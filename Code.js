@@ -702,6 +702,112 @@ function getReportConfig_() {
 }
 
 // =========================================================
+// MEETING CONTEXT (SA4-ARCH-003 compatibility layer)
+// =========================================================
+//
+//   existing configuration (DocumentProperties/ScriptProperties)
+//           |
+//           v
+//   getReportConfig_()
+//           |
+//           v
+//   getMeetingContext_()   <-- this function
+//           |
+//           v
+//   future profile-aware consumers (NOT YET WIRED UP)
+//
+// getMeetingContext_() is a read-only, pure normalization of whatever
+// getReportConfig_() currently returns. It introduces NO second source of
+// truth: every field below is derived from the getReportConfig_() result,
+// never by re-reading PropertiesService directly. It has no side effects
+// beyond whatever getReportConfig_() itself already performs (a
+// PropertiesService read).
+//
+// As of SA4-ARCH-003, NOTHING in this file calls getMeetingContext_() yet.
+// runFullReportBuild(), buildSkeletonWithTdocTables(), continuousUpdate(),
+// the collector, agenda parsing, revision processing, reallocation
+// processing, the setup/config UI, and the legacy report builders all
+// continue to call getReportConfig_() exactly as before. Migrating them is
+// deliberately left to a later task (see SA4-ARCH-002/003 reports).
+//
+// meeting.type is hardcoded to 'main' for every meeting today, because the
+// entire codebase currently only knows how to build main-meeting reports.
+// It exists now as the FUTURE discriminator between 'main', 'adhoc', and
+// any later meeting profile -- no ad-hoc behavior is implemented anywhere
+// yet, and nothing reads this field to branch on it.
+//
+// report.structureProfile makes explicit the structural branch that is
+// currently embedded as inline `is6G`/`isSWGReport` booleans inside
+// buildSkeletonWithTdocTables() (Code.js, see the "6G/SWG/other" skeleton
+// logic ~5350-5517): 'main-6g' for the 6G plenary skeleton (11.0.1-11.0.4
+// subsections), 'main-swg' for the Audio/Video/MBS/RTC skeleton (X.1/X.1.2/
+// X.2 template sections), 'main-other' for report types that get neither
+// (Liaison, New, and any unrecognized REPORT_SUFFIX). This field is derived
+// here from the same REPORT_SUFFIX value buildSkeletonWithTdocTables()
+// already branches on, but buildSkeletonWithTdocTables() itself is NOT
+// changed to consume it -- the branch logic there is untouched.
+//
+// options.emailStartDate and options.fetchAbstractsOnUpdate from the
+// candidate shape in the SA4-ARCH-003 task description are intentionally
+// OMITTED: getReportConfig_() does not read or return EMAIL_START_DATE
+// (only getCollectorConfig_() and the config dialog touch it, via a
+// different code path -- Code.js:721,4052,4119) or FETCH_ABSTRACTS_ON_UPDATE
+// (only getFetchAbstractsSetting_() reads it, again a different code path --
+// Code.js:385-391). Populating them here would mean either re-reading
+// PropertiesService independently (a second source of truth) or reaching
+// into those other reader functions (reintroducing the same
+// multiple-config-systems problem SA4-ARCH-001 flagged for
+// getReportConfig_()/getCollectorConfig_()/getConfig_()). Both are out of
+// scope for this compatibility layer; add them once there is one canonical
+// place to read them from.
+function getMeetingContext_() {
+  const cfg = getReportConfig_();
+
+  const reportType = cfg.REPORT_SUFFIX;
+  const SWG_REPORT_TYPES = ['Audio', 'Video', 'MBS', 'RTC'];
+  let structureProfile;
+  if (reportType === '6G') {
+    structureProfile = 'main-6g';
+  } else if (SWG_REPORT_TYPES.indexOf(reportType) !== -1) {
+    structureProfile = 'main-swg';
+  } else {
+    structureProfile = 'main-other';
+  }
+
+  return {
+    group: 'SA4',
+
+    meeting: {
+      type: 'main', // future discriminator: 'main' | 'adhoc' | ... (not yet used anywhere)
+      folder: cfg.MEETING_FOLDER,
+      number: cfg.MEETING_NUMBER,
+      portalId: cfg.MEETING_ID
+    },
+
+    report: {
+      type: reportType,
+      agendaPrefix: cfg.AGENDA_ITEM_PREFIX,
+      structureProfile: structureProfile
+    },
+
+    sources: {
+      ftpBase: cfg.FTP_BASE,
+      tdocListUrl: cfg.TDOC_LIST_URL,
+      agendaTdoc: cfg.AGENDA_TDOC,
+      agendaTemplateDocId: cfg.AGENDA_SOURCE_DOC_ID,
+      mailingList: cfg.LIST_NAME,
+      draftsFolder: cfg.DRAFTS_FOLDER,
+      revisionsUrl: cfg.REVISIONS_URL
+    },
+
+    options: {
+      showPreviewSnippet: cfg.SHOW_PREVIEW_SNIPPET
+      // emailStartDate, fetchAbstractsOnUpdate: omitted -- see comment above.
+    }
+  };
+}
+
+// =========================================================
 // COLLECTOR CONFIG (now uses centralized config)
 // =========================================================
 
@@ -5305,7 +5411,7 @@ function buildSkeletonWithTdocTables() {
   // Step 1: Clear document, set title
   const body = DocumentApp.getActiveDocument().getBody().clear();
   const templateDocId = extractGoogleDocId_(cfg.AGENDA_SOURCE_DOC_ID);
-  setDocumentTitleFromTemplate_(templateDocId, cfg);
+  setDocumentTitleFromTemplate_(templateDocId);
 
   // Step 2: Parse agenda and download TDOCs
   const agendaItems = parseAgendaForReport_(cfg, templateDocId);
@@ -5703,11 +5809,28 @@ function addTdocTablesOnly() {
 /**
  * Set the document title based on the new requested format.
  * Example: "9. Video SWG Minutes SA4#137-e"
+ *
+ * SA4-ARCH-004: this is the first production consumer migrated to
+ * MeetingContext. It no longer takes a `cfg` (getReportConfig_() result)
+ * parameter -- it reads getMeetingContext_() itself, which derives from
+ * getReportConfig_() internally, so there is still only one underlying
+ * PropertiesService read per call, not two independent config reads.
+ *
+ * generateReportTitle_() itself is intentionally left unchanged (same
+ * plain-object {REPORT_SUFFIX, TDOC_LIST_URL, MEETING_ID} contract as
+ * before) so any other current or future caller of it is unaffected; the
+ * small object below exists only to satisfy that unchanged contract with
+ * values sourced from MeetingContext instead of a legacy cfg object.
  */
-function setDocumentTitleFromTemplate_(sourceDocId, cfg) {
+function setDocumentTitleFromTemplate_(sourceDocId) {
   try {
     const targetDoc = DocumentApp.getActiveDocument();
-    const newTitle = generateReportTitle_(cfg);
+    const context = getMeetingContext_();
+    const newTitle = generateReportTitle_({
+      REPORT_SUFFIX: context.report.type,
+      TDOC_LIST_URL: context.sources.tdocListUrl,
+      MEETING_ID: context.meeting.portalId
+    });
 
     targetDoc.setName(newTitle);
     Logger.log(`Set document title to: ${newTitle}`);

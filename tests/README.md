@@ -3,6 +3,90 @@
 ## Overview
 This directory contains test files and testing documentation for the Google Apps Script project.
 
+## Current automated tests (SA4-ARCH-002 baseline)
+
+This section describes what's actually implemented and runnable today, as opposed to the
+generic guidance further down. It was written as part of SA4-ARCH-002, which established a
+regression baseline before introducing `MeetingContext` (SA4-ARCH-003+).
+
+### How to run everything
+
+All tests are plain Node scripts (no test framework/runner dependency). Each prints its own
+`ok`/`FAIL` lines and exits non-zero if anything failed.
+
+```bash
+node tests/revision-order.test.js     # revision-chain ordering / Disposition text
+node tests/no-duplicates.test.js      # structural integrity + architecture invariants
+node tests/pure-logic.test.js         # pure/near-pure function regression tests
+node tests/report-structure.test.js   # report-type -> structure characterization
+```
+
+Run them individually, or all four in sequence; there is no shared state between files, and no
+network access, Google account, or Apps Script project is required.
+
+### What each file covers
+
+- **`revision-order.test.js`** — `orderTdocsByRevision_`, `orderRevisionChains_`, `getRevisedTo_`,
+  `tdocNumberOf_`, `setDispositionRevisedTo_`. Pre-existing (added alongside Code.js 2.5.0).
+- **`no-duplicates.test.js`** — restores the file referenced by the Code.js changelog but missing
+  from the repo (see SA4-ARCH-001). Checks: no top-level `function name(...)` is declared twice in
+  `Code.js`; every function referenced by an `onOpen()` menu item exists; the canonical entry points
+  `runFullReportBuild`, `buildSkeletonWithTdocTables`, `continuousUpdate` exist; the configuration
+  functions `getReportConfig_`, `getAgendaPrefixForReportType_`, `generateReportTitle_` exist;
+  `orderTdocsByRevision_` exists. These are the invariants meant to catch accidental damage while
+  `Code.js` is later split into modules.
+- **`pure-logic.test.js`** — `normalizeStatus_`, `getAgendaPrefixForReportType_`, the report-type →
+  mailing-list/drafts-folder mapping (observed through `getReportConfig_`, since the underlying
+  `MAILING_LISTS`/`DRAFTS_FOLDERS` consts aren't reachable from outside the VM sandbox),
+  `generateReportTitle_`, `stripReplyPrefixes_`, `parseEmailSubject_`, `extractDeadlineFromTitle_`,
+  `parseExtendedDeadline_`, `normalizeTdoc_`, `extractTdocId_`, `computeShortNumber_`. Expected
+  values were captured by running the current, unmodified `Code.js` and recording its real output —
+  they describe CURRENT behavior, not what the "correct" behavior should be, and may need updating
+  if that behavior is deliberately changed later.
+- **`report-structure.test.js`** — diffs live `getReportConfig_()` / `getAgendaPrefixForReportType_()`
+  / `generateReportTitle_()` output, per report type, against the golden snapshot in
+  `tests/fixtures/main-meeting-profile.expected.json`.
+- **`tests/fixtures/main-meeting-profile.expected.json`** — a regression snapshot (not a new
+  configuration format) of the main-meeting/report-type knowledge currently embedded in `Code.js`:
+  the 7 report types, their agenda prefixes/mailing lists/drafts folders, the 6G-vs-SWG-vs-other
+  structural branch, default configuration values, and title-generation examples.
+
+### What is NOT covered
+
+- **No fake `DocumentApp`.** Nothing in this baseline builds, mutates, or reads a Google Doc — real
+  or simulated. `buildSkeletonWithTdocTables()`, `continuousUpdate()`, `runFullReportBuild()`, and
+  every "ensure/apply/copy to doc" helper are exercised only for *existence* (via
+  `no-duplicates.test.js`), never for behavior.
+- **The `is6G` / `isSWGReport` branch inside `buildSkeletonWithTdocTables()`** (which report types
+  get the `11.0.x` subsections vs. the `X.1`/`X.2` subsections) is documented in the fixture as
+  read from source, not exercised as running code — it isn't extracted into a separate, callable
+  function, and extracting it purely for testability is out of scope for this baseline.
+- **Live network dependencies are intentionally excluded.** The RSS/A1 e-mail collector
+  (`checkRSSFeed_`, `collectA1_`, `collectHybridListservMessages_`), the TDoc-list/agenda downloads
+  (`downloadAndGroupTdocs_`, `downloadMeetingAgenda_`), and the Reviewer API calls are not tested —
+  they need live HTTP responses (or fixture captures of them) and, in several cases, wall-clock time
+  (late-response greying, deadline countdowns), which this baseline does not attempt to mock.
+- **`calculateTimeRemaining_`/`formatDeadline_`** are not tested for exact output because they read
+  `new Date()` ("now") directly; testing them meaningfully would require mocking the clock, which
+  this baseline treats as future work rather than doing cheaply here.
+- **Google Docs rendering is not tested end-to-end.** There is no fixture "before" report and no
+  fixture "after" report, and no way to compare rendered documents byte-for-byte or even
+  structurally yet. Building that (real or fake `DocumentApp`, fixture TDoc-list/agenda inputs, a
+  normalized structural snapshot of the output) is future work, not part of this baseline.
+- The legacy/parallel report-building paths (`processWebDownloadedSheet_`/`copyTableToDoc_`,
+  `createReportStructure_`/`autoCreateReportStructure`) are only checked for existence, same as the
+  canonical paths — their behavior is untested.
+
+### Why this baseline exists
+
+SA4-ARCH-003 (and later tasks) will introduce a `getMeetingContext_()` compatibility wrapper around
+the existing configuration system, then migrate call sites to use it. That work touches
+`getReportConfig_()` and the report-type mapping logic directly. This baseline exists so that work
+can be checked against `tests/pure-logic.test.js` and `tests/report-structure.test.js` after each
+step: if either file starts failing, the wrapper is not yet behavior-preserving. It is deliberately
+narrow ("cheap, deterministic protection first") rather than a comprehensive fake-Docs test harness —
+see SA4-ARCH-002's report for the full rationale and its limitations.
+
 ## Testing Approach
 
 Since Google Apps Script runs in Google's cloud environment, true local testing requires mocking Google services. This document outlines different testing strategies.
