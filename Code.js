@@ -654,7 +654,14 @@ function getReportConfig_() {
   const AGENDA_ITEM_PREFIX = props.getProperty('AGENDA_ITEM_PREFIX') || getAgendaPrefixForReportType_(REPORT_SUFFIX);
   const AGENDA_SOURCE_DOC_ID = props.getProperty('AGENDA_SOURCE_DOC_ID') || '1qP--dusvUhNwwBtMEH4xVdxaP1c6L1hZ49geICoYV2s';
   const AGENDA_TDOC = props.getProperty('AGENDA_TDOC') || '';
-  
+  // SA4-PROD-007A: optional, generic -- no reliable meeting-date value is
+  // available anywhere else during a build (no date field exists on a
+  // parsed agenda item, a TDoc-list row, or MeetingContext today). Used
+  // only by ad-hoc opening-content generation in
+  // buildSkeletonWithTdocTables(); main meetings never read this. Empty
+  // by default -- never invented, never defaulted to any specific date.
+  const MEETING_DATE = props.getProperty('MEETING_DATE') || '';
+
   // ========================================
   // 6. OPTIONS
   // ========================================
@@ -687,7 +694,8 @@ function getReportConfig_() {
     AGENDA_ITEM_PREFIX,
     AGENDA_SOURCE_DOC_ID,
     AGENDA_TDOC,
-    
+    MEETING_DATE,
+
     // Options
     SHOW_PREVIEW_SNIPPET,
     
@@ -865,7 +873,14 @@ function getMeetingIdentityConfig_() {
     TDOC_LIST_URL: String(props.getProperty('TDOC_LIST_URL') || '').trim(),
     AGENDA_TDOC: String(props.getProperty('AGENDA_TDOC') || '').trim(),
     AGENDA_SOURCE_DOC_ID: String(props.getProperty('AGENDA_SOURCE_DOC_ID') || '').trim(),
-    REVISIONS_URL: String(props.getProperty('REVISIONS_URL') || '').trim()
+    REVISIONS_URL: String(props.getProperty('REVISIONS_URL') || '').trim(),
+    // SA4-PROD-007A: generic ad-hoc mailing-list override, same raw-read/
+    // override pattern as every other identity field above -- no
+    // meeting-ID-specific value here. Absent by default; the exact
+    // symbolic ETSI list identifier for a given ad-hoc meeting (e.g.
+    // FS_6G_MED) must be confirmed externally and set explicitly, never
+    // guessed by this function.
+    MAILING_LIST: String(props.getProperty('MAILING_LIST') || '').trim()
   };
 }
 
@@ -1049,18 +1064,27 @@ function getMeetingContext_() {
 
     // Explicit ad-hoc source overrides, reusing the SAME property names
     // getReportConfig_() already reads (no parallel SOURCE_*-named
-    // properties introduced). mailingList/draftsFolder are handled via
-    // `adhocDerived` below, not here, since neither has an override
-    // property today.
+    // properties introduced). draftsFolder is handled via `adhocDerived`
+    // below, not here, since it has no override property today.
+    //
+    // mailingList: SA4-PROD-007A wires in the generic MAILING_LIST
+    // override here, reusing resolveMeetingSources_()'s existing
+    // precedence rule (a non-empty override wins; falls back to
+    // adhocDerived.mailingList below otherwise). No meeting-ID-specific
+    // value is introduced -- an ad-hoc meeting with no MAILING_LIST set
+    // still falls through to the same provisional cfg.LIST_NAME reuse as
+    // before, unchanged.
     const adhocOverrides = {
       ftpBase: identity.FTP_BASE,
       tdocListUrl: identity.TDOC_LIST_URL,
       agendaTdoc: identity.AGENDA_TDOC,
       agendaTemplateDocId: identity.AGENDA_SOURCE_DOC_ID,
-      revisionsUrl: identity.REVISIONS_URL
+      revisionsUrl: identity.REVISIONS_URL,
+      mailingList: identity.MAILING_LIST
     };
 
-    // mailingList: PROVISIONAL reuse of the existing report-type -> mailing
+    // mailingList (fallback, used only when identity.MAILING_LIST is
+    // unset): PROVISIONAL reuse of the existing report-type -> mailing
     // list mapping (cfg.LIST_NAME, e.g. '3GPP_TSG_SA_WG4_AUDIO' for
     // report.type === 'Audio'). This is NOT independently verified for
     // ad-hoc traffic -- SA4-ARCH-006 explicitly left "which mailing list do
@@ -6155,21 +6179,41 @@ function buildSkeletonWithTdocTables() {
       return; // Skip - already created above
     }
     
-    // SA4-PROD-002 gated this branch off for ad-hoc meetings, on the
+    // SA4-PROD-002 gated this whole branch off for ad-hoc meetings, on the
     // assumption that a real ad-hoc agenda never wants the X.1.1/X.1.2
     // subsections this branch produces. SA4-PROD-003 corrected that
     // assumption (clarified production requirement): meeting 86178 DOES
     // want the standard X.1.1 Opening / X.1.2 Registration / X.1.3
     // Document Reallocations / X.1.4 Documents structure under its real
-    // X.1 item, identical to a main SWG meeting. This branch is therefore
-    // unconditional again (byte-identical to its pre-PROD-002 form) --
-    // main-meeting behavior is unaffected either way, since meeting.type
-    // was never consulted by anything downstream of this branch.
+    // X.1 item, identical to a main SWG meeting. The branch itself is
+    // unconditional again -- only the OPENING CONTENT source differs now
+    // (SA4-PROD-007A): a main meeting still copies the shared template's
+    // X.1 body (unchanged, byte-identical to before PROD-002); an ad-hoc
+    // meeting generates its own minimal X.1.1 content instead, because
+    // that shared template's X.1 body is multi-day, main-meeting-specific
+    // boilerplate (dated minute-taker assignments, etc) with no meaning
+    // for a single ad-hoc call -- copying it produced stale August dates
+    // and irrelevant text (SA4-PROD-007 finding). Registration/
+    // Reallocation/Documents handling below is completely unchanged and
+    // shared by both meeting types.
     if (item.number === openingSection) {
-      // Opening section for SWG reports - copy X.1 content from template
-      const openingHeader = findHeading_(sourceBody, /^X\.1\s+/);
-      if (openingHeader) {
-        copySectionContentWithReplacement_(openingHeader, body, /^X\.2\s+/, 'X', agendaPrefixNum);
+      if (context.meeting.type === 'adhoc') {
+        // SA4-PROD-007A: generated directly, not copied from the template.
+        // No CHAIR_NAME/START_TIME property is introduced -- those remain
+        // literal, editable placeholders for the chair to fill in by hand.
+        // MEETING_DATE is optional and generic (no meeting-ID-specific
+        // value baked in here); when unset, "<meeting date>" is used
+        // instead of inventing or assuming any specific date.
+        const openingSubSection = `${agendaPrefixNum}.1.1`;
+        body.appendParagraph(`${openingSubSection} Opening of the session`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+        const meetingDateText = (cfg.MEETING_DATE || '').trim() || '<meeting date>';
+        body.appendParagraph(`<Chair> opens the session on ${meetingDateText} at <start> CEST.`);
+      } else {
+        // Opening section for SWG reports - copy X.1 content from template
+        const openingHeader = findHeading_(sourceBody, /^X\.1\s+/);
+        if (openingHeader) {
+          copySectionContentWithReplacement_(openingHeader, body, /^X\.2\s+/, 'X', agendaPrefixNum);
+        }
       }
 
       // Always ensure Registration of Documents section exists with the summary table

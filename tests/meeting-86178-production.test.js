@@ -214,6 +214,37 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
       /documentsSection\s*=\s*`\$\{agendaPrefixNum\}\.1\.4`/.test(body), true);
     check('the new X.1.4 section renders each doc via appendTdocDetailTable_() with its OWN preserved original agenda-item label (not the loop item.number)',
       /appendTdocDetailTable_\(body,\s*tdocData,\s*tdocData\.row\[tdocData\.agendaCol\]\)/.test(body), true);
+
+    // SA4-PROD-007A: ad-hoc opening content is now generated directly,
+    // not copied from the shared main-meeting template.
+    check('the openingSection branch now has an ad-hoc-only sub-branch (context.meeting.type === \'adhoc\')',
+      /if\s*\(context\.meeting\.type === 'adhoc'\)\s*\{/.test(stripComments(body)), true);
+    check('the ad-hoc sub-branch creates a "{agendaPrefixNum}.1.1 Opening of the session" heading',
+      /openingSubSection\s*=\s*`\$\{agendaPrefixNum\}\.1\.1`/.test(body), true);
+    check('the ad-hoc sub-branch reads cfg.MEETING_DATE with a non-invented placeholder fallback',
+      /\(cfg\.MEETING_DATE \|\| ''\)\.trim\(\) \|\| '<meeting date>'/.test(body), true);
+    check('the ad-hoc opening text retains the literal "<Chair>" placeholder (never invented in code)',
+      /<Chair> opens the session on/.test(body), true);
+    check('the ad-hoc opening text retains the literal "<start>" placeholder (never invented in code)',
+      /at <start> CEST\./.test(body), true);
+    check('the ad-hoc opening text does not hardcode "September 22" or any specific date in generic production logic',
+      /September 22/.test(stripComments(body)), false);
+    check('the main-meeting else branch still copies the template (findHeading_ + copySectionContentWithReplacement_), unchanged',
+      /\}\s*else\s*\{[\s\S]*?findHeading_\(sourceBody, \/\^X\\\.1\\s\+\/\)[\s\S]*?copySectionContentWithReplacement_\(openingHeader, body, \/\^X\\\.2\\s\+\/, 'X', agendaPrefixNum\);[\s\S]*?\}/.test(body), true);
+    // The ad-hoc sub-branch itself, isolated: from "if (context.meeting.type
+    // === 'adhoc') {" up to its own matching "} else {" -- proves it is a
+    // small, self-contained block that does NOT also contain the
+    // registration/reallocation/documents handling (those must remain
+    // shared, outside this if/else, for both meeting types).
+    const adhocSubBranchMatch = body.match(/if\s*\(context\.meeting\.type === 'adhoc'\)\s*\{([\s\S]*?)\}\s*else\s*\{/);
+    check('the ad-hoc sub-branch was found and isolated for inspection', !!adhocSubBranchMatch, true);
+    const adhocSubBranch = adhocSubBranchMatch ? adhocSubBranchMatch[1] : '';
+    check('the ad-hoc sub-branch does NOT call copySectionContentWithReplacement_ (no template copy for ad-hoc opening)',
+      /copySectionContentWithReplacement_/.test(adhocSubBranch), false);
+    check('the ad-hoc sub-branch does NOT also handle registrationSection/documentsSection (those remain shared, outside this if/else)',
+      /registrationSection|documentsSection/.test(adhocSubBranch), false);
+    check('the main-meeting else branch (openingHeader/copySectionContentWithReplacement_) still exists for the OPENING section, unchanged',
+      /else\s*\{[\s\S]*?findHeading_\(sourceBody, \/\^X\\\.1\\s\+\/\)[\s\S]*?copySectionContentWithReplacement_\(openingHeader,/.test(body), true);
   }
 
   const reallocBody = extractFunctionBody(source, 'ensureReallocationTable_');
@@ -730,6 +761,58 @@ console.log('SA4-PROD-005 -- no automatic-reallocation code path exists anywhere
     /does not exist/i.test(stripComments(source)), false);
   check('getReallocationMap_() body has no comparison against a hardcoded "5.0" (it is a pure read of table rows, not an inference)',
     /['"]5\.0['"]/.test(stripComments(extractFunctionBody(source, 'getReallocationMap_'))), false);
+}
+
+// ============ 14. ad-hoc opening text -- real cfg.MEETING_DATE resolution =
+
+console.log('SA4-PROD-007A -- generated 5.1.1 opening text, using the real getReportConfig_() MEETING_DATE resolution');
+
+// Mirrors the exact expression in buildSkeletonWithTdocTables() (verified
+// present, byte-for-byte, by the source-structure checks in section 1
+// above) -- exercised here against the REAL getReportConfig_() output for
+// two real Document Properties configurations, not a reimplementation.
+function generatedOpeningParagraph(cfg) {
+  const meetingDateText = (cfg.MEETING_DATE || '').trim() || '<meeting date>';
+  return `<Chair> opens the session on ${meetingDateText} at <start> CEST.`;
+}
+
+{
+  // No MEETING_DATE configured: placeholder, nothing invented.
+  const { sandbox } = loadCode({ documentProperties: MEETING_86178_PROPS });
+  const cfg = sandbox.getReportConfig_();
+  check('with no MEETING_DATE set, cfg.MEETING_DATE is empty', cfg.MEETING_DATE, '');
+  check('generated opening paragraph uses the "<meeting date>" placeholder when MEETING_DATE is unset',
+    generatedOpeningParagraph(cfg), '<Chair> opens the session on <meeting date> at <start> CEST.');
+}
+
+{
+  // MEETING_DATE configured, exactly as the temporary configureMeeting86178()
+  // helper sets it for today's real deployment.
+  const props = Object.assign({}, MEETING_86178_PROPS, { MEETING_DATE: 'September 22, 2026' });
+  const { sandbox } = loadCode({ documentProperties: props });
+  const cfg = sandbox.getReportConfig_();
+  check('cfg.MEETING_DATE reflects the configured value', cfg.MEETING_DATE, 'September 22, 2026');
+  const generated = generatedOpeningParagraph(cfg);
+  check('generated opening paragraph contains the configured meeting date',
+    generated.indexOf('September 22, 2026') !== -1, true);
+  check('generated opening paragraph still retains the "<Chair>" placeholder',
+    generated.indexOf('<Chair>') !== -1, true);
+  check('generated opening paragraph still retains the "<start>" placeholder',
+    generated.indexOf('<start>') !== -1, true);
+  check('generated opening paragraph is exactly the expected text for meeting 86178',
+    generated, '<Chair> opens the session on September 22, 2026 at <start> CEST.');
+}
+
+{
+  // Main meeting: MEETING_DATE is part of getReportConfig_()'s generic
+  // return shape (harmless/unused there), but the ad-hoc opening-text
+  // generator itself is never reached for a main meeting (proven by the
+  // source-structure checks in section 1 -- the else branch is the
+  // template-copy path, unconditionally, for any non-adhoc meeting).
+  const { sandbox } = loadCode({ documentProperties: { REPORT_SUFFIX: '6G' } });
+  const ctx = sandbox.getMeetingContext_();
+  check('a main meeting has meeting.type "main" (the ad-hoc opening-text branch is unreachable for it)',
+    ctx.meeting.type, 'main');
 }
 
 // ========================================================== summary =======

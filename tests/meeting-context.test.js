@@ -501,6 +501,50 @@ console.log('getMeetingContext_() -- incomplete ad-hoc configuration is represen
   });
 }
 
+// ================ SA4-PROD-007A: ad-hoc MAILING_LIST override ==============
+
+console.log('getMeetingContext_() -- MAILING_LIST override reaches sources.mailingList for ad-hoc meetings');
+
+{
+  // Explicit override present: wins over the provisional cfg.LIST_NAME
+  // reuse. Not "FS_6G_MED" or any other meeting-86178-specific value --
+  // a generic placeholder name, proving the override mechanism itself,
+  // not any particular symbolic list identifier.
+  const { sandbox } = loadCode({ documentProperties: {
+    MEETING_TYPE: 'adhoc',
+    REPORT_SUFFIX: '6G',
+    MAILING_LIST: 'SOME_EXPLICIT_LIST_NAME'
+  } });
+  const ctx = sandbox.getMeetingContext_();
+  check('ad-hoc sources.mailingList uses the explicit MAILING_LIST override when set',
+    ctx.sources.mailingList, 'SOME_EXPLICIT_LIST_NAME');
+}
+
+{
+  // No override: falls back to the existing provisional cfg.LIST_NAME
+  // reuse, unchanged -- same value the pre-existing "incomplete ad-hoc"
+  // check above already pins down for REPORT_SUFFIX '6G'.
+  const { sandbox } = loadCode({ documentProperties: { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G' } });
+  const ctx = sandbox.getMeetingContext_();
+  check('ad-hoc sources.mailingList falls back to cfg.LIST_NAME when no MAILING_LIST override is set',
+    ctx.sources.mailingList, '3GPP_TSG_SA_WG4');
+}
+
+{
+  // Main meetings: MAILING_LIST is a Document Property this function
+  // reads (via getMeetingIdentityConfig_()), but the MAIN branch's
+  // derivedSources never references identity.MAILING_LIST at all -- only
+  // the ad-hoc branch's adhocOverrides does. Setting it must have zero
+  // effect on a main meeting's resolved mailingList.
+  const { sandbox } = loadCode({ documentProperties: {
+    REPORT_SUFFIX: 'Audio',
+    MAILING_LIST: 'SOME_EXPLICIT_LIST_NAME'
+  } });
+  const ctx = sandbox.getMeetingContext_();
+  check('main-meeting sources.mailingList is UNCHANGED by a MAILING_LIST property (main branch never reads it)',
+    ctx.sources.mailingList, '3GPP_TSG_SA_WG4_AUDIO');
+}
+
 // ==================== SA4-IMPL-004: main-meeting agendaSelector proof ======
 
 console.log('getMeetingContext_() -- report.agendaSelector is the prefix-mode equivalent of report.agendaPrefix, all 7 report types');
