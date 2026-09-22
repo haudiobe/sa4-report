@@ -2007,10 +2007,19 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
   }
   
   // Abstracts are intentionally added in workflow step 5.
+  // SA4-PROD-006: this used to gate on a hardcoded main-meeting-only
+  // /^S4-\d{6}$/ regex, so no ad-hoc TDoc (e.g. "S4aP260098") could ever
+  // reach fetchAndAddAbstract_(). Migrated to the same centralized,
+  // registered-family identifier check the rest of the codebase already
+  // uses (parseExactSA4DocumentId_() / SA4_TDOC_FAMILIES) -- no new regex
+  // introduced. parsed.raw (not the raw cell text) is passed to
+  // fetchAndAddAbstract_() so the API always receives the canonical
+  // identifier spelling.
   const skipAbstracts = PropertiesService.getDocumentProperties().getProperty('SKIP_ABSTRACTS_DURING_TABLE_BUILD') === 'true';
   const tdocNumber = String(data[0][1] || '').trim();
-  if (!skipAbstracts && tdocNumber && /^S4-\d{6}$/i.test(tdocNumber)) {
-    fetchAndAddAbstract_(table, tdocNumber);
+  const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
+  if (!skipAbstracts && parsedTdoc.isValid) {
+    fetchAndAddAbstract_(table, parsedTdoc.raw);
   }
   
   // Apply status styling
@@ -4775,19 +4784,27 @@ function testAllConnections() {
   }
   
   // Test 2: Reviewer API
+  // SA4-PROD-006: probes the current meeting's own AGENDA_TDOC when it is
+  // a valid, registered SA4 identifier (any family), falling back to the
+  // original hardcoded main-meeting probe otherwise. This tests
+  // authentication/connectivity only -- it does not prove any specific
+  // document's abstract is available in Reviewer, ad-hoc or main.
   results.push('\n2️⃣ Reviewer API:');
   try {
     const token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');
     if (!token) {
       results.push('   ⚠️  Not configured (abstracts will be skipped)');
     } else {
-      const testUrl = 'https://reviewer.bouazizi.dev/api/v1/documents/S4-260001/summary?type=summary';
+      const cfg = getReportConfig_();
+      const parsedAgendaTdoc = parseExactSA4DocumentId_(cfg.AGENDA_TDOC);
+      const probeTdoc = parsedAgendaTdoc.isValid ? parsedAgendaTdoc.raw : 'S4-260001';
+      const testUrl = `https://reviewer.bouazizi.dev/api/v1/documents/${probeTdoc}/summary?type=summary`;
       const response = UrlFetchApp.fetch(testUrl, {
         headers: { 'X-API-Key': token },
         muteHttpExceptions: true
       });
       if (response.getResponseCode() === 200 || response.getResponseCode() === 404) {
-        results.push('   ✅ API token valid');
+        results.push(`   ✅ API token valid (probed ${probeTdoc}; connectivity/auth only)`);
       } else {
         results.push('   ❌ HTTP ' + response.getResponseCode());
       }
@@ -5069,24 +5086,34 @@ function testTdocListUrl() {
 function testReviewerApi() {
   const ui = DocumentApp.getUi();
   const token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');
-  
+
   if (!token) {
     ui.alert('Error', 'Reviewer API token not configured.\n\nPlease configure it first using:\n⚙️ Configure Meeting Settings', ui.ButtonSet.OK);
     return;
   }
-  
+
   try {
-    const testUrl = 'https://reviewer.bouazizi.dev/api/v1/documents/S4-260001/summary?type=summary';
+    // SA4-PROD-006: use the current meeting's own configured agenda TDoc
+    // when it is a valid, registered SA4 identifier (any family), so the
+    // test at least exercises a real document for THIS meeting; fall back
+    // to the original hardcoded main-meeting probe otherwise. Either way
+    // this proves authentication/connectivity to the Reviewer API only --
+    // a 200/404 here does NOT prove any particular document (ad-hoc or
+    // main) actually has a summary available in Reviewer.
+    const cfg = getReportConfig_();
+    const parsedAgendaTdoc = parseExactSA4DocumentId_(cfg.AGENDA_TDOC);
+    const probeTdoc = parsedAgendaTdoc.isValid ? parsedAgendaTdoc.raw : 'S4-260001';
+    const testUrl = `https://reviewer.bouazizi.dev/api/v1/documents/${probeTdoc}/summary?type=summary`;
     const response = UrlFetchApp.fetch(testUrl, {
       headers: { 'X-API-Key': token },
       muteHttpExceptions: true
     });
-    
+
     const code = response.getResponseCode();
     if (code === 200) {
-      ui.alert('Reviewer API Test', '✅ API token is valid!\n\nAbstracts will be fetched successfully.', ui.ButtonSet.OK);
+      ui.alert('Reviewer API Test', `✅ API token is valid (probed ${probeTdoc}).\n\nThis confirms authentication/connectivity only -- it does not guarantee every document's abstract is available.`, ui.ButtonSet.OK);
     } else if (code === 404) {
-      ui.alert('Reviewer API Test', '✅ API token is valid!\n\n(Test document not found, but authentication works)', ui.ButtonSet.OK);
+      ui.alert('Reviewer API Test', `✅ API token is valid (probed ${probeTdoc}).\n\n(That document has no summary in Reviewer, but authentication works -- this confirms connectivity only.)`, ui.ButtonSet.OK);
     } else {
       ui.alert('Error', `❌ API returned HTTP ${code}\n\nPlease check your API token.`, ui.ButtonSet.OK);
     }
@@ -6814,10 +6841,14 @@ function addAbstractsForTables_(body) {
     const existingAbstract = findCellText_(table, 'Abstract');
     if (existingAbstract) return;
 
+    // SA4-PROD-006: same migration as createTDocTableFromData_() -- was a
+    // hardcoded main-meeting-only /^S4-\d{6}$/ regex, now the centralized
+    // registered-family check, canonical spelling passed to Reviewer.
     const tdocNumber = String(safeCellText_(table, 0, 1) || '').trim();
-    if (!/^S4-\d{6}$/i.test(tdocNumber)) return;
+    const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
+    if (!parsedTdoc.isValid) return;
 
-    fetchAndAddAbstract_(table, tdocNumber);
+    fetchAndAddAbstract_(table, parsedTdoc.raw);
     count++;
   });
 
