@@ -8970,6 +8970,11 @@ function resolveMeetingForConfigDialog_(meetingIdInput) {
  * trailing underscore made the original direct RPC target silently
  * uncallable. A thin, otherwise-behavior-free delegation, so the tested,
  * documented internal implementation and its name are unchanged.
+ *
+ * MEETING-RESOLVER-FINAL: live-verified against meeting 86178 in the real
+ * Google Doc -- Resolve, Discover Agenda/TDocs, Save, and a close/reopen
+ * round-trip all passed, confirming this fix in production, not just
+ * locally.
  */
 function resolveMeetingForConfigDialog(meetingIdInput) {
   return resolveMeetingForConfigDialog_(meetingIdInput);
