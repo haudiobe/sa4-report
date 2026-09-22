@@ -2677,8 +2677,24 @@ function dedupePreviewFirst_(arr) {
 }
 
 // --- Revisions ---
+/**
+ * PROD-017: the drafts/revisions folder source is now
+ * getMeetingContext_().sources.revisionsUrl -- NOT cfg.REVISIONS_URL
+ * (getReportConfig_()'s always-computed main-meeting formula, which
+ * fabricates a URL for every ad-hoc meeting regardless of whether one is
+ * actually configured; see testAllConnections()'s Test 4, which already
+ * made exactly this same fix). getMeetingContext_() never touches the
+ * network (deterministic from saved Document Properties, per its own
+ * contract) -- this is still a pure "read configuration" call, not
+ * Meeting-ID resolution. For a main meeting, sources.revisionsUrl is
+ * IDENTICAL to cfg.REVISIONS_URL (see getMeetingContext_()'s own main-
+ * meeting branch), so this is behavior-preserving there; for an ad-hoc
+ * meeting it is the configured REVISIONS_URL override, or genuinely absent
+ * (undefined) if none was ever set -- the exact same graceful "not
+ * configured" early return below.
+ */
 function updateRevisions_(cfg) {
-  const baseUrl = String(cfg.REVISIONS_URL || '').trim();
+  const baseUrl = String(getMeetingContext_().sources.revisionsUrl || '').trim();
   if (!baseUrl) return;
 
   const url = baseUrl.replace(/\/$/, '') + '/';
@@ -2694,21 +2710,31 @@ function updateRevisions_(cfg) {
     if (!isTDocTable_(t)) return;
 
     const tdocRaw = String(safeCellText_(t, 0, 1) || '').trim();
-    const tdoc = extractTdocId_(tdocRaw, cfg.TDOC_ID_REGEX);
-    if (!tdoc) return;
+    // PROD-017: the TDoc cell holds nothing but the identifier itself --
+    // use the exact-match central parser (all 6 verified SA4 families),
+    // not the legacy cfg.TDOC_ID_REGEX default ('^S4-\d{6}$', main-meeting
+    // only).
+    const tdocParsed = parseExactSA4DocumentId_(tdocRaw);
+    if (!tdocParsed.isValid) return;
+    const tdoc = tdocParsed.raw;
 
-    const rx = new RegExp(escapeRegExp_(tdoc));
     const storeKey = 'REVIS_' + tdoc;
     const store = loadJsonObject_(props.getProperty(storeKey));
 
     let added = 0;
     anchors.forEach(a => {
-      const text = String(a.text || '').trim();
-      if (!text || !rx.test(text)) return;
-      const abs = toAbsoluteUrl_(url, a.href);
-      const id = (abs || text).trim();
+      // PROD-017: match by CANONICAL TDoc identity (parsed out of the
+      // anchor's filename via the central registry -- parseDraftAnchor_()),
+      // never literal substring containment. The old
+      // `new RegExp(escapeRegExp_(tdoc)).test(text)` would also match an
+      // unrelated, longer TDoc number sharing the same leading digits
+      // (e.g. tdoc "S4-261834" is also a substring of "S4-2618345.docx").
+      // Exact canonical-string equality against `tdoc` rules that out.
+      const draft = parseDraftAnchor_(a, url);
+      if (!draft || draft.tdocId !== tdoc) return;
+      const id = (draft.url || draft.fileName).trim();
       if (!id) return;
-      if (!store[id]) { store[id] = { text, link: abs }; added++; }
+      if (!store[id]) { store[id] = { text: draft.fileName, link: draft.url }; added++; }
     });
 
     props.setProperty(storeKey, JSON.stringify(store));
@@ -2751,8 +2777,12 @@ function insertRevisedDocTablesAfter_(body, parentTable, revisions, cfg) {
   let insertAfter = parentIndex + 1;
 
   revisions.forEach(item => {
-    const revTdoc = extractTdocId_(String(item.text || ''), cfg.TDOC_ID_REGEX || 'S4-\\d{6}');
-    if (!revTdoc) return;
+    // PROD-017: central registry, same as updateRevisions_() -- item.text
+    // is a filename (e.g. "S4aP260071_QCOM.docx"), so this searches within
+    // it rather than requiring an exact match.
+    const revParsed = parseSA4DocumentId_(String(item.text || ''));
+    if (!revParsed.isValid) return;
+    const revTdoc = revParsed.raw;
 
     // Check if a table for this revision already exists
     const existing = body.getTables().find(t => {
@@ -2912,6 +2942,36 @@ function parseSA4DocumentId_(value) {
  */
 function parseExactSA4DocumentId_(value) {
   return matchSA4DocumentId_(value, true);
+}
+
+/**
+ * PROD-017: parses one <a> anchor from a 3GPP FTP drafts/revisions folder
+ * listing (parseAnchors_() output: {href, text}) into a structured draft
+ * document record, using the SAME central SA4 TDoc identifier registry
+ * every other consumer uses (parseSA4DocumentId_() / SA4_TDOC_FAMILIES) --
+ * never a second, isolated 'S4-\d{6}'-only regex. A real anchor's text is
+ * a filename, e.g. "S4aP260071_QCOM.docx" -- parseSA4DocumentId_() SEARCHES
+ * within it (not an exact-match), so the identifier is found regardless of
+ * the surrounding "_QCOM"/extension. That suffix is never discarded: it
+ * survives in `fileName` (and in `url`) alongside the canonical `tdocId` --
+ * matching against a report's own TDoc elsewhere always compares `tdocId`
+ * values by exact string equality, never filenames or substrings.
+ *
+ * Returns null (never a partially-filled object) when the anchor's text
+ * contains no recognized SA4 document identifier -- an unrecognized/
+ * unsupported family is never guessed into existence, matching this
+ * project's existing "do not guess" convention.
+ */
+function parseDraftAnchor_(anchor, baseUrl) {
+  const fileName = String(anchor && anchor.text || '').trim();
+  if (!fileName) return null;
+  const parsed = parseSA4DocumentId_(fileName);
+  if (!parsed.isValid) return null;
+  return {
+    tdocId: parsed.raw,
+    fileName: fileName,
+    url: toAbsoluteUrl_(baseUrl, anchor && anchor.href)
+  };
 }
 
 // =========================================================
