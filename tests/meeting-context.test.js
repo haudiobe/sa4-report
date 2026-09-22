@@ -398,16 +398,27 @@ console.log('getMeetingContext_() -- first real ad-hoc context: Audio SWG AH on 
   check('meeting.portalId is null (no fake main identifier exposed; portal ID for this meeting is unverified anyway)', ctx.meeting.portalId, null);
 
   check('report.type is "Audio"', ctx.report.type, 'Audio');
-  // agendaPrefix/structureProfile are STILL the old main-meeting-shaped
-  // model in SA4-IMPL-003 (see Code.js comment) -- these values are known
-  // to be semantically wrong for an ad-hoc meeting (SA4-ARCH-005/006: no
-  // SWG-plenary prefix concept applies to a real ad-hoc agenda) and fixing
-  // that is explicitly deferred to the future agendaSelector/
-  // frontMatterProfile work, NOT this task. Asserted here only to document
-  // and freeze the current (known-imperfect) behavior, not to endorse it.
-  check('report.agendaPrefix is the OLD Audio main-meeting prefix "7." -- KNOWN WRONG for ad-hoc, deferred, not fixed here',
-    ctx.report.agendaPrefix, '7.');
-  check('report.structureProfile is the OLD "main-swg" value -- KNOWN WRONG for ad-hoc, deferred, not fixed here',
+
+  // SA4-IMPL-004: agenda selection is now CORRECT for this ad-hoc meeting --
+  // agendaPrefix is no longer the old, wrong main-meeting "7." value; it's
+  // null, and agendaSelector explicitly represents "every parsed agenda
+  // item is in scope" ({mode:'all'}), matching the verified ULBC-MED
+  // evidence (a dedicated single-topic ad-hoc with no SWG-plenary prefix
+  // concept). This did NOT cause the title-only production consumer to
+  // regress: setDocumentTitleFromTemplate_() never reads report.agendaPrefix
+  // at all (see tests/title-consumer.test.js, unaffected by this task).
+  check('report.agendaPrefix is null (no longer the wrong main-meeting "7." value, SA4-IMPL-004)',
+    ctx.report.agendaPrefix, null);
+  check('report.agendaSelector is {mode:"all"} (verified: ULBC-MED is a dedicated single-topic ad-hoc, no prefix concept applies)',
+    ctx.report.agendaSelector, { mode: 'all' });
+
+  // structureProfile is STILL the old main-meeting-shaped model -- known to
+  // be semantically wrong for an ad-hoc meeting, and fixing that is
+  // explicitly deferred to the future frontMatterProfile/skeleton work, NOT
+  // this task (SA4-IMPL-004 is agendaSelector only). Asserted here only to
+  // document and freeze the current (known-imperfect) behavior, not to
+  // endorse it.
+  check('report.structureProfile is STILL the OLD "main-swg" value -- KNOWN WRONG for ad-hoc, deferred, not fixed here',
     ctx.report.structureProfile, 'main-swg');
 
   check('sources.ftpBase is the verified SA4_Audio ad-hoc Docs folder', ctx.sources.ftpBase, ULBC_MED_PROPS.FTP_BASE);
@@ -488,6 +499,85 @@ console.log('getMeetingContext_() -- incomplete ad-hoc configuration is represen
     check(`missing only ${missingKey}: meeting.type is still "adhoc" (not rejected)`,
       ctx.meeting.type, 'adhoc');
   });
+}
+
+// ==================== SA4-IMPL-004: main-meeting agendaSelector proof ======
+
+console.log('getMeetingContext_() -- report.agendaSelector is the prefix-mode equivalent of report.agendaPrefix, all 7 report types');
+
+REPORT_TYPES.forEach(type => {
+  const { sandbox } = loadCode({ documentProperties: { REPORT_SUFFIX: type } });
+  const ctx = sandbox.getMeetingContext_();
+
+  check(`${type}: report.agendaPrefix is unchanged (not touched by SA4-IMPL-004)`,
+    ctx.report.agendaPrefix, sandbox.getReportConfig_().AGENDA_ITEM_PREFIX);
+  check(`${type}: report.agendaSelector.mode is "prefix"`, ctx.report.agendaSelector.mode, 'prefix');
+  check(`${type}: report.agendaSelector.value === report.agendaPrefix`,
+    ctx.report.agendaSelector.value, ctx.report.agendaPrefix);
+});
+
+// -------------------- SA4-IMPL-004: no production filtering caller yet -----
+
+console.log('source-structure assertion: agendaSelectorMatches_() has NO production filtering caller');
+
+{
+  const fs = require('fs');
+  const { CODE_JS_PATH } = require('./helpers/load-code.js');
+  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+
+  // Strip the function's OWN definition and doc comment first, so the
+  // string "agendaSelectorMatches_(" appearing in ITS OWN JSDoc/declaration
+  // doesn't count as a "caller". Also strip normalizeAgendaSelector_'s
+  // definition for the same reason (it doesn't call agendaSelectorMatches_,
+  // but keeping the check symmetric and simple).
+  const withoutOwnDefinition = source.replace(/function agendaSelectorMatches_\([\s\S]*?\n}\n/, '');
+
+  const KNOWN_NON_CALLERS = [
+    'downloadAndGroupTdocs_', 'parseAgendaForReport_',
+    'buildSkeletonWithTdocTables', 'continuousUpdate'
+  ];
+
+  KNOWN_NON_CALLERS.forEach(fnName => {
+    const startMatch = withoutOwnDefinition.match(new RegExp('^function ' + fnName + '\\(', 'm'));
+    if (!startMatch) {
+      failures++;
+      console.log(`  FAIL could not locate "function ${fnName}(" in Code.js`);
+      return;
+    }
+    const startIndex = startMatch.index;
+    const nextFnRe = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
+    nextFnRe.lastIndex = startIndex + startMatch[0].length;
+    const next = nextFnRe.exec(withoutOwnDefinition);
+    const endIndex = next ? next.index : withoutOwnDefinition.length;
+    const body = withoutOwnDefinition.slice(startIndex, endIndex);
+
+    check(`${fnName}() does NOT call agendaSelectorMatches_() (unmigrated, as required by SA4-IMPL-004)`,
+      /\bagendaSelectorMatches_\s*\(/.test(body), false);
+  });
+
+  // And the positive half of the same proof: the function DOES exist and
+  // IS called from getMeetingContext_() is NOT required (getMeetingContext_
+  // only ever CONSTRUCTS a selector via normalizeAgendaSelector_(), it never
+  // MATCHES one) -- so also confirm getMeetingContext_() doesn't call
+  // agendaSelectorMatches_() either, for the same "representation only,
+  // no filtering yet" reason.
+  const gmcMatch = withoutOwnDefinition.match(/^function getMeetingContext_\(\)/m);
+  if (gmcMatch) {
+    const startIndex = gmcMatch.index;
+    const nextFnRe2 = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
+    nextFnRe2.lastIndex = startIndex + gmcMatch[0].length;
+    const next2 = nextFnRe2.exec(withoutOwnDefinition);
+    const endIndex2 = next2 ? next2.index : withoutOwnDefinition.length;
+    const body2 = withoutOwnDefinition.slice(startIndex, endIndex2);
+
+    check('getMeetingContext_() constructs selectors via normalizeAgendaSelector_() but does not call agendaSelectorMatches_() (representation only)',
+      /\bagendaSelectorMatches_\s*\(/.test(body2), false);
+    check('getMeetingContext_() DOES call normalizeAgendaSelector_() (both main and ad-hoc branches construct a selector)',
+      /\bnormalizeAgendaSelector_\s*\(/.test(body2), true);
+  } else {
+    failures++;
+    console.log('  FAIL could not locate "function getMeetingContext_()" in Code.js');
+  }
 }
 
 // ------------------------------------------------------------------- summary

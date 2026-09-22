@@ -869,6 +869,101 @@ function getMeetingIdentityConfig_() {
   };
 }
 
+/**
+ * SA4-IMPL-004: validates and normalizes an agendaSelector.
+ *
+ * Exactly three modes are supported -- 'prefix', 'all', 'itemList' -- no
+ * speculative modes. Throws for anything invalid (wrong shape, missing
+ * mode, missing/empty required value) rather than silently coercing to
+ * {mode:'all'}: silently selecting EVERY agenda item instead of the
+ * intended subset is a much worse failure than a loud, immediate error,
+ * exactly the same reasoning SA4-IMPL-003A applied to MEETING_TYPE.
+ *
+ * 'prefix': value must be a non-empty (after trim) string. Stored trimmed.
+ * 'all': no value needed or used.
+ * 'itemList': value must be an array; each entry is coerced to a trimmed
+ * string, empty entries are dropped, and the result must be non-empty.
+ */
+function normalizeAgendaSelector_(selector) {
+  if (!selector || typeof selector !== 'object') {
+    throw new Error('Invalid agendaSelector: expected an object, got ' + JSON.stringify(selector));
+  }
+
+  const mode = selector.mode;
+
+  if (mode === 'all') {
+    return { mode: 'all' };
+  }
+
+  if (mode === 'prefix') {
+    const value = selector.value;
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error('Invalid agendaSelector: mode "prefix" requires a non-empty string "value".');
+    }
+    return { mode: 'prefix', value: value.trim() };
+  }
+
+  if (mode === 'itemList') {
+    if (!Array.isArray(selector.value)) {
+      throw new Error('Invalid agendaSelector: mode "itemList" requires an array "value".');
+    }
+    const normalizedItems = selector.value
+      .map(v => String(v === null || v === undefined ? '' : v).trim())
+      .filter(v => v !== '');
+    if (normalizedItems.length === 0) {
+      throw new Error('Invalid agendaSelector: mode "itemList" requires at least one non-empty item in "value".');
+    }
+    return { mode: 'itemList', value: normalizedItems };
+  }
+
+  throw new Error('Invalid agendaSelector: unsupported mode ' + JSON.stringify(mode) + '. Expected "prefix", "all", or "itemList".');
+}
+
+/**
+ * SA4-IMPL-004: pure agenda-item matching against a MeetingContext
+ * agendaSelector. No Google API calls, no property reads, deterministic.
+ * Has NO production filtering caller as of SA4-IMPL-004 -- it exists as a
+ * tested abstraction, ready for a later task to wire into
+ * downloadAndGroupTdocs_()/parseAgendaForReport_(), which are UNCHANGED by
+ * this task.
+ *
+ * 'prefix': String(agendaItem).trim().startsWith(selector.value) -- this is
+ * EXACTLY today's production semantics in downloadAndGroupTdocs_() and
+ * parseAgendaForReport_() (`agendaItem.startsWith(agendaPrefix)`, on an
+ * already-trimmed cell value). Every existing prefix value includes its
+ * trailing dot ('7.', '11.', ...), which is WHY '7.' already cannot
+ * false-positive-match '17.' or '70.' today -- verified against the actual
+ * source, not assumed, see the SA4-IMPL-004 report's inventory. Preserved
+ * exactly here, not "improved".
+ *
+ * 'all': matches any agenda item that is a real, non-blank-after-trim
+ * value. null/undefined/''/whitespace-only do NOT match: a row with no
+ * real agenda item isn't "part of the agenda" under any selector, which
+ * keeps 'all' consistent with how a blank agenda item is already
+ * implicitly excluded under 'prefix' today (an empty string can never
+ * start with a non-empty prefix).
+ *
+ * 'itemList': EXACT match (after trimming both sides) against the
+ * normalized value list -- never a prefix/subtree match. "1.5" matches
+ * only "1.5" (and whitespace-padded variants), never "1.50", "1.5.1", or
+ * "11.5". SA4-ARCH-006's evidence (the Audio-SWG-telco "keeping only
+ * relevant items from the unique agenda" pattern) supports explicit item
+ * selection only, not speculative hierarchical/subtree semantics.
+ */
+function agendaSelectorMatches_(selector, agendaItem) {
+  const normalized = normalizeAgendaSelector_(selector);
+  const item = String(agendaItem === null || agendaItem === undefined ? '' : agendaItem).trim();
+
+  if (normalized.mode === 'all') {
+    return item !== '';
+  }
+  if (normalized.mode === 'prefix') {
+    return item.startsWith(normalized.value);
+  }
+  // itemList
+  return normalized.value.indexOf(item) !== -1;
+}
+
 function getMeetingContext_() {
   const cfg = getReportConfig_();
   const identity = getMeetingIdentityConfig_();
@@ -883,14 +978,13 @@ function getMeetingContext_() {
   } else {
     structureProfile = 'main-other';
   }
-  // SA4-IMPL-003 deliberately does NOT touch agendaPrefix/structureProfile
-  // for the ad-hoc branch below -- SA4-ARCH-005/006 already established
-  // these are semantically wrong for a real ad-hoc meeting (no SWG-plenary
-  // prefix concept applies), but fixing that is agendaSelector/
-  // frontMatterProfile work, explicitly out of scope for this task.
+  // structureProfile is still the SA4-ARCH-003 model, untouched by
+  // SA4-IMPL-004 -- frontMatterProfile/skeleton work is a later task.
 
   let meeting;
   let sources;
+  let agendaPrefix;
+  let agendaSelector;
 
   if (identity.MEETING_TYPE === 'adhoc') {
     meeting = {
@@ -934,6 +1028,21 @@ function getMeetingContext_() {
     };
 
     sources = resolveMeetingSources_(adhocDerived, adhocOverrides);
+
+    // SA4-IMPL-004: an ad-hoc meeting's agenda is not filtered by any
+    // main-meeting SWG-plenary prefix -- SA4-ARCH-005/006 verified this has
+    // no meaning for a real ad-hoc agenda (agenda numbering is flat/
+    // instance-specific, e.g. ULBC-MED's items are "1".."6", not "7.x").
+    // agendaPrefix is explicitly null (no longer the old, wrong
+    // cfg.AGENDA_ITEM_PREFIX value) and every parsed agenda item is in
+    // scope via {mode:'all'}. This is the verified dedicated-single-topic
+    // ad-hoc shape (ULBC-MED). The recurring multi-topic-telco shape
+    // (itemList, e.g. {mode:'itemList', value:['1.5','1.6']}) is equally
+    // evidenced (SA4-ARCH-006) but there is currently only one ad-hoc
+    // MeetingContext branch -- choosing between 'all'/'itemList' per
+    // ad-hoc instance is a later task, not introduced here.
+    agendaPrefix = null;
+    agendaSelector = normalizeAgendaSelector_({ mode: 'all' });
   } else {
     meeting = {
       type: 'main',
@@ -955,6 +1064,11 @@ function getMeetingContext_() {
       revisionsUrl: cfg.REVISIONS_URL
     };
     sources = resolveMeetingSources_(derivedSources, {});
+
+    // SA4-IMPL-004: unchanged report-type -> agenda prefix mapping
+    // (SA4-ARCH-003), now ALSO exposed in the new agendaSelector shape.
+    agendaPrefix = cfg.AGENDA_ITEM_PREFIX;
+    agendaSelector = normalizeAgendaSelector_({ mode: 'prefix', value: cfg.AGENDA_ITEM_PREFIX });
   }
 
   return {
@@ -964,7 +1078,8 @@ function getMeetingContext_() {
 
     report: {
       type: reportType,
-      agendaPrefix: cfg.AGENDA_ITEM_PREFIX,
+      agendaPrefix: agendaPrefix,
+      agendaSelector: agendaSelector,
       structureProfile: structureProfile
     },
 
