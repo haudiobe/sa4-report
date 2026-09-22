@@ -1,0 +1,322 @@
+[
+  {
+    "TDoc": "S4aP260067",
+    "Title": "[FS_6G_MED] Consideration of a Collaboration Scenario for Interoperable RTC Services",
+    "Source": "NTT",
+    "Type": "discussion",
+    "For": "Agreement",
+    "AgendaItem": "5.10",
+    "AgendaItemDesc": "FS_6G_MED - Other issues",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260068",
+    "Title": "[FS_6G_MED] Further study on token error resilience",
+    "Source": "DOCOMO Beijing Labs",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260069",
+    "Title": "[FS_6G_MED] pCR on Editorial Updates to TR 26.870",
+    "Source": "InterDigital Canada",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.4",
+    "AgendaItemDesc": "FS_6G_MED - General and working documents",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260070",
+    "Title": "[FS_6G_MED] pCR on WT#3a: Updates to Use Cases",
+    "Source": "InterDigital Canada",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.7",
+    "AgendaItemDesc": "FS_6G_MED - WT#3: Media Aspects related to SA2 topics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260071",
+    "Title": "[FS_6G_MED] pCR on WT#1: Multi-component media services",
+    "Source": "InterDigital SAS",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.5",
+    "AgendaItemDesc": "FS_6G_MED - WT#1: Media Delivery Architecture",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260072",
+    "Title": "[FS_6G_MED] Work Plan for Media Aspects for 6G System",
+    "Source": "Qualcomm Incorporated (Rapporteur)",
+    "Type": "Work Plan",
+    "For": "Agreement",
+    "AgendaItem": "5.4",
+    "AgendaItemDesc": "FS_6G_MED - General and working documents",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260073",
+    "Title": "[FS_6G_MED] 2D Video Codecs - Improvements of Key issues and questions",
+    "Source": "Orange",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.3",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.3: Non-AI-related topics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260074",
+    "Title": "Draft TR 26.870 FS_6G_MED v0.6.0",
+    "Source": "VODAFONE Group Plc",
+    "Type": "draft TR",
+    "For": "Agreement",
+    "AgendaItem": "5.4",
+    "AgendaItemDesc": "FS_6G_MED - General and working documents",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260075",
+    "Title": "Delay critical for the first packet of response",
+    "Source": "vivo",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260076",
+    "Title": "Attributes of scalable LLM inference",
+    "Source": "vivo",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260077",
+    "Title": "Error resilience test and supplementary test results for the tokenized traffic",
+    "Source": "vivo",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260078",
+    "Title": "[FS_6G_MED] pCR on Collaboration Scenarios for Real-time Communication System Enhancements",
+    "Source": "CMCC, Huawei",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.10",
+    "AgendaItemDesc": "FS_6G_MED - Other issues",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260079",
+    "Title": " [FS_6G_MED] pCR on Runtime Coordination between Application/Service and RTC Media Layer",
+    "Source": "CMCC, Huawei",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.10",
+    "AgendaItemDesc": "FS_6G_MED - Other issues",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260080",
+    "Title": "[FS_6G_MED] pCR on Separation of Application/Service-Specific Logic and Common RTC Media Capabilities",
+    "Source": "CMCC, Huawei",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.10",
+    "AgendaItemDesc": "FS_6G_MED - Other issues",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260081",
+    "Title": "[FS_6G_MED] Evaluation of real-time audio under packet corruption",
+    "Source": "Huawei Technologies France",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260082",
+    "Title": "[FS_6G_MED] Summary of fixes to TR_26870 after SA4-137-e",
+    "Source": "Huawei Technologies France",
+    "Type": "discussion",
+    "For": "Agreement",
+    "AgendaItem": "5.4",
+    "AgendaItemDesc": "FS_6G_MED - General and working documents",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260083",
+    "Title": "[FS_6G_MED] Alignment of the real-time video understanding campaign across clause C and D",
+    "Source": "Huawei Technologies France",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260084",
+    "Title": "[FS_6G_MED]  Completing the test corpus clause and baseline accuracy comparison for real-time video understanding",
+    "Source": "Huawei Technologies France",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260085",
+    "Title": "[FS_6G_MED] pCR on attribution of AI traffic observations and on findings in the body of the TR",
+    "Source": "Huawei Technologies France",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260086",
+    "Title": "[FS_6G_MED]Formats for AI native traffic and distributed inferencing reference for TR 26.870 clause 6.3.4.5",
+    "Source": "Huawei Technologies France",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.2",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.2: Other AI-Related topics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260087",
+    "Title": "Discussion on possible end-state and disposition of annex content in TR 26.870 ",
+    "Source": "VODAFONE Group Plc",
+    "Type": "discussion",
+    "For": "Agreement",
+    "AgendaItem": "5.4",
+    "AgendaItemDesc": "FS_6G_MED - General and working documents",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260088",
+    "Title": "Proposed Planning for AHG and SA4#138",
+    "Source": "Qualcomm Germany",
+    "Type": "discussion",
+    "For": "",
+    "AgendaItem": "5.4",
+    "AgendaItemDesc": "FS_6G_MED - General and working documents",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260089",
+    "Title": "[FS_6G_MED] Considerations on TR organization",
+    "Source": "InterDigital, Europe, Ltd.",
+    "Type": "discussion",
+    "For": "Agreement",
+    "AgendaItem": "5.0",
+    "AgendaItemDesc": "SA4 WG on FS_6G_MED (Study on Media aspects for 6G System)",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260090",
+    "Title": "[FS_6G_MED] Review of Incoming Liaison Statements Related to 6G",
+    "Source": "Qualcomm Germany",
+    "Type": "discussion",
+    "For": "",
+    "AgendaItem": "5.3",
+    "AgendaItemDesc": "Reports/Liaisons from other groups/meetings",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260091",
+    "Title": "[FS_6G_MED] Clarification of AI-native Traffic Characteristics in Clause 6.3.3",
+    "Source": "NTT DOCOMO INC..",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260092",
+    "Title": "[FS_6G_MED] Tabular Specification of High Communication Frequency Metrics",
+    "Source": "NTT DOCOMO INC..",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260093",
+    "Title": "[FS_6G_MED] Tabular Specification of Small Packet Traffic Metrics",
+    "Source": "NTT DOCOMO INC..",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260094",
+    "Title": "Evaluation layers for the 2D video downlink streaming scenario – relation between S4-261588 and S4-261457 and proposed way forward",
+    "Source": "Huawei Technologies France",
+    "Type": "discussion",
+    "For": "Agreement",
+    "AgendaItem": "5.6",
+    "AgendaItemDesc": "FS_6G_MED - WT#2: 6G Media",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260095",
+    "Title": "[FS_6G_MED] WT2.1: 2D Video Traffic – Downlink Streaming Scenario",
+    "Source": "Qualcomm Germany",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.3",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.3: Non-AI-related topics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260096",
+    "Title": "[FS_6G_MED] Stabilization and Harmonization of AI Traffic Characterization Data in TR 26.870",
+    "Source": "Qualcomm Germany",
+    "Type": "pCR",
+    "For": "Agreement",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260097",
+    "Title": "[FS_6G_MED] New test scenarios to address the questions from SA1",
+    "Source": "Qualcomm Incorporated",
+    "Type": "discussion",
+    "For": "",
+    "AgendaItem": "5.6.1",
+    "AgendaItemDesc": "FS_6G_MED - WT#2.1: AI Traffic Characteristics",
+    "Status": "available"
+  },
+  {
+    "TDoc": "S4aP260098",
+    "Title": "Proposed agenda for SA4 AH conf. call on FS_6G_MED (22nd September, 2026)",
+    "Source": "SA4 Chair (Tencent)",
+    "Type": "agenda",
+    "For": "Approval",
+    "AgendaItem": "5.1",
+    "AgendaItemDesc": "Opening of the session and registration of documents",
+    "Status": "available"
+  }
+]

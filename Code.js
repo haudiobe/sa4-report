@@ -5948,7 +5948,22 @@ function buildSkeletonWithTdocTables() {
   const sourceBody = DocumentApp.openById(templateDocId).getBody();
   const agendaPrefixNum = (cfg.AGENDA_ITEM_PREFIX || '0.').replace(/\.$/, '');
   const reportType = cfg.REPORT_SUFFIX || '6G';
-  const is6G = (reportType === '6G');
+  // SA4-PROD-001: the nested X.0.1-X.0.4 skeleton below (opening/registration/
+  // reallocation/IPR bundled under a synthetic "X.0" parent) is the MAIN
+  // 6G-plenary meeting's own template convention. Real evidence from 3GPP
+  // meeting 86178 (SA4-e (AH) on FS_6G_MED, a REPORT_SUFFIX='6G' ad-hoc)
+  // shows its actual agenda uses the SAME flat X.1 (Opening) / X.2 (IPR)
+  // numbering as SWG reports, not X.0.1-X.0.4 -- reusing the nested
+  // convention here would duplicate Opening/IPR (once as synthetic X.0.x,
+  // once as the real X.1/X.2 items) and misnumber the report. This is an
+  // isolated, transitional guard on meeting.type, not a general
+  // frontMatterProfile resolution -- report.structureProfile is still
+  // 'main-6g' and known-imperfect for this ad-hoc case, left as-is per the
+  // same deferral SA4-IMPL-004/007 already established for ULBC-MED. Every
+  // existing main-meeting 6G test is unaffected: context.meeting.type is
+  // 'main' there, so is6G is unchanged for them.
+  const context = getMeetingContext_();
+  const is6G = (reportType === '6G') && context.meeting.type !== 'adhoc';
 
   // For 6G reports, create the 11.0 parent section first
   if (is6G) {
@@ -6183,7 +6198,15 @@ function buildSkeletonWithTdocTables() {
   });
   
   // Add AOB and Close of Session at the end if they weren't in the agenda
-  if (!hasAOB) {
+  // SA4-PROD-001: real evidence from meeting 86178's actual agenda (...5.10
+  // "Other issues", 5.11 "Close of the session", no explicit AOB item) shows
+  // a valid 3GPP ad-hoc agenda can end at Close with no separate AOB item.
+  // Unconditionally auto-appending a synthetic AOB heading after an
+  // already-present Close heading would put "Any other business" AFTER
+  // "Close of the session" -- nonsensical. Every existing main-meeting
+  // fixture agenda already has both AOB and Close as explicit items
+  // (hasAOB is true there), so this added guard never changes their output.
+  if (!hasAOB && !hasCloseOfSession) {
     const lastAgendaNum = filteredAgendaItems[filteredAgendaItems.length - 1].number;
     const aobNum = incrementAgendaNumber_(lastAgendaNum);
     body.appendParagraph(`${aobNum} Any other business`).setHeading(DocumentApp.ParagraphHeading.HEADING2);
