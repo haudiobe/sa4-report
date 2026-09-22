@@ -4991,7 +4991,7 @@ function configureMeetingSettings() {
         // stage markers so "response returned to client" / "client
         // success handler entered" / "client preview render completed"
         // can be distinguished from a genuine server-side stall.
-        console.log('resolveMeeting(): client invoking google.script.run.resolveMeetingForConfigDialog_');
+        console.log('resolveMeeting(): client invoking google.script.run.resolveMeetingForConfigDialog');
         google.script.run
           .withSuccessHandler(function(result) {
             console.log('resolveMeeting(): response returned to client, success handler entered');
@@ -5022,7 +5022,7 @@ function configureMeetingSettings() {
             // Dialog stays open -- resolution failure never closes it or
             // saves anything.
           })
-          .resolveMeetingForConfigDialog_(meetingId);
+          .resolveMeetingForConfigDialog(meetingId);
       }
 
       // PROD-016: separate, explicit enrichment action -- fetches
@@ -5064,7 +5064,7 @@ function configureMeetingSettings() {
             statusEl.className = 'error';
             statusEl.textContent = '\\u274C Discovery failed: ' + error + ' -- core meeting configuration above is unaffected.';
           })
-          .discoverAgendaForConfigDialog_(meetingId, lastResolvedCore);
+          .discoverAgendaForConfigDialog(meetingId, lastResolvedCore);
       }
 
       function saveConfig() {
@@ -8891,17 +8891,31 @@ function computeMeetingConfigReadiness_(props) {
 }
 
 /**
- * PROD-016: the dialog's "Resolve" button calls this. Reads current
- * Document Properties (read-only) and calls resolveMeetingCoreById_() --
- * NOT the full resolveMeetingById_() -- so this returns as soon as
- * GetMeetings (plus, rarely, GetiCal) succeeds, WITHOUT ever touching
- * TdocList.aspx. That fetch was found live to make Resolve hang 90+
- * seconds even after PROD-014 removed the revisions probe; agenda/TDoc
- * discovery is now the separate "Discover Agenda / TDocs" action
- * (discoverAgendaForConfigDialog_(), below). NEVER writes to
+ * PROD-016: reads current Document Properties (read-only) and calls
+ * resolveMeetingCoreById_() -- NOT the full resolveMeetingById_() -- so
+ * this returns as soon as GetMeetings (plus, rarely, GetiCal) succeeds,
+ * WITHOUT ever touching TdocList.aspx. That fetch was found live to make
+ * Resolve hang 90+ seconds even after PROD-014 removed the revisions
+ * probe; agenda/TDoc discovery is now the separate "Discover Agenda /
+ * TDocs" action (discoverAgendaForConfigDialog_(), below). NEVER writes to
  * PropertiesService -- resolution and persistence are deliberately
  * separate actions (clicking Resolve alone must never change saved
  * configuration).
+ *
+ * RESOLVER-HOTFIX: this is the internal implementation only -- the
+ * dialog's "Resolve" button does NOT call this directly any more. Apps
+ * Script's google.script.run can only invoke a PUBLIC top-level function;
+ * a function name ending in "_" is treated as private by Apps Script
+ * convention (hidden from the IDE's function selector, not assignable as
+ * a trigger handler, and NOT invokable via google.script.run from client
+ * HTML) -- this function's trailing underscore meant the client's RPC
+ * call to it was silently never dispatched at all (confirmed live: Apps
+ * Script Executions showed zero executions of this function after
+ * clicking Resolve, only the unrelated configureMeetingSettings() call
+ * that renders the dialog itself). See resolveMeetingForConfigDialog()
+ * (no trailing underscore) below for the actual public RPC entry point;
+ * this internal function, its name, and every existing test against it
+ * are otherwise unchanged.
  */
 function resolveMeetingForConfigDialog_(meetingIdInput) {
   // POST-MEETING-001 (Task A5): manual-diagnostic stage markers only --
@@ -8950,12 +8964,26 @@ function resolveMeetingForConfigDialog_(meetingIdInput) {
 }
 
 /**
+ * RESOLVER-HOTFIX: the actual public google.script.run entry point the
+ * Configure Meeting Settings dialog's "Resolve" button calls -- see
+ * resolveMeetingForConfigDialog_()'s own header comment above for why a
+ * trailing underscore made the original direct RPC target silently
+ * uncallable. A thin, otherwise-behavior-free delegation, so the tested,
+ * documented internal implementation and its name are unchanged.
+ */
+function resolveMeetingForConfigDialog(meetingIdInput) {
+  return resolveMeetingForConfigDialog_(meetingIdInput);
+}
+
+/**
  * PROD-016: the dialog's new, SEPARATE "Discover Agenda / TDocs" button
- * calls this. Takes the meetingId AND the previously-resolved CORE result
- * (from resolveMeetingForConfigDialog_(), which the client already has in
- * hand) -- this avoids re-fetching GetMeetings, and its own TdocList.aspx
- * fetch (via enrichMeetingFromTdocList_()) is the ONLY network call it
- * makes. Reads current Document Properties (read-only, same fields as
+ * calls the public discoverAgendaForConfigDialog() wrapper below (see
+ * RESOLVER-HOTFIX), which delegates here. Takes the meetingId AND the
+ * previously-resolved CORE result (from resolveMeetingForConfigDialog_(),
+ * which the client already has in hand) -- this avoids re-fetching
+ * GetMeetings, and its own TdocList.aspx fetch (via
+ * enrichMeetingFromTdocList_()) is the ONLY network call it makes. Reads
+ * current Document Properties (read-only, same fields as
  * resolveMeetingForConfigDialog_()) and NEVER writes to PropertiesService
  * -- enrichment and persistence are separate actions, exactly like Resolve
  * itself. Refuses (without ever calling TdocList.aspx) if no valid core
@@ -9000,4 +9028,15 @@ function discoverAgendaForConfigDialog_(meetingIdInput, coreResolved) {
     resolved: enriched,
     preview: computeResolvedMeetingPreview_(existing, enriched)
   };
+}
+
+/**
+ * RESOLVER-HOTFIX: the actual public google.script.run entry point the
+ * Configure Meeting Settings dialog's "Discover Agenda / TDocs" button
+ * calls -- see resolveMeetingForConfigDialog()'s header comment for why a
+ * trailing underscore makes a function uncallable via google.script.run.
+ * A thin, otherwise-behavior-free delegation.
+ */
+function discoverAgendaForConfigDialog(meetingIdInput, coreResolved) {
+  return discoverAgendaForConfigDialog_(meetingIdInput, coreResolved);
 }

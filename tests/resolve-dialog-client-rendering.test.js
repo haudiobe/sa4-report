@@ -114,8 +114,14 @@ function makeFakeRunner(response) {
     }
     if (successHandler) successHandler(response.result);
   }
-  runner.resolveMeetingForConfigDialog_ = invoke;
-  runner.discoverAgendaForConfigDialog_ = invoke;
+  // RESOLVER-HOTFIX: the dialog's client script calls the PUBLIC
+  // wrapper names (no trailing "_") -- google.script.run cannot invoke a
+  // private ("_"-suffixed) function at all. Only the public names are
+  // stubbed here on purpose: if the client script ever regresses back to
+  // calling a "_"-suffixed name directly, that call would hit `undefined`
+  // and throw, which is exactly the failure this suite exists to catch.
+  runner.resolveMeetingForConfigDialog = invoke;
+  runner.discoverAgendaForConfigDialog = invoke;
   runner.saveConfigurationSettings = invoke;
   return runner;
 }
@@ -233,6 +239,55 @@ console.log('resolveMeeting() -- withFailureHandler path (e.g. a genuine server-
   check('status shows the failure, not stuck on "Resolving from 3GPP…"', fakeDocument._registry.resolveStatus.textContent.indexOf('Resolving from 3GPP') === -1, true);
   check('status mentions the failure reason', fakeDocument._registry.resolveStatus.textContent.indexOf('simulated Apps Script server error') !== -1, true);
   check('resolve button is re-enabled after a failure', fakeDocument._registry.resolveBtn.disabled, false);
+}
+
+// ============ 5. RESOLVER-HOTFIX regression: reproduces the exact live bug =
+
+console.log('RESOLVER-HOTFIX regression: a runner exposing ONLY the private "_" names reproduces the exact live symptom (stuck busy state)');
+
+{
+  // This is the ORIGINAL, buggy live configuration: a google.script.run
+  // stand-in that only has the "_"-suffixed methods (matching what Apps
+  // Script itself does -- a private function simply is not callable via
+  // google.script.run at all, so neither success nor failure handler is
+  // ever invoked). The real client script now calls the PUBLIC name, so
+  // this runner's methods are never reached -- exactly reproducing "no
+  // execution at all" from the live Apps Script Executions log, and the
+  // dialog staying on "Resolving from 3GPP…" forever.
+  let successHandler = null;
+  const privateOnlyRunner = {
+    withSuccessHandler: (fn) => { successHandler = fn; return privateOnlyRunner; },
+    withFailureHandler: (fn) => { return privateOnlyRunner; },
+    resolveMeetingForConfigDialog_: () => { throw new Error('should never be reached: the client no longer calls the private name'); }
+    // Deliberately no `resolveMeetingForConfigDialog` (public) method --
+    // simulates google.script.run's real behavior when only a private
+    // function was ever exposed to it.
+  };
+
+  const scriptText = extractConfigureMeetingSettingsScript();
+  const fakeDocument = makeFakeDocument();
+  const sandboxGlobals = {
+    document: fakeDocument,
+    google: { script: { run: privateOnlyRunner, host: { close: () => {} } } },
+    alert: () => {},
+    console
+  };
+  vm.createContext(sandboxGlobals);
+  vm.runInContext(scriptText, sandboxGlobals, { filename: 'regression-private-only-runner.js' });
+
+  let threw = null;
+  try {
+    sandboxGlobals.resolveMeeting();
+  } catch (e) {
+    threw = e;
+  }
+
+  check('calling resolveMeeting() against a runner with ONLY the private name throws (proves the client now genuinely depends on the public name existing)',
+    threw !== null, true);
+  check('neither handler ever fired -- the busy state is never cleared, reproducing the exact live "stuck" symptom',
+    fakeDocument._registry.resolveStatus.textContent, 'Resolving from 3GPP…');
+  check('the resolve button is also left disabled -- the full stuck-UI symptom, not just the status text',
+    fakeDocument._registry.resolveBtn.disabled, true);
 }
 
 // ========================================================== summary =======
