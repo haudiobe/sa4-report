@@ -2693,6 +2693,72 @@ function dedupePreviewFirst_(arr) {
  * (undefined) if none was ever set -- the exact same graceful "not
  * configured" early return below.
  */
+/**
+ * HOTFIX-001: normalizes a stored/candidate revision entry's identity key
+ * for deduplication -- prefers its link (URL), falling back to its
+ * filename only when no URL was resolved. `decodeURIComponent` is applied
+ * so two encodings of the literal same URL (e.g. a space as "%20" vs a
+ * literal space) collapse to the SAME key rather than being treated as two
+ * different files; an undecodable string is used as-is rather than
+ * throwing. Returns '' (never null/undefined) for a genuinely empty entry,
+ * so callers can uniformly skip it.
+ */
+function normalizeRevisionKey_(item) {
+  const raw = String((item && (item.link || item.text)) || '').trim();
+  if (!raw) return '';
+  try { return decodeURIComponent(raw); } catch (e) { return raw; }
+}
+
+/**
+ * HOTFIX-001: root cause of the live meeting-86178 corruption (repeated/
+ * concatenated filenames, broken hyperlinks in cells like S4aP260068's and
+ * S4aP260075's, each of which legitimately has multiple real draft files)
+ * was in the ORIGINAL rendering loop, not the matching/store logic itself:
+ * it called `cell.editAsText()` ONCE, then repeatedly called
+ * `te.appendText(line + '\n')` per revision, re-querying `te.getText().length`
+ * for each new offset and calling `te.setLinkUrl()` immediately after each
+ * append -- i.e. interleaving live text MUTATION with offset-range
+ * CALCULATION and immediate hyperlink APPLICATION against a Text object
+ * that was still changing. Apps Script's own documented behavior is that a
+ * literal "\n" passed to Text.appendText() does not behave like a plain
+ * appended character (it is a paragraph-affecting insertion, not a stable,
+ * purely-additive text run) -- continuing to mutate/query the SAME `te`
+ * reference afterward is exactly the kind of "stale reference" pattern
+ * that produces the concatenation/corruption actually observed live.
+ *
+ * The fix: build the ENTIRE final cell text as a single, ordinary
+ * JavaScript string FIRST (no Apps Script calls at all), replace the
+ * cell's contents with exactly ONE cell.setText(fullText) call, and ONLY
+ * THEN compute each line's start/end offsets via plain string arithmetic
+ * against that now-STABLE, already-final text -- no further text mutation
+ * happens after this point, so every setLinkUrl() call operates against
+ * offsets that can never have shifted underneath it. This also REPAIRS an
+ * already-corrupted cell from a prior run for free: the cell's contents
+ * are always fully replaced, never appended to.
+ */
+function renderRevisionsCellContent_(cell, orderedRevisions) {
+  const entries = orderedRevisions
+    .map(item => ({ line: String(item.text || '').trim(), link: item.link }))
+    .filter(e => e.line);
+
+  if (!entries.length) {
+    if (!cell.getText().trim()) cell.setText('No revisions available.');
+    return;
+  }
+
+  const fullText = entries.map(e => e.line).join('\n');
+  cell.setText(fullText);
+
+  const te = cell.editAsText();
+  let offset = 0;
+  entries.forEach(e => {
+    const start = offset;
+    const end = start + e.line.length - 1; // setLinkUrl's endOffsetInclusive
+    if (e.link) { try { te.setLinkUrl(start, end, e.link); } catch (err) { } }
+    offset = end + 2; // skip past this line's '\n' separator
+  });
+}
+
 function updateRevisions_(cfg) {
   const baseUrl = String(getMeetingContext_().sources.revisionsUrl || '').trim();
   if (!baseUrl) return;
@@ -2721,7 +2787,6 @@ function updateRevisions_(cfg) {
     const storeKey = 'REVIS_' + tdoc;
     const store = loadJsonObject_(props.getProperty(storeKey));
 
-    let added = 0;
     anchors.forEach(a => {
       // PROD-017: match by CANONICAL TDoc identity (parsed out of the
       // anchor's filename via the central registry -- parseDraftAnchor_()),
@@ -2732,37 +2797,41 @@ function updateRevisions_(cfg) {
       // Exact canonical-string equality against `tdoc` rules that out.
       const draft = parseDraftAnchor_(a, url);
       if (!draft || draft.tdocId !== tdoc) return;
-      const id = (draft.url || draft.fileName).trim();
+      const id = normalizeRevisionKey_({ link: draft.url, text: draft.fileName });
       if (!id) return;
-      if (!store[id]) { store[id] = { text: draft.fileName, link: draft.url }; added++; }
+      if (!store[id]) { store[id] = { text: draft.fileName, link: draft.url }; }
     });
 
+    // HOTFIX-001: REVIS_<tdoc> is an accumulating, cross-run CACHE (so a
+    // single transient fetch failure never loses a previously-discovered
+    // draft) -- it is intentionally NOT wiped/replaced wholesale here. But
+    // it must never be allowed to RENDER a duplicate: re-key every stored
+    // entry through the SAME normalizeRevisionKey_() used above, so two
+    // entries that only differ by an incidental encoding/casing
+    // difference in how their URL was captured on different runs collapse
+    // into exactly one rendered line.
+    const deduped = {};
+    Object.values(store).forEach(item => {
+      const key = normalizeRevisionKey_(item);
+      if (!key) return;
+      if (!deduped[key]) deduped[key] = item;
+    });
     props.setProperty(storeKey, JSON.stringify(store));
-    const ordered = Object.values(store).sort((x, y) => String(x.text || '').localeCompare(String(y.text || '')));
-
-    // Write revisions into the Revisions cell of this table
-    const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
-
-    if (!ordered.length) {
-      if (!cell.getText().trim()) cell.setText('No revisions available.');
-      return;
-    }
-
-    cell.setText('');
-    const te = cell.editAsText();
-    ordered.forEach(item => {
-      const line = String(item.text || '').trim();
-      if (!line) return;
-      const start = te.getText().length;
-      te.appendText(line + '\n');
-      if (item.link) { try { te.setLinkUrl(start, start + line.length - 1, item.link); } catch (e) { } }
+    const ordered = Object.values(deduped).sort((x, y) => {
+      const byText = String(x.text || '').localeCompare(String(y.text || ''));
+      return byText !== 0 ? byText : String(x.link || '').localeCompare(String(y.link || ''));
     });
+
+    // Write revisions into the Revisions cell of this table -- see
+    // renderRevisionsCellContent_() for the HOTFIX-001 rendering fix.
+    const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
+    renderRevisionsCellContent_(cell, ordered);
 
     // Also insert the revision tables directly after this TDOC table in the document.
     // Find the revised TDOCs and insert their tables immediately after this one.
     insertRevisedDocTablesAfter_(body, t, ordered, cfg);
 
-    log_(cfg, 'Revisions updated', { tdoc, added, total: ordered.length });
+    log_(cfg, 'Revisions updated', { tdoc, total: ordered.length });
   });
 }
 
