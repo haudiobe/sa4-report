@@ -7392,3 +7392,543 @@ function applyDocumentReallocations() {
     ui.ButtonSet.OK
   );
 }
+
+// =========================================================
+// ARCH-009 -- MEETING-ID RESOLVER CORE
+// =========================================================
+//
+// Built from the ARCH-007/ARCH-008 investigations. This section is
+// DELIBERATELY ADDITIVE and NOT wired into getMeetingContext_(), the
+// configuration dialog, or any other production consumer -- every function
+// here is dead code from the rest of the app's point of view until a
+// future task explicitly integrates it. Nothing here mutates
+// PropertiesService.
+//
+// Three real, anonymous, official 3GPP/ETSI endpoints, verified during
+// ARCH-007/008 against real meeting IDs (86178, 86174, 85916, 60778) with
+// no cookies, no session, no auth header, and (for two of the three) no
+// User-Agent at all:
+//
+//   - POST https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetMeetings
+//     (primary identity/date/FTP source)
+//   - GET  https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/{id}.ics
+//     (secondary identity/date source)
+//   - GET  https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId={id}
+//     (TDoc/agenda discovery source)
+//
+// Network access (fetchMeetingMetadataById_/fetchMeetingIcalById_/
+// fetchMeetingTdocListById_) is kept separate from parsing/normalization
+// (everything else below), so the parsing/normalization logic is pure and
+// independently testable without UrlFetchApp -- see
+// tests/meeting-resolver.test.js.
+
+/**
+ * ARCH-009: validates and normalizes a Meeting ID input. Accepts a
+ * positive integer or a string containing ONLY digits (after trimming) --
+ * never extracts digits from arbitrary surrounding text (e.g. "id: 86178"
+ * is rejected, not silently parsed). Rejects empty/blank, non-numeric,
+ * zero, negative, and non-integer (e.g. 86178.5) values.
+ */
+function parseMeetingIdInput_(input) {
+  if (input === null || input === undefined) {
+    return { isValid: false, id: null, error: 'Meeting ID is required.' };
+  }
+  if (typeof input === 'number') {
+    if (!Number.isFinite(input) || !Number.isInteger(input) || input <= 0) {
+      return { isValid: false, id: null, error: 'Meeting ID must be a positive integer.' };
+    }
+    return { isValid: true, id: input, error: null };
+  }
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (trimmed === '') {
+      return { isValid: false, id: null, error: 'Meeting ID is required.' };
+    }
+    if (!/^[0-9]+$/.test(trimmed)) {
+      return { isValid: false, id: null, error: 'Meeting ID must contain only digits.' };
+    }
+    const n = parseInt(trimmed, 10);
+    if (n <= 0) {
+      return { isValid: false, id: null, error: 'Meeting ID must be a positive integer.' };
+    }
+    return { isValid: true, id: n, error: null };
+  }
+  return { isValid: false, id: null, error: 'Meeting ID must be a number or a numeric string.' };
+}
+
+// ----------------------------------------------- network access (impure) --
+
+function fetchMeetingMetadataById_(meetingId) {
+  const url = 'https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetMeetings';
+  const payload = JSON.stringify({
+    getMeetingsInput: {
+      MeetingId: meetingId,
+      StartRow: 0,
+      ResultsPerPage: 1,
+      IncludeChildTbs: true,
+      IncludeNonTBMeetings: true,
+      Tbs: [0]
+    }
+  });
+  const response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: payload,
+    muteHttpExceptions: true
+  });
+  return { statusCode: response.getResponseCode(), text: response.getContentText() };
+}
+
+function fetchMeetingIcalById_(meetingId) {
+  const url = `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${meetingId}.ics`;
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  return { statusCode: response.getResponseCode(), text: response.getContentText() };
+}
+
+function fetchMeetingTdocListById_(meetingId) {
+  const url = `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${meetingId}`;
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  return { statusCode: response.getResponseCode(), text: response.getContentText() };
+}
+
+// -------------------------------------- pure parsing/normalization below --
+
+/**
+ * ARCH-009: parses a fetchMeetingMetadataById_() result. Handles: non-200
+ * HTTP status, malformed JSON, a non-array response, and a valid-but-empty
+ * array (a syntactically valid Meeting ID that Portal does not recognize --
+ * NOT an error, `meeting` is simply null).
+ */
+function parseMeetingMetadataResponse_(fetchResult) {
+  if (!fetchResult || fetchResult.statusCode !== 200) {
+    return { ok: false, meeting: null, error: `GetMeetings returned HTTP ${fetchResult ? fetchResult.statusCode : 'unknown'}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(fetchResult.text);
+  } catch (e) {
+    return { ok: false, meeting: null, error: 'GetMeetings response was not valid JSON: ' + e.message };
+  }
+  if (!Array.isArray(parsed)) {
+    return { ok: false, meeting: null, error: 'GetMeetings response was not an array.' };
+  }
+  if (parsed.length === 0) {
+    return { ok: true, meeting: null, error: null };
+  }
+  return { ok: true, meeting: parsed[0], error: null };
+}
+
+/**
+ * ARCH-009: strips a literal leading "3GPP" marker only (e.g.
+ * "3GPPSA4-e (AH) on FS_6G_MED" -> "SA4-e (AH) on FS_6G_MED"). Deliberately
+ * narrow -- an explicit, tested helper, not broad title rewriting. The
+ * original Portal title is always preserved separately by the caller
+ * (resolveMeetingById_()'s `raw.meeting`).
+ */
+function normalizePortalMeetingTitle_(rawTitle) {
+  const s = String(rawTitle || '').trim();
+  if (s.indexOf('3GPP') === 0) {
+    return s.slice(4);
+  }
+  return s;
+}
+
+// SA4-ARCH-009: only these two Portal `Type` codes are verified (against
+// 4 real meetings: "AH" x3, "OR" x1). Do not add unverified codes here --
+// an unrecognized code must surface as unresolved, never guessed.
+const PORTAL_MEETING_TYPE_MAP_ = { AH: 'adhoc', OR: 'main' };
+
+/**
+ * ARCH-009: maps a raw Portal `Type` code to this project's
+ * meeting.type vocabulary. Returns `recognized:false` (never a guess from
+ * title text) for anything outside PORTAL_MEETING_TYPE_MAP_.
+ */
+function normalizePortalMeetingType_(rawType) {
+  const key = String(rawType || '').trim();
+  if (Object.prototype.hasOwnProperty.call(PORTAL_MEETING_TYPE_MAP_, key)) {
+    return { type: PORTAL_MEETING_TYPE_MAP_[key], portalType: key, recognized: true };
+  }
+  return { type: null, portalType: key || null, recognized: false };
+}
+
+/**
+ * ARCH-009: normalizes a Portal `MtgDocURL` into the actual TDoc Docs/
+ * directory. Conservative by design:
+ *   - collapses an accidental doubled slash right after the host (observed
+ *     on meeting 86178: "https://ftp.3gpp.org//tsg_sa/...") without
+ *     touching the "://" itself;
+ *   - never changes path segment casing (observed to vary --
+ *     "TSG_SA" vs "tsg_sa" -- across real meetings; this function does not
+ *     "fix" that, it passes it through untouched);
+ *   - if the path already ends in "/Docs/" (case-insensitive check), keeps
+ *     it as-is;
+ *   - otherwise appends literal "Docs/" -- this is the ONLY case observed
+ *     (meeting 86178) and the only case handled; nothing else is inferred.
+ */
+function normalizeMtgDocUrlToFtpBase_(mtgDocUrl) {
+  if (!mtgDocUrl || !String(mtgDocUrl).trim()) {
+    return { ftpBase: null, error: 'MtgDocURL is missing.' };
+  }
+  let s = String(mtgDocUrl).trim();
+  s = s.replace(/^(https?:\/\/[^/]+)\/{2,}/, '$1/');
+  s = s.replace(/([^:])\/{2,}/g, '$1/');
+  if (!/\/$/.test(s)) s += '/';
+  if (/\/Docs\/$/i.test(s)) {
+    return { ftpBase: s, error: null };
+  }
+  return { ftpBase: s + 'Docs/', error: null };
+}
+
+/**
+ * ARCH-009: minimal, line-based ICS property extraction (UID, SUMMARY,
+ * DTSTART, DTEND, LOCATION, DESCRIPTION) -- the properties this project's
+ * GetiCal responses were observed to contain. No RFC-5545 folding/
+ * unfolding, no timezone conversion -- this is a secondary/cross-check
+ * source, not the primary one.
+ */
+function parseMeetingIcal_(icsText) {
+  const text = String(icsText || '');
+  function extractLine(name) {
+    const m = text.match(new RegExp('^' + name + ':(.*)$', 'm'));
+    return m ? m[1].trim() : null;
+  }
+  return {
+    uid: extractLine('UID'),
+    summary: extractLine('SUMMARY'),
+    dtstart: extractLine('DTSTART'),
+    dtend: extractLine('DTEND'),
+    location: extractLine('LOCATION'),
+    description: extractLine('DESCRIPTION')
+  };
+}
+
+function decodeTdocListHtmlEntities_(s) {
+  return String(s || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, '\'')
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ');
+}
+
+function stripTdocListHtmlTags_(s) {
+  return String(s || '').replace(/<[^>]*>/g, '').trim();
+}
+
+/**
+ * ARCH-009: splits one TdocList.aspx grid row's HTML into its top-level
+ * <td>...</td> cell contents, in column order. Verified against real
+ * captured rows from meetings 86178 (32 TDocs) and 60778 (482 TDocs,
+ * confirming this also scales to the largest real fixture observed) --
+ * these RadGrid rows do not nest additional <table> markup inside a cell,
+ * so a non-greedy <td>...</td> match is safe for this specific tool's
+ * output. Column indices (0-based), confirmed by direct inspection of real
+ * rows for BOTH an "agenda"-typed row and a revision pair:
+ *   0 = details-icon cell (no text)      6 = For
+ *   1 = TDoc link (id + FTP url)         7 = meeting name (constant per meeting)
+ *   2 = Type                             8 = agenda allocation (span.agendaItem)
+ *   3 = Title                            9 = Revision of (link or empty anchor)
+ *   4 = Source                          10 = Revised To (link or empty)
+ *   5 = Status                          11 = Extra info (usually empty)
+ */
+function extractTdocListRowCells_(rowHtml) {
+  const cells = [];
+  const re = /<td[^>]*>([\s\S]*?)<\/td>/g;
+  let m;
+  while ((m = re.exec(rowHtml))) {
+    cells.push(m[1]);
+  }
+  return cells;
+}
+
+function extractTdocListRevisionLinkId_(cellHtml) {
+  if (!cellHtml) return null;
+  const m = cellHtml.match(/<a[^>]*>([^<]*)<\/a>/);
+  if (!m) return null;
+  const text = decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(m[1]));
+  return text ? text : null;
+}
+
+/**
+ * ARCH-009: parses TdocList.aspx's server-rendered HTML into one object per
+ * TDoc row. Does not depend on any browser DOM API (Apps Script has none) --
+ * pure regex/string parsing only. Rows that don't contain a recognizable
+ * TDoc link (e.g. a header/pager row that also happens to carry an
+ * rgRow-shaped class) are silently skipped rather than producing a
+ * malformed entry.
+ */
+function parseMeetingTdocListHtml_(html) {
+  const text = String(html || '');
+  const rows = [];
+  const rowRe = /<tr[^>]*class="(?:rgRow|rgAltRow)"[\s\S]*?<\/tr>/g;
+  let rowMatch;
+  while ((rowMatch = rowRe.exec(text))) {
+    const rowHtml = rowMatch[0];
+    const cells = extractTdocListRowCells_(rowHtml);
+    const tdocLinkMatch = cells[1] && cells[1].match(/<a[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/);
+    if (!tdocLinkMatch) continue;
+
+    const id = decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(tdocLinkMatch[2]));
+    const url = decodeTdocListHtmlEntities_(tdocLinkMatch[1]);
+    const agendaSpanMatch = rowHtml.match(/<span[^>]*title="([^"]*)"[^>]*class="agendaItem"[^>]*>([^<]*)<\/span>/);
+
+    rows.push({
+      id: id,
+      url: url,
+      type: decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(cells[2] || '')),
+      title: decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(cells[3] || '')),
+      source: decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(cells[4] || '')),
+      status: decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(cells[5] || '')),
+      forAction: decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(cells[6] || '')),
+      meetingName: decodeTdocListHtmlEntities_(stripTdocListHtmlTags_(cells[7] || '')),
+      agendaItem: agendaSpanMatch ? decodeTdocListHtmlEntities_(agendaSpanMatch[2].trim()) : null,
+      agendaTopic: agendaSpanMatch ? decodeTdocListHtmlEntities_(agendaSpanMatch[1]) : null,
+      revisionOf: extractTdocListRevisionLinkId_(cells[9]),
+      revisedTo: extractTdocListRevisionLinkId_(cells[10])
+    });
+  }
+  return rows;
+}
+
+/**
+ * ARCH-009: pure agenda-candidate selection over already-parsed TDoc rows.
+ * Algorithm (per the ARCH-008 evidence-based design):
+ *   1. candidates = rows where type === "agenda" (case-insensitive);
+ *   2. a candidate that is named as another agenda candidate's
+ *      `revisionOf` target is superseded -- excluded from "current";
+ *   3. if exactly one current candidate remains, it is the resolved
+ *      agendaTdoc;
+ *   4. zero candidates -> agendaTdoc: null, unresolved reason "no agenda
+ *      TDoc found" (verified real case: meeting 86174);
+ *   5. more than one still-current candidate -> agendaTdoc: null,
+ *      ambiguous: true, every remaining candidate listed -- never a silent
+ *      pick.
+ * Never infers anything from title text; `status` and `revisionOf` are the
+ * only signals used, matching what was actually evidenced (60778: the
+ * "revised" S4-261375 / "approved" S4-261392 pair).
+ */
+function selectAgendaCandidate_(tdocRows) {
+  const rows = Array.isArray(tdocRows) ? tdocRows : [];
+  const agendaCandidates = rows.filter(r => String(r.type || '').trim().toLowerCase() === 'agenda');
+
+  if (agendaCandidates.length === 0) {
+    return { agendaTdoc: null, candidates: [], ambiguous: false, unresolvedReason: 'No TDoc with type "agenda" was found.' };
+  }
+
+  const supersededIds = {};
+  agendaCandidates.forEach(c => {
+    if (c.revisionOf) supersededIds[c.revisionOf] = true;
+  });
+  const current = agendaCandidates.filter(c => !supersededIds[c.id]);
+
+  if (current.length === 1) {
+    return { agendaTdoc: current[0].id, candidates: current, ambiguous: false, unresolvedReason: null };
+  }
+  if (current.length === 0) {
+    // Every agenda-typed candidate was superseded by another -- shouldn't
+    // normally happen (something must be "current"), but represent it
+    // honestly rather than falling back to a guess.
+    return { agendaTdoc: null, candidates: agendaCandidates, ambiguous: true, unresolvedReason: 'All agenda-typed TDocs appear superseded; none is clearly current.' };
+  }
+  return { agendaTdoc: null, candidates: current, ambiguous: true, unresolvedReason: 'Multiple current agenda-typed TDocs found.' };
+}
+
+/**
+ * ARCH-009: derives TDoc-family evidence from already-parsed TDoc rows,
+ * reusing the EXISTING centralized parseSA4DocumentId_()/SA4_TDOC_FAMILIES
+ * registry -- no second family-recognition implementation. Surfaces a
+ * mixed-family meeting explicitly (`consistent:false`) rather than
+ * silently picking the first family seen.
+ */
+function deriveTdocFamilyEvidence_(tdocRows) {
+  const rows = Array.isArray(tdocRows) ? tdocRows : [];
+  const familiesSeen = {};
+  const unrecognizedIds = [];
+  rows.forEach(r => {
+    const parsed = parseExactSA4DocumentId_(r.id);
+    if (parsed.isValid) {
+      familiesSeen[parsed.familyKey] = (familiesSeen[parsed.familyKey] || 0) + 1;
+    } else {
+      unrecognizedIds.push(r.id);
+    }
+  });
+  const familyKeys = Object.keys(familiesSeen);
+  return {
+    family: familyKeys.length === 1 ? familyKeys[0] : null,
+    familiesSeen: familiesSeen,
+    consistent: familyKeys.length <= 1,
+    unrecognizedIds: unrecognizedIds
+  };
+}
+
+/**
+ * ARCH-009: Meeting-ID resolver core. Orchestrates the three anonymous
+ * Portal sources above and returns a single, self-describing result object
+ * -- see tests/meeting-resolver.test.js for the exact shape asserted
+ * against real captured fixtures. NEVER mutates PropertiesService and is
+ * NOT called by any other function in this file yet (see this section's
+ * header comment) -- a future, separate task decides how/whether
+ * getMeetingContext_() ever consumes this.
+ *
+ * Every network call is individually wrapped so one source failing (HTTP
+ * error, malformed response, thrown exception) degrades to a warning, not
+ * a thrown error out of this function -- the TDoc-list and iCal fetches
+ * are treated as supplementary evidence, not hard requirements, once the
+ * primary GetMeetings call has succeeded.
+ */
+function resolveMeetingById_(meetingId) {
+  const idResult = parseMeetingIdInput_(meetingId);
+  const warnings = [];
+  const unresolved = [];
+
+  if (!idResult.isValid) {
+    return {
+      id: null,
+      meeting: null,
+      sources: null,
+      documents: null,
+      unresolved: ['meeting'],
+      warnings: [idResult.error],
+      raw: {}
+    };
+  }
+
+  const id = idResult.id;
+  const raw = {};
+
+  // --- Primary: GetMeetings -------------------------------------------
+  let metadataParsed = { ok: false, meeting: null, error: 'GetMeetings was not called.' };
+  try {
+    const metadataFetch = fetchMeetingMetadataById_(id);
+    metadataParsed = parseMeetingMetadataResponse_(metadataFetch);
+  } catch (e) {
+    metadataParsed = { ok: false, meeting: null, error: 'GetMeetings request failed: ' + e.message };
+  }
+  if (!metadataParsed.ok) {
+    warnings.push(metadataParsed.error);
+  }
+  raw.meeting = metadataParsed.meeting;
+
+  // --- Secondary: GetiCal (cross-check / fallback only) ----------------
+  let ical = null;
+  try {
+    const icalFetch = fetchMeetingIcalById_(id);
+    if (icalFetch.statusCode === 200) {
+      ical = parseMeetingIcal_(icalFetch.text);
+    } else {
+      warnings.push(`GetiCal returned HTTP ${icalFetch.statusCode}`);
+    }
+  } catch (e) {
+    warnings.push('GetiCal request failed: ' + e.message);
+  }
+  raw.ical = ical;
+
+  // --- TDoc-list / agenda discovery ------------------------------------
+  let tdocRows = [];
+  let tdocListFetchOk = false;
+  try {
+    const tdocFetch = fetchMeetingTdocListById_(id);
+    if (tdocFetch.statusCode === 200) {
+      tdocRows = parseMeetingTdocListHtml_(tdocFetch.text);
+      tdocListFetchOk = true;
+    } else {
+      warnings.push(`TdocList.aspx returned HTTP ${tdocFetch.statusCode}`);
+    }
+  } catch (e) {
+    warnings.push('TdocList.aspx request failed: ' + e.message);
+  }
+  if (tdocListFetchOk && tdocRows.length === 0) {
+    warnings.push('TdocList.aspx returned no recognizable TDoc rows.');
+  }
+
+  // --- Handle "no meeting found" up front -------------------------------
+  if (metadataParsed.ok && metadataParsed.meeting === null) {
+    unresolved.push('meeting');
+    return {
+      id: id,
+      meeting: null,
+      sources: {
+        portalMeetingUrl: `https://portal.3gpp.org/Home.aspx#/meeting?MtgId=${id}`,
+        tdocListEndpoint: `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${id}`,
+        icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`
+      },
+      documents: null,
+      unresolved: unresolved,
+      warnings: warnings,
+      raw: raw
+    };
+  }
+
+  const m = metadataParsed.meeting || {};
+  const typeInfo = normalizePortalMeetingType_(m.Type);
+  if (!typeInfo.recognized && m.Type !== undefined) {
+    unresolved.push('meeting.type');
+    warnings.push(`Unrecognized Portal meeting Type code: ${JSON.stringify(m.Type)}`);
+  }
+
+  const ftpInfo = m.MtgDocURL ? normalizeMtgDocUrlToFtpBase_(m.MtgDocURL) : { ftpBase: null, error: 'MtgDocURL is missing.' };
+  if (!ftpInfo.ftpBase) {
+    unresolved.push('sources.ftpBase');
+    warnings.push(ftpInfo.error);
+  }
+
+  const name = m.Title !== undefined ? normalizePortalMeetingTitle_(m.Title) : (ical && ical.summary ? normalizePortalMeetingTitle_(ical.summary) : null);
+  if (!name) unresolved.push('meeting.name');
+
+  const agendaResult = selectAgendaCandidate_(tdocRows);
+  if (!agendaResult.agendaTdoc) {
+    unresolved.push('documents.agendaTdoc');
+    if (agendaResult.unresolvedReason) warnings.push(agendaResult.unresolvedReason);
+  }
+
+  const familyEvidence = deriveTdocFamilyEvidence_(tdocRows);
+  if (!familyEvidence.consistent) {
+    unresolved.push('documents.family');
+    warnings.push('Inconsistent TDoc families observed: ' + JSON.stringify(familyEvidence.familiesSeen));
+  } else if (!familyEvidence.family && tdocRows.length > 0) {
+    unresolved.push('documents.family');
+  }
+
+  // Mailing list is never derived -- see ARCH-008 §6/§9. Always unresolved.
+  unresolved.push('mailingList');
+
+  return {
+    id: id,
+
+    meeting: {
+      name: name,
+      type: typeInfo.type,
+      portalType: typeInfo.portalType,
+      group: 'SA4',
+      tb: m.TB !== undefined ? m.TB : null,
+      tbId: m.TBId !== undefined ? m.TBId : null,
+      startDate: m.StartDate !== undefined ? m.StartDate : (ical ? ical.dtstart : null),
+      endDate: m.EndDate !== undefined ? m.EndDate : (ical ? ical.dtend : null),
+      timeZone: m.StartTimeZone !== undefined ? m.StartTimeZone : null,
+      location: m.Location !== undefined ? m.Location : (ical ? ical.location : null)
+    },
+
+    sources: {
+      ftpBase: ftpInfo.ftpBase,
+      portalMeetingUrl: `https://portal.3gpp.org/Home.aspx#/meeting?MtgId=${id}`,
+      tdocListEndpoint: `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${id}`,
+      icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`,
+      mailingList: null
+    },
+
+    documents: {
+      count: m.DocCount !== undefined ? m.DocCount : tdocRows.length,
+      family: familyEvidence.family,
+      familiesSeen: familyEvidence.familiesSeen,
+      agendaTdoc: agendaResult.agendaTdoc,
+      agendaCandidates: agendaResult.candidates.map(c => c.id),
+      agendaAmbiguous: agendaResult.ambiguous,
+      agendaItemsObserved: tdocRows.map(r => r.agendaItem).filter(v => v !== null && v !== undefined && v !== '')
+    },
+
+    unresolved: unresolved,
+    warnings: warnings,
+    raw: raw
+  };
+}
