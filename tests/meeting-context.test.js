@@ -1,5 +1,5 @@
 /**
- * SA4-ARCH-003 — MeetingContext compatibility-layer tests.
+ * SA4-ARCH-003 / SA4-IMPL-002 — MeetingContext compatibility-layer tests.
  *
  * getMeetingContext_() is a pure, read-only normalization of whatever
  * getReportConfig_() already returns -- see the "MEETING CONTEXT" comment
@@ -21,6 +21,16 @@
  * Also verified: getMeetingContext_() has no side effects beyond what
  * getReportConfig_() itself performs (a PropertiesService read) -- calling
  * it never writes to the property stores used by the sandbox.
+ *
+ * SA4-IMPL-002 adds direct tests of the pure resolveMeetingSources_() helper
+ * that now produces context.sources -- see the "resolveMeetingSources_"
+ * section below. These are pure-function tests with no PropertiesService
+ * involvement at all (not even the sandbox's stub), proving the resolver
+ * itself has no dependency on Apps Script or on getReportConfig_() -- it
+ * will work identically once a real ad-hoc meeting hands it explicit
+ * overrides and a numberless `derived` object, long before any production
+ * code actually does that (see the SA4-IMPL-002 report for the remaining
+ * gap: no DocumentProperty mechanism yet supplies those overrides).
  *
  * Run: node tests/meeting-context.test.js
  */
@@ -146,6 +156,147 @@ console.log('purity: getMeetingContext_() has no side effects beyond getReportCo
   check('repeated calls return deeply equal objects', JSON.stringify(second), JSON.stringify(first));
   check('repeated calls return deeply equal objects (3rd call too)', JSON.stringify(third), JSON.stringify(first));
   check('repeated calls return distinct object instances (no shared mutable state)', first === second, false);
+}
+
+// ============================== SA4-IMPL-002: resolveMeetingSources_() =====
+
+console.log('resolveMeetingSources_ -- pure precedence rule, no PropertiesService involved');
+
+const REALISTIC_MAIN_DERIVED = {
+  ftpBase: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Docs/',
+  tdocListUrl: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Docs/TDoc_List_Meeting_SA4%23136.xlsx',
+  agendaTdoc: '',
+  agendaTemplateDocId: '1qP--dusvUhNwwBtMEH4xVdxaP1c6L1hZ49geICoYV2s',
+  mailingList: '3GPP_TSG_SA_WG4',
+  draftsFolder: 'FS_6G_MED',
+  revisionsUrl: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/FS_6G_MED'
+};
+
+{
+  const { sandbox } = loadCode();
+
+  check('no overrides -- resolved sources equal derived config exactly',
+    sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, {}),
+    REALISTIC_MAIN_DERIVED);
+
+  check('no overrides object at all (undefined) -- same result as {}',
+    sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, undefined),
+    REALISTIC_MAIN_DERIVED);
+}
+
+{
+  const { sandbox } = loadCode();
+  const result = sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, { tdocListUrl: 'https://example.com/custom-list.xlsx' });
+
+  check('one override (tdocListUrl) wins', result.tdocListUrl, 'https://example.com/custom-list.xlsx');
+  check('  -> ftpBase unaffected', result.ftpBase, REALISTIC_MAIN_DERIVED.ftpBase);
+  check('  -> agendaTdoc unaffected', result.agendaTdoc, REALISTIC_MAIN_DERIVED.agendaTdoc);
+  check('  -> agendaTemplateDocId unaffected', result.agendaTemplateDocId, REALISTIC_MAIN_DERIVED.agendaTemplateDocId);
+  check('  -> mailingList unaffected', result.mailingList, REALISTIC_MAIN_DERIVED.mailingList);
+  check('  -> draftsFolder unaffected', result.draftsFolder, REALISTIC_MAIN_DERIVED.draftsFolder);
+  check('  -> revisionsUrl unaffected', result.revisionsUrl, REALISTIC_MAIN_DERIVED.revisionsUrl);
+}
+
+{
+  // Realistic ad-hoc-shaped override values (real URLs/identifiers from
+  // SA4-ARCH-005/006 evidence) -- test-only; no production default changes.
+  const { sandbox } = loadCode();
+  const adhocOverrides = {
+    ftpBase: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/',
+    tdocListUrl: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/TDoc_List_Meeting_SA4-(AH) Audio SWG on ULBC-MED.xlsx',
+    agendaTdoc: 'S4aA260090',
+    revisionsUrl: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Inbox/Drafts/'
+  };
+  const result = sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, adhocOverrides);
+
+  check('multiple overrides: ftpBase wins independently', result.ftpBase, adhocOverrides.ftpBase);
+  check('multiple overrides: tdocListUrl wins independently', result.tdocListUrl, adhocOverrides.tdocListUrl);
+  check('multiple overrides: agendaTdoc wins independently', result.agendaTdoc, adhocOverrides.agendaTdoc);
+  check('multiple overrides: revisionsUrl wins independently', result.revisionsUrl, adhocOverrides.revisionsUrl);
+  check('multiple overrides: agendaTemplateDocId NOT overridden -- falls back to derived',
+    result.agendaTemplateDocId, REALISTIC_MAIN_DERIVED.agendaTemplateDocId);
+  check('multiple overrides: mailingList NOT overridden -- falls back to derived',
+    result.mailingList, REALISTIC_MAIN_DERIVED.mailingList);
+  check('multiple overrides: draftsFolder NOT overridden -- falls back to derived',
+    result.draftsFolder, REALISTIC_MAIN_DERIVED.draftsFolder);
+}
+
+{
+  const { sandbox } = loadCode();
+  console.log('empty/blank/nullish override values fall back to derived (do not count as "explicit")');
+
+  check('empty string override falls back',
+    sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, { tdocListUrl: '' }).tdocListUrl,
+    REALISTIC_MAIN_DERIVED.tdocListUrl);
+  check('whitespace-only override falls back',
+    sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, { ftpBase: '   ' }).ftpBase,
+    REALISTIC_MAIN_DERIVED.ftpBase);
+  check('null override falls back',
+    sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, { agendaTdoc: null }).agendaTdoc,
+    REALISTIC_MAIN_DERIVED.agendaTdoc);
+  check('undefined override falls back',
+    sandbox.resolveMeetingSources_(REALISTIC_MAIN_DERIVED, { agendaTemplateDocId: undefined }).agendaTemplateDocId,
+    REALISTIC_MAIN_DERIVED.agendaTemplateDocId);
+}
+
+{
+  // SA4-IMPL-002 §6: prove the RESOLVER itself needs no MEETING_NUMBER (or
+  // any derived value at all) as long as every field it needs comes from
+  // `overrides`. This does NOT mean getReportConfig_() or any production
+  // workflow supports a numberless meeting yet -- only that this pure
+  // building block already can, ahead of that wiring existing.
+  const { sandbox } = loadCode();
+  console.log('numberless derived config -- resolver succeeds purely from explicit overrides');
+
+  const numberlessDerived = {
+    ftpBase: undefined, tdocListUrl: undefined, agendaTdoc: '',
+    agendaTemplateDocId: undefined, mailingList: undefined,
+    draftsFolder: undefined, revisionsUrl: undefined
+  };
+  const fullAdhocOverrides = {
+    ftpBase: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/',
+    tdocListUrl: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/TDoc_List_Meeting_SA4-(AH) Audio SWG on ULBC-MED.xlsx',
+    agendaTdoc: 'S4aA260090',
+    revisionsUrl: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Inbox/Drafts/'
+  };
+  const result = sandbox.resolveMeetingSources_(numberlessDerived, fullAdhocOverrides);
+
+  check('numberless: ftpBase resolved purely from override', result.ftpBase, fullAdhocOverrides.ftpBase);
+  check('numberless: tdocListUrl resolved purely from override', result.tdocListUrl, fullAdhocOverrides.tdocListUrl);
+  check('numberless: agendaTdoc resolved purely from override', result.agendaTdoc, fullAdhocOverrides.agendaTdoc);
+  check('numberless: revisionsUrl resolved purely from override', result.revisionsUrl, fullAdhocOverrides.revisionsUrl);
+  check('numberless: a field with NEITHER a derived value NOR an override is left undefined (nothing invented)',
+    result.agendaTemplateDocId, undefined);
+  check('numberless: mailingList likewise left undefined (no property mechanism supplies it yet)',
+    result.mailingList, undefined);
+  check('numberless: draftsFolder likewise left undefined',
+    result.draftsFolder, undefined);
+}
+
+// ---------------------------- getMeetingContext_() production wiring proof
+
+console.log('getMeetingContext_() production wiring: resolver is used, with no overrides supplied today');
+
+{
+  const fs = require('fs');
+  const { CODE_JS_PATH } = require('./helpers/load-code.js');
+  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+
+  const startMatch = source.match(/^function getMeetingContext_\(\)/m);
+  if (!startMatch) {
+    failures++;
+    console.log('  FAIL could not locate "function getMeetingContext_()" in Code.js');
+  } else {
+    const startIndex = startMatch.index;
+    const nextFnRe = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
+    nextFnRe.lastIndex = startIndex + startMatch[0].length;
+    const next = nextFnRe.exec(source);
+    const endIndex = next ? next.index : source.length;
+    const body = source.slice(startIndex, endIndex);
+
+    check('getMeetingContext_() body calls resolveMeetingSources_()',
+      /\bresolveMeetingSources_\s*\(/.test(body), true);
+  }
 }
 
 // ------------------------------------------------------------------- summary

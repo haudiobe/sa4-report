@@ -760,6 +760,55 @@ function getReportConfig_() {
 // getReportConfig_()/getCollectorConfig_()/getConfig_()). Both are out of
 // scope for this compatibility layer; add them once there is one canonical
 // place to read them from.
+/**
+ * SA4-IMPL-002: pure source-resolution rule, extracted so it is testable
+ * without Google APIs and reusable once an explicit-override property
+ * mechanism exists for ad-hoc meetings.
+ *
+ * `derived` is a plain object already shaped like MeetingContext.sources
+ * (ftpBase, tdocListUrl, agendaTdoc, agendaTemplateDocId, mailingList,
+ * draftsFolder, revisionsUrl) -- today this is always built from
+ * getReportConfig_()'s output by the caller, but this function itself does
+ * not know or care where `derived` came from, which is what keeps it pure
+ * and independently testable (it never touches PropertiesService).
+ *
+ * `overrides` is an optional, partial object using the SAME keys. For each
+ * key: a non-empty (after trimming) string in `overrides` wins; anything
+ * else (absent, '', whitespace-only, null, undefined, non-string) falls
+ * back to `derived`'s value. This is a plain precedence rule, not a second
+ * configuration system -- it has no defaults of its own and invents nothing
+ * for a field that has no value in either input.
+ *
+ * Deliberately works even when `derived` describes a meeting with no
+ * MEETING_NUMBER at all (e.g. every field simply came from `overrides`
+ * instead) -- see tests/meeting-context.test.js for the numberless case.
+ * This capability is NOT yet exercised in production: getReportConfig_()
+ * itself still requires MEETING_NUMBER today, and no DocumentProperty
+ * mechanism yet exists to supply mailingList/draftsFolder/revisionsUrl
+ * overrides (see the SA4-IMPL-002 report for the exact gap). Establishing
+ * that the RESOLVER can already do this is the point of this task.
+ */
+function resolveMeetingSources_(derived, overrides) {
+  const base = derived || {};
+  const ov = overrides || {};
+
+  function pick(key) {
+    const explicit = ov[key];
+    if (typeof explicit === 'string' && explicit.trim() !== '') return explicit;
+    return base[key];
+  }
+
+  return {
+    ftpBase: pick('ftpBase'),
+    tdocListUrl: pick('tdocListUrl'),
+    agendaTdoc: pick('agendaTdoc'),
+    agendaTemplateDocId: pick('agendaTemplateDocId'),
+    mailingList: pick('mailingList'),
+    draftsFolder: pick('draftsFolder'),
+    revisionsUrl: pick('revisionsUrl')
+  };
+}
+
 function getMeetingContext_() {
   const cfg = getReportConfig_();
 
@@ -773,6 +822,22 @@ function getMeetingContext_() {
   } else {
     structureProfile = 'main-other';
   }
+
+  // SA4-IMPL-002: sources are now produced by the pure resolver instead of
+  // being copied straight across from cfg. No overrides are supplied here
+  // (no DocumentProperty mechanism for them exists yet -- see the function
+  // comment above), so this call always falls through to `derivedSources`
+  // unchanged; existing main-meeting behavior is therefore byte-identical.
+  const derivedSources = {
+    ftpBase: cfg.FTP_BASE,
+    tdocListUrl: cfg.TDOC_LIST_URL,
+    agendaTdoc: cfg.AGENDA_TDOC,
+    agendaTemplateDocId: cfg.AGENDA_SOURCE_DOC_ID,
+    mailingList: cfg.LIST_NAME,
+    draftsFolder: cfg.DRAFTS_FOLDER,
+    revisionsUrl: cfg.REVISIONS_URL
+  };
+  const sources = resolveMeetingSources_(derivedSources, {});
 
   return {
     group: 'SA4',
@@ -790,15 +855,7 @@ function getMeetingContext_() {
       structureProfile: structureProfile
     },
 
-    sources: {
-      ftpBase: cfg.FTP_BASE,
-      tdocListUrl: cfg.TDOC_LIST_URL,
-      agendaTdoc: cfg.AGENDA_TDOC,
-      agendaTemplateDocId: cfg.AGENDA_SOURCE_DOC_ID,
-      mailingList: cfg.LIST_NAME,
-      draftsFolder: cfg.DRAFTS_FOLDER,
-      revisionsUrl: cfg.REVISIONS_URL
-    },
+    sources: sources,
 
     options: {
       showPreviewSnippet: cfg.SHOW_PREVIEW_SNIPPET
