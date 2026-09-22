@@ -1194,12 +1194,28 @@ function ensureCollectorConfigTable_() {
  */
 function ensureReallocationTable_() {
   const body = DocumentApp.getActiveDocument().getBody();
-  
+
   // Check if table already exists
   for (const t of body.getTables()) {
     if (isReallocationTable_(t)) return;
   }
-  
+
+  // SA4-PROD-002: this function's target section (`${agendaPrefix}1.3`,
+  // e.g. "7.1.3"/"11.1.3") only exists as a real subsection under the
+  // MAIN-meeting SWG-style X.1/X.1.2/X.1.3 template convention. Real
+  // evidence from meeting 86178 (SA4-e (AH) on FS_6G_MED) shows an ad-hoc
+  // meeting's actual agenda has no X.1.3 subsection at all -- forcing one
+  // into existence produced a synthetic "Document Reallocations" section
+  // under the real "5.1 Opening" item with no basis in the real agenda.
+  // Any genuine TDoc reallocation for an ad-hoc meeting remains a manual
+  // editorial decision (see SA4-PROD-001's S4aP260089 finding), never an
+  // auto-created table. Main meetings are unaffected: meeting.type is
+  // 'main' there.
+  if (getMeetingContext_().meeting.type === 'adhoc') {
+    Logger.log('ensureReallocationTable_(): skipped for an ad-hoc meeting (no X.1.3-style subsection in a real ad-hoc agenda)');
+    return;
+  }
+
   // Get the agenda prefix from config (e.g., "7." for Audio, "11." for 6G)
   const cfg = getReportConfig_();
   const agendaPrefix = cfg.AGENDA_ITEM_PREFIX || '7.';
@@ -4774,10 +4790,20 @@ function testAllConnections() {
   }
   
   // Test 4: Revisions Folder
+  // SA4-PROD-002: this used to read getCollectorConfig_().REVISIONS_URL,
+  // which is ALWAYS the main-meeting formula (`${INBOX_BASE}Drafts/
+  // ${DRAFTS_FOLDER}`, Code.js:649) regardless of meeting.type -- it
+  // fabricated and tested a URL for meeting 86178 that was never a real
+  // ad-hoc revisions location (observed: HTTP 403). getMeetingContext_()
+  // .sources.revisionsUrl is the value that already correctly represents
+  // "genuinely absent" for an ad-hoc meeting with no REVISIONS_URL override
+  // (undefined -- see resolveMeetingSources_(), unchanged by this task) and
+  // is IDENTICAL to the old cfg.REVISIONS_URL value for every main meeting
+  // (derivedSources.revisionsUrl: cfg.REVISIONS_URL there), so main-meeting
+  // behavior here is unchanged.
   results.push('\n4️⃣ Revisions Folder:');
   try {
-    const cfg = getCollectorConfig_();
-    const url = cfg.REVISIONS_URL;
+    const url = getMeetingContext_().sources.revisionsUrl;
     if (!url) {
       results.push('   ⚠️  Not configured');
     } else {
@@ -6054,7 +6080,21 @@ function buildSkeletonWithTdocTables() {
       return; // Skip - already created above
     }
     
-    if (item.number === openingSection) {
+    // SA4-PROD-002: this branch's template copy + forced "Registration of
+    // Documents" subsection is the MAIN-meeting SWG template's own X.1.1/
+    // X.1.2 nested-subsection convention (verified: the shared template's
+    // own X.1 content literally contains "X.1.1"/"X.1.2" sub-headings,
+    // carried through verbatim by copySectionContentWithReplacement_'s text
+    // substitution). Real evidence from meeting 86178 shows an ad-hoc
+    // meeting's actual agenda has NO such subsections under its real "5.1"
+    // item -- forcing this in produced a synthetic "5.1.1 Opening of the
+    // session" / "5.1.2 Registration of documents" with no basis in the
+    // real agenda. For ad-hoc meetings this item is left to fall through to
+    // the generic "regular agenda item" handling below (same path "5.2"
+    // IPR already uses for a 6G report type), rendering its own real TDoc
+    // group (the agenda TDoc itself) with no synthetic subsection. Main
+    // meetings are unaffected: context.meeting.type is 'main' there.
+    if (item.number === openingSection && context.meeting.type !== 'adhoc') {
       // Opening section for SWG reports - copy X.1 content from template
       const openingHeader = findHeading_(sourceBody, /^X\.1\s+/);
       if (openingHeader) {
@@ -6347,11 +6387,21 @@ function addTdocTablesOnly() {
  * getReportConfig_() internally, so there is still only one underlying
  * PropertiesService read per call, not two independent config reads.
  *
- * generateReportTitle_() itself is intentionally left unchanged (same
- * plain-object {REPORT_SUFFIX, TDOC_LIST_URL, MEETING_ID} contract as
- * before) so any other current or future caller of it is unaffected; the
- * small object below exists only to satisfy that unchanged contract with
- * values sourced from MeetingContext instead of a legacy cfg object.
+ * generateReportTitle_()'s existing {REPORT_SUFFIX, TDOC_LIST_URL,
+ * MEETING_ID} contract is unchanged and still drives every main-meeting
+ * title exactly as before; the small object below exists only to satisfy
+ * that unchanged contract with values sourced from MeetingContext instead
+ * of a legacy cfg object.
+ *
+ * SA4-PROD-002: an ad-hoc meeting has no real portal meeting number
+ * (context.meeting.portalId is always null there) and its TDOC_LIST_URL
+ * does not follow the main-meeting "SA4%23NNN" filename convention, so the
+ * old formula fell back to the literal string "SA4#null" (observed in
+ * meeting 86178's real production run). meetingLabel is an additional,
+ * OPTIONAL field on generateReportTitle_()'s cfg object -- every existing
+ * caller that never sets it (including every main-meeting call) gets
+ * byte-identical output to before. Only set here, for ad-hoc meetings,
+ * from context.meeting.name -- no meeting number is invented.
  */
 function setDocumentTitleFromTemplate_(sourceDocId) {
   try {
@@ -6360,7 +6410,8 @@ function setDocumentTitleFromTemplate_(sourceDocId) {
     const newTitle = generateReportTitle_({
       REPORT_SUFFIX: context.report.type,
       TDOC_LIST_URL: context.sources.tdocListUrl,
-      MEETING_ID: context.meeting.portalId
+      MEETING_ID: context.meeting.portalId,
+      meetingLabel: context.meeting.type === 'adhoc' ? context.meeting.name : undefined
     });
 
     targetDoc.setName(newTitle);
@@ -6387,7 +6438,17 @@ function generateReportTitle_(cfg) {
       'New': 'New Work'
     };
     const topicName = topicNames[reportType] || reportType;
-    
+
+    // SA4-PROD-002: optional explicit meeting label (e.g. an ad-hoc
+    // meeting's real name, "SA4-e (AH) on FS_6G_MED") for meetings with no
+    // real portal meeting number and no "SA4%23NNN"-style TDOC_LIST_URL to
+    // extract one from. Absent for every existing caller today except the
+    // ad-hoc branch of setDocumentTitleFromTemplate_(), so this is a pure
+    // addition -- every other caller's output is unchanged.
+    if (cfg.meetingLabel) {
+      return `${topicName} Minutes – ${cfg.meetingLabel}`;
+    }
+
     // Extract full meeting name like "SA4#137-e" from the TDOC list URL
     const tdocUrl = cfg.TDOC_LIST_URL || '';
     const meetingNameMatch = tdocUrl.match(/SA4%23(\d+(?:-e)?)/i);

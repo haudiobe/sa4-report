@@ -1,6 +1,6 @@
 /**
- * SA4-PROD-001 — Meeting 86178 (SA4-e (AH) on FS_6G_MED, 2026-09-22)
- * production-readiness regression coverage.
+ * SA4-PROD-001 / SA4-PROD-002 — Meeting 86178 (SA4-e (AH) on FS_6G_MED,
+ * 2026-09-22) production-readiness regression coverage.
  *
  * Real evidence for this meeting was gathered directly from the public
  * 3GPP FTP tree on 2026-09-22 (not inferred from convention):
@@ -17,12 +17,18 @@
  * below (numbers 5, 5.1-5.11) was read directly out of S4aP260098's own
  * Word document body.
  *
+ * SA4-PROD-002 addendum: a real Google Docs production run of SA4-PROD-001's
+ * fix exposed THREE further main-meeting assumptions baked into
+ * buildSkeletonWithTdocTables()/ensureReallocationTable_()/
+ * generateReportTitle_()/testAllConnections() that the is6G guard alone
+ * didn't reach -- all fixed here, all re-characterized below (section 7+).
+ *
  * This suite does NOT execute buildSkeletonWithTdocTables() itself -- doing
  * so requires a fake DocumentApp, which SA4-ARCH-002 explicitly scoped out
  * (see tests/report-structure.test.js's header comment) and this task does
  * not reopen. Instead, per that established precedent, this suite combines:
  *
- *   1. Source-structure assertions proving the two SA4-PROD-001 skeleton
+ *   1. Source-structure assertions proving the SA4-PROD-001/002 skeleton
  *      fixes exist exactly as intended, and that main-meeting-affecting
  *      code paths were not touched otherwise.
  *   2. Real-data pipeline characterization: MeetingContext -> agenda
@@ -30,7 +36,7 @@
  *      TDoc-list grouping, exercised against the real captured meeting
  *      86178 data using the real, unmodified production functions
  *      (getMeetingContext_, projectAgendaItems_, agendaSelectorMatches_,
- *      parseSA4DocumentId_ family).
+ *      parseSA4DocumentId_ family, generateReportTitle_).
  *
  * Run: node tests/meeting-86178-production.test.js
  */
@@ -66,6 +72,14 @@ function item(number, title) {
   return { number, title, level: 1, heading: 'H2', text: '' };
 }
 
+// Strips // line comments and /* */ block comments so a source-structure
+// regex checks only executable code, not an explanatory comment that
+// legitimately names something (e.g. "S4aP260089", "getCollectorConfig_()")
+// for context without actually using it.
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+}
+
 // =========================================================== 1. source ===
 
 console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes');
@@ -88,6 +102,47 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
     // untouched -- only these two conditions changed.
     check('the pre-existing parent-removal filter is still present, unchanged',
       /item\.number\s*!==\s*agendaPrefix\.replace/.test(body), true);
+    // SA4-PROD-002: the openingSection branch (source of the synthetic
+    // "5.1.1 Opening"/"5.1.2 Registration" subsections) now additionally
+    // requires meeting.type !== 'adhoc'.
+    check('the openingSection branch now also requires meeting.type !== "adhoc" (prevents synthetic X.1.1/X.1.2 subsections for ad-hoc meetings)',
+      /if\s*\(item\.number === openingSection && context\.meeting\.type !== 'adhoc'\)/.test(body), true);
+    check('no code-level special-case comparison against "S4aP260089" exists in buildSkeletonWithTdocTables() (comments MAY reference it for context; only an actual comparison would be a remapping)',
+      /['"]S4aP260089['"]\s*[=!]==/.test(stripComments(body)), false);
+  }
+
+  const reallocBody = extractFunctionBody(source, 'ensureReallocationTable_');
+  if (!reallocBody) {
+    failures++;
+    console.log('  FAIL could not locate "function ensureReallocationTable_(" in Code.js');
+  } else {
+    check('ensureReallocationTable_() now calls getMeetingContext_() and skips ad-hoc meetings entirely',
+      /getMeetingContext_\(\)\.meeting\.type === 'adhoc'/.test(reallocBody), true);
+    check('no code-level special-case comparison against "S4aP260089" exists in ensureReallocationTable_() (its own comment names the finding for context; that is not a remapping)',
+      /['"]S4aP260089['"]\s*[=!]==/.test(stripComments(reallocBody)), false);
+  }
+
+  check('no code-level special-case comparison against "S4aP260089" exists ANYWHERE in Code.js (the anomaly remains a manual verification item, not a code-level special case)',
+    /['"]S4aP260089['"]\s*[=!]==/.test(stripComments(source)), false);
+
+  const titleBody = extractFunctionBody(source, 'generateReportTitle_');
+  if (!titleBody) {
+    failures++;
+    console.log('  FAIL could not locate "function generateReportTitle_(" in Code.js');
+  } else {
+    check('generateReportTitle_() now supports an optional cfg.meetingLabel, used before the SA4#-number formula',
+      /if\s*\(cfg\.meetingLabel\)/.test(titleBody), true);
+  }
+
+  const connBody = extractFunctionBody(source, 'testAllConnections');
+  if (!connBody) {
+    failures++;
+    console.log('  FAIL could not locate "function testAllConnections(" in Code.js');
+  } else {
+    check('testAllConnections() Revisions Folder test now reads getMeetingContext_().sources.revisionsUrl, not the main-meeting-only cfg.REVISIONS_URL formula',
+      /getMeetingContext_\(\)\.sources\.revisionsUrl/.test(connBody), true);
+    check('testAllConnections() no longer calls the old getCollectorConfig_().REVISIONS_URL pattern as executable code (a comment MAY still name it for context)',
+      /getCollectorConfig_\(\)\.REVISIONS_URL/.test(stripComments(connBody)), false);
   }
 }
 
@@ -257,6 +312,86 @@ console.log('main-meeting protection: is6G is UNCHANGED for a real main 6G meeti
   const newIs6G = (ctx.report.type === '6G') && ctx.meeting.type !== 'adhoc';
   check('newIs6G === oldIs6G for a main 6G meeting (no behavior change)', newIs6G, oldIs6G);
   check('newIs6G is true for a main 6G meeting', newIs6G, true);
+}
+
+// ============================ 7. no synthetic X.1.1/X.1.2/X.1.3 subsections
+
+console.log('meeting 86178 -- no synthetic 5.1.1 / 5.1.2 / 5.1.3, exactly one real 5.1 and 5.2, agenda continues through 5.11');
+
+{
+  const numbers = REAL_86178_AGENDA.map(i => i.number);
+  ['5.1.1', '5.1.2', '5.1.3'].forEach(synthetic => {
+    check(`"${synthetic}" is not a real agenda item (would be synthetic if emitted)`,
+      numbers.indexOf(synthetic), -1);
+  });
+  check('"5.1" (Opening) appears exactly once in the real agenda', numbers.filter(n => n === '5.1').length, 1);
+  check('"5.2" (IPR) appears exactly once in the real agenda', numbers.filter(n => n === '5.2').length, 1);
+  check('the real agenda continues through "5.11" (Close)', numbers[numbers.length - 1], '5.11');
+
+  // ensureReallocationTable_()'s target section (agendaPrefix + '1.3') would
+  // be "5.1.3" for this meeting -- confirming it is not a real agenda item
+  // (checked above) is what makes the ad-hoc skip in section 1 correct: a
+  // "5.1.3 Document Reallocations" heading would have no corresponding real
+  // agenda item to sit under.
+  const agendaPrefix = '5.';
+  check('ensureReallocationTable_()\'s would-be target section ("5.1.3") is confirmed absent from the real agenda',
+    numbers.indexOf(`${agendaPrefix}1.3`), -1);
+}
+
+// ==================================== 8. ad-hoc title, no meeting number ==
+
+console.log('ad-hoc title: uses context.meeting.name, never invents a meeting number, never "SA4#null"');
+
+{
+  const { sandbox } = loadCode({ documentProperties: MEETING_86178_PROPS });
+  const ctx = sandbox.getMeetingContext_();
+  check('meeting 86178: context.meeting.portalId is null (no real portal number -- confirms the old formula had nothing valid to fall back on)',
+    ctx.meeting.portalId, null);
+
+  const title = sandbox.generateReportTitle_({
+    REPORT_SUFFIX: ctx.report.type,
+    TDOC_LIST_URL: ctx.sources.tdocListUrl,
+    MEETING_ID: ctx.meeting.portalId,
+    meetingLabel: ctx.meeting.type === 'adhoc' ? ctx.meeting.name : undefined
+  });
+  check('ad-hoc title contains the real meeting name', title.indexOf('SA4-e (AH) on FS_6G_MED') !== -1, true);
+  check('ad-hoc title never contains "SA4#null"', title.indexOf('SA4#null'), -1);
+  check('ad-hoc title is exactly "6G Media Minutes – SA4-e (AH) on FS_6G_MED"',
+    title, '6G Media Minutes – SA4-e (AH) on FS_6G_MED');
+}
+
+console.log('main-meeting title: generateReportTitle_() output is byte-identical to before (meetingLabel never set for main meetings)');
+
+{
+  const { sandbox } = loadCode({ documentProperties: { REPORT_SUFFIX: '6G', TDOC_LIST_URL: 'https://www.3gpp.org/ftp/x/TDoc_List_Meeting_SA4%23137-e.xlsx', MEETING_ID: '60777' } });
+  const ctx = sandbox.getMeetingContext_();
+  check('a main meeting has meeting.type "main" (meetingLabel stays undefined)', ctx.meeting.type, 'main');
+
+  const titleWithoutLabel = sandbox.generateReportTitle_({
+    REPORT_SUFFIX: ctx.report.type,
+    TDOC_LIST_URL: ctx.sources.tdocListUrl,
+    MEETING_ID: ctx.meeting.portalId
+  });
+  const titleThroughWrapperContract = sandbox.generateReportTitle_({
+    REPORT_SUFFIX: ctx.report.type,
+    TDOC_LIST_URL: ctx.sources.tdocListUrl,
+    MEETING_ID: ctx.meeting.portalId,
+    meetingLabel: ctx.meeting.type === 'adhoc' ? ctx.meeting.name : undefined
+  });
+  check('main-meeting title unchanged: "6G Media Minutes SA4#137-e"', titleWithoutLabel, '6G Media Minutes SA4#137-e');
+  check('setDocumentTitleFromTemplate_()\'s conditional meetingLabel (undefined for main) produces the identical title',
+    titleThroughWrapperContract, titleWithoutLabel);
+}
+
+// ============================== 9. revisions "Not configured", not 403 ====
+
+console.log('meeting 86178 -- revisions source is genuinely absent, characterized as "Not configured", no fabricated URL/403');
+
+{
+  const { sandbox } = loadCode({ documentProperties: MEETING_86178_PROPS });
+  const ctx = sandbox.getMeetingContext_();
+  check('meeting 86178 has no revisionsUrl (no REVISIONS_URL override was configured, and none should be invented)',
+    ctx.sources.revisionsUrl, undefined);
 }
 
 // ========================================================== summary =======
