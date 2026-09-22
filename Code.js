@@ -178,88 +178,210 @@ function onOpen() {
 }
 
 
+// =========================================================
+// PERF-001 -- LIGHTWEIGHT PERFORMANCE INSTRUMENTATION
+// =========================================================
+//
+// Manual-diagnostic only, purely additive: measures where continuousUpdate()
+// actually spends time and how many times it repeats expensive DocumentApp/
+// network operations, so a later controlled live run's Stackdriver/
+// execution transcript can be read for real numbers. Every helper here
+// either times/counts an existing call and returns ITS real, unchanged
+// result (or rethrows its real error), or is a Logger.log-only summary --
+// nothing here alters control flow, mutates the document differently, or
+// changes what gets written/persisted. Counters/timings are per-execution
+// (module-level state reset at the top of continuousUpdate(), never
+// persisted to PropertiesService, never shown to the user).
+// var (not const): Node's vm module (used by tests/helpers/load-code.js)
+// only attaches top-level `var`/`function` declarations to the sandbox
+// context object, not `const`/`let` -- this has no effect on real Apps
+// Script behavior (which has no such distinction) and lets tests read
+// PERF_TIMINGS_/PERF_COUNTERS_ directly to verify instrumentation state.
+var PERF_TIMINGS_ = {};
+var PERF_COUNTERS_ = {};
+
+function perfResetState_() {
+  Object.keys(PERF_TIMINGS_).forEach(k => delete PERF_TIMINGS_[k]);
+  Object.keys(PERF_COUNTERS_).forEach(k => delete PERF_COUNTERS_[k]);
+}
+
+function perfAddTime_(label, ms) {
+  PERF_TIMINGS_[label] = (PERF_TIMINGS_[label] || 0) + ms;
+}
+
+function perfCount_(label, n) {
+  PERF_COUNTERS_[label] = (PERF_COUNTERS_[label] || 0) + (n === undefined ? 1 : n);
+}
+
+/**
+ * Times a single, one-shot stage: runs fn(), logs
+ * "[PERF] <label>: <ms> ms" immediately (so a live execution transcript
+ * shows progress stage-by-stage as it happens, not only at the end), and
+ * also accumulates into PERF_TIMINGS_ for the final summary line. Use for
+ * stages that run once per continuousUpdate() call. Always re-throws
+ * fn()'s real error (via `finally`) -- timing never swallows a failure.
+ */
+function perfTimed_(label, fn) {
+  const start = Date.now();
+  try {
+    return fn();
+  } finally {
+    const ms = Date.now() - start;
+    perfAddTime_(label, ms);
+    Logger.log('[PERF] ' + label + ': ' + ms + ' ms');
+  }
+}
+
+/**
+ * Times a stage that runs MANY times per continuousUpdate() call (e.g.
+ * once per TDoc) -- accumulates into PERF_TIMINGS_ silently, WITHOUT a
+ * Logger.log per call, so a report with dozens of TDocs doesn't produce
+ * dozens of near-duplicate log lines. The accumulated total is included
+ * in perfLogSummary_()'s single summary line at the end.
+ */
+function perfTimedAccum_(label, fn) {
+  const start = Date.now();
+  try {
+    return fn();
+  } finally {
+    perfAddTime_(label, Date.now() - start);
+  }
+}
+
+/**
+ * Targeted counting wrapper around `body.getTables()` -- called
+ * independently by many separate functions throughout this file (each
+ * doing its OWN fresh full-document table scan: continuousUpdate() itself,
+ * getReallocationMap_(), updateTdocStatus_(), findTdocTable_(),
+ * updateRegisteredDocumentsTable_(), addAbstractsForTables_(),
+ * removeRowHeightAndSpacing(), setTwoColumnTDocTableWidths_(),
+ * checkRSSFeed_(), updateRevisions_()). Counting every call site here --
+ * rather than monkey-patching DocumentApp globally -- directly answers
+ * PERF-001's core question ("are we scanning the complete document once or
+ * twenty times per update?") without touching the DocumentApp API surface
+ * itself. Returns the exact same array `body.getTables()` would have.
+ */
+function getTablesCounted_(body, siteLabel) {
+  perfCount_('body.getTables() calls (total)');
+  if (siteLabel) perfCount_('body.getTables() call site: ' + siteLabel);
+  return body.getTables();
+}
+
+/**
+ * Targeted counting wrapper around `DocumentApp.getActiveDocument().getBody()`
+ * -- several functions each independently re-fetch the live document body
+ * rather than reusing continuousUpdate()'s own `body` reference. Returns
+ * the exact same Body `getBody()` would have.
+ */
+function getActiveDocumentBodyCounted_(siteLabel) {
+  perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
+  if (siteLabel) perfCount_('getActiveDocument().getBody() call site: ' + siteLabel);
+  return DocumentApp.getActiveDocument().getBody();
+}
+
+/**
+ * Logs one single, machine-searchable summary line each for accumulated
+ * timings and call counters -- call once, at the very end of
+ * continuousUpdate() (in a `finally`, so it still runs after an error).
+ */
+function perfLogSummary_() {
+  Logger.log('[PERF] timings summary (ms): ' + JSON.stringify(PERF_TIMINGS_));
+  Logger.log('[PERF] counters summary: ' + JSON.stringify(PERF_COUNTERS_));
+}
+
 /**
  * CONTINUOUS UPDATE FUNCTION
  * Downloads latest TDOCs, adds new ones, updates status
  */
 function continuousUpdate() {
-  const cfg = getReportConfig_();
+  perfResetState_();
+  const perfTotalStart = Date.now();
+  const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_());
   const body = DocumentApp.getActiveDocument().getBody();
-  
+  perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
+  perfCount_('getActiveDocument().getBody() call site: continuousUpdate:initial');
+
   Logger.log('=== CONTINUOUS UPDATE START ===');
-  
+
   try {
     // Download latest TDOC list
-    const tdocGroups = downloadAndGroupTdocs_(cfg);
+    const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg));
     const allTdocs = [];
     Object.keys(tdocGroups).forEach(key => {
       tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
     });
-    
+    perfCount_('TDocs downloaded (this run)', allTdocs.length);
+
     Logger.log(`Downloaded ${allTdocs.length} TDOCs`);
-    
+
     // Get existing TDOCs
     const existingTdocs = new Set();
-    body.getTables().forEach(t => {
-      if (!isTDocTable_(t)) return;
-      const tdoc = safeCellText_(t, 0, 1).trim();
-      if (tdoc) existingTdocs.add(tdoc);
+    perfTimed_('existing-report/document scan (existing TDoc detection)', () => {
+      getTablesCounted_(body, 'continuousUpdate:existingTdocScan').forEach(t => {
+        if (!isTDocTable_(t)) return;
+        const tdoc = safeCellText_(t, 0, 1).trim();
+        if (tdoc) existingTdocs.add(tdoc);
+      });
     });
-    
+
     Logger.log(`Found ${existingTdocs.size} existing TDOCs`);
-    
+
     // Add new TDOCs and update status
     let newTdocsAdded = 0;
     let statusUpdated = 0;
-    
+
     allTdocs.forEach(tdocData => {
       const row = tdocData.row;
       const tdocNumber = String(row[tdocData.tdocCol] || '').trim();
-      
+      perfCount_('TDocs processed (loop iterations)');
+
       if (!existingTdocs.has(tdocNumber)) {
-        insertNewTdoc_(body, tdocData, cfg);
+        perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg));
         newTdocsAdded++;
       } else {
-        if (updateTdocStatus_(body, tdocNumber, tdocData)) {
+        if (perfTimedAccum_('status updates (updateTdocStatus_, accumulated)', () => updateTdocStatus_(body, tdocNumber, tdocData))) {
           statusUpdated++;
         }
       }
     });
-    
+
     Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);
-    
+
     // Update summary table
     if (newTdocsAdded > 0) {
-      updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups);
+      perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups));
     }
-    
+
     // Revision placement: new TDOCs are appended at the end of their agenda
     // section, so move every revision back under the document it revises and
     // fill the revised document's Disposition. Reuses the TDOC list already
     // downloaded above, so this costs no extra fetch.
-    const rev = rearrangeRevisionTables_(cfg, tdocGroups);
+    const rev = perfTimed_('revision ordering/rearrangement (rearrangeRevisionTables_)', () => rearrangeRevisionTables_(cfg, tdocGroups));
     Logger.log(`Revisions: ${rev.moved} moved, ${rev.dispositions} disposition(s) filled`);
-    
+
     // Abstracts are optional on automatic updates (OFF by default).
     // Toggle via: REPORT OPERATIONS -> Manage Auto-Update Trigger.
     if (getFetchAbstractsSetting_()) {
-      const abstractsAdded = addAbstractsForTables_(body);
+      const abstractsAdded = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body));
       Logger.log(`Fetched abstracts for ${abstractsAdded} table(s)`);
     } else {
       Logger.log('Abstract fetching is disabled (trigger configuration)');
     }
-    
+
     // Collect emails and revisions
-    collectorUpdate_();
-    
+    perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_());
+
     // Format
-    removeRowHeightAndSpacing();
-    
+    perfTimed_('formatting (removeRowHeightAndSpacing)', () => removeRowHeightAndSpacing());
+
     Logger.log('=== COMPLETE ===');
-    
+
   } catch (e) {
     Logger.log('ERROR: ' + e.message);
     Logger.log(e.stack);
+  } finally {
+    perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
+    perfLogSummary_();
   }
 }
 
@@ -505,8 +627,8 @@ function updateTdocStatus_(body, tdocNumber, tdocData) {
   const newStatus = tdocData.statusCol >= 0 ? String(row[tdocData.statusCol] || '').trim() : '';
   
   if (!newStatus) return false;
-  
-  const tables = body.getTables();
+
+  const tables = getTablesCounted_(body, 'updateTdocStatus_');
   for (let i = 0; i < tables.length; i++) {
     const table = tables[i];
     if (!isTDocTable_(table)) continue;
@@ -537,7 +659,7 @@ function updateTdocStatus_(body, tdocNumber, tdocData) {
 }
 
 function updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups) {
-  const tables = body.getTables();
+  const tables = getTablesCounted_(body, 'updateRegisteredDocumentsTable_');
   let summaryTable = null;
   
   for (let i = 0; i < tables.length; i++) {
@@ -1358,10 +1480,10 @@ function isReallocationTable_(table) {
  * Returns: { 'S4-260123': { original: '5.3', new: '8.3', reason: '...' }, ... }
  */
 function getReallocationMap_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = getActiveDocumentBodyCounted_('getReallocationMap_');
   const map = {};
-  
-  for (const table of body.getTables()) {
+
+  for (const table of getTablesCounted_(body, 'getReallocationMap_')) {
     if (!isReallocationTable_(table)) continue;
     
     for (let r = 1; r < table.getNumRows(); r++) {
@@ -2066,7 +2188,10 @@ function fetchAndAddAbstract_(table, tdocNumber) {
     }
     
     const apiUrl = `https://reviewer.bouazizi.dev/api/v1/documents/${tdocNumber}/summary?type=summary`;
-    
+
+    perfCount_('UrlFetchApp.fetch() calls (total)');
+    perfCount_('fetch() call site: fetchAndAddAbstract_ (Reviewer API)');
+    perfCount_('Reviewer API requests');
     const response = UrlFetchApp.fetch(apiUrl, {
       method: 'get',
       headers: {
@@ -2335,8 +2460,8 @@ function collectorUpdate_() {
   const cfg = getCollectorConfig_();
   log_(cfg, '=== COLLECTOR START ===');
 
-  try { checkRSSFeed_(cfg); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); }
-  try { updateRevisions_(cfg); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); }
+  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg)); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); }
+  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg)); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); }
 
   log_(cfg, '=== COLLECTOR END ===');
 }
@@ -2347,16 +2472,18 @@ function checkRSSFeed_(cfg) {
   const listName = String(cfg.LIST_NAME || LIST_NAME_LOCK);
   const listLower = listName.toLowerCase();
 
-  const msgs = collectHybridListservMessages_(cfg);
+  const msgs = perfTimed_('    RSS/mail: collectHybridListservMessages_ (fetch, all sources)', () => collectHybridListservMessages_(cfg));
+  perfCount_('RSS/mail messages collected (this run)', msgs.length);
   const tz = String(cfg.TIMEZONE || Session.getScriptTimeZone());
   const showPreview = String(cfg.SHOW_PREVIEW_SNIPPET || 'false').toLowerCase() === 'true';
 
   const props = PropertiesService.getDocumentProperties();
-  const tables = DocumentApp.getActiveDocument().getBody().getTables();
+  const tables = getTablesCounted_(getActiveDocumentBodyCounted_('checkRSSFeed_'), 'checkRSSFeed_');
 
   // Deadlines extended verbally / by e-mail, keyed by TDOC.
   const extensions = getDeadlineExtensionMap_();
 
+  const mailProcessingStart = Date.now();
   tables.forEach(t => {
     if (!isTDocTable_(t)) return;
 
@@ -2507,6 +2634,7 @@ function checkRSSFeed_(cfg) {
 
     log_(cfg, 'Email discussion updated', { tdoc, added, total: ordered.length });
   });
+  perfAddTime_('    RSS/mail: per-table message matching + cell rendering', Date.now() - mailProcessingStart);
 }
 
 function collectHybridListservMessages_(cfg) {
@@ -2515,6 +2643,12 @@ function collectHybridListservMessages_(cfg) {
   out = out.concat(collectRssItems_(cfg, cfg.RSS_URL_V2, 'rss_v2'));
 
   const a1Urls = buildArchiveIndexUrlsByDaysBack_(cfg.LIST_NAME, parseInt(cfg.ARCHIVE_DAYS_BACK || '14', 10), cfg);
+  // PERF-001: up to ARCHIVE_DAYS_BACK (default 14) separate ETSI archive
+  // index fetches, one per day-back -- collectA1_()'s own
+  // isA1CachedEmpty_() short-circuit may skip a fetch for a day already
+  // known empty, but every day not yet cached costs one real network
+  // request here, every run.
+  perfCount_('A1 archive day-URLs considered (ARCHIVE_DAYS_BACK)', a1Urls.length);
   a1Urls.forEach(url => out = out.concat(collectA1_(cfg, url)));
 
   return dedupePreviewFirst_(out);
@@ -2764,13 +2898,21 @@ function updateRevisions_(cfg) {
   if (!baseUrl) return;
 
   const url = baseUrl.replace(/\/$/, '') + '/';
+  // PERF-001 stage: "revision folder fetch/listing" -- the network fetch
+  // (self-timed inside safeFetch_) plus parsing the directory listing HTML
+  // into anchors.
   const resp = safeFetch_(cfg, url, {}, 'Revisions fetch');
   if (!resp.ok) return;
 
-  const anchors = parseAnchors_(resp.text || '');
+  const anchors = perfTimed_('    revisions: parseAnchors_ (listing parse)', () => parseAnchors_(resp.text || ''));
+  perfCount_('revision-folder anchors found (this run)', anchors.length);
   const props = PropertiesService.getDocumentProperties();
-  const body = DocumentApp.getActiveDocument().getBody();
-  const tables = body.getTables();
+  const body = getActiveDocumentBodyCounted_('updateRevisions_');
+  const tables = getTablesCounted_(body, 'updateRevisions_');
+
+  let revisionFilesProcessed = 0;
+  let matchingMs = 0;
+  let renderingMs = 0;
 
   tables.forEach(t => {
     if (!isTDocTable_(t)) return;
@@ -2787,6 +2929,9 @@ function updateRevisions_(cfg) {
     const storeKey = 'REVIS_' + tdoc;
     const store = loadJsonObject_(props.getProperty(storeKey));
 
+    // PERF-001 stage: "revision matching" -- per TDoc table, scanning
+    // every discovered anchor for a canonical-identity match.
+    const matchStart = Date.now();
     anchors.forEach(a => {
       // PROD-017: match by CANONICAL TDoc identity (parsed out of the
       // anchor's filename via the central registry -- parseDraftAnchor_()),
@@ -2799,8 +2944,9 @@ function updateRevisions_(cfg) {
       if (!draft || draft.tdocId !== tdoc) return;
       const id = normalizeRevisionKey_({ link: draft.url, text: draft.fileName });
       if (!id) return;
-      if (!store[id]) { store[id] = { text: draft.fileName, link: draft.url }; }
+      if (!store[id]) { store[id] = { text: draft.fileName, link: draft.url }; revisionFilesProcessed++; }
     });
+    matchingMs += Date.now() - matchStart;
 
     // HOTFIX-001: REVIS_<tdoc> is an accumulating, cross-run CACHE (so a
     // single transient fetch failure never loses a previously-discovered
@@ -2822,10 +2968,13 @@ function updateRevisions_(cfg) {
       return byText !== 0 ? byText : String(x.link || '').localeCompare(String(y.link || ''));
     });
 
-    // Write revisions into the Revisions cell of this table -- see
-    // renderRevisionsCellContent_() for the HOTFIX-001 rendering fix.
+    // PERF-001 stage: "revision cell rendering" -- see
+    // renderRevisionsCellContent_() for the HOTFIX-001 rendering fix
+    // itself (unchanged, not rewritten here).
+    const renderStart = Date.now();
     const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
     renderRevisionsCellContent_(cell, ordered);
+    renderingMs += Date.now() - renderStart;
 
     // Also insert the revision tables directly after this TDOC table in the document.
     // Find the revised TDOCs and insert their tables immediately after this one.
@@ -2833,6 +2982,10 @@ function updateRevisions_(cfg) {
 
     log_(cfg, 'Revisions updated', { tdoc, total: ordered.length });
   });
+
+  perfAddTime_('    revisions: matching (per-table anchor scan, accumulated)', matchingMs);
+  perfAddTime_('    revisions: cell rendering (renderRevisionsCellContent_, accumulated)', renderingMs);
+  perfCount_('revision files newly stored (this run)', revisionFilesProcessed);
 }
 
 /**
@@ -3190,7 +3343,7 @@ function findTdocTable_(body, tdocNumber) {
   const want = String(tdocNumber || '').trim().toUpperCase();
   if (!want) return null;
 
-  const tables = body.getTables();
+  const tables = getTablesCounted_(body, 'findTdocTable_');
   for (let i = 0; i < tables.length; i++) {
     if (!isTDocTable_(tables[i])) continue;
     if (String(safeCellText_(tables[i], 0, 1) || '').trim().toUpperCase() === want) return tables[i];
@@ -3283,8 +3436,9 @@ function rearrangeRevisionTables() {
  */
 function rearrangeRevisionTables_(cfg, groups) {
   cfg = cfg || getReportConfig_();
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = getActiveDocumentBodyCounted_('rearrangeRevisionTables_');
   const map = buildRevisionMapFromTdocList_(cfg, groups);
+  perfCount_('revision pairs processed (rearrangeRevisionTables_)', Object.keys(map).length);
 
   const stats = {
     total: Object.keys(map).length,
@@ -3298,15 +3452,15 @@ function rearrangeRevisionTables_(cfg, groups) {
   orderRevisionChains_(map).forEach(parent => {
     const child = map[parent];
 
-    const parentTable = findTdocTable_(body, parent);
+    const parentTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, parent));
     if (!parentTable) { stats.missingParent++; return; }
 
     if (setDispositionRevisedTo_(parentTable, child)) stats.dispositions++;
 
-    const childTable = findTdocTable_(body, child);
+    const childTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, child));
     if (!childTable) { stats.missingChild++; return; }
 
-    if (moveTableAfter_(body, childTable, parentTable)) {
+    if (perfTimedAccum_('  rearrangeRevisionTables_: moveTableAfter_ (accumulated)', () => moveTableAfter_(body, childTable, parentTable))) {
       stats.moved++;
       Logger.log(`Moved ${child} directly below ${parent}`);
     } else {
@@ -3324,7 +3478,14 @@ function rearrangeRevisionTables_(cfg, groups) {
 
 function safeFetch_(cfg, url, opt, label) {
   try {
+    // PERF-001: safeFetch_() is the shared choke point for RSS, A1
+    // archive, and Revisions-folder fetches -- one counter/timer here
+    // covers all three call sites without touching each individually.
+    perfCount_('UrlFetchApp.fetch() calls (total)');
+    perfCount_('fetch() call site: safeFetch_ (' + (label || 'unlabeled') + ')');
+    const fetchStart = Date.now();
     const r = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    perfAddTime_('  safeFetch_ total UrlFetchApp.fetch time', Date.now() - fetchStart);
     const code = r.getResponseCode();
     const text = r.getContentText() || '';
     if (isDebug_(cfg)) log_(cfg, label, { url, code, bytes: text.length });
@@ -4461,11 +4622,15 @@ function ensureAgendaItemRow_(sheet, table) {
 function removeRowHeightAndSpacing() {
   const doc = DocumentApp.getActiveDocument();
   const body = doc.getBody();
-  const tables = body.getTables();
+  const tables = getTablesCounted_(body, 'removeRowHeightAndSpacing');
 
   // Apply widths ONLY for 2-column TDOC tables (and leave other tables untouched)
-  setTwoColumnTDocTableWidths_();
+  // PERF-001: this ALWAYS runs, unconditionally, on every continuousUpdate()
+  // call, regardless of whether anything actually changed -- suspected
+  // major cost driver (see this task's report). Timed as its own stage.
+  perfTimed_('  formatting: setTwoColumnTDocTableWidths_', () => setTwoColumnTDocTableWidths_());
 
+  const formattingWriteLoopStart = Date.now();
   for (let i = 0; i < tables.length; i++) {
     const table = tables[i];
 
@@ -4473,6 +4638,7 @@ function removeRowHeightAndSpacing() {
     for (let j = 0; j < table.getNumRows(); j++) {
       const row = table.getRow(j);
       row.setMinimumHeight(0);
+      perfCount_('DocumentApp writes: row.setMinimumHeight()');
 
       for (let k = 0; k < row.getNumCells(); k++) {
         const cell = row.getCell(k);
@@ -4484,6 +4650,7 @@ function removeRowHeightAndSpacing() {
             const paragraph = child.asParagraph();
             paragraph.setSpacingBefore(0);
             paragraph.setSpacingAfter(0);
+            perfCount_('DocumentApp writes: paragraph.setSpacingBefore/After()', 2);
           }
         }
       }
@@ -4525,8 +4692,9 @@ function removeRowHeightAndSpacing() {
       // ignore
     }
   }
+  perfAddTime_('  formatting: per-table row/cell/paragraph write loop', Date.now() - formattingWriteLoopStart);
 
-  removeEmptyParagraphs_();
+  perfTimed_('  formatting: removeEmptyParagraphs_ (own full-document paragraph scan)', () => removeEmptyParagraphs_());
 }
 
 /**
@@ -4540,8 +4708,8 @@ function setTwoColumnTDocTableWidths_() {
   const firstColWidth = parseInt(cfg.TDOC_COL1_WIDTH || '108', 10);
   const secondColWidth = pageWidth - firstColWidth;
 
-  const body = DocumentApp.getActiveDocument().getBody();
-  const tables = body.getTables();
+  const body = getActiveDocumentBodyCounted_('setTwoColumnTDocTableWidths_');
+  const tables = getTablesCounted_(body, 'setTwoColumnTDocTableWidths_');
 
   tables.forEach(t => {
     if (!isTDocTable_(t)) return;
@@ -4554,6 +4722,7 @@ function setTwoColumnTDocTableWidths_() {
       const row = t.getRow(r);
       row.getCell(0).setWidth(firstColWidth);
       row.getCell(1).setWidth(secondColWidth);
+      perfCount_('DocumentApp writes: cell.setWidth()', 2);
     }
   });
 }
@@ -4563,8 +4732,11 @@ function setTwoColumnTDocTableWidths_() {
  * (same logic you had).
  */
 function removeEmptyParagraphs_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = getActiveDocumentBodyCounted_('removeEmptyParagraphs_');
   const paragraphs = body.getParagraphs();
+  perfCount_('body.getParagraphs() calls (total)');
+  perfCount_('body.getParagraphs() call site: removeEmptyParagraphs_');
+  perfCount_('paragraphs scanned (removeEmptyParagraphs_)', paragraphs.length);
 
   let inTargetSection = false;
   for (let i = 0; i < paragraphs.length; i++) {
@@ -6786,20 +6958,29 @@ function downloadAndGroupTdocs_(cfg) {
   if (!meetingUrl) return {};
 
   Logger.log('Downloading TDOC list: ' + meetingUrl);
-  const response = UrlFetchApp.fetch(meetingUrl, { muteHttpExceptions: true });
+  perfCount_('UrlFetchApp.fetch() calls (total)');
+  perfCount_('fetch() call site: downloadAndGroupTdocs_:TDocListXlsx');
+  const response = perfTimed_('  TDoc-list: UrlFetchApp.fetch (download xlsx)', () => UrlFetchApp.fetch(meetingUrl, { muteHttpExceptions: true }));
   if (response.getResponseCode() >= 400) {
     throw new Error('Could not download TDOC list: HTTP ' + response.getResponseCode());
   }
 
   const blob = response.getBlob();
   blob.setName('TDoc_List_Temp.xlsx');
-  const tempFile = DriveApp.createFile(blob);
+  const tempFile = perfTimed_('  TDoc-list: DriveApp.createFile (upload temp xlsx)', () => DriveApp.createFile(blob));
 
   try {
-    const spreadsheet = SpreadsheetApp.open(tempFile);
+    // Suspected primary cost/variability driver (PERF-001): converting an
+    // uploaded .xlsx blob into an openable Google Sheet is a genuinely
+    // slow, non-deterministic Apps Script/Drive backend operation --
+    // timed separately from the two full-range reads that follow, which
+    // read the ENTIRE sheet TWICE (getValues() and getRichTextValues()
+    // are two independent full round trips over the same range).
+    const spreadsheet = perfTimed_('  TDoc-list: SpreadsheetApp.open (xlsx->Sheet conversion)', () => SpreadsheetApp.open(tempFile));
     const sheet = spreadsheet.getSheets()[0];
-    const data = sheet.getDataRange().getValues();
-    const richTextValues = sheet.getDataRange().getRichTextValues();
+    const data = perfTimed_('  TDoc-list: sheet.getDataRange().getValues()', () => sheet.getDataRange().getValues());
+    const richTextValues = perfTimed_('  TDoc-list: sheet.getDataRange().getRichTextValues()', () => sheet.getDataRange().getRichTextValues());
+    perfCount_('TDoc-list sheet rows read', data.length);
 
     const headers = data[0];
     const tdocCol = headers.indexOf('TDoc');
@@ -6834,7 +7015,7 @@ function downloadAndGroupTdocs_(cfg) {
     // agendaItem.startsWith(agendaPrefix) check -- see
     // tests/tdoc-agenda-filter.test.js.
     const agendaSelector = getMeetingContext_().report.agendaSelector;
-    const reallocations = getReallocationMap_();
+    const reallocations = perfTimed_('  TDoc-list: getReallocationMap_ (own body.getTables() scan)', () => getReallocationMap_());
     const groups = {};
 
     for (let i = 1; i < data.length; i++) {
@@ -6864,7 +7045,9 @@ function downloadAndGroupTdocs_(cfg) {
     return groups;
 
   } finally {
+    const trashStart = Date.now();
     try { tempFile.setTrashed(true); } catch (e) { }
+    perfAddTime_('  TDoc-list: tempFile.setTrashed (Drive cleanup)', Date.now() - trashStart);
   }
 }
 
@@ -7271,10 +7454,10 @@ function collectRevisionsOnly() {
  * No UI, so it is safe to call from triggers. Returns the number of tables filled.
  */
 function addAbstractsForTables_(body) {
-  body = body || DocumentApp.getActiveDocument().getBody();
+  body = body || getActiveDocumentBodyCounted_('addAbstractsForTables_');
   let count = 0;
 
-  body.getTables().forEach(table => {
+  getTablesCounted_(body, 'addAbstractsForTables_').forEach(table => {
     if (!isTDocTable_(table)) return;
 
     const existingAbstract = findCellText_(table, 'Abstract');
@@ -7287,7 +7470,7 @@ function addAbstractsForTables_(body) {
     const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
     if (!parsedTdoc.isValid) return;
 
-    fetchAndAddAbstract_(table, parsedTdoc.raw);
+    perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw));
     count++;
   });
 
