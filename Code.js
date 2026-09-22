@@ -4653,6 +4653,7 @@ function configureMeetingSettings() {
   function sourceLabel(source) {
     if (source === 'resolved') return '<span class="badge badge-resolved">resolved from 3GPP</span>';
     if (source === 'existing') return '<span class="badge badge-existing">existing value</span>';
+    if (source === 'candidate') return '<span class="badge badge-candidate">candidate -- not validated</span>';
     return '<span class="badge badge-unresolved">needs review</span>';
   }
 
@@ -4673,6 +4674,7 @@ function configureMeetingSettings() {
       .badge { display: inline-block; font-size: 10px; font-weight: normal; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
       .badge-resolved { background: #d4edda; color: #155724; }
       .badge-existing { background: #e2e3e5; color: #383d41; }
+      .badge-candidate { background: #cce5ff; color: #004085; }
       .badge-unresolved { background: #fff3cd; color: #856404; }
       #resolveStatus { font-size: 12px; margin-top: 6px; }
       #resolveStatus.error { color: #a94442; }
@@ -4732,7 +4734,7 @@ function configureMeetingSettings() {
 
       <label>Revisions / Drafts URL: <span id="revisionsUrlBadge">${sourceLabel(initialPreview.revisionsUrl.source)}</span></label>
       <input type="text" id="revisionsUrl" value="${esc(initialPreview.revisionsUrl.value)}" placeholder="https://www.3gpp.org/ftp/.../inbox/drafts/ (optional)">
-      <div class="hint">Optional. Discovered automatically when Resolve validates a real drafts/revisions folder for this meeting; for a main meeting this folder may contain one subfolder per report type (Audio/FS_6G_MED/MBS/Plenary/RTC/Video) rather than a single ready-to-use folder -- review before relying on it.</div>
+      <div class="hint">Optional. Resolve derives a likely candidate folder from this meeting's FTP location but no longer verifies it automatically (a prior version did this synchronously and could hang for minutes against a slow/unreachable source) -- a "candidate" badge means unverified, review the URL yourself before relying on it. For a main meeting this folder may also contain one subfolder per report type (Audio/FS_6G_MED/MBS/Plenary/RTC/Video) rather than being a single ready-to-use folder.</div>
     </div>
 
     <details class="advanced">
@@ -4788,6 +4790,7 @@ function configureMeetingSettings() {
       function sourceBadgeHtml(source) {
         if (source === 'resolved') return '<span class="badge badge-resolved">resolved from 3GPP</span>';
         if (source === 'existing') return '<span class="badge badge-existing">existing value</span>';
+        if (source === 'candidate') return '<span class="badge badge-candidate">candidate -- not validated</span>';
         return '<span class="badge badge-unresolved">needs review</span>';
       }
 
@@ -8046,6 +8049,61 @@ function deriveTdocFamilyEvidence_(tdocRows) {
 }
 
 /**
+ * PROD-014: decides whether the GetiCal fallback fetch is worth making at
+ * all. iCal is ONLY ever consulted (see resolveMeetingById_() below) as a
+ * fallback for meeting.name/startDate/endDate/location when GetMeetings
+ * didn't supply them -- every real captured GetMeetings response (86178,
+ * 86174, 85916, 60778) already supplies all four, so on the normal
+ * success path this fetch was pure latency with no effect on the result.
+ * Skipped entirely when GetMeetings has already conclusively determined
+ * the meeting does not exist (an empty result) since the caller's early
+ * "meeting not found" return never consults `ical` either. Still fetched
+ * whenever GetMeetings itself failed outright (iCal is then the only
+ * remaining source) or the meeting it found is missing any one of the
+ * four fields iCal can substitute for.
+ */
+function shouldFetchIcalFallback_(metadataParsed) {
+  if (!metadataParsed || !metadataParsed.ok) return true;
+  if (metadataParsed.meeting === null) return false;
+  const m = metadataParsed.meeting || {};
+  return m.Title === undefined || m.StartDate === undefined || m.EndDate === undefined || m.Location === undefined;
+}
+
+/**
+ * PROD-014: the ONLY place that still performs ARCH-011's revisions/
+ * drafts folder network probe -- resolveMeetingById_() itself no longer
+ * calls it synchronously (see that function's PROD-014 note below), since
+ * a production smoke test on meeting 86178 found the Resolve action
+ * hanging for 3+ minutes with no response, and this was the one network
+ * call in the chain whose target host (www.3gpp.org's FTP paths, behind a
+ * WAF/bot-challenge -- see ARCH-011's own commit message) had NOT
+ * previously been confirmed fast/reliable from a plain HTTP client the
+ * way portal.3gpp.org's REST API had been.
+ *
+ * This function is meant to be invoked as an explicit, SEPARATE action
+ * (e.g. a future "Validate" step) against a candidate URL that
+ * resolveMeetingById_() already derived (its `sources.revisionsUrlCandidate`)
+ * -- never wired into the normal Resolve path. Never mutates
+ * PropertiesService. Returns `{ ok, revisionsUrl, reason }`; `revisionsUrl`
+ * is the candidate itself once validated, else null.
+ */
+function validateRevisionsUrlCandidate_(candidateUrl) {
+  if (!candidateUrl || !String(candidateUrl).trim()) {
+    return { ok: false, revisionsUrl: null, reason: 'No candidate URL supplied.' };
+  }
+  try {
+    const fetchResult = fetchRevisionsUrlCandidate_(candidateUrl);
+    const validation = validateRevisionsUrlCandidateResponse_(fetchResult);
+    if (validation.ok) {
+      return { ok: true, revisionsUrl: candidateUrl, reason: null };
+    }
+    return { ok: false, revisionsUrl: null, reason: validation.reason };
+  } catch (e) {
+    return { ok: false, revisionsUrl: null, reason: 'Revisions/drafts folder candidate request failed: ' + e.message };
+  }
+}
+
+/**
  * ARCH-009: Meeting-ID resolver core. Orchestrates the three anonymous
  * Portal sources above and returns a single, self-describing result object
  * -- see tests/meeting-resolver.test.js for the exact shape asserted
@@ -8059,6 +8117,19 @@ function deriveTdocFamilyEvidence_(tdocRows) {
  * a thrown error out of this function -- the TDoc-list and iCal fetches
  * are treated as supplementary evidence, not hard requirements, once the
  * primary GetMeetings call has succeeded.
+ *
+ * PROD-014: GetiCal is now fetched only when shouldFetchIcalFallback_()
+ * says it can actually matter (see that function), and the ARCH-011
+ * revisions/drafts folder candidate is only ever DERIVED here (pure, no
+ * network) -- never synchronously fetched/validated. This is a direct fix
+ * for a live production defect: a real Resolve on meeting 86178 hung for
+ * 3+ minutes with no response, most plausibly from that one probe (its
+ * target host was already known, from ARCH-011, to sit behind a WAF that
+ * blocked a plain HTTP client), and Apps Script's UrlFetchApp has no
+ * per-request timeout this function could otherwise impose on it. See
+ * validateRevisionsUrlCandidate_() above for where that probe now lives,
+ * and diagnoseMeetingResolverTiming_() (below, manual/diagnostic only) for
+ * how to independently measure each network call's real latency.
  */
 function resolveMeetingById_(meetingId) {
   const idResult = parseMeetingIdInput_(meetingId);
@@ -8094,16 +8165,22 @@ function resolveMeetingById_(meetingId) {
   raw.meeting = metadataParsed.meeting;
 
   // --- Secondary: GetiCal (cross-check / fallback only) ----------------
+  // PROD-014: only fetched when it can actually matter -- see
+  // shouldFetchIcalFallback_(). Skipped on the normal success path (every
+  // real captured GetMeetings response already supplies everything iCal
+  // could otherwise substitute for).
   let ical = null;
-  try {
-    const icalFetch = fetchMeetingIcalById_(id);
-    if (icalFetch.statusCode === 200) {
-      ical = parseMeetingIcal_(icalFetch.text);
-    } else {
-      warnings.push(`GetiCal returned HTTP ${icalFetch.statusCode}`);
+  if (shouldFetchIcalFallback_(metadataParsed)) {
+    try {
+      const icalFetch = fetchMeetingIcalById_(id);
+      if (icalFetch.statusCode === 200) {
+        ical = parseMeetingIcal_(icalFetch.text);
+      } else {
+        warnings.push(`GetiCal returned HTTP ${icalFetch.statusCode}`);
+      }
+    } catch (e) {
+      warnings.push('GetiCal request failed: ' + e.message);
     }
-  } catch (e) {
-    warnings.push('GetiCal request failed: ' + e.message);
   }
   raw.ical = ical;
 
@@ -8135,7 +8212,8 @@ function resolveMeetingById_(meetingId) {
         portalMeetingUrl: `https://portal.3gpp.org/Home.aspx#/meeting?MtgId=${id}`,
         tdocListEndpoint: `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${id}`,
         icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`,
-        revisionsUrl: null
+        revisionsUrl: null,
+        revisionsUrlCandidate: null
       },
       documents: null,
       unresolved: unresolved,
@@ -8157,30 +8235,23 @@ function resolveMeetingById_(meetingId) {
     warnings.push(ftpInfo.error);
   }
 
-  // --- Revisions/drafts folder discovery (ARCH-011, best-effort, never
-  // fatal to the overall resolve) -------------------------------------
-  let revisionsUrl = null;
+  // --- Revisions/drafts folder discovery (ARCH-011 derivation; PROD-014
+  // made this DERIVE-ONLY, no network -- see this function's PROD-014
+  // header note). sources.revisionsUrl therefore stays null from THIS
+  // function always; only validateRevisionsUrlCandidate_(), called
+  // separately, can ever turn a candidate into a validated "resolved"
+  // value. Always "unresolved" from here, by design -- a derived candidate
+  // is evidence, not a resolved value.
+  let revisionsUrlCandidate = null;
   if (!ftpInfo.ftpBase) {
     unresolved.push('sources.revisionsUrl');
   } else {
     const candidateResult = deriveRevisionsUrlCandidate_(ftpInfo.ftpBase);
+    unresolved.push('sources.revisionsUrl');
     if (!candidateResult.revisionsUrlCandidate) {
-      unresolved.push('sources.revisionsUrl');
       warnings.push('Could not derive a revisions/drafts folder candidate: ' + candidateResult.error);
     } else {
-      try {
-        const revisionsFetch = fetchRevisionsUrlCandidate_(candidateResult.revisionsUrlCandidate);
-        const validation = validateRevisionsUrlCandidateResponse_(revisionsFetch);
-        if (validation.ok) {
-          revisionsUrl = candidateResult.revisionsUrlCandidate;
-        } else {
-          unresolved.push('sources.revisionsUrl');
-          warnings.push(`Revisions/drafts folder candidate (${candidateResult.revisionsUrlCandidate}) could not be validated: ${validation.reason}`);
-        }
-      } catch (e) {
-        unresolved.push('sources.revisionsUrl');
-        warnings.push('Revisions/drafts folder candidate request failed: ' + e.message);
-      }
+      revisionsUrlCandidate = candidateResult.revisionsUrlCandidate;
     }
   }
 
@@ -8226,12 +8297,13 @@ function resolveMeetingById_(meetingId) {
       tdocListEndpoint: `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${id}`,
       icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`,
       mailingList: null,
-      // ARCH-011: only ever set when the derived candidate was actually
-      // validated (HTTP 200 + credible directory/file listing evidence) --
-      // see deriveRevisionsUrlCandidate_()/validateRevisionsUrlCandidateResponse_().
-      // A derived-but-unvalidated or unreachable candidate is null here,
-      // with the reason recorded in `unresolved`/`warnings` instead.
-      revisionsUrl: revisionsUrl
+      // PROD-014: resolveMeetingById_() no longer validates this
+      // synchronously, so revisionsUrl is ALWAYS null from this function --
+      // see revisionsUrlCandidate below for the derived-but-unvalidated
+      // evidence, and validateRevisionsUrlCandidate_() for how a candidate
+      // can be turned into a validated value via a separate, explicit call.
+      revisionsUrl: null,
+      revisionsUrlCandidate: revisionsUrlCandidate
     },
 
     documents: {
@@ -8248,6 +8320,88 @@ function resolveMeetingById_(meetingId) {
     warnings: warnings,
     raw: raw
   };
+}
+
+// =========================================================
+// PROD-014 -- DIAGNOSTIC: TIME EACH RESOLVER NETWORK CALL INDEPENDENTLY
+// =========================================================
+//
+// Manual/diagnostic only. Never called by resolveMeetingById_(), any
+// dialog, or any menu item -- run it directly from the Apps Script editor
+// (select diagnoseMeetingResolverTiming_ in the function dropdown, Run)
+// when investigating resolver latency. Reads no Document Properties and
+// writes none; entirely read-only against the live 3GPP/ETSI endpoints.
+//
+// VERIFIED PLATFORM LIMITATION: Google Apps Script's UrlFetchApp has NO
+// per-request timeout parameter -- there is no `{ timeout: ... }` (or
+// equivalent) option anywhere in its fetch() signature. A call either
+// returns (success or an HTTP error status) or eventually throws once
+// Google's own internal, undocumented fetch ceiling is hit, or the whole
+// script is killed once the platform's total execution-time limit (6
+// minutes for a consumer/free account) is reached. This function cannot
+// impose a true timeout on any individual UrlFetchApp call -- it can only
+// measure how long each one actually took (or that the whole diagnostic
+// itself never finished, which is itself a measurement).
+//
+// Times each of the (up to) four network operations resolveMeetingById_()
+// can perform, INDEPENDENTLY of one another and of resolveMeetingById_()'s
+// own conditional-skip logic, so a single slow/hanging source can be
+// identified without being masked by, or blamed on, any other.
+function diagnoseMeetingResolverTiming_(meetingId) {
+  const id = meetingId || 86178;
+  const report = [];
+
+  function timed(label, fn) {
+    const start = Date.now();
+    try {
+      const result = fn();
+      const elapsedMs = Date.now() - start;
+      const entry = { label: label, elapsedMs: elapsedMs, statusCode: result && result.statusCode !== undefined ? result.statusCode : null, error: null };
+      report.push(entry);
+      Logger.log(`${label}: ${elapsedMs} ms / HTTP ${entry.statusCode}`);
+      return result;
+    } catch (e) {
+      const elapsedMs = Date.now() - start;
+      report.push({ label: label, elapsedMs: elapsedMs, statusCode: null, error: e.message });
+      Logger.log(`${label}: ${elapsedMs} ms / ERROR ${e.message}`);
+      return null;
+    }
+  }
+
+  const metadataFetch = timed('Meeting metadata (GetMeetings)', () => fetchMeetingMetadataById_(id));
+  timed('iCal (GetiCal)', () => fetchMeetingIcalById_(id));
+  timed('TDoc list (TdocList.aspx)', () => fetchMeetingTdocListById_(id));
+
+  // The revisions probe target depends on a successfully parsed FTP base
+  // from the metadata fetch above -- timed separately here, using the
+  // SAME derivation resolveMeetingById_() uses, so this measures the real
+  // production candidate URL, not a guess.
+  if (metadataFetch && metadataFetch.statusCode === 200) {
+    const metadataParsed = parseMeetingMetadataResponse_(metadataFetch);
+    const m = metadataParsed.meeting || {};
+    if (m.MtgDocURL) {
+      const ftpInfo = normalizeMtgDocUrlToFtpBase_(m.MtgDocURL);
+      if (ftpInfo.ftpBase) {
+        const candidateResult = deriveRevisionsUrlCandidate_(ftpInfo.ftpBase);
+        if (candidateResult.revisionsUrlCandidate) {
+          timed('Revisions/drafts probe (' + candidateResult.revisionsUrlCandidate + ')',
+            () => fetchRevisionsUrlCandidate_(candidateResult.revisionsUrlCandidate));
+        } else {
+          Logger.log('Revisions/drafts probe: SKIPPED -- could not derive a candidate (' + candidateResult.error + ')');
+        }
+      } else {
+        Logger.log('Revisions/drafts probe: SKIPPED -- could not normalize ftpBase from MtgDocURL');
+      }
+    } else {
+      Logger.log('Revisions/drafts probe: SKIPPED -- metadata had no MtgDocURL');
+    }
+  } else {
+    Logger.log('Revisions/drafts probe: SKIPPED -- metadata fetch did not return HTTP 200');
+  }
+
+  Logger.log('--- diagnoseMeetingResolverTiming_ summary ---');
+  Logger.log(JSON.stringify(report, null, 2));
+  return report; // Execution-log/manual-inspection only -- never persisted.
 }
 
 // =========================================================
@@ -8356,6 +8510,38 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     }
   }
 
+  /**
+   * PROD-014: revisionsUrl has a FOURTH provenance state ("candidate") the
+   * generic `field()` helper above doesn't have, because resolveMeetingById_()
+   * no longer synchronously validates the candidate it derives (see that
+   * function's PROD-014 note) -- so `resolvedSources.revisionsUrl` is now
+   * always null from a normal Resolve, and only ever non-null via a
+   * separate, explicit validateRevisionsUrlCandidate_() call. Priority:
+   * an actually-validated value always wins ("resolved"); failing that, an
+   * existing manually configured value is preserved ("existing" -- a real,
+   * previously-confirmed value outranks a mere unvalidated guess); failing
+   * that, a derived-but-unvalidated candidate is shown, clearly labeled as
+   * such, NEVER as "resolved"; otherwise genuinely "unresolved". A
+   * resolver warning/403/timeout can therefore never erase an already
+   * configured REVISIONS_URL, and an unvalidated candidate can never be
+   * mistaken for a confirmed one.
+   */
+  function revisionsUrlField() {
+    const resolvedValue = resolvedSources ? resolvedSources.revisionsUrl : null;
+    if (resolvedValue !== null && resolvedValue !== undefined && String(resolvedValue).trim() !== '') {
+      return { value: String(resolvedValue), source: 'resolved' };
+    }
+    const existingValue = props.REVISIONS_URL;
+    if (existingValue !== null && existingValue !== undefined && String(existingValue).trim() !== '') {
+      return { value: String(existingValue), source: 'existing' };
+    }
+    const candidateValue = resolvedSources ? resolvedSources.revisionsUrlCandidate : null;
+    if (candidateValue !== null && candidateValue !== undefined && String(candidateValue).trim() !== '') {
+      return { value: String(candidateValue), source: 'candidate' };
+    }
+    return { value: '', source: 'unresolved' };
+  }
+
   return {
     meetingId: field(meetingIdValue, props.MEETING_ID),
     meetingType: field(resolvedMeeting ? resolvedMeeting.type : null, props.MEETING_TYPE),
@@ -8368,14 +8554,7 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     // "resolved". Explicit `field(null, ...)` documents that, rather than
     // omitting the field.
     mailingList: field(null, props.MAILING_LIST),
-    // ARCH-012: sources.revisionsUrl (ARCH-011) is only ever non-null on
-    // `resolved` when the resolver actually validated the candidate (HTTP
-    // 200 + credible directory listing) -- a 403/404/redirect/thrown-probe
-    // result leaves it null on `resolved`, so this field falls straight
-    // through to the SAME `existing`/`unresolved` fallback every other
-    // field uses. A resolver failure can therefore never erase an already
-    // configured REVISIONS_URL.
-    revisionsUrl: field(resolvedSources ? resolvedSources.revisionsUrl : null, props.REVISIONS_URL),
+    revisionsUrl: revisionsUrlField(),
 
     // Supplementary evidence, not itself a Document Property:
     portalType: resolvedMeeting ? resolvedMeeting.portalType : null,

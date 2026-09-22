@@ -1,16 +1,28 @@
 /**
- * ARCH-011 — Meeting-ID resolver: revisions/drafts folder discovery.
+ * ARCH-011/PROD-014 — Meeting-ID resolver: revisions/drafts folder
+ * discovery.
  *
  * Extends the committed ARCH-009 resolver core (resolveMeetingById_() and
  * friends) with a fourth, DERIVED endpoint: a candidate revisions/drafts
  * folder one level up from the resolved FTP Docs/ directory
- * (<meeting root>/inbox/drafts/), which is only ever reported as
- * `sources.revisionsUrl` when it has been independently validated (HTTP
- * 200 + credible directory/file listing evidence), never merely because it
- * was derived.
+ * (<meeting root>/inbox/drafts/).
  *
- * NOT integrated into getMeetingContext_(), the configuration dialog, or
- * Document Properties in this task -- resolveMeetingById_() remains dead
+ * PROD-014 changed WHEN that candidate is validated: a live production
+ * smoke test found Resolve hanging 3+ minutes on meeting 86178 with no
+ * response, and the revisions-folder probe -- the one network call in the
+ * chain whose target host was already known (from ARCH-011's own
+ * investigation) to sit behind a WAF that blocked a plain HTTP client --
+ * was the most plausible cause, given Apps Script's UrlFetchApp has no
+ * per-request timeout at all. resolveMeetingById_() therefore now only
+ * DERIVES the candidate (pure, no network) and reports it as
+ * `sources.revisionsUrlCandidate`; `sources.revisionsUrl` is always null
+ * from resolveMeetingById_() itself. Only validateRevisionsUrlCandidate_()
+ * -- a separate function, never called from the normal Resolve path --
+ * still performs the actual network probe and can turn a candidate into a
+ * validated URL.
+ *
+ * NOT integrated into getMeetingContext_(), the configuration dialog's
+ * Save path, or Document Properties -- resolveMeetingById_() remains dead
  * code from the rest of the app's point of view (see ARCH-009's own header
  * comment in Code.js), this only extends what it discovers.
  *
@@ -167,9 +179,39 @@ console.log('validateRevisionsUrlCandidateResponse_() -- accept/reject a fetched
   check('missing fetchResult -> reason present', typeof fn(null).reason, 'string');
 }
 
+// ==================== 2b. validateRevisionsUrlCandidate_() (PROD-014) ======
+
+console.log('validateRevisionsUrlCandidate_() -- the separate, explicit network probe PROD-014 moved out of resolveMeetingById_()');
+
+{
+  const { sandbox } = loadCode();
+
+  sandbox.fetchRevisionsUrlCandidate_ = () => ({ statusCode: 200, text: SYNTHETIC_INDEX_HTML_86178 });
+  const okResult = sandbox.validateRevisionsUrlCandidate_('https://ftp.3gpp.org/a/b/inbox/drafts/');
+  check('validated candidate -> ok:true', okResult.ok, true);
+  check('validated candidate -> revisionsUrl is the candidate itself', okResult.revisionsUrl, 'https://ftp.3gpp.org/a/b/inbox/drafts/');
+  check('validated candidate -> reason is null', okResult.reason, null);
+
+  sandbox.fetchRevisionsUrlCandidate_ = () => ({ statusCode: 403, text: WAF_CHALLENGE_BODY });
+  const failResult = sandbox.validateRevisionsUrlCandidate_('https://ftp.3gpp.org/a/b/inbox/drafts/');
+  check('403/WAF-blocked candidate -> ok:false', failResult.ok, false);
+  check('403/WAF-blocked candidate -> revisionsUrl is null', failResult.revisionsUrl, null);
+  check('403/WAF-blocked candidate -> reason present', typeof failResult.reason, 'string');
+
+  sandbox.fetchRevisionsUrlCandidate_ = () => { throw new Error('simulated network failure'); };
+  const throwResult = sandbox.validateRevisionsUrlCandidate_('https://ftp.3gpp.org/a/b/inbox/drafts/');
+  check('a thrown probe does not throw out of validateRevisionsUrlCandidate_', typeof throwResult, 'object');
+  check('a thrown probe -> ok:false', throwResult.ok, false);
+  check('a thrown probe -> reason mentions the failure', /simulated network failure/.test(throwResult.reason), true);
+
+  const noCandidateResult = sandbox.validateRevisionsUrlCandidate_(null);
+  check('no candidate supplied -> ok:false, does not throw', noCandidateResult.ok, false);
+  check('no candidate supplied -> revisionsUrl is null', noCandidateResult.revisionsUrl, null);
+}
+
 // ==================== 3. resolveMeetingById_() end-to-end (86178) ==========
 
-console.log('resolveMeetingById_() -- revisions folder discovery wired end-to-end, meeting 86178');
+console.log('resolveMeetingById_() -- revisions folder discovery wired end-to-end, meeting 86178 (PROD-014: derive-only, never fetched)');
 
 function loadResolverSandbox(overrides) {
   const { sandbox } = loadCode();
@@ -177,146 +219,116 @@ function loadResolverSandbox(overrides) {
   sandbox.fetchMeetingMetadataById_ = () => o.metadata !== undefined ? o.metadata : { statusCode: 200, text: '[]' };
   sandbox.fetchMeetingIcalById_ = () => o.ical !== undefined ? o.ical : { statusCode: 200, text: '' };
   sandbox.fetchMeetingTdocListById_ = () => o.tdoc !== undefined ? o.tdoc : { statusCode: 200, text: '' };
-  sandbox.fetchRevisionsUrlCandidate_ = (url) => {
-    if (o.revisionsThrow) throw new Error(o.revisionsThrow);
-    return o.revisions !== undefined ? o.revisions(url) : { statusCode: 404, text: 'Not Found' };
+  // PROD-014: resolveMeetingById_() must NEVER call this any more -- any
+  // test relying on it being invoked is a regression back to the hanging
+  // behavior. It throws loudly if resolveMeetingById_() ever calls it,
+  // rather than silently returning fixture data that would mask a
+  // regression.
+  sandbox.fetchRevisionsUrlCandidate_ = () => {
+    throw new Error('fetchRevisionsUrlCandidate_ must not be called by resolveMeetingById_() -- PROD-014 made revisions discovery derive-only.');
   };
   return sandbox;
 }
 
 {
-  // (a) successful validation
+  // (a) normal success: candidate is DERIVED, never fetched/validated.
   const sandbox = loadResolverSandbox({
     metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
-    ical: { statusCode: 200, text: FIXTURES.ical86178 },
-    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86178 },
-    revisions: () => ({ statusCode: 200, text: SYNTHETIC_INDEX_HTML_86178 })
+    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86178 }
   });
   const result = sandbox.resolveMeetingById_(86178);
-  check('86178: sources.revisionsUrl resolved to the derived candidate',
-    result.sources.revisionsUrl, 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/');
-  check('86178: unresolved does NOT contain sources.revisionsUrl when validated',
-    result.unresolved.indexOf('sources.revisionsUrl') !== -1, false);
+  check('86178: sources.revisionsUrl is ALWAYS null from resolveMeetingById_() now (PROD-014)',
+    result.sources.revisionsUrl, null);
+  check('86178: sources.revisionsUrlCandidate is the derived candidate',
+    result.sources.revisionsUrlCandidate, 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/');
+  check('86178: unresolved STILL contains sources.revisionsUrl (a candidate is not a resolved value)',
+    result.unresolved.indexOf('sources.revisionsUrl') !== -1, true);
   check('86178: meeting/ftpBase/agendaTdoc still resolve normally alongside it',
     [result.meeting.name, result.sources.ftpBase, result.documents.agendaTdoc].every(Boolean), true);
+  check('86178: no warning about the revisions candidate (deriving one successfully is not a problem)',
+    result.warnings.some(w => /revisions|drafts/i.test(w)), false);
 }
 
 {
-  // (b) candidate derived, but inaccessible (404) -- must NOT be fatal.
-  const sandbox = loadResolverSandbox({
-    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
-    revisions: () => ({ statusCode: 404, text: 'Not Found' })
-  });
-  const result = sandbox.resolveMeetingById_(86178);
-  check('86178, inaccessible candidate: sources.revisionsUrl is null, not the unvalidated candidate',
-    result.sources.revisionsUrl, null);
-  check('86178, inaccessible candidate: unresolved contains sources.revisionsUrl',
-    result.unresolved.indexOf('sources.revisionsUrl') !== -1, true);
-  check('86178, inaccessible candidate: a warning names the candidate URL and the reason',
-    result.warnings.some(w => /inbox\/drafts/.test(w) && /404/.test(w)), true);
-  check('86178, inaccessible candidate: does not throw, meeting metadata still resolves',
-    result.meeting.name, 'SA4-e (AH) on FS_6G_MED');
-}
-
-{
-  // (c) WAF/bot-challenge 403 -- the realistic failure mode found during
-  // this task's live investigation (see file header).
-  const sandbox = loadResolverSandbox({
-    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
-    revisions: () => ({ statusCode: 403, text: WAF_CHALLENGE_BODY })
-  });
-  const result = sandbox.resolveMeetingById_(86178);
-  check('86178, WAF-blocked candidate: sources.revisionsUrl is null, not silently accepted',
-    result.sources.revisionsUrl, null);
-  check('86178, WAF-blocked candidate: unresolved contains sources.revisionsUrl',
-    result.unresolved.indexOf('sources.revisionsUrl') !== -1, true);
-}
-
-{
-  // (d) the revisions-folder probe itself throws (network failure) --
-  // resolveMeetingById_() overall must still not throw or fail.
-  const sandbox = loadResolverSandbox({
-    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
-    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86178 },
-    revisionsThrow: 'simulated network failure'
-  });
-  const result = sandbox.resolveMeetingById_(86178);
-  check('86178, revisions probe throws: resolveMeetingById_ itself does not throw', typeof result, 'object');
-  check('86178, revisions probe throws: sources.revisionsUrl is null', result.sources.revisionsUrl, null);
-  check('86178, revisions probe throws: a warning records the failure',
-    result.warnings.some(w => /simulated network failure/.test(w)), true);
-  check('86178, revisions probe throws: meeting/ftpBase/documents still resolved normally',
-    [result.meeting.name, result.sources.ftpBase, result.documents.agendaTdoc].every(Boolean), true);
-}
-
-{
-  // (e) no ftpBase at all (MtgDocURL missing) -- derivation is skipped
-  // entirely, not attempted against a garbage URL.
+  // (b) no ftpBase at all (MtgDocURL missing) -- derivation is skipped
+  // entirely, not attempted against a garbage URL, and (as always) no
+  // fetch is attempted either.
   const meetingNoFtp = JSON.parse(JSON.stringify(FIXTURES.getMeetings86178));
   delete meetingNoFtp[0].MtgDocURL;
-  let revisionsFetchCalled = false;
   const sandbox = loadResolverSandbox({
-    metadata: { statusCode: 200, text: JSON.stringify(meetingNoFtp) },
-    revisions: () => { revisionsFetchCalled = true; return { statusCode: 200, text: SYNTHETIC_INDEX_HTML_86178 }; }
+    metadata: { statusCode: 200, text: JSON.stringify(meetingNoFtp) }
   });
   const result = sandbox.resolveMeetingById_(86178);
   check('missing MtgDocURL: sources.revisionsUrl is null', result.sources.revisionsUrl, null);
+  check('missing MtgDocURL: sources.revisionsUrlCandidate is null', result.sources.revisionsUrlCandidate, null);
   check('missing MtgDocURL: unresolved contains sources.revisionsUrl', result.unresolved.indexOf('sources.revisionsUrl') !== -1, true);
-  check('missing MtgDocURL: the revisions-folder probe is never even attempted', revisionsFetchCalled, false);
+}
+
+{
+  // (d) PROD-014's actual regression guard: if resolveMeetingById_() were
+  // ever changed back to call fetchRevisionsUrlCandidate_() synchronously,
+  // this stub throws and the whole resolve must still not blow up --
+  // proving resolveMeetingById_() itself has no path left that reaches it.
+  const sandbox = loadResolverSandbox({
+    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
+    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86178 }
+  });
+  let threw = false;
+  let result;
+  try {
+    result = sandbox.resolveMeetingById_(86178);
+  } catch (e) {
+    threw = true;
+  }
+  check('resolveMeetingById_() never reaches fetchRevisionsUrlCandidate_ (stub-throws-if-called guard did not fire)', threw, false);
+  check('resolveMeetingById_() still returns a full, usable result', !!(result && result.meeting && result.meeting.name), true);
 }
 
 // ============ 4. resolveMeetingById_() -- 86174, 85916, 60778 (candidates)
 
-console.log('resolveMeetingById_() -- revisions folder candidate derivation for 86174/85916/60778');
+console.log('resolveMeetingById_() -- revisions folder candidate derivation for 86174/85916/60778 (PROD-014: derive-only)');
 
 {
   // 86174 and 85916 share the same real MtgDocURL (SA4_Audio/Docs/, the
   // shared, unshared-per-series ad hoc folder -- see Code.js's own
-  // pre-existing comment on this). Both derive to, and here validate
-  // against, the SAME candidate -- this is a real, observed relationship,
-  // not a meeting-type guess.
+  // pre-existing comment on this). Both derive to the SAME candidate --
+  // this is a real, observed relationship, not a meeting-type guess --
+  // but neither is fetched/validated any more (PROD-014).
   const sandbox = loadResolverSandbox({
     metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86174) },
-    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86174 },
-    revisions: (url) => {
-      check('86174: the exact candidate probed is .../SA4_Audio/inbox/drafts/',
-        url, 'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/inbox/drafts/');
-      return { statusCode: 200, text: '<html><head><title>Index of /TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/inbox/drafts/</title></head><body><a href="report.docx">report.docx</a></body></html>' };
-    }
+    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86174 }
   });
   const result = sandbox.resolveMeetingById_(86174);
-  check('86174: sources.revisionsUrl validated', result.sources.revisionsUrl,
-    'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/inbox/drafts/');
+  check('86174: sources.revisionsUrl is null (never validated)', result.sources.revisionsUrl, null);
+  check('86174: sources.revisionsUrlCandidate is the derived .../SA4_Audio/inbox/drafts/ candidate',
+    result.sources.revisionsUrlCandidate, 'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/inbox/drafts/');
   check('86174: agendaTdoc still genuinely unresolved (real negative case, unaffected by this change)',
     result.documents.agendaTdoc, null);
 }
 
 {
   const sandbox = loadResolverSandbox({
-    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings85916) },
-    revisions: () => ({ statusCode: 200, text: '<html><head><title>Index of /TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/inbox/drafts/</title></head><body><a href="report.docx">report.docx</a></body></html>' })
+    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings85916) }
   });
   const result = sandbox.resolveMeetingById_(85916);
-  check('85916: sources.revisionsUrl validated (same shared ad-hoc-series folder as 86174)',
-    result.sources.revisionsUrl, 'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/inbox/drafts/');
+  check('85916: sources.revisionsUrl is null (never validated)', result.sources.revisionsUrl, null);
+  check('85916: sources.revisionsUrlCandidate derived (same shared ad-hoc-series folder as 86174)',
+    result.sources.revisionsUrlCandidate, 'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/inbox/drafts/');
 }
 
 {
-  // 60778 (main/plenary): the candidate is real and validates, but lands
-  // on the SHARED per-series Inbox/Drafts/ parent (one subfolder per SWG),
-  // not a single meeting-specific folder directly -- recorded as observed
-  // evidence, not treated as equivalent to the ad-hoc case. Deciding how a
-  // future consumer should use this (e.g. still requiring the existing
-  // REPORT_SUFFIX-based DRAFTS_FOLDERS subfolder pick) is explicitly out
-  // of scope for this task.
+  // 60778 (main/plenary): the candidate is real (lands on the SHARED
+  // per-series Inbox/Drafts/ parent -- one subfolder per SWG, not a single
+  // meeting-specific folder directly), but is now only ever derived, never
+  // fetched/validated by resolveMeetingById_() itself either.
   const sandbox = loadResolverSandbox({
     metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings60778) },
-    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml60778RevisionPair },
-    revisions: () => ({ statusCode: 200, text: SYNTHETIC_INDEX_HTML_60778 })
+    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml60778RevisionPair }
   });
   const result = sandbox.resolveMeetingById_(60778);
-  check('60778: sources.revisionsUrl validated', result.sources.revisionsUrl,
-    'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/TSGS4_137-e/inbox/drafts/');
+  check('60778: sources.revisionsUrl is null (never validated)', result.sources.revisionsUrl, null);
+  check('60778: sources.revisionsUrlCandidate derived',
+    result.sources.revisionsUrlCandidate, 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/TSGS4_137-e/inbox/drafts/');
   check('60778: documents.agendaTdoc still resolves as before, unaffected by this change',
     result.documents.agendaTdoc, 'S4-261392');
 }

@@ -37,21 +37,20 @@ function check(name, actual, expected) {
 
 // Same "override the three network functions on the sandbox" pattern as
 // tests/meeting-resolver.test.js -- exercises the REAL resolveMeetingById_()
-// orchestration, not a reimplementation.
+// orchestration, not a reimplementation. PROD-014: fetchRevisionsUrlCandidate_
+// is deliberately stubbed to throw -- resolveMeetingById_() must never call
+// it any more (revisions discovery is derive-only now), so any test that
+// hits this stub is a regression back to the hanging behavior PROD-014 fixed.
 function resolveWithFixtures(sandbox, meetingId, overrides) {
   const o = overrides || {};
   sandbox.fetchMeetingMetadataById_ = () => o.metadata !== undefined ? o.metadata : { statusCode: 200, text: '[]' };
   sandbox.fetchMeetingIcalById_ = () => o.ical !== undefined ? o.ical : { statusCode: 200, text: '' };
   sandbox.fetchMeetingTdocListById_ = () => o.tdoc !== undefined ? o.tdoc : { statusCode: 200, text: '' };
-  // ARCH-012: default to an unvalidated (404) revisions-folder probe unless
-  // a case explicitly stubs one -- matches ARCH-011's own "never assume
-  // validated" default.
-  sandbox.fetchRevisionsUrlCandidate_ = () => o.revisions !== undefined ? o.revisions() : { statusCode: 404, text: 'Not Found' };
+  sandbox.fetchRevisionsUrlCandidate_ = () => {
+    throw new Error('fetchRevisionsUrlCandidate_ must not be called by resolveMeetingById_() (PROD-014)');
+  };
   return sandbox.resolveMeetingById_(meetingId);
 }
-
-const SYNTHETIC_REVISIONS_INDEX_HTML = '<html><head><title>Index of /inbox/drafts/</title></head><body><a href="draft.docx">draft.docx</a></body></html>';
-const WAF_CHALLENGE_BODY = '<html><head><title>Access Denied</title></head><body>Please verify you are human.</body></html>';
 
 // ============================== 1. computeMeetingDateFromStartDate_() ======
 
@@ -152,33 +151,48 @@ console.log('computeResolvedMeetingPreview_() -- resolved > existing > unresolve
   check('ambiguous agenda candidates: surfaced separately for explicit user choice',
     previewAmbiguous.agendaCandidates.sort(), ['S4aP260001', 'S4aP260002']);
 
-  // (f) ARCH-012: revisionsUrl merge -- validated resolver evidence wins;
-  // an existing REVISIONS_URL survives a resolver miss/failure untouched.
-  const resolved86178WithRevisions = resolveWithFixtures(sandbox, 86178, {
+  // (f) PROD-014/ARCH-012: revisionsUrl merge now has FOUR states.
+  // resolveMeetingById_() itself never validates any more (PROD-014), so a
+  // normal Resolve on 86178 only ever derives sources.revisionsUrlCandidate
+  // -- sources.revisionsUrl stays null. computeResolvedMeetingPreview_()
+  // must therefore label that candidate "candidate", never "resolved".
+  const resolved86178Revisions = resolveWithFixtures(sandbox, 86178, {
     metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
     ical: { statusCode: 200, text: FIXTURES.ical86178 },
-    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86178 },
-    revisions: () => ({ statusCode: 200, text: SYNTHETIC_REVISIONS_INDEX_HTML })
+    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86178 }
   });
-  const previewValidatedRevisions = sandbox.computeResolvedMeetingPreview_(
-    { REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' },
-    resolved86178WithRevisions
-  );
-  check('86178, validated revisionsUrl: preview.revisionsUrl is the resolved candidate, source resolved',
-    previewValidatedRevisions.revisionsUrl,
-    { value: 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/', source: 'resolved' });
+  check('86178: resolveMeetingById_() itself never validates revisionsUrl any more (PROD-014)',
+    resolved86178Revisions.sources.revisionsUrl, null);
+  check('86178: resolveMeetingById_() derives revisionsUrlCandidate',
+    resolved86178Revisions.sources.revisionsUrlCandidate, 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/');
 
-  const resolved86178RevisionsFailed = resolveWithFixtures(sandbox, 86178, {
-    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
-    revisions: () => ({ statusCode: 403, text: WAF_CHALLENGE_BODY })
-  });
-  const previewFailedRevisions = sandbox.computeResolvedMeetingPreview_(
+  const previewCandidateNoExisting = sandbox.computeResolvedMeetingPreview_({}, resolved86178Revisions);
+  check('86178, no existing REVISIONS_URL: preview.revisionsUrl shows the candidate, labeled "candidate" (NOT "resolved")',
+    previewCandidateNoExisting.revisionsUrl,
+    { value: 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/', source: 'candidate' });
+
+  const previewCandidateWithExisting = sandbox.computeResolvedMeetingPreview_(
     { REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' },
-    resolved86178RevisionsFailed
+    resolved86178Revisions
   );
-  check('86178, resolver 403 on revisions candidate: preview.revisionsUrl falls back to the existing manual value, NOT blanked',
-    previewFailedRevisions.revisionsUrl,
+  check('86178, existing REVISIONS_URL present: an unvalidated candidate never overrides it -- existing wins, value NOT blanked',
+    previewCandidateWithExisting.revisionsUrl,
     { value: 'https://old-manual-value/Inbox/Drafts/Plenary', source: 'existing' });
+
+  // A genuinely validated value (e.g. from a future explicit
+  // validateRevisionsUrlCandidate_() action merged into resolverResult.sources)
+  // must still win over both an existing value and a mere candidate --
+  // computeResolvedMeetingPreview_() doesn't care how sources.revisionsUrl
+  // became non-null, only that it did.
+  const resolvedWithValidatedRevisions = JSON.parse(JSON.stringify(resolved86178Revisions));
+  resolvedWithValidatedRevisions.sources.revisionsUrl = 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/';
+  const previewValidated = sandbox.computeResolvedMeetingPreview_(
+    { REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' },
+    resolvedWithValidatedRevisions
+  );
+  check('a genuinely validated sources.revisionsUrl is labeled "resolved" and wins over an existing value',
+    previewValidated.revisionsUrl,
+    { value: 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/', source: 'resolved' });
 
   const previewNoResolveNoExisting = sandbox.computeResolvedMeetingPreview_({}, null);
   check('no resolution, no existing REVISIONS_URL -> genuinely unresolved (optional field, never guessed)',
@@ -360,20 +374,25 @@ console.log('resolveMeetingForConfigDialog_() -- never writes to PropertiesServi
   }
 
   // Behavioral confirmation: calling it directly against a live sandbox must
-  // leave Document Properties byte-identical -- including when the
-  // ARCH-011 revisions-folder probe itself succeeds and validates.
-  const { sandbox, docProps } = loadCode({ documentProperties: { MAILING_LIST: 'untouched-list', MEETING_ID: '60777', REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' } });
+  // leave Document Properties byte-identical -- including now that a
+  // normal Resolve derives a revisions/drafts candidate (PROD-014: never
+  // fetched/validated synchronously). This stub throws if resolveMeetingById_()
+  // ever reaches it, which would be a regression back to the hanging
+  // behavior this task fixed.
+  const { sandbox, docProps } = loadCode({ documentProperties: { MAILING_LIST: 'untouched-list', MEETING_ID: '60777' } });
   sandbox.fetchMeetingMetadataById_ = () => ({ statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) });
   sandbox.fetchMeetingIcalById_ = () => ({ statusCode: 200, text: FIXTURES.ical86178 });
   sandbox.fetchMeetingTdocListById_ = () => ({ statusCode: 200, text: FIXTURES.tdocListHtml86178 });
-  sandbox.fetchRevisionsUrlCandidate_ = () => ({ statusCode: 200, text: SYNTHETIC_REVISIONS_INDEX_HTML });
+  sandbox.fetchRevisionsUrlCandidate_ = () => {
+    throw new Error('fetchRevisionsUrlCandidate_ must not be called during a normal Resolve (PROD-014)');
+  };
   const before = JSON.stringify(docProps._store);
   const result = sandbox.resolveMeetingForConfigDialog_('86178');
   const after = JSON.stringify(docProps._store);
   check('resolveMeetingForConfigDialog_() returns ok:true for a valid, resolvable id', result.ok, true);
-  check('ARCH-012: the resolve DID find/validate a revisionsUrl (so this is a real, non-trivial no-op check)',
-    result.preview.revisionsUrl.source, 'resolved');
-  check('resolveMeetingForConfigDialog_() does not mutate Document Properties, even on a successful resolve (incl. a validated revisions folder)', after, before);
+  check('PROD-014: the resolve derived a revisionsUrl CANDIDATE (not validated) -- provenance is "candidate", never "resolved"',
+    result.preview.revisionsUrl.source, 'candidate');
+  check('resolveMeetingForConfigDialog_() does not mutate Document Properties, even on a successful resolve (candidate derivation included)', after, before);
 }
 
 // ========================================================== summary =======
