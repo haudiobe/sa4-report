@@ -1,0 +1,112 @@
+/**
+ * PERF-003 (Part B) — skip global formatting when nothing structural
+ * changed.
+ *
+ * PERF-002's controlled production measurement found removeRowHeightAndSpacing()
+ * costing ~16.4s of the ~73s no-change baseline: an unconditional,
+ * full-document pass writing row.setMinimumHeight(0)/paragraph spacing/
+ * cell widths across EVERY table, every run, regardless of whether
+ * anything changed. Characterization: this pass exists because Apps
+ * Script's own table/row/cell/paragraph insertion APIs default to
+ * non-zero spacing/height, so a newly INSERTED table or paragraph needs
+ * it -- content whose TEXT changed in an EXISTING row/cell (status
+ * updates, e-mail discussion, revision cell rendering) never does.
+ *
+ * This suite proves the extracted decision (shouldReformatAfterUpdate_())
+ * that continuousUpdate() now gates its removeRowHeightAndSpacing() call
+ * with, and confirms (via source-structure) that every OTHER call site of
+ * removeRowHeightAndSpacing() remains unconditional -- full report build/
+ * "Update All"/manual formatting menu items are untouched.
+ *
+ * Run: node tests/perf003-formatting-skip.test.js
+ */
+
+const fs = require('fs');
+const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
+
+let failures = 0;
+function check(name, actual, expected) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a === e) {
+    console.log(`  ok   ${name}`);
+  } else {
+    failures++;
+    console.log(`  FAIL ${name}\n         expected ${e}\n         actual   ${a}`);
+  }
+}
+
+// ==================== 1. shouldReformatAfterUpdate_() -- pure decision ====
+
+console.log('shouldReformatAfterUpdate_() -- pure structural-change decision');
+
+{
+  const { sandbox } = loadCode();
+  const fn = sandbox.shouldReformatAfterUpdate_;
+
+  check('1. no-change run (0 new, 0 moved, 0 inserted) -> SKIP formatting', fn(0, 0, 0), false);
+  check('2. a newly inserted TDoc (newTdocsAdded=1) -> formatting REQUIRED', fn(1, 0, 0), true);
+  check('3. a structural revision-table movement (revisionsMoved=1) -> formatting REQUIRED', fn(0, 1, 0), true);
+  check('a newly inserted revision-linked table (insertRevisedDocTablesAfter_) -> formatting REQUIRED', fn(0, 0, 1), true);
+  check('multiple simultaneous structural changes -> still just REQUIRED (no double-counting concern)', fn(3, 2, 1), true);
+  check('undefined/missing arguments do not throw and default to "no change"', fn(undefined, undefined, undefined), false);
+  check('null arguments do not throw and default to "no change"', fn(null, null, null), false);
+}
+
+// ============ 2. source-structure: continuousUpdate() wires real inputs ===
+
+console.log('source-structure: continuousUpdate() feeds its REAL newTdocsAdded/rev.moved/counter into the decision');
+
+{
+  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  const fnStart = source.indexOf('function continuousUpdate()');
+  const nextFnMatch = source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m);
+  const fnEnd = nextFnMatch ? fnStart + 1 + nextFnMatch.index : source.length;
+  const body = source.slice(fnStart, fnEnd);
+
+  check('continuousUpdate() calls shouldReformatAfterUpdate_(newTdocsAdded, rev.moved, ...)',
+    /shouldReformatAfterUpdate_\(\s*newTdocsAdded,\s*rev\.moved,/.test(body), true);
+  check('continuousUpdate() reads the revision-linked-table-insertion counter as the third argument',
+    /perfCounterValue_\('structural: new revision-linked tables inserted \(insertRevisedDocTablesAfter_\)'\)/.test(body), true);
+  check('the formatting call is inside an if() gated by the decision result (not called unconditionally any more here)',
+    /if\s*\(structuralChangeThisRun\)\s*\{\s*perfTimed_\('formatting \(removeRowHeightAndSpacing\)'/.test(body), true);
+}
+
+// ======= 3. source-structure: every OTHER call site remains unconditional =
+
+console.log('source-structure: full-build/"Update All"/manual formatting call sites remain UNCONDITIONAL (item 4)');
+
+{
+  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  // Every literal "removeRowHeightAndSpacing()" call site in the file,
+  // with a few characters of context to classify it.
+  const callSites = [];
+  const pattern = /removeRowHeightAndSpacing\(\)/g;
+  let m;
+  while ((m = pattern.exec(source)) !== null) {
+    const lineStart = source.lastIndexOf('\n', m.index) + 1;
+    const lineEnd = source.indexOf('\n', m.index);
+    callSites.push(source.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim());
+  }
+  // Excludes: the function's own `function removeRowHeightAndSpacing() {`
+  // definition line, and any line that is purely a comment reference.
+  const realCallSites = callSites.filter(line =>
+    !line.startsWith('function removeRowHeightAndSpacing') &&
+    !line.startsWith('//') && !line.startsWith('*'));
+
+  check('at least 6 other unconditional call sites still exist besides continuousUpdate()\'s', realCallSites.length >= 6, true);
+  check('exactly ONE call site is the new conditional one (inside the perfTimed_ formatting branch)',
+    realCallSites.filter(line => line.includes("perfTimed_('formatting")).length, 1);
+  check('every OTHER call site is a bare, unconditional call (not wrapped in a new if-condition)',
+    realCallSites.filter(line => !line.includes("perfTimed_('formatting")).every(line => line === 'removeRowHeightAndSpacing();'),
+    true);
+}
+
+// ========================================================== summary =======
+
+if (failures > 0) {
+  console.log(`\n${failures} check(s) FAILED`);
+  process.exit(1);
+} else {
+  console.log('\nAll checks passed.');
+}

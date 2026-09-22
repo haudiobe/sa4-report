@@ -213,6 +213,10 @@ function perfCount_(label, n) {
   PERF_COUNTERS_[label] = (PERF_COUNTERS_[label] || 0) + (n === undefined ? 1 : n);
 }
 
+function perfCounterValue_(label) {
+  return PERF_COUNTERS_[label] || 0;
+}
+
 /**
  * Times a single, one-shot stage: runs fn(), logs
  * "[PERF] <label>: <ms> ms" immediately (so a live execution transcript
@@ -314,14 +318,20 @@ function continuousUpdate() {
 
     Logger.log(`Downloaded ${allTdocs.length} TDOCs`);
 
-    // Get existing TDOCs
+    // Get existing TDOCs. PERF-003 (Part A): also builds the canonical
+    // TDoc-table index from this SAME scan (no extra body.getTables()
+    // call) -- this is what lets updateTdocStatus_()/findTdocTable_() stop
+    // rescanning the whole document once per TDoc/revision pair below.
     const existingTdocs = new Set();
+    let tdocTableIndex;
     perfTimed_('existing-report/document scan (existing TDoc detection)', () => {
-      getTablesCounted_(body, 'continuousUpdate:existingTdocScan').forEach(t => {
+      const tables = getTablesCounted_(body, 'continuousUpdate:existingTdocScan');
+      tables.forEach(t => {
         if (!isTDocTable_(t)) return;
         const tdoc = safeCellText_(t, 0, 1).trim();
         if (tdoc) existingTdocs.add(tdoc);
       });
+      tdocTableIndex = buildTdocTableIndex_(tables);
     });
 
     Logger.log(`Found ${existingTdocs.size} existing TDOCs`);
@@ -336,10 +346,10 @@ function continuousUpdate() {
       perfCount_('TDocs processed (loop iterations)');
 
       if (!existingTdocs.has(tdocNumber)) {
-        perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg));
+        perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg, tdocTableIndex));
         newTdocsAdded++;
       } else {
-        if (perfTimedAccum_('status updates (updateTdocStatus_, accumulated)', () => updateTdocStatus_(body, tdocNumber, tdocData))) {
+        if (perfTimedAccum_('status updates (updateTdocStatus_, accumulated)', () => updateTdocStatus_(body, tdocNumber, tdocData, tdocTableIndex))) {
           statusUpdated++;
         }
       }
@@ -356,7 +366,7 @@ function continuousUpdate() {
     // section, so move every revision back under the document it revises and
     // fill the revised document's Disposition. Reuses the TDOC list already
     // downloaded above, so this costs no extra fetch.
-    const rev = perfTimed_('revision ordering/rearrangement (rearrangeRevisionTables_)', () => rearrangeRevisionTables_(cfg, tdocGroups));
+    const rev = perfTimed_('revision ordering/rearrangement (rearrangeRevisionTables_)', () => rearrangeRevisionTables_(cfg, tdocGroups, tdocTableIndex));
     Logger.log(`Revisions: ${rev.moved} moved, ${rev.dispositions} disposition(s) filled`);
 
     // Abstracts are optional on automatic updates (OFF by default).
@@ -371,8 +381,28 @@ function continuousUpdate() {
     // Collect emails and revisions
     perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_());
 
+    // PERF-003 (Part B): the unconditional, full-document formatting pass
+    // is only actually needed when this run inserted or moved a TABLE --
+    // never merely because cell TEXT changed (status updates, e-mail
+    // discussion, revision cell rendering all rewrite existing cells in
+    // place, never add/remove rows or tables). See
+    // removeRowHeightAndSpacing()'s own header comment for the full
+    // characterization, and shouldReformatAfterUpdate_() for the decision
+    // itself. Every OTHER call site of removeRowHeightAndSpacing() (full
+    // report build, "Update All", manual formatting menu items) is
+    // untouched and still calls it unconditionally.
+    const structuralChangeThisRun = shouldReformatAfterUpdate_(
+      newTdocsAdded,
+      rev.moved,
+      perfCounterValue_('structural: new revision-linked tables inserted (insertRevisedDocTablesAfter_)')
+    );
+
     // Format
-    perfTimed_('formatting (removeRowHeightAndSpacing)', () => removeRowHeightAndSpacing());
+    if (structuralChangeThisRun) {
+      perfTimed_('formatting (removeRowHeightAndSpacing)', () => removeRowHeightAndSpacing());
+    } else {
+      Logger.log('[PERF] formatting skipped: no structural change this run (no new/moved/inserted tables)');
+    }
 
     Logger.log('=== COMPLETE ===');
 
@@ -572,7 +602,14 @@ function getTriggerStatus() {
 }
 
 
-function insertNewTdoc_(body, tdocData, cfg) {
+/**
+ * PERF-003 (Part A): `index`, if supplied, is threaded through to
+ * findParentRevisedToTable_() (avoiding a fresh full-table scan there),
+ * and is itself UPDATED in place with the newly-inserted table -- so a
+ * LATER new TDoc in the same continuousUpdate() run that revises THIS one
+ * can still find it via the index, without needing a full rebuild mid-run.
+ */
+function insertNewTdoc_(body, tdocData, cfg, index) {
   const row = tdocData.row;
   const agendaItem = tdocData.agendaItem;
   const revisedTo = getRevisedTo_(tdocData);
@@ -581,20 +618,20 @@ function insertNewTdoc_(body, tdocData, cfg) {
   // document is not in the report yet do we fall back to the end of the
   // agenda section (continuousUpdate's re-arrangement pass fixes it later).
   let insertIdx = -1;
-  const parentTable = findParentRevisedToTable_(body, tdocNumberOf_(tdocData));
+  const parentTable = findParentRevisedToTable_(body, tdocNumberOf_(tdocData), index);
   if (parentTable) {
     insertIdx = body.getChildIndex(parentTable) + 1;
     Logger.log(`Placing ${tdocNumberOf_(tdocData)} directly below its parent`);
   }
   if (insertIdx < 0) insertIdx = findInsertionPointForAgendaItem_(body, agendaItem, '');
-  
+
   const typeCol = tdocData.typeCol;
   const forCol = tdocData.forCol;
   const typeFor = (typeCol >= 0 && forCol >= 0 && row[typeCol] && row[forCol])
     ? `${row[typeCol]} for ${row[forCol]}`
-    : (typeCol >= 0 && row[typeCol]) ? row[typeCol] 
+    : (typeCol >= 0 && row[typeCol]) ? row[typeCol]
     : (forCol >= 0 && row[forCol]) ? row[forCol] : '';
-  
+
   const tempData = [
     ['TDoc', row[tdocData.tdocCol]],
     ['Title', row[tdocData.titleCol]],
@@ -608,9 +645,14 @@ function insertNewTdoc_(body, tdocData, cfg) {
     ['Disposition', revisedTo ? 'Revised to ' + revisedTo : ''],
     ['Status', tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '']
   ];
-  
-  insertTDocTableAtIndex_(body, insertIdx, tempData, tdocData.richTextRow, tdocData.tdocCol);
+
+  const newTable = insertTDocTableAtIndex_(body, insertIdx, tempData, tdocData.richTextRow, tdocData.tdocCol);
   Logger.log(`Inserted ${row[tdocData.tdocCol]}`);
+
+  if (index) {
+    const parsed = parseExactSA4DocumentId_(String(row[tdocData.tdocCol] || '').trim());
+    if (parsed.isValid) index.set(parsed.raw, newTable);
+  }
 }
 
 /**
@@ -618,7 +660,7 @@ function insertNewTdoc_(body, tdocData, cfg) {
  * REVISION_MAP built from the TDOC list. Returns null when unknown or when that
  * document has no table in this report.
  */
-function findParentRevisedToTable_(body, tdocNumber) {
+function findParentRevisedToTable_(body, tdocNumber, index) {
   const want = String(tdocNumber || '').trim().toUpperCase();
   if (!want) return null;
 
@@ -627,44 +669,73 @@ function findParentRevisedToTable_(body, tdocNumber) {
 
   for (const parent of Object.keys(map)) {
     if (String(map[parent] || '').toUpperCase() !== want) continue;
-    const t = findTdocTable_(body, parent);
+    const t = findTdocTable_(body, parent, index);
     if (t) return t;
   }
   return null;
 }
 
-function updateTdocStatus_(body, tdocNumber, tdocData) {
+/**
+ * PERF-003 (Part A): the actual "found the table -- decide/apply the
+ * status update" logic, extracted so BOTH the fast (indexed) and fallback
+ * (full-scan) paths in updateTdocStatus_() below share exactly one copy
+ * of it -- byte-identical decision logic either way.
+ */
+function applyTdocStatusUpdate_(table, tdocNumber, newStatus) {
+  const statusInfo = findStatusInDocTable_(table);
+  if (!statusInfo) return false;
+
+  const currentStatus = statusInfo.value.trim();
+
+  if (currentStatus !== newStatus) {
+    const docStatus = normalizeStatus_(currentStatus);
+    const newStatusLower = newStatus.toLowerCase();
+    const isRevised = newStatusLower.includes('revised');
+
+    if (docStatus === 'reserved' || docStatus === 'available' || isRevised) {
+      statusInfo.cell.setText(newStatus);
+      styleStatusCell_(table);
+      Logger.log(`Updated ${tdocNumber}: ${currentStatus} → ${newStatus}`);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * PERF-003 (Part A): `index`, if supplied (a buildTdocTableIndex_()
+ * result), is tried first for an O(1) lookup -- the measured cost this
+ * optimization targets was exactly this function calling
+ * body.getTables() once per EXISTING TDoc every run (32 times for a
+ * 32-TDoc no-change run). The indexed candidate's raw TDoc cell text is
+ * still verified to exactly equal `tdocNumber` before use (the SAME
+ * case-sensitive, raw-string-equality check the original code always
+ * used) -- if that verification ever fails, or no index was supplied,
+ * this falls straight back to the original full scan, so behavior is
+ * byte-identical in every case, not just the common one.
+ */
+function updateTdocStatus_(body, tdocNumber, tdocData, index) {
   const row = tdocData.row;
   const newStatus = tdocData.statusCol >= 0 ? String(row[tdocData.statusCol] || '').trim() : '';
-  
+
   if (!newStatus) return false;
+
+  if (index) {
+    const candidate = lookupTdocTableInIndex_(index, tdocNumber);
+    if (candidate && safeCellText_(candidate, 0, 1).trim() === tdocNumber) {
+      return applyTdocStatusUpdate_(candidate, tdocNumber, newStatus);
+    }
+  }
 
   const tables = getTablesCounted_(body, 'updateTdocStatus_');
   for (let i = 0; i < tables.length; i++) {
     const table = tables[i];
     if (!isTDocTable_(table)) continue;
-    
+
     const tableTdoc = safeCellText_(table, 0, 1).trim();
     if (tableTdoc !== tdocNumber) continue;
-    
-    const statusInfo = findStatusInDocTable_(table);
-    if (!statusInfo) continue;
-    
-    const currentStatus = statusInfo.value.trim();
-    
-    if (currentStatus !== newStatus) {
-      const docStatus = normalizeStatus_(currentStatus);
-      const newStatusLower = newStatus.toLowerCase();
-      const isRevised = newStatusLower.includes('revised');
-      
-      if (docStatus === 'reserved' || docStatus === 'available' || isRevised) {
-        statusInfo.cell.setText(newStatus);
-        styleStatusCell_(table);
-        Logger.log(`Updated ${tdocNumber}: ${currentStatus} → ${newStatus}`);
-        return true;
-      }
-    }
-    return false;
+
+    return applyTdocStatusUpdate_(table, tdocNumber, newStatus);
   }
   return false;
 }
@@ -2172,6 +2243,23 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
   // introduced. parsed.raw (not the raw cell text) is passed to
   // fetchAndAddAbstract_() so the API always receives the canonical
   // identifier spelling.
+  //
+  // PERF-003 (Part D, characterization only -- no behavior change): this
+  // is a SEPARATE gate from FETCH_ABSTRACTS_ON_UPDATE (getFetchAbstractsSetting_(),
+  // see the 2.3.0 changelog entry above and addAbstractsForTables_()).
+  // FETCH_ABSTRACTS_ON_UPDATE only controls continuousUpdate()'s bulk sweep
+  // over EXISTING tables that don't have an abstract yet. This call site is
+  // reached every time ANY new TDoc table is created -- including from
+  // inside continuousUpdate() when it inserts a brand-new TDoc this run --
+  // regardless of the FETCH_ABSTRACTS_ON_UPDATE setting. It is only skipped
+  // when SKIP_ABSTRACTS_DURING_TABLE_BUILD is explicitly set, which happens
+  // solely inside addTdocTablesOnly()'s manual two-step "tables now,
+  // abstracts later" workflow. This is why a controlled continuousUpdate()
+  // run that inserted exactly one new TDoc made exactly one Reviewer API
+  // request even with FETCH_ABSTRACTS_ON_UPDATE left at its default (off):
+  // the request came from here, not from addAbstractsForTables_(). This is
+  // existing, intentional behavior (a newly-created table is meant to get
+  // its Abstract row immediately) and is left unchanged.
   const skipAbstracts = PropertiesService.getDocumentProperties().getProperty('SKIP_ABSTRACTS_DURING_TABLE_BUILD') === 'true';
   const tdocNumber = String(data[0][1] || '').trim();
   const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
@@ -2654,11 +2742,23 @@ function collectHybridListservMessages_(cfg) {
   out = out.concat(collectRssItems_(cfg, cfg.RSS_URL_V2, 'rss_v2'));
 
   const a1Urls = buildArchiveIndexUrlsByDaysBack_(cfg.LIST_NAME, parseInt(cfg.ARCHIVE_DAYS_BACK || '14', 10), cfg);
-  // PERF-001: up to ARCHIVE_DAYS_BACK (default 14) separate ETSI archive
-  // index fetches, one per day-back -- collectA1_()'s own
-  // isA1CachedEmpty_() short-circuit may skip a fetch for a day already
-  // known empty, but every day not yet cached costs one real network
-  // request here, every run.
+  // PERF-001/PERF-003 (Part C, characterization): buildArchiveIndexUrlsByDaysBack_()
+  // does not generate one URL per day -- ETSI's archive is indexed by
+  // WEEK-LETTER (A-E) within each calendar MONTH the ARCHIVE_DAYS_BACK
+  // window touches (e.g. "ind2609A".."ind2609E" for September 2026), so a
+  // default 14-day window that stays inside one month produces exactly 5
+  // URLs, not 14. collectA1_()'s own isA1CachedEmpty_()/markA1Empty_()
+  // 24h-TTL cache already skips a re-fetch for any week-page previously
+  // found empty and still within its TTL -- this is why a measured run
+  // considered 5 URLs but only fetched 3: the other 2 were weeks already
+  // known (within the last 24h) to have no new messages. Every
+  // NOT-yet-known-empty week (necessarily including the current, still
+  // possibly-changing week) is always fetched fresh, every run, by design
+  // -- per PERF-003 Part C's explicit constraint, correctness must never
+  // depend on skipping a week that could still contain new/current
+  // messages, so no further safe reduction was found here; this network
+  // cost is genuine ETSI round-trip latency, not redundant work, and is
+  // left unchanged.
   perfCount_('A1 archive day-URLs considered (ARCHIVE_DAYS_BACK)', a1Urls.length);
   a1Urls.forEach(url => out = out.concat(collectA1_(cfg, url)));
 
@@ -3024,6 +3124,13 @@ function insertRevisedDocTablesAfter_(body, parentTable, revisions, cfg) {
     });
     if (existing) return;
 
+    // PERF-003 (Part B): this is the one place inside collectorUpdate_()'s
+    // call chain that can insert a brand-new TABLE (structural change) --
+    // continuousUpdate()'s end-of-run formatting-skip decision reads this
+    // counter to know whether a genuinely structural change happened here,
+    // even though nothing else that run needed reformatting.
+    perfCount_('structural: new revision-linked tables inserted (insertRevisedDocTablesAfter_)');
+
     // Insert a minimal revision table
     const revTable = body.insertTable(insertAfter);
     removeInitialEmptyRow_(revTable);
@@ -3348,11 +3455,58 @@ function orderRevisionChains_(map) {
 }
 
 /**
- * Find the TDOC table for a given document number.
+ * PERF-003 (Part A): builds a canonical-identity index of every TDoc table
+ * currently in the document from a SINGLE table scan --
+ * Map<canonicalTdocId, Table>. Uses the SAME central SA4 TDoc registry
+ * (parseExactSA4DocumentId_) every other "is this a TDoc table, what's its
+ * number" consumer in this file already uses -- not a second, parallel
+ * identification scheme. A table whose own TDoc cell doesn't parse as a
+ * valid SA4 identifier is skipped, never indexed under a guessed/partial
+ * key. `tables` is expected to already be a `getTablesCounted_()` result
+ * (this function does not fetch the document itself, so building the
+ * index never costs an extra scan beyond whichever scan already produced
+ * `tables`).
  */
-function findTdocTable_(body, tdocNumber) {
+function buildTdocTableIndex_(tables) {
+  const index = new Map();
+  tables.forEach(table => {
+    if (!isTDocTable_(table)) return;
+    const raw = String(safeCellText_(table, 0, 1) || '').trim();
+    const parsed = parseExactSA4DocumentId_(raw);
+    if (!parsed.isValid) return;
+    index.set(parsed.raw, table);
+  });
+  return index;
+}
+
+/**
+ * PERF-003 (Part A): O(1) canonical-identity lookup against a
+ * buildTdocTableIndex_() result. Returns null (never throws, never
+ * guesses) for an input that doesn't parse as a valid SA4 identifier or
+ * that simply isn't in the index.
+ */
+function lookupTdocTableInIndex_(index, tdocNumber) {
+  const parsed = parseExactSA4DocumentId_(tdocNumber);
+  if (!parsed.isValid) return null;
+  return index.get(parsed.raw) || null;
+}
+
+/**
+ * Find the TDOC table for a given document number.
+ *
+ * PERF-003 (Part A): `index`, if supplied (a buildTdocTableIndex_()
+ * result), is used for an O(1) lookup instead of a fresh full-document
+ * table scan -- this is what lets findParentRevisedToTable_()/
+ * rearrangeRevisionTables_() avoid repeating body.getTables() once per
+ * TDoc/revision-pair. Omitting `index` preserves the exact original
+ * behavior (a fresh scan every call) for any caller that hasn't been
+ * updated to build/pass one.
+ */
+function findTdocTable_(body, tdocNumber, index) {
   const want = String(tdocNumber || '').trim().toUpperCase();
   if (!want) return null;
+
+  if (index) return lookupTdocTableInIndex_(index, tdocNumber);
 
   const tables = getTablesCounted_(body, 'findTdocTable_');
   for (let i = 0; i < tables.length; i++) {
@@ -3393,17 +3547,27 @@ function setDispositionRevisedTo_(table, revisedTo) {
  * Move a table so it sits immediately after another table.
  * Returns true when the document was actually changed.
  */
+/**
+ * PERF-003 (Part A): now returns the NEWLY INSERTED copy (truthy) when a
+ * move happened, or `null` (falsy, same as the old `false`) when the
+ * table was already in place -- existing `if (moveTableAfter_(...))`
+ * call sites branch identically either way. The return value lets a
+ * caller maintaining a table-identity index (e.g. rearrangeRevisionTables_())
+ * update that index to point at the new table object, since the ORIGINAL
+ * one this function removes via removeFromParent() becomes a stale/
+ * dangling reference the instant this function returns.
+ */
 function moveTableAfter_(body, table, afterTable) {
   const targetIndex = body.getChildIndex(afterTable) + 1;
   const currentIndex = body.getChildIndex(table);
-  if (currentIndex === targetIndex) return false; // already in the right place
+  if (currentIndex === targetIndex) return null; // already in the right place
 
   // Insert a copy at the destination, then drop the original. Holding the
   // element reference means the shifting indices do not matter.
   const copy = table.copy();
   body.insertTable(targetIndex, copy);
   table.removeFromParent();
-  return true;
+  return copy;
 }
 
 /**
@@ -3444,8 +3608,16 @@ function rearrangeRevisionTables() {
 /**
  * Worker for the above; no UI, so it is safe to call from other steps.
  * `groups` is optional (see buildRevisionMapFromTdocList_).
+ *
+ * PERF-003 (Part A): `index`, if supplied, is used for both findTdocTable_()
+ * lookups per revision pair instead of a fresh full-table scan each time.
+ * When moveTableAfter_() actually moves a table, the ORIGINAL table
+ * object it removed becomes a stale reference -- the index entry for the
+ * moved (child) TDoc is updated in place to point at the new copy, so a
+ * LATER revision pair in the same call that also touches this TDoc still
+ * gets a live, correct reference rather than a dangling one.
  */
-function rearrangeRevisionTables_(cfg, groups) {
+function rearrangeRevisionTables_(cfg, groups, index) {
   cfg = cfg || getReportConfig_();
   const body = getActiveDocumentBodyCounted_('rearrangeRevisionTables_');
   const map = buildRevisionMapFromTdocList_(cfg, groups);
@@ -3463,15 +3635,20 @@ function rearrangeRevisionTables_(cfg, groups) {
   orderRevisionChains_(map).forEach(parent => {
     const child = map[parent];
 
-    const parentTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, parent));
+    const parentTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, parent, index));
     if (!parentTable) { stats.missingParent++; return; }
 
     if (setDispositionRevisedTo_(parentTable, child)) stats.dispositions++;
 
-    const childTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, child));
+    const childTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, child, index));
     if (!childTable) { stats.missingChild++; return; }
 
-    if (perfTimedAccum_('  rearrangeRevisionTables_: moveTableAfter_ (accumulated)', () => moveTableAfter_(body, childTable, parentTable))) {
+    const movedTable = perfTimedAccum_('  rearrangeRevisionTables_: moveTableAfter_ (accumulated)', () => moveTableAfter_(body, childTable, parentTable));
+    if (movedTable) {
+      if (index) {
+        const parsedChild = parseExactSA4DocumentId_(child);
+        if (parsedChild.isValid) index.set(parsedChild.raw, movedTable);
+      }
       stats.moved++;
       Logger.log(`Moved ${child} directly below ${parent}`);
     } else {
@@ -4630,6 +4807,42 @@ function ensureAgendaItemRow_(sheet, table) {
 /********************************************************
  * FORMATTING
  ********************************************************/
+/**
+ * Re-applies this report's compact table style (zero row height, zero
+ * paragraph spacing, fixed 2-column TDoc widths, header shading, font
+ * normalization) across every table in the document, plus a stray-
+ * empty-paragraph cleanup in the e-mail discussion section. It exists
+ * because Apps Script's own table/row/cell/paragraph insertion APIs
+ * (insertTable/appendTableRow/appendTableCell/insertParagraph) all default
+ * to non-zero spacing/height -- every newly INSERTED table or paragraph
+ * needs this pass to look consistent with the rest of the report; content
+ * already formatted by a PRIOR run's pass needs it again only if its
+ * structure changed (a row/cell/table was added), never merely because
+ * its TEXT changed (status/e-mail/revision cell rewrites reuse the same
+ * existing rows/cells).
+ *
+ * PERF-003 (Part B): measured as ~16s of the ~73s no-change baseline
+ * (largely thousands of individual per-row/per-paragraph writes across
+ * the WHOLE document, unconditionally, every run) -- see
+ * continuousUpdate()'s own call site for the structural-change gate that
+ * now skips this call specifically for a no-change incremental update.
+ * This function itself, and every OTHER call site (full report build,
+ * "Update All", manual formatting menu items), is completely unchanged
+ * and still calls it unconditionally, exactly as before.
+ */
+/**
+ * PERF-003 (Part B): pure decision -- whether continuousUpdate()'s
+ * unconditional, full-document formatting pass (removeRowHeightAndSpacing())
+ * is actually needed this run. True whenever ANY table was inserted or
+ * moved this run (new TDocs, a moved revision table, or a newly-inserted
+ * revision-linked table); false when this run only rewrote EXISTING cell
+ * TEXT (status updates, e-mail discussion, revision cell rendering), which
+ * never adds/removes a row/cell/table and so never needs reformatting.
+ */
+function shouldReformatAfterUpdate_(newTdocsAdded, revisionsMoved, revisionLinkedTablesInserted) {
+  return (newTdocsAdded || 0) > 0 || (revisionsMoved || 0) > 0 || (revisionLinkedTablesInserted || 0) > 0;
+}
+
 function removeRowHeightAndSpacing() {
   const doc = DocumentApp.getActiveDocument();
   const body = doc.getBody();
