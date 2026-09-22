@@ -4618,18 +4618,43 @@ function removeInitialEmptyRow_(table) {
 function configureMeetingSettings() {
   const ui = DocumentApp.getUi();
   const props = PropertiesService.getDocumentProperties();
-  
+
   // Get current values
   const currentMeetingFolder = props.getProperty('MEETING_FOLDER') || 'TSGS4_136_Montreal';
   const currentMeetingNumber = props.getProperty('MEETING_NUMBER') || '136';
-  const currentMeetingId = props.getProperty('MEETING_ID') || '60777';
   const currentSuffix = props.getProperty('REPORT_SUFFIX') || '6G';
   const currentAgendaSourceDocId = props.getProperty('AGENDA_SOURCE_DOC_ID') || '1qP--dusvUhNwwBtMEH4xVdxaP1c6L1hZ49geICoYV2s';
-  const currentAgendaTdoc = props.getProperty('AGENDA_TDOC') || '';
   const currentTdocUrl = props.getProperty('TDOC_LIST_URL') || '';
   const currentShowPreview = props.getProperty('SHOW_PREVIEW_SNIPPET') !== 'false';
   const currentToken = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN') || '';
-  
+
+  // ARCH-010: the SAME pure merge function the "Resolve" button's server
+  // call uses (computeResolvedMeetingPreview_()), called here with
+  // resolverResult=null -- since no resolution has happened yet on dialog
+  // open, every field falls straight through to its existing Document
+  // Property value. This is what makes an existing, legacy-configured
+  // document (no MEETING_ID resolution ever performed) open pre-filled
+  // correctly without forcing the user through Resolve first.
+  const existingForPreview = {
+    MEETING_ID: props.getProperty('MEETING_ID'),
+    MEETING_TYPE: props.getProperty('MEETING_TYPE'),
+    MEETING_NAME: props.getProperty('MEETING_NAME'),
+    MEETING_DATE: props.getProperty('MEETING_DATE'),
+    FTP_BASE: props.getProperty('FTP_BASE'),
+    AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
+    MAILING_LIST: props.getProperty('MAILING_LIST'),
+    TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL')
+  };
+  const initialPreview = computeResolvedMeetingPreview_(existingForPreview, null);
+  const readiness = computeMeetingConfigReadiness_(existingForPreview);
+
+  function esc(v) { return String(v === null || v === undefined ? '' : v).replace(/"/g, '&quot;'); }
+  function sourceLabel(source) {
+    if (source === 'resolved') return '<span class="badge badge-resolved">resolved from 3GPP</span>';
+    if (source === 'existing') return '<span class="badge badge-existing">existing value</span>';
+    return '<span class="badge badge-unresolved">needs review</span>';
+  }
+
   // Build HTML form
   const html = HtmlService.createHtmlOutput(`
     <style>
@@ -4638,85 +4663,212 @@ function configureMeetingSettings() {
       input, select { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; }
       button { margin-top: 20px; padding: 10px 20px; background: #4285f4; color: white; border: none; cursor: pointer; }
       button:hover { background: #357ae8; }
+      button:disabled { background: #999; cursor: default; }
       .hint { font-size: 11px; color: #666; margin-top: 3px; }
       .section { background: #f5f5f5; padding: 10px; margin: 15px 0; border-left: 3px solid #4285f4; }
+      .resolve-row { display: flex; gap: 8px; align-items: flex-start; }
+      .resolve-row input { flex: 1; }
+      .resolve-row button { margin-top: 5px; white-space: nowrap; }
+      .badge { display: inline-block; font-size: 10px; font-weight: normal; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+      .badge-resolved { background: #d4edda; color: #155724; }
+      .badge-existing { background: #e2e3e5; color: #383d41; }
+      .badge-unresolved { background: #fff3cd; color: #856404; }
+      #resolveStatus { font-size: 12px; margin-top: 6px; }
+      #resolveStatus.error { color: #a94442; }
+      #resolveStatus.busy { color: #666; }
+      #resolveStatus.ok { color: #2d7d2d; }
+      #agendaCandidates { margin-top: 8px; font-size: 12px; }
+      #readinessBox { padding: 10px; margin: 15px 0; border-radius: 4px; font-size: 13px; }
+      #readinessBox.ready { background: #d4edda; color: #155724; }
+      #readinessBox.needsAttention { background: #fff3cd; color: #856404; }
+      details.advanced { margin-top: 20px; }
+      details.advanced summary { cursor: pointer; font-weight: bold; color: #4285f4; padding: 8px 0; }
     </style>
-    
+
     <h2>Meeting Configuration</h2>
-    
+
     <div class="section">
-      <h3>📅 Meeting Information</h3>
-      
-      <label>Meeting Folder:</label>
-      <input type="text" id="meetingFolder" value="${currentMeetingFolder}" placeholder="TSGS4_136_Montreal">
-      <div class="hint">Folder name on 3GPP FTP (e.g., TSGS4_136_Montreal or TSGS4_137-e)</div>
-      
-      <label>Meeting Number:</label>
-      <input type="text" id="meetingNumber" value="${currentMeetingNumber}" placeholder="136">
-      <div class="hint">Meeting number for TDOC list filename (e.g., 136 or 137-e)</div>
-      
+      <h3>🔎 Resolve from 3GPP Meeting ID</h3>
       <label>3GPP Portal Meeting ID:</label>
-      <input type="text" id="meetingId" value="${currentMeetingId}" placeholder="60777">
-      <div class="hint">Portal ID from https://portal.3gpp.org/Home.aspx#/meeting?MtgId=60777</div>
+      <div class="resolve-row">
+        <input type="text" id="meetingId" value="${esc(initialPreview.meetingId.value)}" placeholder="86178">
+        <button type="button" id="resolveBtn" onclick="resolveMeeting()">Resolve</button>
+      </div>
+      <div class="hint">Portal ID from https://portal.3gpp.org/Home.aspx#/meeting?MtgId=86178. Resolving fetches meeting details from anonymous official 3GPP services -- it does NOT save anything by itself.</div>
+      <div id="resolveStatus"></div>
+      <div id="agendaCandidates"></div>
     </div>
-    
+
+    <div id="readinessBox" class="${readiness.ready ? 'ready' : 'needsAttention'}">
+      ${readiness.ready
+        ? '✅ Ready to build report'
+        : '⚠️ Needs attention:<br>' + readiness.issues.map(i => '• ' + i).join('<br>')}
+    </div>
+
     <div class="section">
-      <h3>📋 Report Configuration</h3>
-      
-      <label>Report Type:</label>
-      <select id="reportType">
-        <option value="6G" ${currentSuffix === '6G' ? 'selected' : ''}>6G (Agenda 11.x)</option>
-        <option value="Audio" ${currentSuffix === 'Audio' ? 'selected' : ''}>Audio (Agenda 7.x)</option>
-        <option value="Video" ${currentSuffix === 'Video' ? 'selected' : ''}>Video (Agenda 9.x)</option>
-        <option value="RTC" ${currentSuffix === 'RTC' ? 'selected' : ''}>RTC (Agenda 10.x)</option>
-        <option value="MBS" ${currentSuffix === 'MBS' ? 'selected' : ''}>MBS (Agenda 8.x)</option>
-        <option value="Liaison" ${currentSuffix === 'Liaison' ? 'selected' : ''}>Liaison (Agenda 5.x)</option>
-        <option value="New" ${currentSuffix === 'New' ? 'selected' : ''}>New Work Items (Agenda 18.x)</option>
-      </select>
-      
-      <label>Meeting Report Template (Google Doc):</label>
-      <input type="text" id="agendaSourceDocId" value="${currentAgendaSourceDocId}" placeholder="https://docs.google.com/document/d/...">
-      <div class="hint">Google Doc ID or URL for skeleton/template with agenda structure</div>
-      
-      <label>Agenda TDoc Number:</label>
-      <input type="text" id="agendaTdoc" value="${currentAgendaTdoc}" placeholder="S4-260868">
-      <div class="hint">TDoc number of the official meeting agenda (e.g., S4-260868)</div>
+      <h3>📋 Resolved Meeting</h3>
+
+      <label>Meeting Name: ${sourceLabel(initialPreview.meetingName.source)}</label>
+      <input type="text" id="meetingName" value="${esc(initialPreview.meetingName.value)}" placeholder="SA4-e (AH) on FS_6G_MED">
+
+      <label>Meeting Type (adhoc / main): ${sourceLabel(initialPreview.meetingType.source)}</label>
+      <input type="text" id="meetingType" value="${esc(initialPreview.meetingType.value)}" placeholder="adhoc">
+      <div class="hint" id="portalTypeHint"></div>
+
+      <label>Meeting Date: ${sourceLabel(initialPreview.meetingDate.source)}</label>
+      <input type="text" id="meetingDate" value="${esc(initialPreview.meetingDate.value)}" placeholder="September 22, 2026">
+      <div class="hint" id="dateRangeHint"></div>
+
+      <label>FTP Base: ${sourceLabel(initialPreview.ftpBase.source)}</label>
+      <input type="text" id="ftpBase" value="${esc(initialPreview.ftpBase.value)}" placeholder="https://www.3gpp.org/ftp/.../Docs/">
+
+      <label>Agenda TDoc: ${sourceLabel(initialPreview.agendaTdoc.source)}</label>
+      <input type="text" id="agendaTdoc" value="${esc(initialPreview.agendaTdoc.value)}" placeholder="S4aP260098 (or enter manually)">
+
+      <label>Mailing List: ${sourceLabel(initialPreview.mailingList.source)}</label>
+      <input type="text" id="mailingList" value="${esc(initialPreview.mailingList.value)}" placeholder="e.g. 3GPP_TSG_SA4_FS_6G_MED -- never auto-resolved">
+      <div class="hint">The Portal cannot determine this automatically -- always entered/reviewed manually.</div>
     </div>
-    
-    <div class="section">
-      <h3>📁 File Locations</h3>
-      
-      <label>TDOC List URL (optional - auto-detected if empty):</label>
-      <input type="text" id="tdocUrl" value="${currentTdocUrl}" placeholder="Leave empty for auto-detection">
-      <div class="hint">Auto: https://www.3gpp.org/ftp/.../TSGS4_136_Montreal/Docs/TDoc_List_Meeting_SA4#136.xlsx</div>
-    </div>
-    
-    <div class="section">
-      <h3>⚙️ Options</h3>
-      
-      <label>
-        <input type="checkbox" id="showPreview" ${currentShowPreview ? 'checked' : ''}> 
-        Show email preview snippets in report
-      </label>
-      
-      <label>Email Collection Start Date:</label>
-      <input type="date" id="emailStartDate" value="${props.getProperty('EMAIL_START_DATE') || '2026-08-21'}">
-      <div class="hint">Only collect emails from this date onwards (format: YYYY-MM-DD)</div>
-      
-      <label>Reviewer API Token (optional):</label>
-      <input type="password" id="apiToken" value="${currentToken}" placeholder="crv1_...">
-      <div class="hint">For fetching AI summaries and abstracts</div>
-    </div>
-    
+
+    <details class="advanced">
+      <summary>⚙️ Advanced configuration (legacy / main-meeting fields)</summary>
+
+      <div class="section">
+        <label>Meeting Folder:</label>
+        <input type="text" id="meetingFolder" value="${currentMeetingFolder}" placeholder="TSGS4_136_Montreal">
+        <div class="hint">Folder name on 3GPP FTP (e.g., TSGS4_136_Montreal or TSGS4_137-e) -- main meetings only.</div>
+
+        <label>Meeting Number:</label>
+        <input type="text" id="meetingNumber" value="${currentMeetingNumber}" placeholder="136">
+        <div class="hint">Meeting number for TDOC list filename (e.g., 136 or 137-e) -- main meetings only.</div>
+
+        <label>Report Type:</label>
+        <select id="reportType">
+          <option value="6G" ${currentSuffix === '6G' ? 'selected' : ''}>6G (Agenda 11.x)</option>
+          <option value="Audio" ${currentSuffix === 'Audio' ? 'selected' : ''}>Audio (Agenda 7.x)</option>
+          <option value="Video" ${currentSuffix === 'Video' ? 'selected' : ''}>Video (Agenda 9.x)</option>
+          <option value="RTC" ${currentSuffix === 'RTC' ? 'selected' : ''}>RTC (Agenda 10.x)</option>
+          <option value="MBS" ${currentSuffix === 'MBS' ? 'selected' : ''}>MBS (Agenda 8.x)</option>
+          <option value="Liaison" ${currentSuffix === 'Liaison' ? 'selected' : ''}>Liaison (Agenda 5.x)</option>
+          <option value="New" ${currentSuffix === 'New' ? 'selected' : ''}>New Work Items (Agenda 18.x)</option>
+        </select>
+
+        <label>Meeting Report Template (Google Doc):</label>
+        <input type="text" id="agendaSourceDocId" value="${currentAgendaSourceDocId}" placeholder="https://docs.google.com/document/d/...">
+        <div class="hint">Google Doc ID or URL for skeleton/template with agenda structure</div>
+
+        <label>TDOC List URL (optional -- auto-detected if empty for main meetings):</label>
+        <input type="text" id="tdocUrl" value="${currentTdocUrl}" placeholder="Leave empty for auto-detection">
+        <div class="hint">Not migrated to the resolver in this task -- required manually for ad-hoc meetings; retains its existing value if the resolver has nothing to propose.</div>
+
+        <label>
+          <input type="checkbox" id="showPreview" ${currentShowPreview ? 'checked' : ''}>
+          Show email preview snippets in report
+        </label>
+
+        <label>Email Collection Start Date:</label>
+        <input type="date" id="emailStartDate" value="${props.getProperty('EMAIL_START_DATE') || '2026-08-21'}">
+        <div class="hint">Only collect emails from this date onwards (format: YYYY-MM-DD)</div>
+
+        <label>Reviewer API Token (optional):</label>
+        <input type="password" id="apiToken" value="${currentToken}" placeholder="crv1_...">
+        <div class="hint">For fetching AI summaries and abstracts</div>
+      </div>
+    </details>
+
     <button onclick="saveConfig()">💾 Save Configuration</button>
     <button onclick="google.script.host.close()" style="background: #666;">Cancel</button>
-    
+
     <script>
+      function sourceBadgeHtml(source) {
+        if (source === 'resolved') return '<span class="badge badge-resolved">resolved from 3GPP</span>';
+        if (source === 'existing') return '<span class="badge badge-existing">existing value</span>';
+        return '<span class="badge badge-unresolved">needs review</span>';
+      }
+
+      function setFieldWithBadge(inputId, labelId, fieldPreview) {
+        document.getElementById(inputId).value = fieldPreview.value;
+        const badgeHost = document.getElementById(labelId);
+        if (badgeHost) badgeHost.innerHTML = sourceBadgeHtml(fieldPreview.source);
+      }
+
+      function applyPreview(preview) {
+        setFieldWithBadge('meetingName', 'meetingNameBadge', preview.meetingName);
+        setFieldWithBadge('meetingType', 'meetingTypeBadge', preview.meetingType);
+        setFieldWithBadge('meetingDate', 'meetingDateBadge', preview.meetingDate);
+        setFieldWithBadge('ftpBase', 'ftpBaseBadge', preview.ftpBase);
+        setFieldWithBadge('agendaTdoc', 'agendaTdocBadge', preview.agendaTdoc);
+        setFieldWithBadge('mailingList', 'mailingListBadge', preview.mailingList);
+
+        const portalHint = document.getElementById('portalTypeHint');
+        if (preview.portalType && preview.meetingType.source !== 'resolved') {
+          portalHint.textContent = 'Unrecognized Portal type code "' + preview.portalType + '" -- please confirm adhoc/main manually.';
+        } else if (preview.portalType) {
+          portalHint.textContent = 'Raw Portal type code: ' + preview.portalType;
+        } else {
+          portalHint.textContent = '';
+        }
+
+        const dateHint = document.getElementById('dateRangeHint');
+        if (preview.startDateRaw || preview.endDateRaw) {
+          dateHint.textContent = 'Raw Portal range: ' + (preview.startDateRaw || '?') + ' \\u2192 ' + (preview.endDateRaw || '?') + ' (shown as-is; not reinterpreted).';
+        } else {
+          dateHint.textContent = '';
+        }
+
+        const candBox = document.getElementById('agendaCandidates');
+        if (preview.agendaCandidates && preview.agendaCandidates.length > 0) {
+          candBox.innerHTML = '⚠️ Multiple possible agenda TDocs found -- please choose one and enter it above manually: ' + preview.agendaCandidates.join(', ');
+        } else {
+          candBox.innerHTML = '';
+        }
+      }
+
+      function resolveMeeting() {
+        const meetingId = document.getElementById('meetingId').value;
+        const statusEl = document.getElementById('resolveStatus');
+        const btn = document.getElementById('resolveBtn');
+        btn.disabled = true;
+        statusEl.className = 'busy';
+        statusEl.textContent = 'Resolving from 3GPP\\u2026';
+        google.script.run
+          .withSuccessHandler(function(result) {
+            btn.disabled = false;
+            if (!result.ok) {
+              statusEl.className = 'error';
+              statusEl.textContent = '\\u274C ' + result.error;
+              applyPreview(result.preview);
+              return;
+            }
+            applyPreview(result.preview);
+            if (result.resolved.warnings && result.resolved.warnings.length > 0) {
+              statusEl.className = 'error';
+              statusEl.textContent = '\\u26A0\\uFE0F ' + result.resolved.warnings.join(' | ');
+            } else {
+              statusEl.className = 'ok';
+              statusEl.textContent = '\\u2705 Resolved. Review the fields below, then Save.';
+            }
+          })
+          .withFailureHandler(function(error) {
+            btn.disabled = false;
+            statusEl.className = 'error';
+            statusEl.textContent = '\\u274C Resolve failed: ' + error;
+            // Dialog stays open -- resolution failure never closes it or
+            // saves anything.
+          })
+          .resolveMeetingForConfigDialog_(meetingId);
+      }
+
       function saveConfig() {
         const config = {
           meetingFolder: document.getElementById('meetingFolder').value,
           meetingNumber: document.getElementById('meetingNumber').value,
           meetingId: document.getElementById('meetingId').value,
+          meetingType: document.getElementById('meetingType').value,
+          meetingName: document.getElementById('meetingName').value,
+          meetingDate: document.getElementById('meetingDate').value,
+          ftpBase: document.getElementById('ftpBase').value,
+          mailingList: document.getElementById('mailingList').value,
           reportType: document.getElementById('reportType').value,
           agendaSourceDocId: document.getElementById('agendaSourceDocId').value,
           agendaTdoc: document.getElementById('agendaTdoc').value,
@@ -4737,8 +4889,8 @@ function configureMeetingSettings() {
     </script>
   `)
   .setWidth(600)
-  .setHeight(700);
-  
+  .setHeight(820);
+
   ui.showModalDialog(html, 'Meeting Configuration');
 }
 
@@ -4746,35 +4898,68 @@ function configureMeetingSettings() {
 function saveConfigurationSettings(config) {
   const docProps = PropertiesService.getDocumentProperties();
   const scriptProps = PropertiesService.getScriptProperties();
-  
+
   // Save meeting information
   docProps.setProperty('MEETING_FOLDER', config.meetingFolder || 'TSGS4_136_Montreal');
   docProps.setProperty('MEETING_NUMBER', config.meetingNumber || '136');
   docProps.setProperty('MEETING_ID', config.meetingId || '60777');
-  
+
   // Save report configuration
   docProps.setProperty('REPORT_SUFFIX', config.reportType || '6G');
   docProps.setProperty('AGENDA_SOURCE_DOC_ID', extractGoogleDocId_(config.agendaSourceDocId || ''));
-  docProps.setProperty('AGENDA_TDOC', config.agendaTdoc || '');
-  
+  // ARCH-010: was `config.agendaTdoc || ''` -- always overwrote, even with
+  // blank, silently erasing an existing manually-configured AGENDA_TDOC
+  // whenever the field arrived blank (e.g. the resolver found no agenda
+  // TDoc for a meeting like 86174). Now skip-if-blank, matching the same
+  // "never overwrite a manual value with a resolver gap" rule the new
+  // fields below use -- an existing value survives untouched.
+  if (config.agendaTdoc && config.agendaTdoc.trim()) {
+    docProps.setProperty('AGENDA_TDOC', config.agendaTdoc.trim());
+  }
+
   // Save file locations (only if provided, otherwise auto-detect)
   if (config.tdocUrl && config.tdocUrl.trim()) {
     docProps.setProperty('TDOC_LIST_URL', config.tdocUrl.trim());
   } else {
     docProps.deleteProperty('TDOC_LIST_URL'); // Will auto-detect
   }
-  
+
   // Save options
   docProps.setProperty('SHOW_PREVIEW_SNIPPET', config.showPreview ? 'true' : 'false');
   if (config.emailStartDate && config.emailStartDate.trim()) {
     docProps.setProperty('EMAIL_START_DATE', config.emailStartDate.trim());
   }
-  
+
   // Save API token (script properties for security)
   if (config.apiToken && config.apiToken.trim()) {
     scriptProps.setProperty('REVIEWER_API_TOKEN', config.apiToken.trim());
   }
-  
+
+  // ARCH-010: ad-hoc/resolver-driven fields, introduced by SA4-PROD-007A
+  // (MEETING_DATE, MAILING_LIST) and now given a UI here for the first
+  // time (MEETING_TYPE, MEETING_NAME, FTP_BASE were previously
+  // script-editor-only). Skip-if-blank for every one of them: a blank
+  // submitted value means "resolver/user had nothing new to say", never
+  // "erase what was already configured" -- computeResolvedMeetingPreview_()
+  // already pre-fills these inputs from the existing property whenever the
+  // resolver has nothing, so this is a second, independent layer of the
+  // same protection, not the only one.
+  if (config.meetingType && config.meetingType.trim()) {
+    docProps.setProperty('MEETING_TYPE', config.meetingType.trim());
+  }
+  if (config.meetingName && config.meetingName.trim()) {
+    docProps.setProperty('MEETING_NAME', config.meetingName.trim());
+  }
+  if (config.meetingDate && config.meetingDate.trim()) {
+    docProps.setProperty('MEETING_DATE', config.meetingDate.trim());
+  }
+  if (config.ftpBase && config.ftpBase.trim()) {
+    docProps.setProperty('FTP_BASE', config.ftpBase.trim());
+  }
+  if (config.mailingList && config.mailingList.trim()) {
+    docProps.setProperty('MAILING_LIST', config.mailingList.trim());
+  }
+
   Logger.log('Configuration saved: ' + JSON.stringify(config));
 }
 
@@ -7930,5 +8115,206 @@ function resolveMeetingById_(meetingId) {
     unresolved: unresolved,
     warnings: warnings,
     raw: raw
+  };
+}
+
+// =========================================================
+// ARCH-010 -- MEETING-ID RESOLVE -> PREVIEW -> SAVE CONFIGURATION
+// =========================================================
+//
+// Wires resolveMeetingById_() into the Configure Meeting Settings dialog
+// as an EXPLICIT, configuration-time-only operation:
+//
+//   Meeting ID -> Resolve -> Preview -> user reviews/edits -> Save ->
+//   Document Properties -> existing getMeetingContext_()/report generation
+//
+// getMeetingContext_() itself is NOT changed and does NOT call the Portal
+// -- resolution only ever happens when the user clicks "Resolve" inside
+// this dialog. Once Document Properties are saved, everything downstream
+// is exactly the existing, unchanged, deterministic
+// getReportConfig_()/getMeetingContext_() pipeline.
+//
+// Three pure functions carry the actual merge/readiness POLICY (fully
+// testable in Node, no PropertiesService/HtmlService/DocumentApp
+// involved):
+//   - computeMeetingDateFromStartDate_(startDate)
+//   - computeResolvedMeetingPreview_(existingProps, resolverResult)
+//   - computeMeetingConfigReadiness_(props)
+// plus one impure orchestrator (resolveMeetingForConfigDialog_) that reads
+// current Document Properties and calls resolveMeetingById_() -- it NEVER
+// writes. configureMeetingSettings()/saveConfigurationSettings() (below,
+// existing functions) are extended, not replaced.
+
+/**
+ * ARCH-010: extracts only the CALENDAR DATE portion of a Portal
+ * `StartDate` string ("YYYY-MM-DD HH:MM:SS", as returned by GetMeetings)
+ * and formats it exactly like this project's existing MEETING_DATE
+ * convention (e.g. "September 22, 2026"). Deliberately ignores time and
+ * EndDate entirely -- per the ARCH-010 requirement, MEETING_DATE is only
+ * ever derived from the start calendar date, and the unusual multi-day
+ * 86178 StartDate/EndDate range is preserved untouched elsewhere (the
+ * resolver's own raw/normalized startDate/endDate fields) and never
+ * "explained" or collapsed into a single-day assumption here.
+ */
+function computeMeetingDateFromStartDate_(startDate) {
+  const s = String(startDate || '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const year = parseInt(m[1], 10);
+  const monthIndex = parseInt(m[2], 10) - 1;
+  const day = parseInt(m[3], 10);
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  if (monthIndex < 0 || monthIndex > 11 || day < 1 || day > 31) return null;
+  return `${MONTH_NAMES[monthIndex]} ${day}, ${year}`;
+}
+
+/**
+ * ARCH-010: pure merge of (current Document Properties, a
+ * resolveMeetingById_() result) into a preview object the dialog can
+ * render and pre-fill its editable inputs from -- one entry per primary
+ * field, each `{ value, source }` where `source` is exactly one of
+ * `"resolved"` (came from the Portal just now), `"existing"` (Portal had
+ * nothing useful, the prior manually-configured value was kept), or
+ * `"unresolved"` (neither source has anything -- the field is genuinely
+ * blank and needs manual entry).
+ *
+ * The core rule, applied per field: a non-empty resolved value always
+ * wins; ONLY when the resolver has nothing does the existing property
+ * value survive into the preview. This is exactly what prevents a
+ * resolver gap (e.g. meeting 86174's missing agenda TDoc, or ANY meeting's
+ * always-missing mailing list) from ever proposing a blank value over an
+ * already-configured manual one -- resolverResult may be null (Resolve was
+ * never clicked, e.g. opening the dialog on an existing legacy document)
+ * and every field then falls straight through to `existing`.
+ *
+ * agendaTdoc is a special case: pre-filled ONLY when the resolver found
+ * exactly one current candidate. When it found several
+ * (`documents.agendaAmbiguous`), NONE is pre-filled -- the candidate list
+ * is surfaced separately (`agendaCandidates`) for the user to choose from
+ * explicitly; this function never silently picks one.
+ */
+function computeResolvedMeetingPreview_(existingProps, resolverResult) {
+  const props = existingProps || {};
+  const resolved = resolverResult || null;
+
+  function field(resolvedValue, existingValue) {
+    if (resolvedValue !== null && resolvedValue !== undefined && String(resolvedValue).trim() !== '') {
+      return { value: String(resolvedValue), source: 'resolved' };
+    }
+    if (existingValue !== null && existingValue !== undefined && String(existingValue).trim() !== '') {
+      return { value: String(existingValue), source: 'existing' };
+    }
+    return { value: '', source: 'unresolved' };
+  }
+
+  const resolvedMeeting = resolved && resolved.meeting ? resolved.meeting : null;
+  const resolvedSources = resolved && resolved.sources ? resolved.sources : null;
+  const resolvedDocuments = resolved && resolved.documents ? resolved.documents : null;
+
+  const meetingIdValue = resolved && resolved.id !== null && resolved.id !== undefined ? resolved.id : null;
+  const meetingDateValue = resolvedMeeting && resolvedMeeting.startDate ? computeMeetingDateFromStartDate_(resolvedMeeting.startDate) : null;
+
+  let agendaTdocResolvedValue = null;
+  let agendaCandidates = [];
+  if (resolvedDocuments) {
+    if (resolvedDocuments.agendaTdoc) {
+      agendaTdocResolvedValue = resolvedDocuments.agendaTdoc;
+    } else if (resolvedDocuments.agendaAmbiguous && Array.isArray(resolvedDocuments.agendaCandidates) && resolvedDocuments.agendaCandidates.length > 0) {
+      agendaCandidates = resolvedDocuments.agendaCandidates;
+    }
+  }
+
+  return {
+    meetingId: field(meetingIdValue, props.MEETING_ID),
+    meetingType: field(resolvedMeeting ? resolvedMeeting.type : null, props.MEETING_TYPE),
+    meetingName: field(resolvedMeeting ? resolvedMeeting.name : null, props.MEETING_NAME),
+    meetingDate: field(meetingDateValue, props.MEETING_DATE),
+    ftpBase: field(resolvedSources ? resolvedSources.ftpBase : null, props.FTP_BASE),
+    agendaTdoc: field(agendaTdocResolvedValue, props.AGENDA_TDOC),
+    // The resolver NEVER proposes a mailing list (ARCH-008 §6/§9/§11) --
+    // this field can only ever be "existing" or "unresolved", never
+    // "resolved". Explicit `field(null, ...)` documents that, rather than
+    // omitting the field.
+    mailingList: field(null, props.MAILING_LIST),
+
+    // Supplementary evidence, not itself a Document Property:
+    portalType: resolvedMeeting ? resolvedMeeting.portalType : null,
+    agendaCandidates: agendaCandidates,
+    startDateRaw: resolvedMeeting ? resolvedMeeting.startDate : null,
+    endDateRaw: resolvedMeeting ? resolvedMeeting.endDate : null,
+    warnings: resolved ? resolved.warnings : [],
+    unresolved: resolved ? resolved.unresolved : []
+  };
+}
+
+/**
+ * ARCH-010: pure, minimal configuration-readiness check over the fields
+ * the EXISTING production build actually depends on (buildSkeletonWithTdocTables()
+ * / downloadAndGroupTdocs_()). Deliberately NOT based on every field this
+ * dialog exposes -- e.g. the optional Revisions URL is never flagged.
+ *
+ * TDOC_LIST_URL and AGENDA_TDOC only need to be flagged for an AD-HOC
+ * meeting: getReportConfig_() already has a working (main-meeting)
+ * fallback formula for TDOC_LIST_URL that always produces SOME value, and
+ * parseAgendaForReport_() has a template-based fallback path when
+ * AGENDA_TDOC is blank -- neither fallback is meaningful for ad hoc, which
+ * is exactly the class of meeting this whole resolver exists for.
+ * MAILING_LIST is flagged unconditionally when blank, matching the
+ * resolver's own permanent inability to determine it.
+ */
+function computeMeetingConfigReadiness_(props) {
+  const p = props || {};
+  const isAdhoc = String(p.MEETING_TYPE || '').trim().toLowerCase() === 'adhoc';
+  const issues = [];
+
+  if (isAdhoc && !String(p.TDOC_LIST_URL || '').trim()) {
+    issues.push('TDoc List URL not configured (required for ad-hoc meetings -- no reliable default exists).');
+  }
+  if (isAdhoc && !String(p.AGENDA_TDOC || '').trim()) {
+    issues.push('Agenda TDoc not configured (required for ad-hoc meetings -- no template fallback exists).');
+  }
+  if (!String(p.MAILING_LIST || '').trim()) {
+    issues.push('Mailing list not configured.');
+  }
+
+  return { ready: issues.length === 0, issues: issues };
+}
+
+/**
+ * ARCH-010: the dialog's "Resolve" button calls this. Reads current
+ * Document Properties (read-only) and calls resolveMeetingById_(), then
+ * returns a UI-safe preview via computeResolvedMeetingPreview_(). NEVER
+ * writes to PropertiesService -- resolution and persistence are
+ * deliberately separate actions (clicking Resolve alone must never change
+ * saved configuration).
+ */
+function resolveMeetingForConfigDialog_(meetingIdInput) {
+  const props = PropertiesService.getDocumentProperties();
+  const existing = {
+    MEETING_ID: props.getProperty('MEETING_ID'),
+    MEETING_TYPE: props.getProperty('MEETING_TYPE'),
+    MEETING_NAME: props.getProperty('MEETING_NAME'),
+    MEETING_DATE: props.getProperty('MEETING_DATE'),
+    FTP_BASE: props.getProperty('FTP_BASE'),
+    AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
+    MAILING_LIST: props.getProperty('MAILING_LIST'),
+    TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL')
+  };
+
+  const idResult = parseMeetingIdInput_(meetingIdInput);
+  if (!idResult.isValid) {
+    return {
+      ok: false,
+      error: idResult.error,
+      preview: computeResolvedMeetingPreview_(existing, null)
+    };
+  }
+
+  const resolved = resolveMeetingById_(idResult.id);
+  return {
+    ok: true,
+    error: null,
+    resolved: resolved,
+    preview: computeResolvedMeetingPreview_(existing, resolved)
   };
 }
