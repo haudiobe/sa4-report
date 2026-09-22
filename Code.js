@@ -2397,25 +2397,157 @@ function parseAnchors_(html) {
 }
 
 // =========================================================
+// SA4 TDOC IDENTIFIER MODEL (SA4-IMPL-001)
+// =========================================================
+//
+// Central, single-source-of-truth registry of the SA4 document-identifier
+// families verified in SA4-ARCH-005/006 against real, currently-live 3GPP
+// FTP material. Each entry's `prefix` is the EXACT canonical casing found in
+// real documents (e.g. Readme_Audio.txt, real TDoc-list filenames) -- this
+// is deliberately NOT derived from the report-type name (RTC's real prefix
+// is `A4aR`, not `S4aR`; MBS's is `S4aI`, not `S4aM` -- guessing by symmetry
+// was explicitly wrong for both, per the evidence).
+//
+// Unverified/unconfirmed series (MTSI, EVS, SQ, ...) are intentionally
+// ABSENT: an unrecognized prefix must stay unrecognized rather than being
+// guessed into existence. Adding a family here is the only way to recognize
+// it; nothing else in this model infers families from shape alone.
+//
+// `body` is an UNANCHORED regex fragment (a trailing `(?!\d)` guards against
+// a 6-digit capture inside a longer run of digits, e.g. "S4-2601234" must
+// NOT match as "S4-260123" -- verified against SA4-IMPL-001's test suite).
+// Both parseSA4DocumentId_() below and any future exact-match use wrap this
+// fragment with `^...$` themselves; the registry stores the fragment once.
+const SA4_TDOC_FAMILIES = [
+  { key: 'main',          family: 'main',  seriesCode: null, prefix: 'S4-',  body: 'S4-(\\d{6})(?!\\d)' },
+  { key: 'audio-adhoc',   family: 'adhoc', seriesCode: 'A',  prefix: 'S4aA', body: 'S4aA(\\d{6})(?!\\d)' },
+  { key: 'plenary-adhoc', family: 'adhoc', seriesCode: 'P',  prefix: 'S4aP', body: 'S4aP(\\d{6})(?!\\d)' },
+  { key: 'video-adhoc',   family: 'adhoc', seriesCode: 'V',  prefix: 'S4aV', body: 'S4aV(\\d{6})(?!\\d)' },
+  { key: 'mbs-adhoc',     family: 'adhoc', seriesCode: 'I',  prefix: 'S4aI', body: 'S4aI(\\d{6})(?!\\d)' },
+  { key: 'rtc-adhoc',     family: 'adhoc', seriesCode: 'R',  prefix: 'A4aR', body: 'A4aR(\\d{6})(?!\\d)' }
+];
+
+/**
+ * Shared matcher behind parseSA4DocumentId_()/parseExactSA4DocumentId_().
+ * Not exposed directly -- both public entry points below derive their
+ * behavior from this single loop over SA4_TDOC_FAMILIES, so "search within
+ * text" and "whole string must be exactly one identifier" can never drift
+ * into two independently-maintained regex sets.
+ *
+ * `exact`: false = search `value` for the first matching family anywhere
+ * within it (used where a field may legitimately contain other text around
+ * the identifier, e.g. "revised to S4-261599"). true = the ENTIRE trimmed
+ * `value` must itself be exactly one recognized identifier, nothing more
+ * (used where a field is defined to hold nothing but the identifier).
+ *
+ * The returned identifier's casing is always the family's own canonical
+ * casing (SA4_TDOC_FAMILIES[i].prefix), never the input's original casing
+ * and never force-uppercased -- this is deliberate: main-meeting IDs are
+ * conventionally all-uppercase ("S4-260123") so canonical-casing and
+ * uppercasing happen to agree there, but ad-hoc IDs are NOT all-uppercase in
+ * real documents ("S4aA260090", not "S4AA260090") -- forcing uppercase would
+ * silently corrupt the real, verified identifier spelling.
+ *
+ * Returns { raw, isValid, family, familyKey, seriesCode, yearCode, sequence }.
+ * On no match, isValid=false, raw=<trimmed input>, all other fields null.
+ */
+function matchSA4DocumentId_(value, exact) {
+  const trimmed = String(value === null || value === undefined ? '' : value).trim();
+
+  if (trimmed) {
+    for (const fam of SA4_TDOC_FAMILIES) {
+      const pattern = exact ? ('^' + fam.body + '$') : fam.body;
+      const m = trimmed.match(new RegExp(pattern, 'i'));
+      if (m) {
+        const digits = m[1];
+        return {
+          raw: fam.prefix + digits,
+          isValid: true,
+          family: fam.family,
+          familyKey: fam.key,
+          seriesCode: fam.seriesCode,
+          yearCode: digits.slice(0, 2),
+          sequence: digits.slice(2)
+        };
+      }
+    }
+  }
+
+  return { raw: trimmed, isValid: false, family: null, familyKey: null, seriesCode: null, yearCode: null, sequence: null };
+}
+
+/**
+ * Parse an SA4 document identifier out of `value` (search within text).
+ *
+ * Mirrors normalizeTdoc_()'s pre-existing "extract from surrounding text"
+ * behavior (e.g. "revised to S4-261599" -> S4-261599) -- several callers,
+ * including normalizeTdoc_() itself, intentionally rely on this NOT being
+ * anchored to the whole string. Use parseExactSA4DocumentId_() where a field
+ * is defined to hold nothing but the identifier itself (e.g. a TDoc table's
+ * own "TDoc" value cell).
+ */
+function parseSA4DocumentId_(value) {
+  return matchSA4DocumentId_(value, false);
+}
+
+/**
+ * SA4-IMPL-001A: like parseSA4DocumentId_(), but the ENTIRE trimmed `value`
+ * must be exactly one recognized identifier -- no other characters before
+ * or after it are tolerated. This restores cleanUpWrongEmailDiscussions()'s
+ * pre-IMPL-001 exact-match semantics (it used to require
+ * `^S4-\d{6}$` against the whole cell) while still recognizing all 6
+ * verified families, without hand-maintaining a second, separately-anchored
+ * copy of each family's pattern -- both this and parseSA4DocumentId_() are
+ * thin wrappers over the same matchSA4DocumentId_()/SA4_TDOC_FAMILIES pair.
+ */
+function parseExactSA4DocumentId_(value) {
+  return matchSA4DocumentId_(value, true);
+}
+
+// =========================================================
 // REVISIONS FROM THE TDOC LIST ("Revised to" column)
 // =========================================================
 
 /**
- * TDOC number of a TDOC-list row, normalized to upper case.
+ * TDOC number of a TDOC-list row.
+ *
+ * SA4-IMPL-001: this used to unconditionally uppercase the cell text, which
+ * was harmless while every TDoc number was in the always-uppercase main
+ * family ("S4-260123" upper-cased is itself) but silently corrupts a
+ * verified ad-hoc identifier's real casing ("S4aA260090" -> "S4AA260090",
+ * which no longer matches the same identifier as written in the actual
+ * TDoc-list Excel or in getRevisedTo_()'s output -- discovered by the
+ * revision-chain test for a same-family ad-hoc revision, which failed to
+ * link until this was fixed). Now: a recognized SA4 document identifier
+ * (main or ad-hoc) is returned in its real canonical casing via
+ * parseSA4DocumentId_(); anything NOT recognized as a valid identifier falls
+ * back to the exact previous behavior (trim + uppercase) so this function's
+ * contract for non-TDoc/malformed input is unchanged.
  */
 function tdocNumberOf_(tdocData) {
-  return String(tdocData.row[tdocData.tdocCol] || '').trim().toUpperCase();
+  const raw = String(tdocData.row[tdocData.tdocCol] || '').trim();
+  const parsed = parseSA4DocumentId_(raw);
+  return parsed.isValid ? parsed.raw : raw.toUpperCase();
 }
 
 /**
  * The document this row was revised to, from the "Revised to" column.
  * Returns '' when the column is absent or the cell holds no TDOC number.
+ *
+ * SA4-IMPL-001: migrated from a hardcoded 'S4-\d{6}' extraction (which
+ * bypassed cfg.TDOC_ID_REGEX entirely and could never recognize an ad-hoc
+ * "Revised to" target) to the central parseSA4DocumentId_() model, so
+ * same-family ad-hoc revisions (e.g. "S4aA260049 is revised to S4aA260050",
+ * verified in a real Audio SWG ad-hoc report, SA4-ARCH-005/006) are now
+ * recognized. Existing main-meeting behavior is unchanged -- see
+ * tests/revision-order.test.js.
  */
 function getRevisedTo_(tdocData) {
   if (!tdocData || tdocData.revisedToCol === undefined || tdocData.revisedToCol === null) return '';
   if (tdocData.revisedToCol < 0) return '';
-  const raw = String(tdocData.row[tdocData.revisedToCol] || '').toUpperCase();
-  return extractTdocId_(raw, 'S4-\\d{6}');
+  const raw = String(tdocData.row[tdocData.revisedToCol] || '');
+  const parsed = parseSA4DocumentId_(raw);
+  return parsed.isValid ? parsed.raw : '';
 }
 
 /**
@@ -3314,7 +3446,10 @@ function getDeadlineExtensionMap_() {
       const row = table.getRow(r);
       if (row.getNumCells() < 2) continue;
 
-      const tdoc = extractTdocId_(row.getCell(0).getText().trim().toUpperCase(), 'S4-\\d{6}');
+      // SA4-IMPL-001: was extractTdocId_(text, 'S4-\\d{6}') -- migrated to the
+      // central model so an ad-hoc TDoc can also get a deadline extension.
+      const parsedTdoc = parseSA4DocumentId_(row.getCell(0).getText());
+      const tdoc = parsedTdoc.isValid ? parsedTdoc.raw : '';
       const raw = row.getCell(1).getText().trim();
       if (!tdoc || !raw) continue;
 
@@ -5172,9 +5307,20 @@ function convertWordBlobToGoogleDoc_(wordBlob) {
   return file.id;
 }
 
+/**
+ * SA4-IMPL-001: delegates to the central parseSA4DocumentId_() model instead
+ * of a hardcoded /S4-\d{6}/. Preserves its exact external contract (valid ->
+ * normalized identifier string, invalid -> '') and every existing
+ * main-meeting case (see tests/pure-logic.test.js) is unchanged. New:
+ * recognizes the 5 verified ad-hoc families (S4aA/S4aP/S4aV/S4aI/A4aR) --
+ * this is the primary intentional behavior change of SA4-IMPL-001. This is
+ * also what makes parseAgendaFromZippedTdoc()/parseAgendaDocumentById()
+ * (both of which reject input when this returns '') ad-hoc-capable, with no
+ * changes needed in either of those two functions themselves.
+ */
 function normalizeTdoc_(value) {
-  const m = String(value || '').trim().toUpperCase().match(/S4-\d{6}/);
-  return m ? m[0] : '';
+  const parsed = parseSA4DocumentId_(value);
+  return parsed.isValid ? parsed.raw : '';
 }
 
 function extractGoogleDocId_(input) {
@@ -6381,9 +6527,16 @@ function cleanUpWrongEmailDiscussions() {
     if (!isTDocTable_(t)) return;
     
     const tdocRaw = String(safeCellText_(t, 0, 1) || '').trim();
-    const tdoc = extractTdocId_(tdocRaw, '^S4-\\d{6}$');
+    // SA4-IMPL-001/001A: was extractTdocId_(text, '^S4-\\d{6}$') --
+    // main-meeting-only, but correctly anchored (the whole cell had to be
+    // exactly one TDoc number). Migrated to parseExactSA4DocumentId_() so
+    // all 6 verified families are recognized while preserving that same
+    // exact-whole-cell requirement -- not the unanchored/search-within-text
+    // parseSA4DocumentId_() used elsewhere (e.g. normalizeTdoc_()).
+    const parsedTdoc = parseExactSA4DocumentId_(tdocRaw);
+    const tdoc = parsedTdoc.isValid ? parsedTdoc.raw : '';
     if (!tdoc) return;
-    
+
     const storeKey = 'DISCUSS_' + tdoc;
     const storeJson = props.getProperty(storeKey);
     if (!storeJson) return;

@@ -99,6 +99,20 @@ check('empty cell -> ""', getRevisedTo_(row('S4-261480', '')), '');
 check('absent column -> ""', getRevisedTo_(row('S4-261480', 'S4-261599', -1)), '');
 check('non-TDOC text -> ""', getRevisedTo_(row('S4-261480', 'n/a')), '');
 
+// SA4-IMPL-001: getRevisedTo_ was migrated from a hardcoded 'S4-\d{6}'
+// extraction (which bypassed cfg.TDOC_ID_REGEX entirely) to the central
+// parseSA4DocumentId_() model. Same-family ad-hoc revisions are real: a real
+// Audio SWG ad-hoc report (SA4-ARCH-005/006) records
+// "Decision: S4aA260049 is revised to S4aA260050".
+check('recognizes a same-family Audio ad-hoc revision (real-world example)',
+  getRevisedTo_(row('S4aA260049', 'S4aA260050')), 'S4aA260050');
+check('Audio ad-hoc revision tolerates surrounding text',
+  getRevisedTo_(row('S4aA260049', 'revised to S4aA260050')), 'S4aA260050');
+check('Audio ad-hoc revision casing is normalized to the real canonical spelling (not upper-cased)',
+  getRevisedTo_(row('S4aA260049', 's4aa260050')), 'S4aA260050');
+check('an unverified lookalike ad-hoc prefix in the "Revised to" cell is still rejected',
+  getRevisedTo_(row('S4aA260049', 'S4aX260050')), '');
+
 // ------------------------------------------------------- orderTdocsByRevision_
 
 console.log('orderTdocsByRevision_');
@@ -164,6 +178,17 @@ check('no document is ever lost',
     row('S4-000009', '')
   ]).length,
   4);
+
+// SA4-IMPL-001: orderTdocsByRevision_ itself was never hardcoded to the main
+// family (tdocNumberOf_ is a raw-string identity, no regex) -- this proves
+// the whole revision-chain engine, not just getRevisedTo_ in isolation,
+// already works end-to-end for a real ad-hoc identifier format.
+check('a same-family Audio ad-hoc revision chain orders correctly (real identifiers, SA4-ARCH-005/006)',
+  numbers(orderTdocsByRevision_([
+    row('S4aA260050', ''),               // the revision, listed first
+    row('S4aA260049', 'S4aA260050')      // the document it revises
+  ])),
+  ['S4aA260049', 'S4aA260050']);
 
 // ------------------------------------------------------- orderRevisionChains_
 

@@ -256,6 +256,51 @@ function check(name, actual, expected) {
   check('computeShortNumber_ no 6-digit run -> ""', sandbox.computeShortNumber_('no digits'), '');
 }
 
+// ===================================== SA4-IMPL-001: ad-hoc TDoc identifiers
+//
+// normalizeTdoc_() now delegates to the central parseSA4DocumentId_() model
+// (Code.js, "SA4 TDOC IDENTIFIER MODEL" section) instead of a hardcoded
+// /S4-\d{6}/. Every existing main-meeting case above is unchanged (this is
+// re-verified, not just asserted by omission). These new cases exercise the
+// 5 verified ad-hoc families from SA4-ARCH-005/006. See
+// tests/tdoc-identifier.test.js for exhaustive coverage of the parser
+// itself; this section only covers normalizeTdoc_()/computeShortNumber_()
+// as its consumers, per SA4-IMPL-001 §13.
+
+{
+  const { sandbox } = loadCode();
+  console.log('normalizeTdoc_ -- verified ad-hoc families (SA4-IMPL-001)');
+
+  check('Audio ad-hoc: S4aA260090 is now recognized (was "" before SA4-IMPL-001)',
+    sandbox.normalizeTdoc_('S4aA260090'), 'S4aA260090');
+  check('Plenary/6G ad-hoc: S4aP260098 is now recognized',
+    sandbox.normalizeTdoc_('S4aP260098'), 'S4aP260098');
+  check('Video ad-hoc: S4aV200545 is now recognized',
+    sandbox.normalizeTdoc_('S4aV200545'), 'S4aV200545');
+  check('MBS ad-hoc: S4aI240064 is now recognized',
+    sandbox.normalizeTdoc_('S4aI240064'), 'S4aI240064');
+  check('RTC ad-hoc: A4aR260097 is now recognized (A4 root, not S4)',
+    sandbox.normalizeTdoc_('A4aR260097'), 'A4aR260097');
+  check('ad-hoc casing is preserved, NOT force-uppercased like main IDs are',
+    sandbox.normalizeTdoc_('s4aa260090'), 'S4aA260090');
+  check('an unverified lookalike prefix is still rejected (S4aM is NOT MBS\'s real prefix)',
+    sandbox.normalizeTdoc_('S4aM260001'), '');
+  check('an unverified lookalike prefix is still rejected (S4aR is NOT RTC\'s real prefix)',
+    sandbox.normalizeTdoc_('S4aR260001'), '');
+}
+
+{
+  const { sandbox } = loadCode();
+  console.log('computeShortNumber_ -- already worked for ad-hoc IDs without modification (not changed by SA4-IMPL-001)');
+
+  check('computeShortNumber_("S4aA260090") -- generic /(\\d{6})/, no prefix assumption',
+    sandbox.computeShortNumber_('S4aA260090'), '090');
+  check('computeShortNumber_("S4aP260098")',
+    sandbox.computeShortNumber_('S4aP260098'), '098');
+  check('computeShortNumber_("A4aR260097")',
+    sandbox.computeShortNumber_('A4aR260097'), '097');
+}
+
 // ------------------------------------------------------------------- summary
 
 console.log(failures === 0 ? '\nAll pure-logic tests passed.' : `\n${failures} test(s) FAILED.`);
