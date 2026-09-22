@@ -516,9 +516,18 @@ REPORT_TYPES.forEach(type => {
     ctx.report.agendaSelector.value, ctx.report.agendaPrefix);
 });
 
-// -------------------- SA4-IMPL-004: no production filtering caller yet -----
+// ---------------- SA4-IMPL-004/005: production filtering caller status ----
+//
+// SA4-IMPL-004 introduced agendaSelectorMatches_() with NO production
+// caller at all. SA4-IMPL-005 migrated exactly ONE consumer --
+// downloadAndGroupTdocs_() -- to call it; see tests/tdoc-agenda-filter.test.js
+// for that migration's own dedicated characterization. This section now
+// documents the REMAINING known non-callers (agenda-structure parsing and
+// the skeleton builder, both deliberately left unmigrated) rather than
+// treating "zero callers" as still true -- that would misrepresent the
+// current, approved state of the codebase.
 
-console.log('source-structure assertion: agendaSelectorMatches_() has NO production filtering caller');
+console.log('source-structure assertion: agendaSelectorMatches_() production caller status');
 
 {
   const fs = require('fs');
@@ -532,48 +541,50 @@ console.log('source-structure assertion: agendaSelectorMatches_() has NO product
   // but keeping the check symmetric and simple).
   const withoutOwnDefinition = source.replace(/function agendaSelectorMatches_\([\s\S]*?\n}\n/, '');
 
+  function extractBody(src, fnName) {
+    const startMatch = src.match(new RegExp('^function ' + fnName + '\\(', 'm'));
+    if (!startMatch) return null;
+    const startIndex = startMatch.index;
+    const nextFnRe = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
+    nextFnRe.lastIndex = startIndex + startMatch[0].length;
+    const next = nextFnRe.exec(src);
+    const endIndex = next ? next.index : src.length;
+    return src.slice(startIndex, endIndex);
+  }
+
+  const migratedBody = extractBody(withoutOwnDefinition, 'downloadAndGroupTdocs_');
+  if (!migratedBody) {
+    failures++;
+    console.log('  FAIL could not locate "function downloadAndGroupTdocs_(" in Code.js');
+  } else {
+    check('downloadAndGroupTdocs_() DOES call agendaSelectorMatches_() (migrated by SA4-IMPL-005 -- see tests/tdoc-agenda-filter.test.js)',
+      /\bagendaSelectorMatches_\s*\(/.test(migratedBody), true);
+  }
+
   const KNOWN_NON_CALLERS = [
-    'downloadAndGroupTdocs_', 'parseAgendaForReport_',
-    'buildSkeletonWithTdocTables', 'continuousUpdate'
+    'parseAgendaForReport_', 'buildSkeletonWithTdocTables', 'continuousUpdate'
   ];
 
   KNOWN_NON_CALLERS.forEach(fnName => {
-    const startMatch = withoutOwnDefinition.match(new RegExp('^function ' + fnName + '\\(', 'm'));
-    if (!startMatch) {
+    const body = extractBody(withoutOwnDefinition, fnName);
+    if (!body) {
       failures++;
       console.log(`  FAIL could not locate "function ${fnName}(" in Code.js`);
       return;
     }
-    const startIndex = startMatch.index;
-    const nextFnRe = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
-    nextFnRe.lastIndex = startIndex + startMatch[0].length;
-    const next = nextFnRe.exec(withoutOwnDefinition);
-    const endIndex = next ? next.index : withoutOwnDefinition.length;
-    const body = withoutOwnDefinition.slice(startIndex, endIndex);
-
-    check(`${fnName}() does NOT call agendaSelectorMatches_() (unmigrated, as required by SA4-IMPL-004)`,
+    check(`${fnName}() does NOT call agendaSelectorMatches_() (unmigrated as of SA4-IMPL-005)`,
       /\bagendaSelectorMatches_\s*\(/.test(body), false);
   });
 
-  // And the positive half of the same proof: the function DOES exist and
-  // IS called from getMeetingContext_() is NOT required (getMeetingContext_
-  // only ever CONSTRUCTS a selector via normalizeAgendaSelector_(), it never
-  // MATCHES one) -- so also confirm getMeetingContext_() doesn't call
-  // agendaSelectorMatches_() either, for the same "representation only,
-  // no filtering yet" reason.
-  const gmcMatch = withoutOwnDefinition.match(/^function getMeetingContext_\(\)/m);
-  if (gmcMatch) {
-    const startIndex = gmcMatch.index;
-    const nextFnRe2 = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
-    nextFnRe2.lastIndex = startIndex + gmcMatch[0].length;
-    const next2 = nextFnRe2.exec(withoutOwnDefinition);
-    const endIndex2 = next2 ? next2.index : withoutOwnDefinition.length;
-    const body2 = withoutOwnDefinition.slice(startIndex, endIndex2);
-
+  // And the positive half of the same proof: getMeetingContext_() only ever
+  // CONSTRUCTS a selector via normalizeAgendaSelector_(), it never MATCHES
+  // one -- confirm it doesn't call agendaSelectorMatches_() either.
+  const gmcBody = extractBody(withoutOwnDefinition, 'getMeetingContext_');
+  if (gmcBody) {
     check('getMeetingContext_() constructs selectors via normalizeAgendaSelector_() but does not call agendaSelectorMatches_() (representation only)',
-      /\bagendaSelectorMatches_\s*\(/.test(body2), false);
+      /\bagendaSelectorMatches_\s*\(/.test(gmcBody), false);
     check('getMeetingContext_() DOES call normalizeAgendaSelector_() (both main and ad-hoc branches construct a selector)',
-      /\bnormalizeAgendaSelector_\s*\(/.test(body2), true);
+      /\bnormalizeAgendaSelector_\s*\(/.test(gmcBody), true);
   } else {
     failures++;
     console.log('  FAIL could not locate "function getMeetingContext_()" in Code.js');

@@ -6193,7 +6193,20 @@ function downloadAndGroupTdocs_(cfg) {
       Logger.log('Warning: no "Revised to" column in the TDOC list; revision placement is skipped');
     }
 
-    const agendaPrefix = getConfiguredAgendaPrefix_();
+    // SA4-IMPL-005: agenda selection now goes through MeetingContext's
+    // agendaSelector (SA4-IMPL-004) instead of a direct
+    // getConfiguredAgendaPrefix_() + .startsWith() check. getMeetingContext_()
+    // is called here specifically for report.agendaSelector -- cfg (this
+    // function's existing parameter) cannot supply it, because cfg is a
+    // getReportConfig_() result and has no notion of MEETING_TYPE, so it can
+    // never carry the ad-hoc {mode:'all'} selector. Every other value this
+    // function uses (TDOC_LIST_URL via `cfg`, the reallocation map, the
+    // column layout) is completely unchanged. For every existing main
+    // meeting, agendaSelectorMatches_({mode:'prefix', value: <same prefix as
+    // before>}, agendaItem) is byte-equivalent to the old
+    // agendaItem.startsWith(agendaPrefix) check -- see
+    // tests/tdoc-agenda-filter.test.js.
+    const agendaSelector = getMeetingContext_().report.agendaSelector;
     const reallocations = getReallocationMap_();
     const groups = {};
 
@@ -6208,7 +6221,7 @@ function downloadAndGroupTdocs_(cfg) {
         agendaItem = reallocations[tdoc].new;
       }
 
-      if (!agendaItem.startsWith(agendaPrefix)) continue;
+      if (!agendaSelectorMatches_(agendaSelector, agendaItem)) continue;
 
       if (!groups[agendaItem]) groups[agendaItem] = { tdocs: [] };
 
