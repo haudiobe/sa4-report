@@ -1,14 +1,18 @@
 /**
- * ARCH-010 — Meeting-ID Resolve -> Preview -> Save configuration merge/save
- * logic regression coverage.
+ * ARCH-010/ARCH-012 — Meeting-ID Resolve -> Preview -> Save configuration
+ * merge/save logic regression coverage.
  *
- * Exercises the three new pure functions (computeMeetingDateFromStartDate_,
+ * Exercises the three ARCH-010 pure functions (computeMeetingDateFromStartDate_,
  * computeResolvedMeetingPreview_, computeMeetingConfigReadiness_) and the
  * end-to-end save workflow (saveConfigurationSettings()) against the
  * in-memory Document Properties store returned by loadCode(), reusing the
  * same real captured 3GPP Portal fixtures as tests/meeting-resolver.test.js
  * (via resolveMeetingById_() itself, stubbing only its three network
  * functions -- the same pattern used there). No live network is used.
+ *
+ * ARCH-012 extends this coverage to the ARCH-011 `sources.revisionsUrl`
+ * evidence now flowing through the SAME preview/save pipeline (see section
+ * 2f and section 4's new (e)/(f) cases below).
  *
  * Run: node tests/meeting-config-merge.test.js
  */
@@ -39,8 +43,15 @@ function resolveWithFixtures(sandbox, meetingId, overrides) {
   sandbox.fetchMeetingMetadataById_ = () => o.metadata !== undefined ? o.metadata : { statusCode: 200, text: '[]' };
   sandbox.fetchMeetingIcalById_ = () => o.ical !== undefined ? o.ical : { statusCode: 200, text: '' };
   sandbox.fetchMeetingTdocListById_ = () => o.tdoc !== undefined ? o.tdoc : { statusCode: 200, text: '' };
+  // ARCH-012: default to an unvalidated (404) revisions-folder probe unless
+  // a case explicitly stubs one -- matches ARCH-011's own "never assume
+  // validated" default.
+  sandbox.fetchRevisionsUrlCandidate_ = () => o.revisions !== undefined ? o.revisions() : { statusCode: 404, text: 'Not Found' };
   return sandbox.resolveMeetingById_(meetingId);
 }
+
+const SYNTHETIC_REVISIONS_INDEX_HTML = '<html><head><title>Index of /inbox/drafts/</title></head><body><a href="draft.docx">draft.docx</a></body></html>';
+const WAF_CHALLENGE_BODY = '<html><head><title>Access Denied</title></head><body>Please verify you are human.</body></html>';
 
 // ============================== 1. computeMeetingDateFromStartDate_() ======
 
@@ -140,6 +151,38 @@ console.log('computeResolvedMeetingPreview_() -- resolved > existing > unresolve
   check('ambiguous agenda candidates: preview.agendaTdoc is NOT pre-filled', previewAmbiguous.agendaTdoc.value, '');
   check('ambiguous agenda candidates: surfaced separately for explicit user choice',
     previewAmbiguous.agendaCandidates.sort(), ['S4aP260001', 'S4aP260002']);
+
+  // (f) ARCH-012: revisionsUrl merge -- validated resolver evidence wins;
+  // an existing REVISIONS_URL survives a resolver miss/failure untouched.
+  const resolved86178WithRevisions = resolveWithFixtures(sandbox, 86178, {
+    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
+    ical: { statusCode: 200, text: FIXTURES.ical86178 },
+    tdoc: { statusCode: 200, text: FIXTURES.tdocListHtml86178 },
+    revisions: () => ({ statusCode: 200, text: SYNTHETIC_REVISIONS_INDEX_HTML })
+  });
+  const previewValidatedRevisions = sandbox.computeResolvedMeetingPreview_(
+    { REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' },
+    resolved86178WithRevisions
+  );
+  check('86178, validated revisionsUrl: preview.revisionsUrl is the resolved candidate, source resolved',
+    previewValidatedRevisions.revisionsUrl,
+    { value: 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/', source: 'resolved' });
+
+  const resolved86178RevisionsFailed = resolveWithFixtures(sandbox, 86178, {
+    metadata: { statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) },
+    revisions: () => ({ statusCode: 403, text: WAF_CHALLENGE_BODY })
+  });
+  const previewFailedRevisions = sandbox.computeResolvedMeetingPreview_(
+    { REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' },
+    resolved86178RevisionsFailed
+  );
+  check('86178, resolver 403 on revisions candidate: preview.revisionsUrl falls back to the existing manual value, NOT blanked',
+    previewFailedRevisions.revisionsUrl,
+    { value: 'https://old-manual-value/Inbox/Drafts/Plenary', source: 'existing' });
+
+  const previewNoResolveNoExisting = sandbox.computeResolvedMeetingPreview_({}, null);
+  check('no resolution, no existing REVISIONS_URL -> genuinely unresolved (optional field, never guessed)',
+    previewNoResolveNoExisting.revisionsUrl, { value: '', source: 'unresolved' });
 }
 
 // ============================== 3. computeMeetingConfigReadiness_() ========
@@ -168,6 +211,10 @@ console.log('computeMeetingConfigReadiness_() -- only fields the production buil
 
   check('optional Revisions URL is never checked (not a readiness field at all)',
     fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: 'x', AGENDA_TDOC: 'x', MAILING_LIST: 'x', REVISIONS_URL: '' }).ready, true);
+  check('ARCH-012: missing REVISIONS_URL alone does not add an issue, ready meeting stays ready',
+    fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: 'x', AGENDA_TDOC: 'x', MAILING_LIST: 'x', REVISIONS_URL: '' }).issues.length, 0);
+  check('ARCH-012: missing REVISIONS_URL on an otherwise-unready meeting does not add a 4th issue',
+    fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: '', AGENDA_TDOC: '', MAILING_LIST: '', REVISIONS_URL: '' }).issues.length, 3);
 }
 
 // ============================== 4. saveConfigurationSettings() workflow ====
@@ -256,6 +303,39 @@ console.log('saveConfigurationSettings() -- merge-on-save semantics, skip-if-bla
     check('legacy save: MEETING_NUMBER updated via the old field path', docProps._store.MEETING_NUMBER, '137');
     check('legacy save: no MEETING_TYPE written when blank (new ARCH-010 field never forced)', docProps._store.MEETING_TYPE, undefined);
     check('legacy save: no MEETING_NAME written when blank', docProps._store.MEETING_NAME, undefined);
+    check('ARCH-012: legacy save with a blank revisionsUrl writes nothing for REVISIONS_URL', docProps._store.REVISIONS_URL, undefined);
+  }
+
+  // (e) ARCH-012: user-edited (or resolver-proposed, carried through
+  // unedited) revisionsUrl wins over whatever was there before on Save.
+  {
+    const { sandbox, docProps } = loadCode({ documentProperties: { REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' } });
+    sandbox.saveConfigurationSettings({
+      meetingFolder: 'F', meetingNumber: '1', meetingId: '86178',
+      meetingType: 'adhoc', meetingName: 'SA4-e (AH) on FS_6G_MED', meetingDate: 'September 22, 2026',
+      ftpBase: 'https://example/Docs/', agendaTdoc: 'S4aP260098', mailingList: '3GPP_TSG_SA4_FS_6G_MED',
+      revisionsUrl: 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/', // user-reviewed/edited value submitted at Save time
+      reportType: '6G', agendaSourceDocId: '', tdocUrl: '', showPreview: true, apiToken: ''
+    });
+    check('ARCH-012: user-edited/reviewed REVISIONS_URL wins over the old value on Save',
+      docProps._store.REVISIONS_URL, 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/inbox/drafts/');
+  }
+
+  // (f) ARCH-012: a blank submitted revisionsUrl (resolver found nothing/
+  // failed validation, user did not type one in) must NOT erase an
+  // existing manually configured REVISIONS_URL -- the same skip-if-blank
+  // protection every other ARCH-010 field already has.
+  {
+    const { sandbox, docProps } = loadCode({ documentProperties: { REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' } });
+    sandbox.saveConfigurationSettings({
+      meetingFolder: 'F', meetingNumber: '1', meetingId: '86178',
+      meetingType: 'adhoc', meetingName: 'SA4-e (AH) on FS_6G_MED', meetingDate: 'September 22, 2026',
+      ftpBase: 'https://example/Docs/', agendaTdoc: 'S4aP260098', mailingList: '3GPP_TSG_SA4_FS_6G_MED',
+      revisionsUrl: '', // blank -- resolver 403'd or was never run
+      reportType: '6G', agendaSourceDocId: '', tdocUrl: '', showPreview: true, apiToken: ''
+    });
+    check('ARCH-012: blank submitted REVISIONS_URL does NOT erase the existing manual value',
+      docProps._store.REVISIONS_URL, 'https://old-manual-value/Inbox/Drafts/Plenary');
   }
 }
 
@@ -280,16 +360,20 @@ console.log('resolveMeetingForConfigDialog_() -- never writes to PropertiesServi
   }
 
   // Behavioral confirmation: calling it directly against a live sandbox must
-  // leave Document Properties byte-identical.
-  const { sandbox, docProps } = loadCode({ documentProperties: { MAILING_LIST: 'untouched-list', MEETING_ID: '60777' } });
+  // leave Document Properties byte-identical -- including when the
+  // ARCH-011 revisions-folder probe itself succeeds and validates.
+  const { sandbox, docProps } = loadCode({ documentProperties: { MAILING_LIST: 'untouched-list', MEETING_ID: '60777', REVISIONS_URL: 'https://old-manual-value/Inbox/Drafts/Plenary' } });
   sandbox.fetchMeetingMetadataById_ = () => ({ statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) });
   sandbox.fetchMeetingIcalById_ = () => ({ statusCode: 200, text: FIXTURES.ical86178 });
   sandbox.fetchMeetingTdocListById_ = () => ({ statusCode: 200, text: FIXTURES.tdocListHtml86178 });
+  sandbox.fetchRevisionsUrlCandidate_ = () => ({ statusCode: 200, text: SYNTHETIC_REVISIONS_INDEX_HTML });
   const before = JSON.stringify(docProps._store);
   const result = sandbox.resolveMeetingForConfigDialog_('86178');
   const after = JSON.stringify(docProps._store);
   check('resolveMeetingForConfigDialog_() returns ok:true for a valid, resolvable id', result.ok, true);
-  check('resolveMeetingForConfigDialog_() does not mutate Document Properties, even on a successful resolve', after, before);
+  check('ARCH-012: the resolve DID find/validate a revisionsUrl (so this is a real, non-trivial no-op check)',
+    result.preview.revisionsUrl.source, 'resolved');
+  check('resolveMeetingForConfigDialog_() does not mutate Document Properties, even on a successful resolve (incl. a validated revisions folder)', after, before);
 }
 
 // ========================================================== summary =======

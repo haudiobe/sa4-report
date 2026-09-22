@@ -4643,7 +4643,8 @@ function configureMeetingSettings() {
     FTP_BASE: props.getProperty('FTP_BASE'),
     AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
     MAILING_LIST: props.getProperty('MAILING_LIST'),
-    TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL')
+    TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL'),
+    REVISIONS_URL: props.getProperty('REVISIONS_URL')
   };
   const initialPreview = computeResolvedMeetingPreview_(existingForPreview, null);
   const readiness = computeMeetingConfigReadiness_(existingForPreview);
@@ -4728,6 +4729,10 @@ function configureMeetingSettings() {
       <label>Mailing List: ${sourceLabel(initialPreview.mailingList.source)}</label>
       <input type="text" id="mailingList" value="${esc(initialPreview.mailingList.value)}" placeholder="e.g. 3GPP_TSG_SA4_FS_6G_MED -- never auto-resolved">
       <div class="hint">The Portal cannot determine this automatically -- always entered/reviewed manually.</div>
+
+      <label>Revisions / Drafts URL: <span id="revisionsUrlBadge">${sourceLabel(initialPreview.revisionsUrl.source)}</span></label>
+      <input type="text" id="revisionsUrl" value="${esc(initialPreview.revisionsUrl.value)}" placeholder="https://www.3gpp.org/ftp/.../inbox/drafts/ (optional)">
+      <div class="hint">Optional. Discovered automatically when Resolve validates a real drafts/revisions folder for this meeting; for a main meeting this folder may contain one subfolder per report type (Audio/FS_6G_MED/MBS/Plenary/RTC/Video) rather than a single ready-to-use folder -- review before relying on it.</div>
     </div>
 
     <details class="advanced">
@@ -4799,6 +4804,7 @@ function configureMeetingSettings() {
         setFieldWithBadge('ftpBase', 'ftpBaseBadge', preview.ftpBase);
         setFieldWithBadge('agendaTdoc', 'agendaTdocBadge', preview.agendaTdoc);
         setFieldWithBadge('mailingList', 'mailingListBadge', preview.mailingList);
+        setFieldWithBadge('revisionsUrl', 'revisionsUrlBadge', preview.revisionsUrl);
 
         const portalHint = document.getElementById('portalTypeHint');
         if (preview.portalType && preview.meetingType.source !== 'resolved') {
@@ -4869,6 +4875,7 @@ function configureMeetingSettings() {
           meetingDate: document.getElementById('meetingDate').value,
           ftpBase: document.getElementById('ftpBase').value,
           mailingList: document.getElementById('mailingList').value,
+          revisionsUrl: document.getElementById('revisionsUrl').value,
           reportType: document.getElementById('reportType').value,
           agendaSourceDocId: document.getElementById('agendaSourceDocId').value,
           agendaTdoc: document.getElementById('agendaTdoc').value,
@@ -4958,6 +4965,15 @@ function saveConfigurationSettings(config) {
   }
   if (config.mailingList && config.mailingList.trim()) {
     docProps.setProperty('MAILING_LIST', config.mailingList.trim());
+  }
+  // ARCH-012: same skip-if-blank protection as the fields above --
+  // REVISIONS_URL is already read raw (no fallback formula) for ad-hoc
+  // meetings by getMeetingIdentityConfig_(), so writing it here reuses an
+  // existing override mechanism rather than introducing a new one; a blank
+  // submitted value (resolver found nothing / user cleared it) never
+  // erases an already-configured value.
+  if (config.revisionsUrl && config.revisionsUrl.trim()) {
+    docProps.setProperty('REVISIONS_URL', config.revisionsUrl.trim());
   }
 
   Logger.log('Configuration saved: ' + JSON.stringify(config));
@@ -8352,6 +8368,14 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     // "resolved". Explicit `field(null, ...)` documents that, rather than
     // omitting the field.
     mailingList: field(null, props.MAILING_LIST),
+    // ARCH-012: sources.revisionsUrl (ARCH-011) is only ever non-null on
+    // `resolved` when the resolver actually validated the candidate (HTTP
+    // 200 + credible directory listing) -- a 403/404/redirect/thrown-probe
+    // result leaves it null on `resolved`, so this field falls straight
+    // through to the SAME `existing`/`unresolved` fallback every other
+    // field uses. A resolver failure can therefore never erase an already
+    // configured REVISIONS_URL.
+    revisionsUrl: field(resolvedSources ? resolvedSources.revisionsUrl : null, props.REVISIONS_URL),
 
     // Supplementary evidence, not itself a Document Property:
     portalType: resolvedMeeting ? resolvedMeeting.portalType : null,
@@ -8376,7 +8400,9 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
  * AGENDA_TDOC is blank -- neither fallback is meaningful for ad hoc, which
  * is exactly the class of meeting this whole resolver exists for.
  * MAILING_LIST is flagged unconditionally when blank, matching the
- * resolver's own permanent inability to determine it.
+ * resolver's own permanent inability to determine it. REVISIONS_URL
+ * (ARCH-011/ARCH-012) is deliberately never checked here -- it is optional,
+ * purely informational evidence, and no existing build path depends on it.
  */
 function computeMeetingConfigReadiness_(props) {
   const p = props || {};
@@ -8414,7 +8440,8 @@ function resolveMeetingForConfigDialog_(meetingIdInput) {
     FTP_BASE: props.getProperty('FTP_BASE'),
     AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
     MAILING_LIST: props.getProperty('MAILING_LIST'),
-    TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL')
+    TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL'),
+    REVISIONS_URL: props.getProperty('REVISIONS_URL')
   };
 
   const idResult = parseMeetingIdInput_(meetingIdInput);
