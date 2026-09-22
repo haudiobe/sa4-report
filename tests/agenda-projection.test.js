@@ -209,7 +209,13 @@ console.log('projectAgendaItems_ -- null/blank agenda numbers rely on agendaSele
 
 // ============================ 10. no production caller (source-structure) =
 
-console.log('source-structure assertion: projectAgendaItems_() has NO production caller yet');
+// SA4-IMPL-007 migrated parseAgendaForReport_() onto projectAgendaItems_()
+// (its ZIP/AGENDA_TDOC branch only -- see tests/canonical-agenda-projection
+// .test.js for that migration's own source-structure and behavior
+// coverage). It is deliberately EXCLUDED from the "still has no caller"
+// list below; every other function here remains unmigrated exactly as
+// SA4-IMPL-006 left it.
+console.log('source-structure assertion: projectAgendaItems_() has no OTHER production caller (parseAgendaForReport_ migrated by SA4-IMPL-007)');
 
 {
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
@@ -229,7 +235,7 @@ console.log('source-structure assertion: projectAgendaItems_() has NO production
   // mentions of its own name in its own JSDoc don't count as a "caller".
   const withoutOwnDefinition = source.replace(/function projectAgendaItems_\([\s\S]*?\n}\n/, '');
 
-  ['parseAgendaForReport_', 'parseAgendaFromZippedTdoc', 'parseAgendaDocumentById',
+  ['parseAgendaFromZippedTdoc', 'parseAgendaDocumentById',
    'parseAgendaStructureWithText_', 'parseAgendaFromHeadings_', 'parseAgendaFromTables_',
    'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_'].forEach(fnName => {
     const body = extractBody(withoutOwnDefinition, fnName);
@@ -241,6 +247,15 @@ console.log('source-structure assertion: projectAgendaItems_() has NO production
     check(`${fnName}() does NOT call projectAgendaItems_() (unmigrated, as required by SA4-IMPL-006)`,
       /\bprojectAgendaItems_\s*\(/.test(body), false);
   });
+
+  const migrated = extractBody(withoutOwnDefinition, 'parseAgendaForReport_');
+  if (!migrated) {
+    failures++;
+    console.log('  FAIL could not locate "function parseAgendaForReport_(" in Code.js');
+  } else {
+    check('parseAgendaForReport_() DOES call projectAgendaItems_() (migrated by SA4-IMPL-007; see tests/canonical-agenda-projection.test.js)',
+      /\bprojectAgendaItems_\s*\(/.test(migrated), true);
+  }
 }
 
 // ------------------------------------------------------------------- summary

@@ -5496,13 +5496,25 @@ function parseAgendaForReport_(cfg, templateDocId) {
   if (cfg.AGENDA_TDOC) {
     Logger.log('Parsing agenda from TDOC ZIP: ' + cfg.AGENDA_TDOC);
     const agendaStructure = downloadMeetingAgenda_(cfg.AGENDA_TDOC, cfg.FTP_BASE);
-    const prefix = getConfiguredAgendaPrefix_();
-    agendaItems = agendaStructure.filter(item =>
-      item.number === prefix.replace(/\.$/, '') ||
-      item.number.startsWith(prefix)
-    );
+    // SA4-IMPL-007: canonical ZIP-path filtering migrated from the old
+    // inline parent-or-prefix filter to the MeetingContext-driven
+    // projection. Note this drops the bare parent item (e.g. "7") that the
+    // old filter retained -- SA4-ARCH-007 confirmed buildSkeletonWithTdocTables()
+    // immediately, redundantly re-filters that parent back out before doing
+    // anything else with the array, so this has no observable effect on the
+    // canonical build. The Google-Doc fallback below is deliberately left
+    // unmigrated -- see its comment.
+    const context = getMeetingContext_();
+    agendaItems = projectAgendaItems_(agendaStructure, context.report.agendaSelector);
   } else {
     Logger.log('Parsing agenda from template Google Doc: ' + templateDocId);
+    // SA4-IMPL-007: NOT migrated to projectAgendaItems_(). This branch
+    // passes a non-empty prefix into parseAgendaStructureWithText_(), which
+    // pre-filters at heading/table-parse time via the known-buggy
+    // parseAgendaFromHeadings_() (SA4-ARCH-007). Migrating this branch to
+    // selector-aware projection would require first obtaining an unfiltered
+    // agenda structure from that parser, which means fixing or restructuring
+    // the heading-parser bug -- out of scope for this task. Left unchanged.
     const prefix = getConfiguredAgendaPrefix_();
     const agendaDoc = DocumentApp.openById(templateDocId);
     agendaItems = parseAgendaStructureWithText_(agendaDoc.getBody(), prefix);
