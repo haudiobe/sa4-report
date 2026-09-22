@@ -28,7 +28,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { loadCode } = require('./helpers/load-code.js');
+const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 
 const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'main-meeting-profile.expected.json');
 const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
@@ -123,6 +123,57 @@ reportTypes.forEach(type => {
   check(`${type}: structureBranch matches isSWGReport/6G classification`,
     profile.structureBranch, expectedBranch);
 });
+
+// --------------------------- SA4-PROD-008: X.2 iprSection, tied to live source
+
+console.log('iprSection fixture claims, tied to live Code.js source (not just fixture self-consistency)');
+
+function extractFunctionBody(source, fnName) {
+  const startMatch = source.match(new RegExp('^function ' + fnName + '\\(', 'm'));
+  if (!startMatch) return null;
+  const startIndex = startMatch.index;
+  const nextFnRe = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
+  nextFnRe.lastIndex = startIndex + startMatch[0].length;
+  const next = nextFnRe.exec(source);
+  const endIndex = next ? next.index : source.length;
+  return source.slice(startIndex, endIndex);
+}
+
+{
+  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  const skeletonBody = extractFunctionBody(source, 'buildSkeletonWithTdocTables');
+
+  check('buildSkeletonWithTdocTables() exists', !!skeletonBody, true);
+
+  if (skeletonBody) {
+    // The live invariant this fixture's per-profile "iprSection" claims
+    // actually rest on: appendStandardIprSection_() is called exactly once,
+    // inside the iprSection branch that only is6G===false profiles reach
+    // (the is6G block returns early for its own openingSection/
+    // registrationSection/reallocationSection/iprSection quartet BEFORE
+    // that branch is reached) -- and the is6G block's OWN "X.0.4 IPR and
+    // antitrust reminder" still copies template content, unchanged.
+    check('buildSkeletonWithTdocTables() calls appendStandardIprSection_() (the canonical-generated path every non-plenary-6g profile below claims)',
+      /appendStandardIprSection_\(/.test(skeletonBody), true);
+    check('is6G\'s own nested "X.0.4 IPR and antitrust reminder" still exists and still copies template content (the plenary-6g profile\'s claimed, UNCHANGED path)',
+      /\.0\.4 IPR and antitrust reminder[\s\S]{0,300}copySectionContentWithReplacement_/.test(skeletonBody), true);
+    check('the is6G block still returns early for its own iprSection before the canonical-generated branch could be reached (plenary-6g never calls appendStandardIprSection_)',
+      /if\s*\(is6G\s*&&\s*\([\s\S]*?item\.number === iprSection[\s\S]*?\)\)\s*\{\s*return;/.test(skeletonBody), true);
+  }
+
+  // Cross-check every profile's fixture claim against the single rule this
+  // implies: plenary-6g (and only plenary-6g) keeps the old template-copy
+  // path; every other profile claims the new canonical-generated path.
+  reportTypes.forEach(type => {
+    const profile = fixture.reportTypeProfiles[type];
+    check(`${type}: fixture.iprSection.source is present`, typeof profile.iprSection?.source, 'string');
+    const expectedSource = profile.structureBranch === 'plenary-6g' ? 'is6G-nested-template-copy' : 'canonical-generated';
+    check(`${type}: fixture.iprSection.source matches the structureBranch-derived rule (plenary-6g keeps template-copy, everything else is canonical-generated)`,
+      profile.iprSection && profile.iprSection.source, expectedSource);
+    check(`${type}: fixture.iprSection.changedBySA4PROD008 matches (only plenary-6g is unchanged)`,
+      profile.iprSection && profile.iprSection.changedBySA4PROD008, profile.structureBranch !== 'plenary-6g');
+  });
+}
 
 // ------------------------------------------------------------------- summary
 

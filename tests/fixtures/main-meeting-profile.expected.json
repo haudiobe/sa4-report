@@ -14,7 +14,12 @@
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/FS_6G_MED",
       "structureBranch": "plenary-6g",
       "isSWGReport": false,
-      "structureNote": "buildSkeletonWithTdocTables() treats REPORT_SUFFIX === '6G' as is6G=true and builds fixed subsections 11.0.1 Opening, 11.0.2 Registration of Documents, 11.0.3 Document Reallocations, 11.0.4 IPR and antitrust reminder BEFORE walking the parsed agenda items (Code.js ~5352-5406)."
+      "structureNote": "buildSkeletonWithTdocTables() treats REPORT_SUFFIX === '6G' AND meeting.type !== 'adhoc' as is6G=true and builds fixed subsections 11.0.1 Opening, 11.0.2 Registration of Documents, 11.0.3 Document Reallocations, 11.0.4 IPR and antitrust reminder BEFORE walking the parsed agenda items (Code.js, the `if (is6G) {...}` block). NOT changed by SA4-PROD-008: this profile is a MAIN 6G-plenary meeting (meeting.type defaults to 'main'), so is6G stays true and the iprSection branch (where SA4-PROD-008's canonical appendStandardIprSection_() lives) is skipped entirely for it -- 11.0.4 still copies IPR content from the AGENDA_SOURCE_DOC_ID template, unchanged. Only a 6G-type AD-HOC meeting (is6G=false there, e.g. meeting 86178) reaches the canonical-generated X.2.x path -- see 'iprSection' below.",
+      "iprSection": {
+        "source": "is6G-nested-template-copy",
+        "changedBySA4PROD008": false,
+        "note": "11.0.4 IPR and antitrust reminder, template-copied. An ad-hoc 6G-type meeting does NOT use this path (is6G=false for it) -- it uses the canonical-generated path instead, same as every other non-is6G profile below."
+      }
     },
     "Audio": {
       "agendaPrefix": "7.",
@@ -23,7 +28,13 @@
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/Audio",
       "structureBranch": "swg",
       "isSWGReport": true,
-      "structureNote": "isSWGReport=true. Section X.1 Opening / X.1.2 Registration of Documents / X.2 IPR and antitrust reminder are copied from the AGENDA_SOURCE_DOC_ID template (Code.js ~5430-5465); no 11.0.x subsections."
+      "structureNote": "Section X.1 Opening / X.1.2 Registration of Documents are still copied from the AGENDA_SOURCE_DOC_ID template (Code.js, buildSkeletonWithTdocTables()'s openingSection branch, main-meeting else path); no 11.0.x subsections. CHANGED by SA4-PROD-008: X.2 IPR and antitrust reminder is NO LONGER copied from the template -- buildSkeletonWithTdocTables() now calls the canonical appendStandardIprSection_(body, agendaPrefixNum) unconditionally for every report type that reaches the iprSection branch (every profile here except 6G/plenary-6g). See 'iprSection' below.",
+      "iprSection": {
+        "source": "canonical-generated",
+        "changedBySA4PROD008": true,
+        "headings": ["{prefix}2.1 Introduction", "{prefix}2.2 Call for IPRs", "{prefix}2.3 Statement regarding competition law", "{prefix}2.4 Consensus principles reminder"],
+        "note": "appendStandardIprSection_(body, agendaPrefixNum) -- same fixed wording/headings for every profile in this group, only the numeric prefix differs. Previously (pre-SA4-PROD-008): copied from the AGENDA_SOURCE_DOC_ID template's own X.2 content (isSWGReport-gated)."
+      }
     },
     "Video": {
       "agendaPrefix": "9.",
@@ -32,7 +43,8 @@
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/Video",
       "structureBranch": "swg",
       "isSWGReport": true,
-      "structureNote": "Same swg branch as Audio."
+      "structureNote": "Same swg branch as Audio, including the SA4-PROD-008 canonical X.2 change.",
+      "iprSection": { "source": "canonical-generated", "changedBySA4PROD008": true, "headings": ["{prefix}2.1 Introduction", "{prefix}2.2 Call for IPRs", "{prefix}2.3 Statement regarding competition law", "{prefix}2.4 Consensus principles reminder"] }
     },
     "MBS": {
       "agendaPrefix": "8.",
@@ -41,7 +53,8 @@
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/MBS",
       "structureBranch": "swg",
       "isSWGReport": true,
-      "structureNote": "Same swg branch as Audio."
+      "structureNote": "Same swg branch as Audio, including the SA4-PROD-008 canonical X.2 change.",
+      "iprSection": { "source": "canonical-generated", "changedBySA4PROD008": true, "headings": ["{prefix}2.1 Introduction", "{prefix}2.2 Call for IPRs", "{prefix}2.3 Statement regarding competition law", "{prefix}2.4 Consensus principles reminder"] }
     },
     "RTC": {
       "agendaPrefix": "10.",
@@ -50,7 +63,8 @@
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/RTC",
       "structureBranch": "swg",
       "isSWGReport": true,
-      "structureNote": "Same swg branch as Audio."
+      "structureNote": "Same swg branch as Audio, including the SA4-PROD-008 canonical X.2 change.",
+      "iprSection": { "source": "canonical-generated", "changedBySA4PROD008": true, "headings": ["{prefix}2.1 Introduction", "{prefix}2.2 Call for IPRs", "{prefix}2.3 Statement regarding competition law", "{prefix}2.4 Consensus principles reminder"] }
     },
     "Liaison": {
       "agendaPrefix": "5.",
@@ -59,7 +73,13 @@
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/Plenary",
       "structureBranch": "other",
       "isSWGReport": false,
-      "structureNote": "Neither is6G nor isSWGReport. At the 'X.2' position, buildSkeletonWithTdocTables() does NOT copy IPR boilerplate (that only happens when isSWGReport is true) -- instead 'X.2' is treated as a normal, TDoc-bearing agenda item like any other (Code.js ~5457-5517, the 'else' branch of the isSWGReport check)."
+      "structureNote": "Neither is6G nor isSWGReport. CHANGED by SA4-PROD-008: at the 'X.2' position, buildSkeletonWithTdocTables() no longer treats it as a normal TDoc-bearing agenda item (that fallback was already dead code post-SA4-PROD-007, since the registration-boundary extraction always empties tdocGroups['X.2'] before this point) -- it now calls the same canonical appendStandardIprSection_() as the SWG profiles. See 'iprSection' below.",
+      "iprSection": {
+        "source": "canonical-generated",
+        "changedBySA4PROD008": true,
+        "headings": ["{prefix}2.1 Introduction", "{prefix}2.2 Call for IPRs", "{prefix}2.3 Statement regarding competition law", "{prefix}2.4 Consensus principles reminder"],
+        "note": "Previously (pre-SA4-PROD-008): 'X.2' was treated as a normal, TDoc-bearing agenda item (the isSWGReport===false fallback) -- already silently empty post-SA4-PROD-007's registration-boundary extraction, so this change adds real content where there was previously nothing."
+      }
     },
     "New": {
       "agendaPrefix": "18.",
@@ -68,7 +88,8 @@
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/Plenary",
       "structureBranch": "other",
       "isSWGReport": false,
-      "structureNote": "Same 'other' branch as Liaison."
+      "structureNote": "Same 'other' branch as Liaison, including the SA4-PROD-008 canonical X.2 change.",
+      "iprSection": { "source": "canonical-generated", "changedBySA4PROD008": true, "headings": ["{prefix}2.1 Introduction", "{prefix}2.2 Call for IPRs", "{prefix}2.3 Statement regarding competition law", "{prefix}2.4 Consensus principles reminder"] }
     }
   },
 
@@ -123,7 +144,7 @@
     "TDoc table row schema is fixed regardless of report type: TDoc / Title / Source / Contact / Agenda Item / Type-For / E-mail Discussion / Revisions / Minutes / Disposition / Status, in that order (Code.js ~5484-5496, duplicated at ~5548-5560).",
     "buildSkeletonWithTdocTables() auto-appends 'Any other business' and 'Close of the session' sections at the end if the parsed agenda did not already contain a heading matching those title keywords (Code.js ~5584-5605), incrementing the last agenda number via incrementAgendaNumber_().",
     "ensureReallocationTable_() computes its insertion point as `${agendaPrefix}1.3` and searches for headings starting with `${agendaPrefix}1.2` / `${agendaPrefix}1.4` / `${agendaPrefix}1.5` / `${agendaPrefix}2` (Code.js ~760-813) -- this only makes sense for report types that follow the X.1.x subsection convention (SWG types); for 6G the equivalent position is 11.0.3, built separately in the is6G branch.",
-    "AGENDA_SOURCE_DOC_ID default ('1qP--dusvUhNwwBtMEH4xVdxaP1c6L1hZ49geICoYV2s', Code.js:655,3976) is a single hardcoded template Google Doc shared by ALL report types; its 'X.1'/'X.2'/'X.Y'/'X.Z' placeholder sections are substituted via copySectionContentWithReplacement_.",
+    "AGENDA_SOURCE_DOC_ID default ('1qP--dusvUhNwwBtMEH4xVdxaP1c6L1hZ49geICoYV2s', Code.js:655,3976) is a single hardcoded template Google Doc shared by ALL report types; its 'X.1'/'X.Y'/'X.Z' placeholder sections are still substituted via copySectionContentWithReplacement_ for main meetings. UPDATED by SA4-PROD-008: 'X.2' is NO LONGER one of these template-substituted sections for any profile that reaches the iprSection branch (every profile except plenary-6g/is6G) -- see each profile's 'iprSection' field above; is6G's own nested 11.0.4 (main 6G plenary only) is the sole remaining X.2-shaped template-copy consumer.",
     "generateReportTitle_() extracts the meeting label from TDOC_LIST_URL via the regex /SA4%23(\\d+(?:-e)?)/i, expecting the 3GPP FTP filename convention 'TDoc_List_Meeting_SA4%23NNN[-e].xlsx'; a meeting number/name that does not fit '\\d+(-e)?' falls back to 'SA4#{MEETING_ID}'.",
     "EMAIL_START_DATE default '2026-08-21' (Code.js:721,1902,2013,2081) is a meeting-136-specific fallback, overridable per Doc via 'Configure Meeting Settings'."
   ],

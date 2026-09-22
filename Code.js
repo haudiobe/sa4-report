@@ -6253,66 +6253,21 @@ function buildSkeletonWithTdocTables() {
         });
       }
     } else if (item.number === iprSection) {
-      // IPR section - only copy template content for SWG reports (Audio, Video, MBS, RTC)
-      const isSWGReport = (reportType === 'Audio' || reportType === 'Video' || reportType === 'MBS' || reportType === 'RTC');
-      
-      if (isSWGReport) {
-        const iprHeader = findHeading_(sourceBody, /^X\.2\s+/);
-        if (iprHeader) {
-          copySectionContentWithReplacement_(iprHeader, body, /^X\.Y\s+/, 'X', agendaPrefixNum);
-        }
-      } else {
-        // For non-SWG reports (6G, Liaison, New), .2 items are regular agenda items with TDOC tables
-        const group = tdocGroups[item.number];
-        if (group && group.tdocs.length > 0) {
-          // Revisions are emitted directly below the document they revise.
-          orderTdocsByRevision_(group.tdocs).forEach(tdocData => {
-            const row = tdocData.row;
-            const revisedTo = getRevisedTo_(tdocData);
-            
-            // Build Type/For field
-            const typeCol = tdocData.typeCol;
-            const forCol = tdocData.forCol;
-            const typeFor = (typeCol >= 0 && forCol >= 0 && row[typeCol] && row[forCol])
-              ? `${row[typeCol]} for ${row[forCol]}`
-              : (typeCol >= 0 && row[typeCol]) ? row[typeCol] 
-              : (forCol >= 0 && row[forCol]) ? row[forCol] 
-              : '';
-            
-            const tempData = [
-              ['TDoc', row[tdocData.tdocCol]],
-              ['Title', row[tdocData.titleCol]],
-              ['Source', row[tdocData.sourceCol]],
-              ['Contact', tdocData.contactCol >= 0 ? row[tdocData.contactCol] : ''],
-              ['Agenda Item', item.number],
-              ['Type/For', typeFor],
-              ['E-mail Discussion', ''],
-              ['Revisions', ''],
-              ['Minutes', ''],
-              ['Disposition', revisedTo ? 'Revised to ' + revisedTo : ''],
-              ['Status', tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '']
-            ];
-            const table = body.appendTable();
-            removeInitialEmptyRow_(table);
-            tempData.forEach(rowData => {
-              const tr = table.appendTableRow();
-              tr.appendTableCell(rowData[0]);
-              tr.appendTableCell(String(rowData[1] || ''));
-            });
-            if (tdocData.richTextRow && tdocData.richTextRow[tdocData.tdocCol]) {
-              const richText = tdocData.richTextRow[tdocData.tdocCol];
-              if (richText.getLinkUrl && richText.getLinkUrl()) {
-                const cell = table.getRow(0).getCell(1);
-                const tdocValue = String(row[tdocData.tdocCol]);
-                if (tdocValue.length > 0) {
-                  cell.editAsText().setLinkUrl(0, tdocValue.length - 1, richText.getLinkUrl());
-                }
-              }
-            }
-            styleStatusCell_(table);
-          });
-        }
-      }
+      // SA4-PROD-008: standard IPR/antitrust/consensus boilerplate,
+      // generated directly for EVERY report type (previously: SWG reports
+      // copied template content here; 6G/Liaison/New reports fell through
+      // to rendering tdocGroups[iprSection] as a plain TDoc table instead).
+      // That old TDoc-table fallback is safely removable: since
+      // SA4-PROD-007's registration-boundary extraction (isBeforeRegistrationBoundary_,
+      // above, gated on !is6G) already removes every tdocGroups entry whose
+      // raw agenda item is < "{agendaPrefixNum}.3" -- which "{agendaPrefixNum}.2"
+      // (iprSection) always is -- BEFORE this loop runs, tdocGroups[iprSection]
+      // is already guaranteed empty by this point for every is6G-false
+      // report type. No real TDoc visibility is lost; it was already
+      // dead code post-PROD-007. The agenda's own "X.2 ..." heading
+      // (already appended above from the real parsed agenda item) remains
+      // the section anchor; this only appends its standard child content.
+      appendStandardIprSection_(body, agendaPrefixNum);
     } else if (item.title.toLowerCase().includes('any other business') || item.title.toLowerCase().includes('aob')) {
       // AOB section - copy template content
       const aobHeader = findHeading_(sourceBody, /^X\.Y\s+/);
@@ -6820,6 +6775,43 @@ function appendTdocDetailTable_(body, tdocData, agendaItemLabel) {
     }
   }
   styleStatusCell_(table);
+}
+
+/**
+ * SA4-PROD-008: canonical, report-boilerplate IPR/antitrust/consensus
+ * subsections (X.2.1-X.2.4), generated directly rather than copied from
+ * any template document -- this exact wording is standard across every
+ * SA4 report and is never meeting-specific. Prefix-independent via
+ * `agendaPrefixNum` (never a hardcoded "5" or any other literal number).
+ *
+ * The caller is responsible for the "X.2 ..." heading itself (the real
+ * agenda item's own title, already appended before this is called) -- this
+ * function only appends the X.2.1-X.2.4 child content beneath it, so no
+ * duplicate X.2 heading is ever created.
+ *
+ * Wording is preserved EXACTLY as supplied/approved, including its
+ * internal inconsistency between a closing ASCII quote (Call for IPRs) and
+ * closing curly quotes (Statement regarding competition law / Consensus
+ * principles reminder) -- do not "fix" this without a separate, explicit
+ * decision to do so.
+ */
+function appendStandardIprSection_(body, agendaPrefixNum) {
+  body.appendParagraph(`${agendaPrefixNum}.2.1 Introduction`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph('The chair read the antitrust and IPR clause at the opening of the meeting session.');
+
+  body.appendParagraph(`${agendaPrefixNum}.2.2 Call for IPRs`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph('“I draw your attention to your obligations under the 3GPP Partner Organizations’ IPR policies. Every Individual Member organization is obliged to declare to the Partner Organization or Organizations of which it is a member any IPR owned by the Individual Member or any other organization which is or is likely to become essential to the work of 3GPP.');
+  body.appendParagraph('Delegates are asked to take note that they are thereby invited:');
+  body.appendListItem('to investigate whether their organization or any other organization owns IPRs which were, or were likely to become Essential in respect of the work of 3GPP.').setGlyphType(DocumentApp.GlyphType.BULLET);
+  body.appendListItem('to notify their respective Organizational Partners of all potential IPRs, e.g., for ETSI, by means of the IPR Information Statement and the Licensing declaration forms"').setGlyphType(DocumentApp.GlyphType.BULLET);
+
+  body.appendParagraph(`${agendaPrefixNum}.2.3 Statement regarding competition law`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph('“I also draw your attention to the fact that 3GPP activities are subject to all applicable antitrust and competition laws and that compliance with said laws is therefore required of any participant of this TSG/WG/SWG meeting including the Chair and Vice Chairs. In case of question I recommend that you contact your legal counsel.');
+  body.appendParagraph('The leadership shall conduct the present meeting with impartiality and in the interests of 3GPP.');
+  body.appendParagraph('Furthermore, I would like to remind you that timely submission of work items in advance of TSG/WG/SWG meetings is important to allow for full and fair consideration of such matters.”');
+
+  body.appendParagraph(`${agendaPrefixNum}.2.4 Consensus principles reminder`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph('“I also draw your attention to the fact that 3GPP endeavours to reach consensus on all decisions and therefore depends on a cooperative spirit of the Individual Members. In particular, Individual Members are encouraged to seek a consensus-based solution and only to sustain objections as a very last resort, and where absolutely necessary and well justified. The leadership will conduct the present meeting in a manner whereby informal methods of reaching consensus are encouraged, whilst ensuring that well justified concerns are taken into account.”');
 }
 
 /**
