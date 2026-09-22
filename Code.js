@@ -809,8 +809,69 @@ function resolveMeetingSources_(derived, overrides) {
   };
 }
 
+/**
+ * SA4-IMPL-003/003A: normalizes the MEETING_TYPE document property.
+ * trim + lowercase; absent or blank -> 'main' (backward-compatible: every
+ * document that predates this property, and every existing main-meeting
+ * test/workflow, has no MEETING_TYPE set at all).
+ *
+ * Any other, unrecognized NON-EMPTY value throws, rather than silently
+ * falling back to 'main' (SA4-IMPL-003A -- changed from the original
+ * SA4-IMPL-003 behavior, which logged and fell back). Rationale: once
+ * meeting type decides whether main-derived or explicit ad-hoc sources are
+ * exposed (see getMeetingContext_()), silently converting a configuration
+ * typo ("ad-hoc", "Adhoc " mistyped, "electronic") into 'main' risks
+ * silently building against the WRONG meeting's sources rather than failing
+ * where the mistake was made. This is a deliberate departure from this
+ * file's usual "always fall back, never throw" convention, specific to this
+ * one property, because the two failure modes are not equally bad here: a
+ * missing property (blank) has an obviously-correct, harmless default
+ * (main, matching every meeting that has ever existed so far); a wrong,
+ * non-empty value does not.
+ */
+function normalizeMeetingType_(value) {
+  const t = String(value || '').trim().toLowerCase();
+  if (!t) return 'main';
+  if (t === 'main') return 'main';
+  if (t === 'adhoc') return 'adhoc';
+  throw new Error('Unsupported MEETING_TYPE "' + value + '". Expected "main" or "adhoc".');
+}
+
+/**
+ * SA4-IMPL-003: reads every meeting-identity-related DocumentProperty
+ * together in one place, so getMeetingContext_() itself doesn't scatter
+ * PropertiesService calls (per the SA4-IMPL-002/003 "keep configuration
+ * access separate from pure resolution" rule).
+ *
+ * FTP_BASE / TDOC_LIST_URL / AGENDA_TDOC / AGENDA_SOURCE_DOC_ID /
+ * REVISIONS_URL are read RAW here (no fallback formula), deliberately
+ * bypassing getReportConfig_()'s own handling of those same property names.
+ * This is intentional, not a second source of truth for MAIN meetings
+ * (getMeetingContext_() still uses cfg.* for those, unchanged): for an
+ * AD-HOC meeting, getReportConfig_()'s fallbacks for these fields are
+ * main-meeting-specific formulas (e.g. FTP_BASE falls back to a
+ * Montreal-based URL built from MEETING_FOLDER) that would be actively
+ * WRONG -- not just incomplete -- to expose. Reading them raw lets a
+ * missing ad-hoc value surface as genuinely absent instead of a silently
+ * wrong main-meeting default. No new property names are introduced: these
+ * are the exact same properties getReportConfig_() already reads.
+ */
+function getMeetingIdentityConfig_() {
+  const props = PropertiesService.getDocumentProperties();
+  return {
+    MEETING_TYPE: normalizeMeetingType_(props.getProperty('MEETING_TYPE')),
+    MEETING_NAME: String(props.getProperty('MEETING_NAME') || '').trim(),
+    FTP_BASE: String(props.getProperty('FTP_BASE') || '').trim(),
+    TDOC_LIST_URL: String(props.getProperty('TDOC_LIST_URL') || '').trim(),
+    AGENDA_TDOC: String(props.getProperty('AGENDA_TDOC') || '').trim(),
+    AGENDA_SOURCE_DOC_ID: String(props.getProperty('AGENDA_SOURCE_DOC_ID') || '').trim(),
+    REVISIONS_URL: String(props.getProperty('REVISIONS_URL') || '').trim()
+  };
+}
+
 function getMeetingContext_() {
   const cfg = getReportConfig_();
+  const identity = getMeetingIdentityConfig_();
 
   const reportType = cfg.REPORT_SUFFIX;
   const SWG_REPORT_TYPES = ['Audio', 'Video', 'MBS', 'RTC'];
@@ -822,32 +883,84 @@ function getMeetingContext_() {
   } else {
     structureProfile = 'main-other';
   }
+  // SA4-IMPL-003 deliberately does NOT touch agendaPrefix/structureProfile
+  // for the ad-hoc branch below -- SA4-ARCH-005/006 already established
+  // these are semantically wrong for a real ad-hoc meeting (no SWG-plenary
+  // prefix concept applies), but fixing that is agendaSelector/
+  // frontMatterProfile work, explicitly out of scope for this task.
 
-  // SA4-IMPL-002: sources are now produced by the pure resolver instead of
-  // being copied straight across from cfg. No overrides are supplied here
-  // (no DocumentProperty mechanism for them exists yet -- see the function
-  // comment above), so this call always falls through to `derivedSources`
-  // unchanged; existing main-meeting behavior is therefore byte-identical.
-  const derivedSources = {
-    ftpBase: cfg.FTP_BASE,
-    tdocListUrl: cfg.TDOC_LIST_URL,
-    agendaTdoc: cfg.AGENDA_TDOC,
-    agendaTemplateDocId: cfg.AGENDA_SOURCE_DOC_ID,
-    mailingList: cfg.LIST_NAME,
-    draftsFolder: cfg.DRAFTS_FOLDER,
-    revisionsUrl: cfg.REVISIONS_URL
-  };
-  const sources = resolveMeetingSources_(derivedSources, {});
+  let meeting;
+  let sources;
+
+  if (identity.MEETING_TYPE === 'adhoc') {
+    meeting = {
+      type: 'adhoc',
+      name: identity.MEETING_NAME || null,
+      folder: null,
+      number: null,
+      portalId: null
+    };
+
+    // Explicit ad-hoc source overrides, reusing the SAME property names
+    // getReportConfig_() already reads (no parallel SOURCE_*-named
+    // properties introduced). mailingList/draftsFolder are handled via
+    // `adhocDerived` below, not here, since neither has an override
+    // property today.
+    const adhocOverrides = {
+      ftpBase: identity.FTP_BASE,
+      tdocListUrl: identity.TDOC_LIST_URL,
+      agendaTdoc: identity.AGENDA_TDOC,
+      agendaTemplateDocId: identity.AGENDA_SOURCE_DOC_ID,
+      revisionsUrl: identity.REVISIONS_URL
+    };
+
+    // mailingList: PROVISIONAL reuse of the existing report-type -> mailing
+    // list mapping (cfg.LIST_NAME, e.g. '3GPP_TSG_SA_WG4_AUDIO' for
+    // report.type === 'Audio'). This is NOT independently verified for
+    // ad-hoc traffic -- SA4-ARCH-006 explicitly left "which mailing list do
+    // ad-hoc meetings actually use" as an unresolved unknown. Reusing it is
+    // a deliberate, documented placeholder, not a verified fact.
+    //
+    // draftsFolder: always null for ad-hoc. The main-meeting
+    // DRAFTS_FOLDERS lookup (SWG name -> subfolder within one shared
+    // meeting's Inbox/Drafts/) has no ad-hoc equivalent -- each ad-hoc
+    // series already has its OWN, unshared Inbox/Drafts/ folder (verified,
+    // SA4-ARCH-005), so sources.revisionsUrl alone fully represents where
+    // ad-hoc revisions live. Inventing a folder name on top would be
+    // meaningless, not just redundant.
+    const adhocDerived = {
+      mailingList: cfg.LIST_NAME,
+      draftsFolder: null
+    };
+
+    sources = resolveMeetingSources_(adhocDerived, adhocOverrides);
+  } else {
+    meeting = {
+      type: 'main',
+      name: null, // stable shape with the ad-hoc branch; no main meeting has ever had a free-form display name
+      folder: cfg.MEETING_FOLDER,
+      number: cfg.MEETING_NUMBER,
+      portalId: cfg.MEETING_ID
+    };
+
+    // Unchanged since SA4-IMPL-002: no overrides supplied, sources fall
+    // straight through to the existing main-meeting derivation in cfg.
+    const derivedSources = {
+      ftpBase: cfg.FTP_BASE,
+      tdocListUrl: cfg.TDOC_LIST_URL,
+      agendaTdoc: cfg.AGENDA_TDOC,
+      agendaTemplateDocId: cfg.AGENDA_SOURCE_DOC_ID,
+      mailingList: cfg.LIST_NAME,
+      draftsFolder: cfg.DRAFTS_FOLDER,
+      revisionsUrl: cfg.REVISIONS_URL
+    };
+    sources = resolveMeetingSources_(derivedSources, {});
+  }
 
   return {
     group: 'SA4',
 
-    meeting: {
-      type: 'main', // future discriminator: 'main' | 'adhoc' | ... (not yet used anywhere)
-      folder: cfg.MEETING_FOLDER,
-      number: cfg.MEETING_NUMBER,
-      portalId: cfg.MEETING_ID
-    },
+    meeting: meeting,
 
     report: {
       type: reportType,

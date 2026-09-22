@@ -299,6 +299,197 @@ console.log('getMeetingContext_() production wiring: resolver is used, with no o
   }
 }
 
+// ============================ SA4-IMPL-003: ad-hoc meeting identity =======
+
+console.log('normalizeMeetingType_ -- backward-compatible fallback for blank/absent, strict for everything else (SA4-IMPL-003A)');
+
+function expectThrows(name, fn, messageSubstring) {
+  try {
+    fn();
+    failures++;
+    console.log(`  FAIL ${name}\n         expected a throw, but none occurred`);
+  } catch (e) {
+    if (messageSubstring && e.message.indexOf(messageSubstring) === -1) {
+      failures++;
+      console.log(`  FAIL ${name}\n         expected message to contain ${JSON.stringify(messageSubstring)}\n         actual message: ${e.message}`);
+    } else {
+      console.log(`  ok   ${name}`);
+    }
+  }
+}
+
+{
+  const { sandbox } = loadCode();
+
+  // Backward-compatible: blank/absent -> 'main' (every document that
+  // predates MEETING_TYPE, and every existing main-meeting workflow, has no
+  // such property set at all).
+  check('absent (undefined) -> "main"', sandbox.normalizeMeetingType_(undefined), 'main');
+  check('null -> "main"', sandbox.normalizeMeetingType_(null), 'main');
+  check('empty string -> "main"', sandbox.normalizeMeetingType_(''), 'main');
+  check('whitespace only -> "main"', sandbox.normalizeMeetingType_('   '), 'main');
+  check('"main" -> "main"', sandbox.normalizeMeetingType_('main'), 'main');
+  check('"MAIN" -> "main"', sandbox.normalizeMeetingType_('MAIN'), 'main');
+  check('"adhoc" -> "adhoc"', sandbox.normalizeMeetingType_('adhoc'), 'adhoc');
+  check('" adhoc " (whitespace) -> "adhoc"', sandbox.normalizeMeetingType_(' adhoc '), 'adhoc');
+  check('"ADHOC" -> "adhoc"', sandbox.normalizeMeetingType_('ADHOC'), 'adhoc');
+
+  // SA4-IMPL-003A: any other non-empty value THROWS -- it must NOT silently
+  // become 'main'. A configuration typo picking the wrong meeting/source
+  // configuration is worse than a loud, immediate failure.
+  expectThrows('"ad-hoc" (hyphenated -- a very plausible typo) throws',
+    () => sandbox.normalizeMeetingType_('ad-hoc'), 'Unsupported MEETING_TYPE "ad-hoc"');
+  expectThrows('"electronic" throws',
+    () => sandbox.normalizeMeetingType_('electronic'), 'Unsupported MEETING_TYPE "electronic"');
+  expectThrows('"BogusType" throws',
+    () => sandbox.normalizeMeetingType_('BogusType'), 'Unsupported MEETING_TYPE "BogusType"');
+  expectThrows('"audio" (a report type, not a meeting type -- a very plausible mix-up) throws',
+    () => sandbox.normalizeMeetingType_('audio'), 'Unsupported MEETING_TYPE "audio"');
+  expectThrows('error message names both supported values',
+    () => sandbox.normalizeMeetingType_('BogusType'), 'Expected "main" or "adhoc"');
+}
+
+console.log('getMeetingContext_() -- meeting.type === "adhoc" only when MEETING_TYPE is explicitly set');
+
+REPORT_TYPES.forEach(type => {
+  const { sandbox } = loadCode({ documentProperties: { REPORT_SUFFIX: type } });
+  const ctx = sandbox.getMeetingContext_();
+  check(`${type}: MEETING_TYPE absent -> meeting.type is "main" (regression, unchanged since SA4-ARCH-003)`,
+    ctx.meeting.type, 'main');
+  check(`${type}: meeting.name is null for main meetings`, ctx.meeting.name, null);
+});
+
+{
+  const { sandbox } = loadCode({ documentProperties: { MEETING_TYPE: 'BogusType' } });
+  expectThrows('getMeetingContext_() propagates the throw for an unrecognized MEETING_TYPE property value',
+    () => sandbox.getMeetingContext_(), 'Unsupported MEETING_TYPE "BogusType"');
+}
+
+// -------------------- first real ad-hoc context: Audio SWG AH on ULBC-MED --
+//
+// Values below are the VERIFIED evidence from SA4-ARCH-005/006
+// (docs/ADHOC_MEETING_ANALYSIS.md): the real agenda TDoc (S4aA260090), the
+// real TDoc-list filename, and the real FTP_BASE/Inbox-Drafts folder paths
+// for the SA4_Audio ad-hoc series, combined with the base URL
+// (https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/) stated
+// once at the top of that document's SA4-ARCH-006 addendum section.
+
+console.log('getMeetingContext_() -- first real ad-hoc context: Audio SWG AH on ULBC-MED');
+
+{
+  const ULBC_MED_PROPS = {
+    MEETING_TYPE: 'adhoc',
+    MEETING_NAME: 'SA4-(AH) Audio SWG on ULBC-MED',
+    REPORT_SUFFIX: 'Audio',
+    FTP_BASE: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/',
+    TDOC_LIST_URL: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/TDoc_List_Meeting_SA4-(AH) Audio SWG on ULBC-MED.xlsx',
+    AGENDA_TDOC: 'S4aA260090',
+    REVISIONS_URL: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Inbox/Drafts/'
+  };
+  const { sandbox } = loadCode({ documentProperties: ULBC_MED_PROPS });
+  const ctx = sandbox.getMeetingContext_();
+
+  check('group is "SA4"', ctx.group, 'SA4');
+
+  check('meeting.type is "adhoc"', ctx.meeting.type, 'adhoc');
+  check('meeting.name is the verified ULBC-MED display name', ctx.meeting.name, ULBC_MED_PROPS.MEETING_NAME);
+  check('meeting.folder is null (no fake main identifier exposed)', ctx.meeting.folder, null);
+  check('meeting.number is null (no fake main identifier exposed)', ctx.meeting.number, null);
+  check('meeting.portalId is null (no fake main identifier exposed; portal ID for this meeting is unverified anyway)', ctx.meeting.portalId, null);
+
+  check('report.type is "Audio"', ctx.report.type, 'Audio');
+  // agendaPrefix/structureProfile are STILL the old main-meeting-shaped
+  // model in SA4-IMPL-003 (see Code.js comment) -- these values are known
+  // to be semantically wrong for an ad-hoc meeting (SA4-ARCH-005/006: no
+  // SWG-plenary prefix concept applies to a real ad-hoc agenda) and fixing
+  // that is explicitly deferred to the future agendaSelector/
+  // frontMatterProfile work, NOT this task. Asserted here only to document
+  // and freeze the current (known-imperfect) behavior, not to endorse it.
+  check('report.agendaPrefix is the OLD Audio main-meeting prefix "7." -- KNOWN WRONG for ad-hoc, deferred, not fixed here',
+    ctx.report.agendaPrefix, '7.');
+  check('report.structureProfile is the OLD "main-swg" value -- KNOWN WRONG for ad-hoc, deferred, not fixed here',
+    ctx.report.structureProfile, 'main-swg');
+
+  check('sources.ftpBase is the verified SA4_Audio ad-hoc Docs folder', ctx.sources.ftpBase, ULBC_MED_PROPS.FTP_BASE);
+  check('sources.tdocListUrl is the verified ULBC-MED TDoc-list URL', ctx.sources.tdocListUrl, ULBC_MED_PROPS.TDOC_LIST_URL);
+  check('sources.agendaTdoc is the verified real agenda TDoc "S4aA260090"', ctx.sources.agendaTdoc, 'S4aA260090');
+  check('sources.agendaTemplateDocId is undefined (no override given, no ad-hoc-appropriate default exists)',
+    ctx.sources.agendaTemplateDocId, undefined);
+  check('sources.mailingList PROVISIONALLY reuses the existing Audio mapping (NOT independently verified for ad-hoc traffic -- see SA4-ARCH-006)',
+    ctx.sources.mailingList, '3GPP_TSG_SA_WG4_AUDIO');
+  check('sources.draftsFolder is null (no ad-hoc equivalent to the main DRAFTS_FOLDERS lookup; revisionsUrl already fully represents the location)',
+    ctx.sources.draftsFolder, null);
+  check('sources.revisionsUrl is the verified SA4_Audio ad-hoc Inbox/Drafts/ folder', ctx.sources.revisionsUrl, ULBC_MED_PROPS.REVISIONS_URL);
+
+  check('options.showPreviewSnippet still comes from the existing SHOW_PREVIEW_SNIPPET default', ctx.options.showPreviewSnippet, true);
+}
+
+// ---------------------------------------------- incomplete ad-hoc config ---
+
+console.log('getMeetingContext_() -- incomplete ad-hoc configuration is represented, not rejected');
+
+{
+  // MEETING_TYPE=adhoc and NOTHING else set. Per SA4-IMPL-003 scope
+  // ("prefer representation over workflow validation"), getMeetingContext_()
+  // must not throw here -- no production workflow consumes ad-hoc context
+  // yet, so validating completeness is left to a later task.
+  const { sandbox } = loadCode({ documentProperties: { MEETING_TYPE: 'adhoc' } });
+  const ctx = sandbox.getMeetingContext_();
+
+  check('incomplete ad-hoc: meeting.type is still "adhoc"', ctx.meeting.type, 'adhoc');
+  check('incomplete ad-hoc: meeting.name is null (MEETING_NAME missing)', ctx.meeting.name, null);
+  check('incomplete ad-hoc: meeting.folder/number/portalId remain null',
+    [ctx.meeting.folder, ctx.meeting.number, ctx.meeting.portalId], [null, null, null]);
+  check('incomplete ad-hoc: sources.ftpBase is undefined (FTP_BASE missing -- NOT a fake main default)',
+    ctx.sources.ftpBase, undefined);
+  check('incomplete ad-hoc: sources.tdocListUrl is undefined (TDOC_LIST_URL missing)',
+    ctx.sources.tdocListUrl, undefined);
+  check('incomplete ad-hoc: sources.agendaTdoc is undefined (AGENDA_TDOC missing)',
+    ctx.sources.agendaTdoc, undefined);
+  check('incomplete ad-hoc: sources.revisionsUrl is undefined (REVISIONS_URL missing)',
+    ctx.sources.revisionsUrl, undefined);
+  check('incomplete ad-hoc: sources.mailingList is STILL populated (provisional REPORT_SUFFIX-based reuse, independent of the missing fields)',
+    ctx.sources.mailingList, '3GPP_TSG_SA_WG4'); // REPORT_SUFFIX defaults to '6G' when unset
+  check('incomplete ad-hoc: sources.draftsFolder is still null',
+    ctx.sources.draftsFolder, null);
+  check('incomplete ad-hoc: getMeetingContext_() does not throw', typeof ctx, 'object');
+}
+
+{
+  // Individual missing-field cases, each with everything else present, to
+  // pin down that ONLY the missing field is affected.
+  const FULL_PROPS = {
+    MEETING_TYPE: 'adhoc',
+    MEETING_NAME: 'SA4-(AH) Audio SWG on ULBC-MED',
+    REPORT_SUFFIX: 'Audio',
+    FTP_BASE: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/',
+    TDOC_LIST_URL: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/TDoc_List_Meeting_SA4-(AH) Audio SWG on ULBC-MED.xlsx',
+    AGENDA_TDOC: 'S4aA260090',
+    REVISIONS_URL: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Inbox/Drafts/'
+  };
+
+  ['MEETING_NAME', 'FTP_BASE', 'TDOC_LIST_URL', 'AGENDA_TDOC', 'REVISIONS_URL'].forEach(missingKey => {
+    const props = Object.assign({}, FULL_PROPS);
+    delete props[missingKey];
+    const { sandbox } = loadCode({ documentProperties: props });
+    const ctx = sandbox.getMeetingContext_();
+
+    const fieldMap = {
+      MEETING_NAME: () => ctx.meeting.name,
+      FTP_BASE: () => ctx.sources.ftpBase,
+      TDOC_LIST_URL: () => ctx.sources.tdocListUrl,
+      AGENDA_TDOC: () => ctx.sources.agendaTdoc,
+      REVISIONS_URL: () => ctx.sources.revisionsUrl
+    };
+    const expectedWhenMissing = missingKey === 'MEETING_NAME' ? null : undefined;
+
+    check(`missing only ${missingKey}: its own field is ${JSON.stringify(expectedWhenMissing)}`,
+      fieldMap[missingKey](), expectedWhenMissing);
+    check(`missing only ${missingKey}: meeting.type is still "adhoc" (not rejected)`,
+      ctx.meeting.type, 'adhoc');
+  });
+}
+
 // ------------------------------------------------------------------- summary
 
 console.log(failures === 0 ? '\nAll MeetingContext tests passed.' : `\n${failures} test(s) FAILED.`);
