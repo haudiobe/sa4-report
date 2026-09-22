@@ -4725,8 +4725,13 @@ function configureMeetingSettings() {
       <label>FTP Base: ${sourceLabel(initialPreview.ftpBase.source)}</label>
       <input type="text" id="ftpBase" value="${esc(initialPreview.ftpBase.value)}" placeholder="https://www.3gpp.org/ftp/.../Docs/">
 
-      <label>Agenda TDoc: ${sourceLabel(initialPreview.agendaTdoc.source)}</label>
-      <input type="text" id="agendaTdoc" value="${esc(initialPreview.agendaTdoc.value)}" placeholder="S4aP260098 (or enter manually)">
+      <label>Agenda TDoc: <span id="agendaTdocBadge">${sourceLabel(initialPreview.agendaTdoc.source)}</span></label>
+      <div class="resolve-row">
+        <input type="text" id="agendaTdoc" value="${esc(initialPreview.agendaTdoc.value)}" placeholder="S4aP260098 (or enter manually)">
+        <button type="button" id="discoverBtn" onclick="discoverAgendaTdocs()">Discover Agenda / TDocs</button>
+      </div>
+      <div class="hint">Resolve does NOT look this up (it can be slow) -- click "Discover Agenda / TDocs" separately to fetch and scan the meeting's full TDoc list. A slow/hanging TDoc list will never block or hang meeting resolution itself.</div>
+      <div id="discoverStatus"></div>
 
       <label>Mailing List: ${sourceLabel(initialPreview.mailingList.source)}</label>
       <input type="text" id="mailingList" value="${esc(initialPreview.mailingList.value)}" placeholder="e.g. 3GPP_TSG_SA4_FS_6G_MED -- never auto-resolved">
@@ -4833,10 +4838,21 @@ function configureMeetingSettings() {
         }
       }
 
+      // PROD-016: holds the CORE resolve result (GetMeetings only, no
+      // TdocList.aspx) so "Discover Agenda / TDocs" can enrich it without
+      // re-fetching GetMeetings. Cleared whenever Resolve is re-run or the
+      // Meeting ID field changes, so a stale enrichment can never be
+      // merged against a different meeting's core result.
+      let lastResolvedCore = null;
+
       function resolveMeeting() {
         const meetingId = document.getElementById('meetingId').value;
+        lastResolvedCore = null;
         const statusEl = document.getElementById('resolveStatus');
         const btn = document.getElementById('resolveBtn');
+        const discoverStatusEl = document.getElementById('discoverStatus');
+        discoverStatusEl.className = '';
+        discoverStatusEl.textContent = '';
         btn.disabled = true;
         statusEl.className = 'busy';
         statusEl.textContent = 'Resolving from 3GPP\\u2026';
@@ -4849,13 +4865,14 @@ function configureMeetingSettings() {
               applyPreview(result.preview);
               return;
             }
+            lastResolvedCore = result.resolved;
             applyPreview(result.preview);
             if (result.resolved.warnings && result.resolved.warnings.length > 0) {
               statusEl.className = 'error';
               statusEl.textContent = '\\u26A0\\uFE0F ' + result.resolved.warnings.join(' | ');
             } else {
               statusEl.className = 'ok';
-              statusEl.textContent = '\\u2705 Resolved. Review the fields below, then Save.';
+              statusEl.textContent = '\\u2705 Resolved. Agenda/TDocs not looked up yet -- use "Discover Agenda / TDocs" if needed, then review and Save.';
             }
           })
           .withFailureHandler(function(error) {
@@ -4866,6 +4883,48 @@ function configureMeetingSettings() {
             // saves anything.
           })
           .resolveMeetingForConfigDialog_(meetingId);
+      }
+
+      // PROD-016: separate, explicit enrichment action -- fetches
+      // TdocList.aspx (agenda TDoc, TDoc family). Requires a successful
+      // Resolve first (needs lastResolvedCore); never runs automatically
+      // after Resolve, and its own slowness/failure can never affect the
+      // already-resolved core meeting fields above.
+      function discoverAgendaTdocs() {
+        const meetingId = document.getElementById('meetingId').value;
+        const statusEl = document.getElementById('discoverStatus');
+        const btn = document.getElementById('discoverBtn');
+        if (!lastResolvedCore) {
+          statusEl.className = 'error';
+          statusEl.textContent = '\\u274C Resolve the meeting first.';
+          return;
+        }
+        btn.disabled = true;
+        statusEl.className = 'busy';
+        statusEl.textContent = 'Fetching and scanning the TDoc list\\u2026';
+        google.script.run
+          .withSuccessHandler(function(result) {
+            btn.disabled = false;
+            if (!result.ok) {
+              statusEl.className = 'error';
+              statusEl.textContent = '\\u274C ' + result.error;
+              return;
+            }
+            applyPreview(result.preview);
+            if (result.resolved.warnings && result.resolved.warnings.length > 0) {
+              statusEl.className = 'error';
+              statusEl.textContent = '\\u26A0\\uFE0F ' + result.resolved.warnings.join(' | ');
+            } else {
+              statusEl.className = 'ok';
+              statusEl.textContent = '\\u2705 Agenda/TDocs discovered.';
+            }
+          })
+          .withFailureHandler(function(error) {
+            btn.disabled = false;
+            statusEl.className = 'error';
+            statusEl.textContent = '\\u274C Discovery failed: ' + error + ' -- core meeting configuration above is unaffected.';
+          })
+          .discoverAgendaForConfigDialog_(meetingId, lastResolvedCore);
       }
 
       function saveConfig() {
@@ -8104,34 +8163,28 @@ function validateRevisionsUrlCandidate_(candidateUrl) {
 }
 
 /**
- * ARCH-009: Meeting-ID resolver core. Orchestrates the three anonymous
- * Portal sources above and returns a single, self-describing result object
- * -- see tests/meeting-resolver.test.js for the exact shape asserted
- * against real captured fixtures. NEVER mutates PropertiesService and is
- * NOT called by any other function in this file yet (see this section's
- * header comment) -- a future, separate task decides how/whether
- * getMeetingContext_() ever consumes this.
+ * PROD-016: CORE meeting resolution -- the ONLY network call is GetMeetings
+ * (POST), plus a conditional GetiCal fallback via shouldFetchIcalFallback_()
+ * (PROD-014, unchanged). NEVER fetches TdocList.aspx and NEVER fetches the
+ * revisions/drafts folder candidate (still derive-only, per PROD-014) --
+ * agenda/TDoc discovery is a SEPARATE, explicit operation, see
+ * enrichMeetingFromTdocList_() below.
  *
- * Every network call is individually wrapped so one source failing (HTTP
- * error, malformed response, thrown exception) degrades to a warning, not
- * a thrown error out of this function -- the TDoc-list and iCal fetches
- * are treated as supplementary evidence, not hard requirements, once the
- * primary GetMeetings call has succeeded.
+ * This exists because PROD-014 (removing the synchronous revisions probe)
+ * was NOT sufficient: a fresh live smoke test on meeting 86178 still hung
+ * 90+ seconds, proving TdocList.aspx itself (or its combination with
+ * GetiCal) was also part of the problem. This is what the configuration
+ * dialog's Resolve button now calls directly (resolveMeetingForConfigDialog_()),
+ * so a slow/hanging TdocList.aspx request can never make Meeting-ID
+ * resolution itself appear hung again.
  *
- * PROD-014: GetiCal is now fetched only when shouldFetchIcalFallback_()
- * says it can actually matter (see that function), and the ARCH-011
- * revisions/drafts folder candidate is only ever DERIVED here (pure, no
- * network) -- never synchronously fetched/validated. This is a direct fix
- * for a live production defect: a real Resolve on meeting 86178 hung for
- * 3+ minutes with no response, most plausibly from that one probe (its
- * target host was already known, from ARCH-011, to sit behind a WAF that
- * blocked a plain HTTP client), and Apps Script's UrlFetchApp has no
- * per-request timeout this function could otherwise impose on it. See
- * validateRevisionsUrlCandidate_() above for where that probe now lives,
- * and diagnoseMeetingResolverTiming_() (below, manual/diagnostic only) for
- * how to independently measure each network call's real latency.
+ * `documents` is always null here. `unresolved` still lists
+ * 'documents.agendaTdoc'/'documents.family' (not yet attempted, not
+ * "failed") using the exact same unresolved-list convention the rest of
+ * this module already uses, so a caller can't mistake "not yet
+ * discovered" for "resolved".
  */
-function resolveMeetingById_(meetingId) {
+function resolveMeetingCoreById_(meetingId) {
   const idResult = parseMeetingIdInput_(meetingId);
   const warnings = [];
   const unresolved = [];
@@ -8184,24 +8237,6 @@ function resolveMeetingById_(meetingId) {
   }
   raw.ical = ical;
 
-  // --- TDoc-list / agenda discovery ------------------------------------
-  let tdocRows = [];
-  let tdocListFetchOk = false;
-  try {
-    const tdocFetch = fetchMeetingTdocListById_(id);
-    if (tdocFetch.statusCode === 200) {
-      tdocRows = parseMeetingTdocListHtml_(tdocFetch.text);
-      tdocListFetchOk = true;
-    } else {
-      warnings.push(`TdocList.aspx returned HTTP ${tdocFetch.statusCode}`);
-    }
-  } catch (e) {
-    warnings.push('TdocList.aspx request failed: ' + e.message);
-  }
-  if (tdocListFetchOk && tdocRows.length === 0) {
-    warnings.push('TdocList.aspx returned no recognizable TDoc rows.');
-  }
-
   // --- Handle "no meeting found" up front -------------------------------
   if (metadataParsed.ok && metadataParsed.meeting === null) {
     unresolved.push('meeting');
@@ -8236,12 +8271,10 @@ function resolveMeetingById_(meetingId) {
   }
 
   // --- Revisions/drafts folder discovery (ARCH-011 derivation; PROD-014
-  // made this DERIVE-ONLY, no network -- see this function's PROD-014
-  // header note). sources.revisionsUrl therefore stays null from THIS
-  // function always; only validateRevisionsUrlCandidate_(), called
-  // separately, can ever turn a candidate into a validated "resolved"
-  // value. Always "unresolved" from here, by design -- a derived candidate
-  // is evidence, not a resolved value.
+  // made this DERIVE-ONLY, no network). sources.revisionsUrl therefore
+  // stays null from THIS function always; only
+  // validateRevisionsUrlCandidate_(), called separately, can ever turn a
+  // candidate into a validated "resolved" value.
   let revisionsUrlCandidate = null;
   if (!ftpInfo.ftpBase) {
     unresolved.push('sources.revisionsUrl');
@@ -8258,19 +8291,13 @@ function resolveMeetingById_(meetingId) {
   const name = m.Title !== undefined ? normalizePortalMeetingTitle_(m.Title) : (ical && ical.summary ? normalizePortalMeetingTitle_(ical.summary) : null);
   if (!name) unresolved.push('meeting.name');
 
-  const agendaResult = selectAgendaCandidate_(tdocRows);
-  if (!agendaResult.agendaTdoc) {
-    unresolved.push('documents.agendaTdoc');
-    if (agendaResult.unresolvedReason) warnings.push(agendaResult.unresolvedReason);
-  }
-
-  const familyEvidence = deriveTdocFamilyEvidence_(tdocRows);
-  if (!familyEvidence.consistent) {
-    unresolved.push('documents.family');
-    warnings.push('Inconsistent TDoc families observed: ' + JSON.stringify(familyEvidence.familiesSeen));
-  } else if (!familyEvidence.family && tdocRows.length > 0) {
-    unresolved.push('documents.family');
-  }
+  // PROD-016: agenda/TDoc discovery has NOT been attempted yet -- it is
+  // now a separate, explicit operation (enrichMeetingFromTdocList_()).
+  // Marked unresolved here for exactly the same reason every other
+  // not-yet-determined field is: absence must never be mistaken for a
+  // negative result.
+  unresolved.push('documents.agendaTdoc');
+  unresolved.push('documents.family');
 
   // Mailing list is never derived -- see ARCH-008 §6/§9. Always unresolved.
   unresolved.push('mailingList');
@@ -8297,29 +8324,127 @@ function resolveMeetingById_(meetingId) {
       tdocListEndpoint: `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${id}`,
       icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`,
       mailingList: null,
-      // PROD-014: resolveMeetingById_() no longer validates this
-      // synchronously, so revisionsUrl is ALWAYS null from this function --
-      // see revisionsUrlCandidate below for the derived-but-unvalidated
-      // evidence, and validateRevisionsUrlCandidate_() for how a candidate
-      // can be turned into a validated value via a separate, explicit call.
       revisionsUrl: null,
       revisionsUrlCandidate: revisionsUrlCandidate
     },
 
-    documents: {
-      count: m.DocCount !== undefined ? m.DocCount : tdocRows.length,
-      family: familyEvidence.family,
-      familiesSeen: familyEvidence.familiesSeen,
-      agendaTdoc: agendaResult.agendaTdoc,
-      agendaCandidates: agendaResult.candidates.map(c => c.id),
-      agendaAmbiguous: agendaResult.ambiguous,
-      agendaItemsObserved: tdocRows.map(r => r.agendaItem).filter(v => v !== null && v !== undefined && v !== '')
-    },
+    // Always null from core resolution -- see enrichMeetingFromTdocList_().
+    documents: null,
 
     unresolved: unresolved,
     warnings: warnings,
     raw: raw
   };
+}
+
+/**
+ * PROD-016: the SEPARATE, explicit TDoc/agenda ENRICHMENT step -- fetches
+ * TdocList.aspx (the ONLY network call this function makes) and merges
+ * family/agenda evidence into a CLONE of `coreResult` (a previously
+ * computed resolveMeetingCoreById_() result), returning a full result in
+ * the SAME shape resolveMeetingById_() has always returned. Never mutates
+ * `coreResult`; never touches PropertiesService.
+ *
+ * Safe to call independently, at any time after a core resolve -- its own
+ * failure or latency can never affect or erase what core resolution
+ * already established. On any failure the returned result keeps
+ * `documents: null` (exactly as coreResult already had it) plus an added
+ * warning, the same degrade-to-warning behavior every other source in
+ * this module already has.
+ */
+function enrichMeetingFromTdocList_(meetingId, coreResult) {
+  const idResult = parseMeetingIdInput_(meetingId);
+  const base = coreResult ? JSON.parse(JSON.stringify(coreResult)) : null;
+
+  if (!idResult.isValid || !base) {
+    return base || {
+      id: null,
+      meeting: null,
+      sources: null,
+      documents: null,
+      unresolved: ['meeting'],
+      warnings: [idResult.error || 'No core result supplied to enrich.'],
+      raw: {}
+    };
+  }
+
+  if (base.id !== idResult.id) {
+    base.warnings = (base.warnings || []).concat(['enrichMeetingFromTdocList_: meetingId does not match the supplied core result -- enrichment skipped.']);
+    return base;
+  }
+
+  if (!base.meeting) {
+    // Core resolution never found a meeting -- nothing to enrich.
+    return base;
+  }
+
+  let tdocRows = [];
+  let tdocListFetchOk = false;
+  try {
+    const tdocFetch = fetchMeetingTdocListById_(idResult.id);
+    if (tdocFetch.statusCode === 200) {
+      tdocRows = parseMeetingTdocListHtml_(tdocFetch.text);
+      tdocListFetchOk = true;
+    } else {
+      base.warnings.push(`TdocList.aspx returned HTTP ${tdocFetch.statusCode}`);
+    }
+  } catch (e) {
+    base.warnings.push('TdocList.aspx request failed: ' + e.message);
+  }
+  if (tdocListFetchOk && tdocRows.length === 0) {
+    base.warnings.push('TdocList.aspx returned no recognizable TDoc rows.');
+  }
+  if (!tdocListFetchOk) {
+    // Enrichment failed -- core/existing configuration is untouched;
+    // documents stays exactly as coreResult already had it (null).
+    return base;
+  }
+
+  const agendaResult = selectAgendaCandidate_(tdocRows);
+  const unresolved = base.unresolved.filter(u => u !== 'documents.agendaTdoc' && u !== 'documents.family');
+  if (!agendaResult.agendaTdoc) {
+    unresolved.push('documents.agendaTdoc');
+    if (agendaResult.unresolvedReason) base.warnings.push(agendaResult.unresolvedReason);
+  }
+
+  const familyEvidence = deriveTdocFamilyEvidence_(tdocRows);
+  if (!familyEvidence.consistent) {
+    unresolved.push('documents.family');
+    base.warnings.push('Inconsistent TDoc families observed: ' + JSON.stringify(familyEvidence.familiesSeen));
+  } else if (!familyEvidence.family && tdocRows.length > 0) {
+    unresolved.push('documents.family');
+  }
+
+  const rawDocCount = base.raw && base.raw.meeting && base.raw.meeting.DocCount !== undefined ? base.raw.meeting.DocCount : undefined;
+  base.documents = {
+    count: rawDocCount !== undefined ? rawDocCount : tdocRows.length,
+    family: familyEvidence.family,
+    familiesSeen: familyEvidence.familiesSeen,
+    agendaTdoc: agendaResult.agendaTdoc,
+    agendaCandidates: agendaResult.candidates.map(c => c.id),
+    agendaAmbiguous: agendaResult.ambiguous,
+    agendaItemsObserved: tdocRows.map(r => r.agendaItem).filter(v => v !== null && v !== undefined && v !== '')
+  };
+  base.unresolved = unresolved;
+  return base;
+}
+
+/**
+ * ARCH-009 (kept for compatibility) / PROD-016: FULL meeting resolution --
+ * resolveMeetingCoreById_() PLUS enrichMeetingFromTdocList_(), composed
+ * together. This is NOT what the configuration dialog's Resolve button
+ * calls any more -- it calls resolveMeetingCoreById_() alone, with
+ * enrichment as a separate, explicit "Discover Agenda / TDocs" action
+ * (discoverAgendaForConfigDialog_()). resolveMeetingById_() is kept, with
+ * its full original GetMeetings+[GetiCal]+TdocList.aspx behavior and
+ * result shape UNCHANGED, for any full-resolution consumer (and this
+ * module's own regression tests) that wants the old all-in-one call.
+ * NEVER mutates PropertiesService.
+ */
+function resolveMeetingById_(meetingId) {
+  const core = resolveMeetingCoreById_(meetingId);
+  if (!core.meeting) return core;
+  return enrichMeetingFromTdocList_(meetingId, core);
 }
 
 // =========================================================
@@ -8344,11 +8469,21 @@ function resolveMeetingById_(meetingId) {
 // itself never finished, which is itself a measurement).
 //
 // Times each of the (up to) four network operations resolveMeetingById_()
-// can perform, INDEPENDENTLY of one another and of resolveMeetingById_()'s
-// own conditional-skip logic, so a single slow/hanging source can be
-// identified without being masked by, or blamed on, any other.
-function diagnoseMeetingResolverTiming_(meetingId) {
+// CAN perform (not what resolveMeetingCoreById_()/enrichMeetingFromTdocList_()
+// actually do by default -- this diagnostic always probes every source it's
+// asked to, regardless of the production conditional-skip logic), so a
+// single slow/hanging source can be identified without being masked by, or
+// blamed on, any other.
+//
+// PROD-016: accepts an optional `only` array to run just a subset (e.g.
+// `diagnoseMeetingResolverTiming_(86178, ['metadata'])` for GetMeetings
+// alone, or `['tdoc']` for TdocList.aspx alone) without running the full
+// diagnostic -- valid labels: 'metadata', 'ical', 'tdoc', 'revisions'.
+// Omit `only` (or pass null/undefined) to time all four, the original
+// PROD-014 behavior.
+function diagnoseMeetingResolverTiming_(meetingId, only) {
   const id = meetingId || 86178;
+  const wanted = Array.isArray(only) && only.length > 0 ? only : ['metadata', 'ical', 'tdoc', 'revisions'];
   const report = [];
 
   function timed(label, fn) {
@@ -8368,35 +8503,45 @@ function diagnoseMeetingResolverTiming_(meetingId) {
     }
   }
 
-  const metadataFetch = timed('Meeting metadata (GetMeetings)', () => fetchMeetingMetadataById_(id));
-  timed('iCal (GetiCal)', () => fetchMeetingIcalById_(id));
-  timed('TDoc list (TdocList.aspx)', () => fetchMeetingTdocListById_(id));
+  let metadataFetch = null;
+  if (wanted.indexOf('metadata') !== -1) {
+    metadataFetch = timed('Meeting metadata (GetMeetings)', () => fetchMeetingMetadataById_(id));
+  }
+  if (wanted.indexOf('ical') !== -1) {
+    timed('iCal (GetiCal)', () => fetchMeetingIcalById_(id));
+  }
+  if (wanted.indexOf('tdoc') !== -1) {
+    timed('TDoc list (TdocList.aspx)', () => fetchMeetingTdocListById_(id));
+  }
 
   // The revisions probe target depends on a successfully parsed FTP base
   // from the metadata fetch above -- timed separately here, using the
-  // SAME derivation resolveMeetingById_() uses, so this measures the real
-  // production candidate URL, not a guess.
-  if (metadataFetch && metadataFetch.statusCode === 200) {
-    const metadataParsed = parseMeetingMetadataResponse_(metadataFetch);
-    const m = metadataParsed.meeting || {};
-    if (m.MtgDocURL) {
-      const ftpInfo = normalizeMtgDocUrlToFtpBase_(m.MtgDocURL);
-      if (ftpInfo.ftpBase) {
-        const candidateResult = deriveRevisionsUrlCandidate_(ftpInfo.ftpBase);
-        if (candidateResult.revisionsUrlCandidate) {
-          timed('Revisions/drafts probe (' + candidateResult.revisionsUrlCandidate + ')',
-            () => fetchRevisionsUrlCandidate_(candidateResult.revisionsUrlCandidate));
+  // SAME derivation resolveMeetingCoreById_() uses, so this measures the
+  // real production candidate URL, not a guess. Requires 'metadata' to
+  // also have been requested (and to have succeeded) in this same call.
+  if (wanted.indexOf('revisions') !== -1) {
+    if (metadataFetch && metadataFetch.statusCode === 200) {
+      const metadataParsed = parseMeetingMetadataResponse_(metadataFetch);
+      const m = metadataParsed.meeting || {};
+      if (m.MtgDocURL) {
+        const ftpInfo = normalizeMtgDocUrlToFtpBase_(m.MtgDocURL);
+        if (ftpInfo.ftpBase) {
+          const candidateResult = deriveRevisionsUrlCandidate_(ftpInfo.ftpBase);
+          if (candidateResult.revisionsUrlCandidate) {
+            timed('Revisions/drafts probe (' + candidateResult.revisionsUrlCandidate + ')',
+              () => fetchRevisionsUrlCandidate_(candidateResult.revisionsUrlCandidate));
+          } else {
+            Logger.log('Revisions/drafts probe: SKIPPED -- could not derive a candidate (' + candidateResult.error + ')');
+          }
         } else {
-          Logger.log('Revisions/drafts probe: SKIPPED -- could not derive a candidate (' + candidateResult.error + ')');
+          Logger.log('Revisions/drafts probe: SKIPPED -- could not normalize ftpBase from MtgDocURL');
         }
       } else {
-        Logger.log('Revisions/drafts probe: SKIPPED -- could not normalize ftpBase from MtgDocURL');
+        Logger.log('Revisions/drafts probe: SKIPPED -- metadata had no MtgDocURL');
       }
     } else {
-      Logger.log('Revisions/drafts probe: SKIPPED -- metadata had no MtgDocURL');
+      Logger.log('Revisions/drafts probe: SKIPPED -- \'metadata\' was not requested in this call, or did not return HTTP 200');
     }
-  } else {
-    Logger.log('Revisions/drafts probe: SKIPPED -- metadata fetch did not return HTTP 200');
   }
 
   Logger.log('--- diagnoseMeetingResolverTiming_ summary ---');
@@ -8602,12 +8747,17 @@ function computeMeetingConfigReadiness_(props) {
 }
 
 /**
- * ARCH-010: the dialog's "Resolve" button calls this. Reads current
- * Document Properties (read-only) and calls resolveMeetingById_(), then
- * returns a UI-safe preview via computeResolvedMeetingPreview_(). NEVER
- * writes to PropertiesService -- resolution and persistence are
- * deliberately separate actions (clicking Resolve alone must never change
- * saved configuration).
+ * PROD-016: the dialog's "Resolve" button calls this. Reads current
+ * Document Properties (read-only) and calls resolveMeetingCoreById_() --
+ * NOT the full resolveMeetingById_() -- so this returns as soon as
+ * GetMeetings (plus, rarely, GetiCal) succeeds, WITHOUT ever touching
+ * TdocList.aspx. That fetch was found live to make Resolve hang 90+
+ * seconds even after PROD-014 removed the revisions probe; agenda/TDoc
+ * discovery is now the separate "Discover Agenda / TDocs" action
+ * (discoverAgendaForConfigDialog_(), below). NEVER writes to
+ * PropertiesService -- resolution and persistence are deliberately
+ * separate actions (clicking Resolve alone must never change saved
+ * configuration).
  */
 function resolveMeetingForConfigDialog_(meetingIdInput) {
   const props = PropertiesService.getDocumentProperties();
@@ -8632,11 +8782,64 @@ function resolveMeetingForConfigDialog_(meetingIdInput) {
     };
   }
 
-  const resolved = resolveMeetingById_(idResult.id);
+  const resolved = resolveMeetingCoreById_(idResult.id);
   return {
     ok: true,
     error: null,
     resolved: resolved,
     preview: computeResolvedMeetingPreview_(existing, resolved)
+  };
+}
+
+/**
+ * PROD-016: the dialog's new, SEPARATE "Discover Agenda / TDocs" button
+ * calls this. Takes the meetingId AND the previously-resolved CORE result
+ * (from resolveMeetingForConfigDialog_(), which the client already has in
+ * hand) -- this avoids re-fetching GetMeetings, and its own TdocList.aspx
+ * fetch (via enrichMeetingFromTdocList_()) is the ONLY network call it
+ * makes. Reads current Document Properties (read-only, same fields as
+ * resolveMeetingForConfigDialog_()) and NEVER writes to PropertiesService
+ * -- enrichment and persistence are separate actions, exactly like Resolve
+ * itself. Refuses (without ever calling TdocList.aspx) if no valid core
+ * result for the SAME meeting ID is supplied -- this action only ever
+ * enriches an already-resolved meeting, it never resolves one from
+ * scratch.
+ */
+function discoverAgendaForConfigDialog_(meetingIdInput, coreResolved) {
+  const props = PropertiesService.getDocumentProperties();
+  const existing = {
+    MEETING_ID: props.getProperty('MEETING_ID'),
+    MEETING_TYPE: props.getProperty('MEETING_TYPE'),
+    MEETING_NAME: props.getProperty('MEETING_NAME'),
+    MEETING_DATE: props.getProperty('MEETING_DATE'),
+    FTP_BASE: props.getProperty('FTP_BASE'),
+    AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
+    MAILING_LIST: props.getProperty('MAILING_LIST'),
+    TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL'),
+    REVISIONS_URL: props.getProperty('REVISIONS_URL')
+  };
+
+  const idResult = parseMeetingIdInput_(meetingIdInput);
+  if (!idResult.isValid) {
+    return {
+      ok: false,
+      error: idResult.error,
+      preview: computeResolvedMeetingPreview_(existing, coreResolved || null)
+    };
+  }
+  if (!coreResolved || !coreResolved.meeting || coreResolved.id !== idResult.id) {
+    return {
+      ok: false,
+      error: 'Resolve the meeting first before discovering agenda/TDocs.',
+      preview: computeResolvedMeetingPreview_(existing, coreResolved || null)
+    };
+  }
+
+  const enriched = enrichMeetingFromTdocList_(idResult.id, coreResolved);
+  return {
+    ok: true,
+    error: null,
+    resolved: enriched,
+    preview: computeResolvedMeetingPreview_(existing, enriched)
   };
 }

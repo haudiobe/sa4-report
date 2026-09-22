@@ -376,13 +376,17 @@ console.log('resolveMeetingForConfigDialog_() -- never writes to PropertiesServi
   // Behavioral confirmation: calling it directly against a live sandbox must
   // leave Document Properties byte-identical -- including now that a
   // normal Resolve derives a revisions/drafts candidate (PROD-014: never
-  // fetched/validated synchronously). This stub throws if resolveMeetingById_()
-  // ever reaches it, which would be a regression back to the hanging
-  // behavior this task fixed.
+  // fetched/validated synchronously) AND never touches TdocList.aspx
+  // (PROD-016: resolveMeetingForConfigDialog_() now calls
+  // resolveMeetingCoreById_(), not the full resolveMeetingById_()). Both
+  // stubs throw if ever reached, which would be a regression back to the
+  // hanging behavior these tasks fixed.
   const { sandbox, docProps } = loadCode({ documentProperties: { MAILING_LIST: 'untouched-list', MEETING_ID: '60777' } });
   sandbox.fetchMeetingMetadataById_ = () => ({ statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) });
   sandbox.fetchMeetingIcalById_ = () => ({ statusCode: 200, text: FIXTURES.ical86178 });
-  sandbox.fetchMeetingTdocListById_ = () => ({ statusCode: 200, text: FIXTURES.tdocListHtml86178 });
+  sandbox.fetchMeetingTdocListById_ = () => {
+    throw new Error('fetchMeetingTdocListById_ must not be called during a normal Resolve (PROD-016)');
+  };
   sandbox.fetchRevisionsUrlCandidate_ = () => {
     throw new Error('fetchRevisionsUrlCandidate_ must not be called during a normal Resolve (PROD-014)');
   };
@@ -390,9 +394,81 @@ console.log('resolveMeetingForConfigDialog_() -- never writes to PropertiesServi
   const result = sandbox.resolveMeetingForConfigDialog_('86178');
   const after = JSON.stringify(docProps._store);
   check('resolveMeetingForConfigDialog_() returns ok:true for a valid, resolvable id', result.ok, true);
+  check('PROD-016: core-only resolve leaves preview.agendaTdoc genuinely unresolved (not yet discovered, no existing value here)',
+    result.preview.agendaTdoc, { value: '', source: 'unresolved' });
   check('PROD-014: the resolve derived a revisionsUrl CANDIDATE (not validated) -- provenance is "candidate", never "resolved"',
     result.preview.revisionsUrl.source, 'candidate');
   check('resolveMeetingForConfigDialog_() does not mutate Document Properties, even on a successful resolve (candidate derivation included)', after, before);
+}
+
+// ============== 6. discoverAgendaForConfigDialog_() (PROD-016) ============
+
+console.log('discoverAgendaForConfigDialog_() -- explicit, separate TDoc/agenda enrichment');
+
+{
+  // (a) requires a matching core result -- refuses, without ever touching
+  // TdocList.aspx, if none is supplied.
+  const { sandbox, docProps } = loadCode();
+  sandbox.fetchMeetingTdocListById_ = () => {
+    throw new Error('fetchMeetingTdocListById_ must not be called when no core result was supplied');
+  };
+  const before = JSON.stringify(docProps._store);
+  const noCoreResult = sandbox.discoverAgendaForConfigDialog_('86178', null);
+  const after = JSON.stringify(docProps._store);
+  check('no core result supplied: ok:false', noCoreResult.ok, false);
+  check('no core result supplied: a clear error message', typeof noCoreResult.error, 'string');
+  check('no core result supplied: Document Properties untouched', after, before);
+}
+
+{
+  // (b) mismatched meeting id between the input and the supplied core
+  // result -- refuses rather than merging mismatched data.
+  const { sandbox } = loadCode();
+  sandbox.fetchMeetingTdocListById_ = () => {
+    throw new Error('fetchMeetingTdocListById_ must not be called on a meetingId mismatch');
+  };
+  const wrongCore = { id: 60777, meeting: { name: 'Some Other Meeting' }, sources: {}, documents: null, unresolved: [], warnings: [], raw: {} };
+  const mismatchResult = sandbox.discoverAgendaForConfigDialog_('86178', wrongCore);
+  check('meetingId mismatch: ok:false', mismatchResult.ok, false);
+}
+
+{
+  // (c) real, successful enrichment: full round trip Resolve -> Discover.
+  const { sandbox, docProps } = loadCode({ documentProperties: { MAILING_LIST: '3GPP_TSG_SA4_FS_6G_MED', TDOC_LIST_URL: 'existing-tdoc-url.xlsx' } });
+  sandbox.fetchMeetingMetadataById_ = () => ({ statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) });
+  sandbox.fetchMeetingTdocListById_ = () => ({ statusCode: 200, text: FIXTURES.tdocListHtml86178 });
+
+  const coreResult = sandbox.resolveMeetingForConfigDialog_('86178');
+  check('(c) core resolve succeeds first', coreResult.ok, true);
+  check('(c) core resolve leaves agendaTdoc unresolved (not yet discovered)', coreResult.preview.agendaTdoc.source, 'unresolved');
+
+  const before = JSON.stringify(docProps._store);
+  const enrichResult = sandbox.discoverAgendaForConfigDialog_('86178', coreResult.resolved);
+  const after = JSON.stringify(docProps._store);
+  check('(c) discovery succeeds', enrichResult.ok, true);
+  check('(c) discovery finds S4aP260098, now "resolved"', enrichResult.preview.agendaTdoc, { value: 'S4aP260098', source: 'resolved' });
+  check('(c) discovery does not mutate Document Properties either', after, before);
+  check('(c) discovery does not disturb fields core resolution already established (meetingName)',
+    enrichResult.preview.meetingName, { value: 'SA4-e (AH) on FS_6G_MED', source: 'resolved' });
+  check('(c) existing MAILING_LIST/TDOC_LIST_URL still survive after discovery',
+    [enrichResult.preview.mailingList.value, enrichResult.preview.mailingList.source],
+    ['3GPP_TSG_SA4_FS_6G_MED', 'existing']);
+}
+
+{
+  // (d) enrichment FAILURE cannot erase/disturb what core resolution (or
+  // an existing manual AGENDA_TDOC) already established.
+  const { sandbox } = loadCode({ documentProperties: { AGENDA_TDOC: 'S4aA260090-manual' } });
+  sandbox.fetchMeetingMetadataById_ = () => ({ statusCode: 200, text: JSON.stringify(FIXTURES.getMeetings86178) });
+  const coreResult = sandbox.resolveMeetingForConfigDialog_('86178');
+  check('(d) core resolve preserves the existing manual AGENDA_TDOC', coreResult.preview.agendaTdoc, { value: 'S4aA260090-manual', source: 'existing' });
+
+  sandbox.fetchMeetingTdocListById_ = () => { throw new Error('simulated TdocList outage'); };
+  const enrichResult = sandbox.discoverAgendaForConfigDialog_('86178', coreResult.resolved);
+  check('(d) discovery reports ok:true even though the underlying fetch failed (degrades to a warning, matches existing resolver convention)', enrichResult.ok, true);
+  check('(d) the existing manual AGENDA_TDOC still survives a failed discovery attempt',
+    enrichResult.preview.agendaTdoc, { value: 'S4aA260090-manual', source: 'existing' });
+  check('(d) a warning records the discovery failure', enrichResult.resolved.warnings.some(w => /simulated TdocList outage/.test(w)), true);
 }
 
 // ========================================================== summary =======
