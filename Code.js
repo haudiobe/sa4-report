@@ -7606,6 +7606,14 @@ function applyDocumentReallocations() {
 // (everything else below), so the parsing/normalization logic is pure and
 // independently testable without UrlFetchApp -- see
 // tests/meeting-resolver.test.js.
+//
+// ARCH-011 adds a fourth, DERIVED (not Portal-provided) endpoint: a
+// candidate revisions/drafts folder, one level up from the resolved
+// FTP Docs/ directory (<meeting root>/inbox/drafts/), validated with its
+// own probe (fetchRevisionsUrlCandidate_) before ever being reported as
+// resolved. See deriveRevisionsUrlCandidate_()/
+// validateRevisionsUrlCandidateResponse_() below and
+// tests/meeting-revisions-folder.test.js.
 
 /**
  * ARCH-009: validates and normalizes a Meeting ID input. Accepts a
@@ -7673,6 +7681,19 @@ function fetchMeetingIcalById_(meetingId) {
 function fetchMeetingTdocListById_(meetingId) {
   const url = `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${meetingId}`;
   const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  return { statusCode: response.getResponseCode(), text: response.getContentText() };
+}
+
+/**
+ * ARCH-011: probes a derived revisions/drafts folder candidate (see
+ * deriveRevisionsUrlCandidate_() below). `followRedirects: false` is
+ * deliberate -- a candidate that redirects anywhere (including a
+ * seemingly benign trailing-slash redirect) is treated as unvalidated
+ * rather than silently followed, since this project has no way to inspect
+ * the actual redirect target's content here.
+ */
+function fetchRevisionsUrlCandidate_(url) {
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: false });
   return { statusCode: response.getResponseCode(), text: response.getContentText() };
 }
 
@@ -7762,6 +7783,67 @@ function normalizeMtgDocUrlToFtpBase_(mtgDocUrl) {
     return { ftpBase: s, error: null };
   }
   return { ftpBase: s + 'Docs/', error: null };
+}
+
+/**
+ * ARCH-011: derives a revisions/drafts folder CANDIDATE from an already
+ * normalized ftpBase (normalizeMtgDocUrlToFtpBase_() output), using ONLY
+ * the authoritative MtgDocURL-derived directory evidence already resolved
+ * -- never the meeting title or Meeting ID. Conceptually:
+ *
+ *   <meeting root>/Docs/           (ftpBase)
+ *   <meeting root>/inbox/drafts/   (this candidate)
+ *
+ * so the "Docs/" segment is replaced with "inbox/drafts/" under the same
+ * meeting-root parent. This is a PURE derivation only -- it does not mean
+ * the candidate is real; see fetchRevisionsUrlCandidate_()/
+ * validateRevisionsUrlCandidateResponse_() for that. Returns
+ * `revisionsUrlCandidate: null` (with an `error`) when ftpBase is
+ * missing/blank or does not end in a recognizable "Docs/" segment -- this
+ * function never guesses a meeting root from anything else.
+ */
+function deriveRevisionsUrlCandidate_(ftpBase) {
+  if (!ftpBase || !String(ftpBase).trim()) {
+    return { revisionsUrlCandidate: null, error: 'ftpBase is missing.' };
+  }
+  let s = String(ftpBase).trim();
+  s = s.replace(/^(https?:\/\/[^/]+)\/{2,}/, '$1/');
+  s = s.replace(/([^:])\/{2,}/g, '$1/');
+  if (!/\/$/.test(s)) s += '/';
+  const m = s.match(/^(.*\/)Docs\/$/i);
+  if (!m) {
+    return { revisionsUrlCandidate: null, error: 'ftpBase does not end in a recognizable "Docs/" segment; cannot derive a meeting root.' };
+  }
+  return { revisionsUrlCandidate: `${m[1]}inbox/drafts/`, error: null };
+}
+
+/**
+ * ARCH-011: decides whether a fetchRevisionsUrlCandidate_() result is
+ * credible evidence that the candidate revisions/drafts folder actually
+ * exists and is accessible -- a derived candidate is NEVER itself treated
+ * as resolved (see deriveRevisionsUrlCandidate_() above). Requires HTTP
+ * 200 (a 3xx/4xx/5xx, including a redirect -- see
+ * fetchRevisionsUrlCandidate_()'s `followRedirects: false` -- is a
+ * failure) AND a body that looks like a directory/file listing (an
+ * Apache-style "Index of" autoindex title, or at least one `<a href=`
+ * entry -- this project's real 3GPP FTP directory pages use exactly this
+ * shape; a malformed or unexpectedly empty body is rejected, not
+ * guessed-at).
+ */
+function validateRevisionsUrlCandidateResponse_(fetchResult) {
+  if (!fetchResult || fetchResult.statusCode !== 200) {
+    return { ok: false, reason: `HTTP ${fetchResult ? fetchResult.statusCode : 'unknown'}` };
+  }
+  const text = String(fetchResult.text || '');
+  if (!text.trim()) {
+    return { ok: false, reason: 'Empty response body.' };
+  }
+  const looksLikeIndex = /Index of/i.test(text);
+  const hasLinks = /<a\s+href=/i.test(text);
+  if (!looksLikeIndex && !hasLinks) {
+    return { ok: false, reason: 'Response did not look like a directory/file listing (no "Index of" title, no <a href> entries).' };
+  }
+  return { ok: true, reason: null };
 }
 
 /**
@@ -8036,7 +8118,8 @@ function resolveMeetingById_(meetingId) {
       sources: {
         portalMeetingUrl: `https://portal.3gpp.org/Home.aspx#/meeting?MtgId=${id}`,
         tdocListEndpoint: `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${id}`,
-        icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`
+        icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`,
+        revisionsUrl: null
       },
       documents: null,
       unresolved: unresolved,
@@ -8056,6 +8139,33 @@ function resolveMeetingById_(meetingId) {
   if (!ftpInfo.ftpBase) {
     unresolved.push('sources.ftpBase');
     warnings.push(ftpInfo.error);
+  }
+
+  // --- Revisions/drafts folder discovery (ARCH-011, best-effort, never
+  // fatal to the overall resolve) -------------------------------------
+  let revisionsUrl = null;
+  if (!ftpInfo.ftpBase) {
+    unresolved.push('sources.revisionsUrl');
+  } else {
+    const candidateResult = deriveRevisionsUrlCandidate_(ftpInfo.ftpBase);
+    if (!candidateResult.revisionsUrlCandidate) {
+      unresolved.push('sources.revisionsUrl');
+      warnings.push('Could not derive a revisions/drafts folder candidate: ' + candidateResult.error);
+    } else {
+      try {
+        const revisionsFetch = fetchRevisionsUrlCandidate_(candidateResult.revisionsUrlCandidate);
+        const validation = validateRevisionsUrlCandidateResponse_(revisionsFetch);
+        if (validation.ok) {
+          revisionsUrl = candidateResult.revisionsUrlCandidate;
+        } else {
+          unresolved.push('sources.revisionsUrl');
+          warnings.push(`Revisions/drafts folder candidate (${candidateResult.revisionsUrlCandidate}) could not be validated: ${validation.reason}`);
+        }
+      } catch (e) {
+        unresolved.push('sources.revisionsUrl');
+        warnings.push('Revisions/drafts folder candidate request failed: ' + e.message);
+      }
+    }
   }
 
   const name = m.Title !== undefined ? normalizePortalMeetingTitle_(m.Title) : (ical && ical.summary ? normalizePortalMeetingTitle_(ical.summary) : null);
@@ -8099,7 +8209,13 @@ function resolveMeetingById_(meetingId) {
       portalMeetingUrl: `https://portal.3gpp.org/Home.aspx#/meeting?MtgId=${id}`,
       tdocListEndpoint: `https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=${id}`,
       icalEndpoint: `https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetiCal/${id}.ics`,
-      mailingList: null
+      mailingList: null,
+      // ARCH-011: only ever set when the derived candidate was actually
+      // validated (HTTP 200 + credible directory/file listing evidence) --
+      // see deriveRevisionsUrlCandidate_()/validateRevisionsUrlCandidateResponse_().
+      // A derived-but-unvalidated or unreachable candidate is null here,
+      // with the reason recorded in `unresolved`/`warnings` instead.
+      revisionsUrl: revisionsUrl
     },
 
     documents: {
