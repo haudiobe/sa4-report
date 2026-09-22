@@ -4985,17 +4985,27 @@ function configureMeetingSettings() {
         btn.disabled = true;
         statusEl.className = 'busy';
         statusEl.textContent = 'Resolving from 3GPP\\u2026';
+        // POST-MEETING-001 (Task A5): manual-diagnostic stage markers only
+        // (browser DevTools console, never required for normal use) --
+        // pairs with resolveMeetingForConfigDialog_()'s own Logger.log
+        // stage markers so "response returned to client" / "client
+        // success handler entered" / "client preview render completed"
+        // can be distinguished from a genuine server-side stall.
+        console.log('resolveMeeting(): client invoking google.script.run.resolveMeetingForConfigDialog_');
         google.script.run
           .withSuccessHandler(function(result) {
+            console.log('resolveMeeting(): response returned to client, success handler entered');
             btn.disabled = false;
             if (!result.ok) {
               statusEl.className = 'error';
               statusEl.textContent = '\\u274C ' + result.error;
               applyPreview(result.preview);
+              console.log('resolveMeeting(): client preview render completed (ok:false path)');
               return;
             }
             lastResolvedCore = result.resolved;
             applyPreview(result.preview);
+            console.log('resolveMeeting(): client preview render completed (ok:true path)');
             if (result.resolved.warnings && result.resolved.warnings.length > 0) {
               statusEl.className = 'error';
               statusEl.textContent = '\\u26A0\\uFE0F ' + result.resolved.warnings.join(' | ');
@@ -5005,6 +5015,7 @@ function configureMeetingSettings() {
             }
           })
           .withFailureHandler(function(error) {
+            console.log('resolveMeeting(): response returned to client, failure handler entered: ' + error);
             btn.disabled = false;
             statusEl.className = 'error';
             statusEl.textContent = '\\u274C Resolve failed: ' + error;
@@ -8334,6 +8345,9 @@ function resolveMeetingCoreById_(meetingId) {
   const raw = {};
 
   // --- Primary: GetMeetings -------------------------------------------
+  // POST-MEETING-001 (Task A5): manual-diagnostic stage markers -- see
+  // resolveMeetingForConfigDialog_()'s own header note.
+  Logger.log('resolveMeetingCoreById_: before GetMeetings');
   let metadataParsed = { ok: false, meeting: null, error: 'GetMeetings was not called.' };
   try {
     const metadataFetch = fetchMeetingMetadataById_(id);
@@ -8341,6 +8355,7 @@ function resolveMeetingCoreById_(meetingId) {
   } catch (e) {
     metadataParsed = { ok: false, meeting: null, error: 'GetMeetings request failed: ' + e.message };
   }
+  Logger.log('resolveMeetingCoreById_: after GetMeetings, ok=' + metadataParsed.ok);
   if (!metadataParsed.ok) {
     warnings.push(metadataParsed.error);
   }
@@ -8889,6 +8904,17 @@ function computeMeetingConfigReadiness_(props) {
  * configuration).
  */
 function resolveMeetingForConfigDialog_(meetingIdInput) {
+  // POST-MEETING-001 (Task A5): manual-diagnostic stage markers only --
+  // visible in the Apps Script execution transcript when this is run
+  // (from the dialog, or directly from the editor), never required for
+  // normal operation. Pairs with tests/resolve-dialog-client-rendering.test.js's
+  // client-side "client success handler entered"/"client preview render
+  // completed" console.log markers, so a later manual investigation can
+  // distinguish "server entered" / "before GetMeetings" / "after
+  // GetMeetings" / "before response return" / "response returned to
+  // client" / "client success handler entered" / "client preview render
+  // completed" as seven distinct, independently-timestamped points.
+  Logger.log('resolveMeetingForConfigDialog_: server entered, meetingIdInput=' + meetingIdInput);
   const props = PropertiesService.getDocumentProperties();
   const existing = {
     MEETING_ID: props.getProperty('MEETING_ID'),
@@ -8904,6 +8930,7 @@ function resolveMeetingForConfigDialog_(meetingIdInput) {
 
   const idResult = parseMeetingIdInput_(meetingIdInput);
   if (!idResult.isValid) {
+    Logger.log('resolveMeetingForConfigDialog_: invalid meeting id, before response return');
     return {
       ok: false,
       error: idResult.error,
@@ -8911,7 +8938,9 @@ function resolveMeetingForConfigDialog_(meetingIdInput) {
     };
   }
 
+  Logger.log('resolveMeetingForConfigDialog_: before resolveMeetingCoreById_ (includes GetMeetings [+ conditional GetiCal])');
   const resolved = resolveMeetingCoreById_(idResult.id);
+  Logger.log('resolveMeetingForConfigDialog_: after resolveMeetingCoreById_, before response return');
   return {
     ok: true,
     error: null,
