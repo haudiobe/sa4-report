@@ -138,6 +138,7 @@ function makeFakeTable(rows) {
   const self = {
     getType: () => 'TABLE',
     getRow: (i) => _rows[i],
+    getNumRows: () => _rows.length,
     appendTableRow: () => { const r = makeFakeTableRow([]); _rows.push(r); return r; }
   };
   return self;
@@ -646,6 +647,89 @@ console.log('ensureReallocationTable_() -- actual insertion order against a simu
     s098Idx < idx.p52 && s089Idx < idx.p52 &&
     idx.p52 < idx.p53,
     true);
+}
+
+// =========== 13. no automatic reallocation row during initial construction
+
+console.log('SA4-PROD-005 -- ensureReallocationTable_()/getReallocationMap_() never auto-populate a reallocation decision');
+
+{
+  const { sandbox } = loadCode({ documentProperties: MEETING_86178_PROPS });
+  const H2 = sandbox.DocumentApp.ParagraphHeading.HEADING2;
+  const H3 = sandbox.DocumentApp.ParagraphHeading.HEADING3;
+
+  // Same simulated "just after buildSkeletonWithTdocTables()" document state
+  // as section 12 -- S4aP260089's staged table (Agenda Item = "5.0", its
+  // real original TDoc-list assignment, per SA4-PROD-003/004) is already
+  // present under 5.1.4, exactly as buildSkeletonWithTdocTables() would
+  // have left it. No reallocation table exists yet.
+  const fakeBody = makeFakeBody(buildFakeSkeletonState(H2, H3));
+  sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => fakeBody });
+
+  // Run the REAL, unmodified ensureReallocationTable_() -- this is
+  // "initial skeleton construction" creating 5.1.3 for the first time.
+  sandbox.ensureReallocationTable_();
+
+  const reallocTable = fakeBody._children.find(c => c.getType() === 'TABLE' && sandbox.isReallocationTable_(c));
+  check('a reallocation table was created', !!reallocTable, true);
+
+  const reallocRowCount = reallocTable ? reallocTable.getNumRows() : -1;
+  check('the newly-created reallocation table contains ONLY its header row (TDoc | Original Agenda | New Agenda | Reason) -- no automatic S4aP260089 row',
+    reallocRowCount, 1);
+  check('the header row itself is exactly TDoc / Original Agenda / New Agenda / Reason',
+    reallocTable ? [0, 1, 2, 3].map(i => reallocTable.getRow(0).getCell(i).getText()) : null,
+    ['TDoc', 'Original Agenda', 'New Agenda', 'Reason']);
+
+  // getReallocationMap_() is a pure read of whatever rows are ALREADY in
+  // the table -- against a header-only table it must reflect that there
+  // are no decisions yet, not infer one from "5.0 not matching a real
+  // heading". This is what buildSkeletonWithTdocTables()/
+  // downloadAndGroupTdocs_() would see if "Build Skeleton" were run again
+  // right after this initial construction, before any human decision.
+  const map = sandbox.getReallocationMap_();
+  check('getReallocationMap_() returns an empty map against a header-only reallocation table (no inferred decision)',
+    map, {});
+  check('getReallocationMap_() specifically has no entry for S4aP260089',
+    map['S4aP260089'], undefined);
+
+  // S4aP260089 remains exactly where SA4-PROD-003/004 staged it: under
+  // 5.1.4, with its untouched ORIGINAL agenda metadata "5.0" -- it was
+  // never removed or altered by ensureReallocationTable_() running.
+  const s089Table = fakeBody._children.find(c => c.getType() === 'TABLE' && c.getRow(0).getCell(1).getText() === 'S4aP260089');
+  check('S4aP260089\'s staged table still exists after ensureReallocationTable_() runs', !!s089Table, true);
+  check('S4aP260089\'s staged table still shows its ORIGINAL agenda metadata "5.0" (untouched -- no reallocation was inferred or applied)',
+    s089Table.getRow(2).getCell(1).getText(), '5.0');
+  const idx514 = fakeBody._children.findIndex(c => c.getType() === 'PARAGRAPH' && c.getText().startsWith('5.1.4'));
+  const idxS089 = fakeBody._children.indexOf(s089Table);
+  check('S4aP260089 still sits after "5.1.4" (staging/5.1.4 placement is untouched by the reallocation-table fix)',
+    idxS089 > idx514, true);
+
+  // 5.1.2 -> 5.1.3 -> 5.1.4 ordering (SA4-PROD-004) still holds after this
+  // task's characterization -- re-asserted here for this section's own
+  // self-containment, not just relying on section 12.
+  const texts2 = fakeBody._children.map(c => c.getType() === 'PARAGRAPH' ? c.getText() : '[TABLE]');
+  const i512 = texts2.findIndex(t => t.startsWith('5.1.2'));
+  const i513 = texts2.findIndex(t => t.startsWith('5.1.3'));
+  const i514 = texts2.findIndex(t => t.startsWith('5.1.4'));
+  check('5.1.2 < 5.1.3 < 5.1.4 ordering is unaffected by this task', i512 < i513 && i513 < i514, true);
+}
+
+// SA4-PROD-005: no production code change was needed (see the source-
+// structure absence-of-a-literal-reason-string check below) -- this whole
+// section exists to LOCK IN, as regression coverage, the already-correct
+// behavior traced during this task: no code path in Code.js infers or
+// auto-writes a reallocation decision. A reallocation row can only be
+// added the way the UI dialog (addDocumentReallocation() ->
+// saveReallocation()) requires: a human explicitly filling in TDoc /
+// Original / New / Reason fields. Main-meeting behavior is provably
+// unaffected because NO production code was touched by SA4-PROD-005.
+console.log('SA4-PROD-005 -- no automatic-reallocation code path exists anywhere in Code.js (source-structure confirmation)');
+{
+  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  check('no literal "does not exist" reason string exists anywhere in Code.js (nothing synthesizes that specific reallocation reason)',
+    /does not exist/i.test(stripComments(source)), false);
+  check('getReallocationMap_() body has no comparison against a hardcoded "5.0" (it is a pure read of table rows, not an inference)',
+    /['"]5\.0['"]/.test(stripComments(extractFunctionBody(source, 'getReallocationMap_'))), false);
 }
 
 // ========================================================== summary =======
