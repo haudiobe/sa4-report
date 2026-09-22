@@ -380,6 +380,17 @@ function continuousUpdate() {
     Logger.log('ERROR: ' + e.message);
     Logger.log(e.stack);
   } finally {
+    // PERF-002: this `finally` guarantees the summary runs after a normal
+    // completion OR a catchable in-script exception (the `catch` above) --
+    // it does NOT run after Apps Script's own hard execution-time-limit
+    // termination, which kills the whole process from OUTSIDE the running
+    // JavaScript and gives no guarantee that ANY further code (not even a
+    // `finally` block, and not even an already-queued Logger.log call)
+    // executes or flushes. That is exactly why every major stage above
+    // also logs its own immediate "[PERF] <label>: <ms> ms" line via
+    // perfTimed_() the moment it finishes, rather than relying solely on
+    // this end-of-run summary -- for a genuine timeout, those per-stage
+    // lines (as far as they got) are the only available evidence.
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
     perfLogSummary_();
   }
