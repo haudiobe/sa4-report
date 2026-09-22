@@ -92,6 +92,89 @@ function stripComments(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 }
 
+// SA4-PROD-004: a small, purpose-built fake Body/Paragraph/Table -- just
+// enough of the DocumentApp surface ensureReallocationTable_() actually
+// calls (getNumChildren/getChild/getTables/insertParagraph/insertTable, and
+// a Paragraph's getType/asParagraph/getText/getHeading, and a Table's
+// getRow/getNumCells/getCell) -- so the REAL, unmodified production
+// function can be executed against a hand-built document state and its
+// actual output inspected, rather than reimplementing its logic
+// separately (which could drift from the real code and prove nothing).
+// This is intentionally narrow: it does NOT attempt to fake enough of
+// DocumentApp to run buildSkeletonWithTdocTables() itself (openById,
+// findHeading_'s traversal, copySectionContentWithReplacement_'s sibling
+// walk, etc) -- that remains out of scope per SA4-ARCH-002's established
+// precedent (see the header comment above). Instead, the document state
+// buildSkeletonWithTdocTables() would have produced is built by hand
+// below, directly from the real meeting 86178 heading/table sequence.
+function makeFakeParagraph(text, heading) {
+  const self = {
+    _text: text,
+    _heading: heading,
+    getType: () => 'PARAGRAPH',
+    asParagraph: () => self,
+    getText: () => self._text,
+    getHeading: () => self._heading,
+    setHeading: (h) => { self._heading = h; return self; }
+  };
+  return self;
+}
+
+function makeFakeTableCell(text) {
+  return { getText: () => text };
+}
+
+function makeFakeTableRow(cells) {
+  const _cells = cells.slice();
+  return {
+    getNumCells: () => _cells.length,
+    getCell: (i) => makeFakeTableCell(_cells[i] === undefined ? '' : _cells[i]),
+    appendTableCell: (t) => { _cells.push(t); return makeFakeTableCell(t); }
+  };
+}
+
+function makeFakeTable(rows) {
+  const _rows = rows.map(r => makeFakeTableRow(r));
+  const self = {
+    getType: () => 'TABLE',
+    getRow: (i) => _rows[i],
+    appendTableRow: () => { const r = makeFakeTableRow([]); _rows.push(r); return r; }
+  };
+  return self;
+}
+
+function makeFakeBody(children) {
+  const _children = children.slice();
+  return {
+    _children,
+    getNumChildren: () => _children.length,
+    getChild: (i) => _children[i],
+    getTables: () => _children.filter(c => c.getType() === 'TABLE'),
+    insertParagraph: (idx, text) => { const p = makeFakeParagraph(text, 'NORMAL'); _children.splice(idx, 0, p); return p; },
+    insertTable: (idx, data) => { const t = makeFakeTable(data); _children.splice(idx, 0, t); return t; }
+  };
+}
+
+// The document state buildSkeletonWithTdocTables() would have produced for
+// meeting 86178 BEFORE ensureReallocationTable_() runs (i.e., as Thomas ran
+// "Build Skeleton" then "Create Configuration Tables", the real sequence
+// that exposed this bug): heading levels use the same HEADING2/HEADING3
+// constants the sandbox's DocumentApp.ParagraphHeading already defines.
+function buildFakeSkeletonState(H2, H3) {
+  return [
+    makeFakeParagraph('5.1 Opening of the session and registration of documents', H2),
+    makeFakeParagraph('5.1.1 Opening of the session', H3),
+    makeFakeParagraph('<Chair> opens the session...', 'NORMAL'),
+    makeFakeParagraph('5.1.2 Registration of Documents', H3),
+    makeFakeTable([['TDoc', 'Title', 'Source', 'Agenda Item'], ['S4aP260067', 'Some title', 'NTT', '5.10']]),
+    makeFakeParagraph('5.1.4 Documents', H3),
+    makeFakeTable([['TDoc', 'S4aP260098'], ['Title', 'Proposed agenda'], ['Agenda Item', '5.1']]),
+    makeFakeTable([['TDoc', 'S4aP260089'], ['Title', 'Considerations on TR organization'], ['Agenda Item', '5.0']]),
+    makeFakeParagraph('5.2 IPR, antitrust and consensus principles reminder', H2),
+    makeFakeParagraph('5.3 Reports/Liaisons from other groups/meetings', H2)
+  ];
+}
+
 // =========================================================== 1. source ===
 
 console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes');
@@ -499,6 +582,70 @@ console.log('meeting 86178 -- revisions source is genuinely absent, characterize
   const ctx = sandbox.getMeetingContext_();
   check('meeting 86178 has no revisionsUrl (no REVISIONS_URL override was configured, and none should be invented)',
     ctx.sources.revisionsUrl, undefined);
+}
+
+// ============ 12. ensureReallocationTable_() insertion order (real bug) ===
+
+console.log('ensureReallocationTable_() -- actual insertion order against a simulated post-Build-Skeleton meeting 86178 document');
+
+{
+  const { sandbox } = loadCode({ documentProperties: MEETING_86178_PROPS });
+  const H2 = sandbox.DocumentApp.ParagraphHeading.HEADING2;
+  const H3 = sandbox.DocumentApp.ParagraphHeading.HEADING3;
+
+  const fakeBody = makeFakeBody(buildFakeSkeletonState(H2, H3));
+  sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => fakeBody });
+
+  // Run the REAL, unmodified (apart from this task's fix)
+  // ensureReallocationTable_() against the simulated state.
+  sandbox.ensureReallocationTable_();
+
+  const texts = fakeBody._children.map(c =>
+    c.getType() === 'PARAGRAPH' ? c.getText() : '[TABLE:' + c.getRow(0).getCell(0).getText() + ']'
+  );
+
+  const idx = {
+    p512: texts.findIndex(t => t.startsWith('5.1.2')),
+    p513: texts.findIndex(t => t.startsWith('5.1.3')),
+    p514: texts.findIndex(t => t.startsWith('5.1.4')),
+    p52: texts.findIndex(t => t.startsWith('5.2')),
+    p53: texts.findIndex(t => t.startsWith('5.3'))
+  };
+
+  check('a "5.1.3 Document Reallocations" heading was inserted', idx.p513 !== -1, true);
+  check('"5.1.3" comes after "5.1.2" (the summary table sits between them and is untouched -- see below)', idx.p513 > idx.p512, true);
+
+  // The reallocation table itself is the table immediately following the
+  // "5.1.3" heading -- find it explicitly via isReallocationTable_()'s own
+  // header-row signature, not by position alone.
+  const reallocTableChildIdx = fakeBody._children.findIndex(c =>
+    c.getType() === 'TABLE' && sandbox.isReallocationTable_(c));
+  check('exactly one reallocation table exists (isReallocationTable_() signature: TDoc/Original Agenda/New Agenda)',
+    fakeBody._children.filter(c => c.getType() === 'TABLE' && sandbox.isReallocationTable_(c)).length, 1);
+  check('the reallocation table is the very next child after "5.1.3" (no normal TDoc table in between)',
+    reallocTableChildIdx, idx.p513 + 1);
+
+  check('"5.1.4 Documents" comes right after the reallocation table', idx.p514, reallocTableChildIdx + 1);
+
+  // The two staged pre-5.3 TDoc detail tables, identified by their own
+  // TDoc-id cell, must sit strictly between "5.1.4" and "5.2".
+  const s098Idx = fakeBody._children.findIndex(c => c.getType() === 'TABLE' && c.getRow(0).getCell(1).getText() === 'S4aP260098');
+  const s089Idx = fakeBody._children.findIndex(c => c.getType() === 'TABLE' && c.getRow(0).getCell(1).getText() === 'S4aP260089');
+  check('staged TDoc table for S4aP260098 sits after "5.1.4" and before "5.2"', s098Idx > idx.p514 && s098Idx < idx.p52, true);
+  check('staged TDoc table for S4aP260089 sits after "5.1.4" and before "5.2"', s089Idx > idx.p514 && s089Idx < idx.p52, true);
+
+  check('"5.2" still comes after all staged tables and before "5.3" (untouched)', idx.p52 > idx.p514 && idx.p52 < idx.p53, true);
+  check('"5.3" is unaffected -- still present, still after "5.2"', idx.p53 > idx.p52, true);
+
+  // Full-sequence assertion, the exact order requested: 5.1.3 heading,
+  // reallocation table, 5.1.4 heading, staged TDoc tables, 5.2, 5.3.
+  check('full required sequence holds: 5.1.3 < reallocTable < 5.1.4 < staged tables < 5.2 < 5.3',
+    idx.p513 < reallocTableChildIdx &&
+    reallocTableChildIdx < idx.p514 &&
+    idx.p514 < s098Idx && idx.p514 < s089Idx &&
+    s098Idx < idx.p52 && s089Idx < idx.p52 &&
+    idx.p52 < idx.p53,
+    true);
 }
 
 // ========================================================== summary =======

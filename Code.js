@@ -1216,37 +1216,66 @@ function ensureReallocationTable_() {
   const agendaPrefix = cfg.AGENDA_ITEM_PREFIX || '7.';
   const targetSection = `${agendaPrefix}1.3`; // e.g., "7.1.3" or "11.1.3"
   
-  // Find insertion point: after section X.1.2 or before X.1.4
+  // Find insertion point: before X.1.4 (preferred) or after X.1.2 (fallback)
+  //
+  // SA4-PROD-004: this used to be a SINGLE forward scan that checked "is
+  // this X.1.2?" before "is this X.1.4-or-later?" on each paragraph -- so
+  // whenever X.1.2 (which always exists, and is always immediately
+  // followed by its OWN Registration-of-Documents summary table, built by
+  // buildSkeletonWithTdocTables()) appeared BEFORE X.1.4 in the document
+  // (which it always does), the loop matched and broke on X.1.2 first,
+  // computing "insert right after the X.1.2 HEADING paragraph" -- i.e.
+  // BEFORE that heading's own summary table, not after the whole X.1.2
+  // section. That wedged the reallocation heading+table between X.1.2's
+  // heading and its own table, visually merging the reallocation table
+  // with the unrelated X.1.2 summary table (and, once X.1.4 exists per
+  // SA4-PROD-003, pushing X.1.4 and its own staged TDoc tables further
+  // down but never actually separating them from that summary table
+  // either). Fixed by searching for the "before X.1.4/X.1.5/X.2" anchor
+  // FIRST, in its own complete pass -- it is the more specific, correct
+  // anchor whenever it exists (X.1.4 now always exists once there is any
+  // registration/staged content) -- and falling back to the original
+  // "after X.1.2" pass only when no X.1.4-or-later heading is present at
+  // all (a document with no X.1.4 section).
   let insertIndex = -1;
   let foundSection = false;
-  
+
   for (let i = 0; i < body.getNumChildren(); i++) {
     const child = body.getChild(i);
     if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
-    
+
     const para = child.asParagraph();
     const text = para.getText().trim();
     const heading = para.getHeading();
-    
-    // Look for X.1.2 (insert after) or X.1.4 (insert before)
-    if (heading !== DocumentApp.ParagraphHeading.NORMAL) {
-      // Check if this is X.1.2 - insert after it
-      if (text.startsWith(`${agendaPrefix}1.2`)) {
+
+    if (heading !== DocumentApp.ParagraphHeading.NORMAL &&
+        (text.startsWith(`${agendaPrefix}1.4`) ||
+         text.startsWith(`${agendaPrefix}1.5`) ||
+         text.startsWith(`${agendaPrefix}2`))) {
+      insertIndex = i;
+      foundSection = true;
+      break;
+    }
+  }
+
+  if (!foundSection) {
+    for (let i = 0; i < body.getNumChildren(); i++) {
+      const child = body.getChild(i);
+      if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+
+      const para = child.asParagraph();
+      const text = para.getText().trim();
+      const heading = para.getHeading();
+
+      if (heading !== DocumentApp.ParagraphHeading.NORMAL &&
+          text.startsWith(`${agendaPrefix}1.2`)) {
         insertIndex = i + 1;
-        foundSection = true;
-        break;
-      }
-      // Check if this is X.1.4 or later - insert before it
-      if (text.startsWith(`${agendaPrefix}1.4`) || 
-          text.startsWith(`${agendaPrefix}1.5`) ||
-          text.startsWith(`${agendaPrefix}2`)) {
-        insertIndex = i;
         foundSection = true;
         break;
       }
     }
   }
-  
+
   // If we didn't find a good spot, try to find X.1 and insert after it
   if (!foundSection) {
     for (let i = 0; i < body.getNumChildren(); i++) {
