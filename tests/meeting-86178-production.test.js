@@ -1,6 +1,6 @@
 /**
- * SA4-PROD-001 / SA4-PROD-002 — Meeting 86178 (SA4-e (AH) on FS_6G_MED,
- * 2026-09-22) production-readiness regression coverage.
+ * SA4-PROD-001 / SA4-PROD-002 / SA4-PROD-003 — Meeting 86178 (SA4-e (AH) on
+ * FS_6G_MED, 2026-09-22) production-readiness regression coverage.
  *
  * Real evidence for this meeting was gathered directly from the public
  * 3GPP FTP tree on 2026-09-22 (not inferred from convention):
@@ -18,25 +18,37 @@
  * Word document body.
  *
  * SA4-PROD-002 addendum: a real Google Docs production run of SA4-PROD-001's
- * fix exposed THREE further main-meeting assumptions baked into
+ * fix exposed further main-meeting assumptions in
  * buildSkeletonWithTdocTables()/ensureReallocationTable_()/
  * generateReportTitle_()/testAllConnections() that the is6G guard alone
- * didn't reach -- all fixed here, all re-characterized below (section 7+).
+ * didn't reach.
+ *
+ * SA4-PROD-003 correction: PROD-002's premise that an ad-hoc meeting never
+ * wants the SWG X.1.1/X.1.2/X.1.3 subsection structure was WRONG (clarified
+ * production requirement) -- meeting 86178 explicitly wants that structure
+ * under its real X.1 item, PLUS a new {agendaPrefixNum}.1.4 "Documents"
+ * bucket for TDocs whose original agenda assignment predates the normal
+ * X.3+ sections (so they are never silently dropped). PROD-002's ad-hoc
+ * early-return guards in the openingSection branch and
+ * ensureReallocationTable_() are reverted here; the new registration
+ * boundary/isBeforeRegistrationBoundary_()/appendTdocDetailTable_()
+ * mechanism is characterized below (sections 7-9).
  *
  * This suite does NOT execute buildSkeletonWithTdocTables() itself -- doing
  * so requires a fake DocumentApp, which SA4-ARCH-002 explicitly scoped out
  * (see tests/report-structure.test.js's header comment) and this task does
  * not reopen. Instead, per that established precedent, this suite combines:
  *
- *   1. Source-structure assertions proving the SA4-PROD-001/002 skeleton
- *      fixes exist exactly as intended, and that main-meeting-affecting
- *      code paths were not touched otherwise.
+ *   1. Source-structure assertions proving the SA4-PROD-001/002/003
+ *      skeleton fixes exist exactly as intended, and that main-meeting-
+ *      affecting code paths were not touched otherwise.
  *   2. Real-data pipeline characterization: MeetingContext -> agenda
  *      projection -> the (untouched) skeleton parent-removal filter ->
- *      TDoc-list grouping, exercised against the real captured meeting
- *      86178 data using the real, unmodified production functions
- *      (getMeetingContext_, projectAgendaItems_, agendaSelectorMatches_,
- *      parseSA4DocumentId_ family, generateReportTitle_).
+ *      TDoc-list grouping -> registration-boundary extraction, exercised
+ *      against the real captured meeting 86178 data using the real,
+ *      unmodified production functions (getMeetingContext_,
+ *      projectAgendaItems_, agendaSelectorMatches_, parseSA4DocumentId_
+ *      family, generateReportTitle_, isBeforeRegistrationBoundary_).
  *
  * Run: node tests/meeting-86178-production.test.js
  */
@@ -102,13 +114,22 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
     // untouched -- only these two conditions changed.
     check('the pre-existing parent-removal filter is still present, unchanged',
       /item\.number\s*!==\s*agendaPrefix\.replace/.test(body), true);
-    // SA4-PROD-002: the openingSection branch (source of the synthetic
-    // "5.1.1 Opening"/"5.1.2 Registration" subsections) now additionally
-    // requires meeting.type !== 'adhoc'.
-    check('the openingSection branch now also requires meeting.type !== "adhoc" (prevents synthetic X.1.1/X.1.2 subsections for ad-hoc meetings)',
-      /if\s*\(item\.number === openingSection && context\.meeting\.type !== 'adhoc'\)/.test(body), true);
+    // SA4-PROD-003: PROD-002's "&& context.meeting.type !== 'adhoc'" guard
+    // on the openingSection branch is reverted -- meeting 86178 explicitly
+    // wants that branch's X.1.1/X.1.2 template-copy behavior.
+    check('the openingSection branch is unconditional again (no meeting.type guard -- PROD-002\'s guard was reverted per the clarified PROD-003 requirement)',
+      /if\s*\(item\.number === openingSection\)\s*\{/.test(stripComments(body)), true);
     check('no code-level special-case comparison against "S4aP260089" exists in buildSkeletonWithTdocTables() (comments MAY reference it for context; only an actual comparison would be a remapping)',
       /['"]S4aP260089['"]\s*[=!]==/.test(stripComments(body)), false);
+    // SA4-PROD-003: the new registration-boundary extraction, gated to the
+    // SWG-style branch only (!is6G), and the new X.1.4 "Documents" section
+    // inside the openingSection branch.
+    check('buildSkeletonWithTdocTables() now builds registrationDocs via isBeforeRegistrationBoundary_(), gated on !is6G',
+      /if\s*\(!is6G\)\s*\{[\s\S]*?isBeforeRegistrationBoundary_\(/.test(body), true);
+    check('buildSkeletonWithTdocTables() now creates a "{agendaPrefixNum}.1.4" Documents section when registrationDocs is non-empty',
+      /documentsSection\s*=\s*`\$\{agendaPrefixNum\}\.1\.4`/.test(body), true);
+    check('the new X.1.4 section renders each doc via appendTdocDetailTable_() with its OWN preserved original agenda-item label (not the loop item.number)',
+      /appendTdocDetailTable_\(body,\s*tdocData,\s*tdocData\.row\[tdocData\.agendaCol\]\)/.test(body), true);
   }
 
   const reallocBody = extractFunctionBody(source, 'ensureReallocationTable_');
@@ -116,10 +137,30 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
     failures++;
     console.log('  FAIL could not locate "function ensureReallocationTable_(" in Code.js');
   } else {
-    check('ensureReallocationTable_() now calls getMeetingContext_() and skips ad-hoc meetings entirely',
-      /getMeetingContext_\(\)\.meeting\.type === 'adhoc'/.test(reallocBody), true);
+    // SA4-PROD-003: PROD-002's unconditional ad-hoc early return is
+    // reverted -- meeting 86178 explicitly wants a real X.1.3 Document
+    // Reallocations section, exactly like a main SWG meeting.
+    check('ensureReallocationTable_() no longer has an ad-hoc early return (reverted to its pre-PROD-002, meeting-type-agnostic form)',
+      /getMeetingContext_\(\)\.meeting\.type === 'adhoc'/.test(stripComments(reallocBody)), false);
     check('no code-level special-case comparison against "S4aP260089" exists in ensureReallocationTable_() (its own comment names the finding for context; that is not a remapping)',
       /['"]S4aP260089['"]\s*[=!]==/.test(stripComments(reallocBody)), false);
+  }
+
+  const boundaryBody = extractFunctionBody(source, 'isBeforeRegistrationBoundary_');
+  if (!boundaryBody) {
+    failures++;
+    console.log('  FAIL could not locate "function isBeforeRegistrationBoundary_(" in Code.js');
+  } else {
+    check('isBeforeRegistrationBoundary_() does not hardcode the literal "5" (it is parameterized by agendaPrefixNum)',
+      /['"]5['"]/.test(stripComments(boundaryBody)), false);
+    check('isBeforeRegistrationBoundary_() does not reference any meeting ID or TDoc ID literal',
+      /86178|S4aP260089|S4aP260098/.test(stripComments(boundaryBody)), false);
+  }
+
+  const appendBody = extractFunctionBody(source, 'appendTdocDetailTable_');
+  if (!appendBody) {
+    failures++;
+    console.log('  FAIL could not locate "function appendTdocDetailTable_(" in Code.js');
   }
 
   check('no code-level special-case comparison against "S4aP260089" exists ANYWHERE in Code.js (the anomaly remains a manual verification item, not a code-level special case)',
@@ -314,31 +355,97 @@ console.log('main-meeting protection: is6G is UNCHANGED for a real main 6G meeti
   check('newIs6G is true for a main 6G meeting', newIs6G, true);
 }
 
-// ============================ 7. no synthetic X.1.1/X.1.2/X.1.3 subsections
+// ================================== 7. isBeforeRegistrationBoundary_() ====
 
-console.log('meeting 86178 -- no synthetic 5.1.1 / 5.1.2 / 5.1.3, exactly one real 5.1 and 5.2, agenda continues through 5.11');
+console.log('isBeforeRegistrationBoundary_() -- pure function, generic/prefix-driven, real meeting 86178 boundary values');
+
+{
+  const { sandbox } = loadCode();
+  const fn = sandbox.isBeforeRegistrationBoundary_;
+
+  // Prefix "5" (meeting 86178): the exact examples from the clarified
+  // production requirement.
+  check('"5" is before the "5.3" boundary (bare parent)', fn('5', '5'), true);
+  check('"5.0" is before the "5.3" boundary', fn('5.0', '5'), true);
+  check('"5.1" is before the "5.3" boundary', fn('5.1', '5'), true);
+  check('"5.2" is before the "5.3" boundary', fn('5.2', '5'), true);
+  check('"5.3" is NOT before the boundary (normal agenda sections begin here)', fn('5.3', '5'), false);
+  check('"5.4" is NOT before the boundary', fn('5.4', '5'), false);
+  check('"5.6.1" is NOT before the boundary (nested sub-item, still >= 5.3)', fn('5.6.1', '5'), false);
+
+  // Generic across a DIFFERENT prefix, proving no literal "5" is baked in.
+  check('for prefix "11" (a main 6G-plenary AGENDA_ITEM_PREFIX), "11.1" is before the "11.3" boundary', fn('11.1', '11'), true);
+  check('for prefix "11", "11.3" is NOT before the boundary', fn('11.3', '11'), false);
+
+  // A value belonging to a DIFFERENT top-level item must never match.
+  check('"6.1" is never before the "5.3" boundary (different top-level item)', fn('6.1', '5'), false);
+  check('blank/garbage input does not throw and returns false', fn('', '5'), false);
+}
+
+// ======================= 8. registration-boundary extraction (real data) ==
+
+console.log('meeting 86178 -- registration-boundary extraction against the real captured TDoc list (5.1.4 Documents bucket)');
+
+{
+  const { sandbox } = loadCode({ documentProperties: MEETING_86178_PROPS });
+  const ctx = sandbox.getMeetingContext_();
+  const rows = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'meeting-86178-tdoc-list.json'), 'utf8'));
+  const agendaPrefixNum = sandbox.getConfiguredAgendaPrefix_().replace(/\.$/, '');
+  check('agendaPrefixNum derived from Document Properties is "5" (not hardcoded)', agendaPrefixNum, '5');
+
+  // The SAME grouping downloadAndGroupTdocs_() performs (agenda-selector
+  // filtered), followed by the SAME extraction buildSkeletonWithTdocTables()
+  // now performs (isBeforeRegistrationBoundary_(), gated on !is6G -- is6G is
+  // false for this ad-hoc 6G-type meeting per SA4-PROD-001).
+  const groups = {};
+  rows.forEach(r => {
+    const agendaItem = String(r.AgendaItem || '').trim();
+    if (!sandbox.agendaSelectorMatches_(ctx.report.agendaSelector, agendaItem)) return;
+    (groups[agendaItem] = groups[agendaItem] || []).push(r);
+  });
+
+  const registrationDocs = [];
+  Object.keys(groups).forEach(key => {
+    if (sandbox.isBeforeRegistrationBoundary_(key, agendaPrefixNum)) {
+      registrationDocs.push(...groups[key]);
+      delete groups[key];
+    }
+  });
+
+  check('registrationDocs collects exactly S4aP260098 (5.1) and S4aP260089 (5.0), preserving each one\'s ORIGINAL agenda item',
+    registrationDocs.map(d => ({ tdoc: d.TDoc, originalAgendaItem: d.AgendaItem })).sort((a, b) => a.tdoc.localeCompare(b.tdoc)),
+    [{ tdoc: 'S4aP260089', originalAgendaItem: '5.0' }, { tdoc: 'S4aP260098', originalAgendaItem: '5.1' }]);
+
+  check('S4aP260098 no longer sits in the raw "5.1" group after extraction (it would otherwise render directly under the 5.1 heading)',
+    groups['5.1'], undefined);
+  check('S4aP260089\'s orphaned "5.0" group no longer exists after extraction (it now has a home: 5.1.4, not nowhere)',
+    groups['5.0'], undefined);
+  check('agenda item "5.3" (Reports/Liaisons) is untouched by the extraction -- still renders under its own real section',
+    (groups['5.3'] || []).map(d => d.TDoc), ['S4aP260090']);
+  check('agenda item "5.6.1" is untouched by the extraction -- still 13 real TDocs under its own real section',
+    (groups['5.6.1'] || []).length, 13);
+}
+
+// ============================ 9. real 5.1/5.2 remain single, real headings
+
+console.log('meeting 86178 -- exactly one real 5.1 and 5.2, agenda continues through 5.11, no synthetic AOB after Close');
 
 {
   const numbers = REAL_86178_AGENDA.map(i => i.number);
-  ['5.1.1', '5.1.2', '5.1.3'].forEach(synthetic => {
-    check(`"${synthetic}" is not a real agenda item (would be synthetic if emitted)`,
-      numbers.indexOf(synthetic), -1);
-  });
   check('"5.1" (Opening) appears exactly once in the real agenda', numbers.filter(n => n === '5.1').length, 1);
   check('"5.2" (IPR) appears exactly once in the real agenda', numbers.filter(n => n === '5.2').length, 1);
   check('the real agenda continues through "5.11" (Close)', numbers[numbers.length - 1], '5.11');
-
-  // ensureReallocationTable_()'s target section (agendaPrefix + '1.3') would
-  // be "5.1.3" for this meeting -- confirming it is not a real agenda item
-  // (checked above) is what makes the ad-hoc skip in section 1 correct: a
-  // "5.1.3 Document Reallocations" heading would have no corresponding real
-  // agenda item to sit under.
-  const agendaPrefix = '5.';
-  check('ensureReallocationTable_()\'s would-be target section ("5.1.3") is confirmed absent from the real agenda',
-    numbers.indexOf(`${agendaPrefix}1.3`), -1);
+  // "5.1.1"/"5.1.2"/"5.1.3"/"5.1.4" are SYNTHESIZED (by the reverted
+  // openingSection branch / ensureReallocationTable_() / the new X.1.4
+  // step) -- they are legitimately NOT present in the raw parsed agenda
+  // itself; this just documents that fact so it is not mistaken for a gap.
+  ['5.1.1', '5.1.2', '5.1.3', '5.1.4'].forEach(synthetic => {
+    check(`"${synthetic}" is not itself a parsed agenda item (it is synthesized under the real "5.1" item)`,
+      numbers.indexOf(synthetic), -1);
+  });
 }
 
-// ==================================== 8. ad-hoc title, no meeting number ==
+// ==================================== 10. ad-hoc title, no meeting number ==
 
 console.log('ad-hoc title: uses context.meeting.name, never invents a meeting number, never "SA4#null"');
 
@@ -383,7 +490,7 @@ console.log('main-meeting title: generateReportTitle_() output is byte-identical
     titleThroughWrapperContract, titleWithoutLabel);
 }
 
-// ============================== 9. revisions "Not configured", not 403 ====
+// ============================== 11. revisions "Not configured", not 403 ====
 
 console.log('meeting 86178 -- revisions source is genuinely absent, characterized as "Not configured", no fabricated URL/403');
 

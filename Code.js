@@ -1200,21 +1200,16 @@ function ensureReallocationTable_() {
     if (isReallocationTable_(t)) return;
   }
 
-  // SA4-PROD-002: this function's target section (`${agendaPrefix}1.3`,
-  // e.g. "7.1.3"/"11.1.3") only exists as a real subsection under the
-  // MAIN-meeting SWG-style X.1/X.1.2/X.1.3 template convention. Real
-  // evidence from meeting 86178 (SA4-e (AH) on FS_6G_MED) shows an ad-hoc
-  // meeting's actual agenda has no X.1.3 subsection at all -- forcing one
-  // into existence produced a synthetic "Document Reallocations" section
-  // under the real "5.1 Opening" item with no basis in the real agenda.
-  // Any genuine TDoc reallocation for an ad-hoc meeting remains a manual
-  // editorial decision (see SA4-PROD-001's S4aP260089 finding), never an
-  // auto-created table. Main meetings are unaffected: meeting.type is
-  // 'main' there.
-  if (getMeetingContext_().meeting.type === 'adhoc') {
-    Logger.log('ensureReallocationTable_(): skipped for an ad-hoc meeting (no X.1.3-style subsection in a real ad-hoc agenda)');
-    return;
-  }
+  // SA4-PROD-002 added an unconditional early return here for any ad-hoc
+  // meeting, on the assumption that an ad-hoc agenda never has an X.1.3
+  // subsection. SA4-PROD-003 corrected that assumption (clarified
+  // production requirement): meeting 86178 DOES want a real
+  // "{agendaPrefixNum}.1.3 Document Reallocations" section, functioning
+  // exactly as it does for a main SWG meeting -- this function's own
+  // insertion-point search (below) already targets "X.1.2"/"X.1.4" as
+  // generic boundaries, not anything meeting-type-specific, so no ad-hoc
+  // guard belongs here. Reverted to unconditional, byte-identical to its
+  // pre-PROD-002 form.
 
   // Get the agenda prefix from config (e.g., "7." for Audio, "11." for 6G)
   const cfg = getReportConfig_();
@@ -5991,6 +5986,30 @@ function buildSkeletonWithTdocTables() {
   const context = getMeetingContext_();
   const is6G = (reportType === '6G') && context.meeting.type !== 'adhoc';
 
+  // SA4-PROD-003: extract, from tdocGroups, every TDoc whose ORIGINAL
+  // TDoc-list agenda assignment is before the normal agenda sections begin
+  // (isBeforeRegistrationBoundary_(), generic/prefix-driven -- no literal
+  // "5"). Gated on !is6G: the 6G-plenary nested convention (is6G branch,
+  // just above) uses REAL topic items starting at "{prefix}.1" onward with
+  // no reserved Opening/IPR slots, so this boundary concept does not apply
+  // there and must not divert real 6G-main topic documents. For the
+  // SWG-style branch (every SWG main meeting, and now every ad-hoc 6G-type
+  // meeting per SA4-PROD-001), X.1/X.2 are ALWAYS special-cased below
+  // (never a plain tdocGroups[...] lookup target), so removing entries
+  // here has no effect on any EXISTING main-meeting rendering path -- it
+  // only prevents a pre-agenda document from silently vanishing. Rendered
+  // under {agendaPrefixNum}.1.4 "Documents" inside the openingSection
+  // branch below.
+  const registrationDocs = [];
+  if (!is6G) {
+    Object.keys(tdocGroups).forEach(key => {
+      if (isBeforeRegistrationBoundary_(key, agendaPrefixNum)) {
+        registrationDocs.push(...tdocGroups[key].tdocs);
+        delete tdocGroups[key];
+      }
+    });
+  }
+
   // For 6G reports, create the 11.0 parent section first
   if (is6G) {
     body.appendParagraph(`${agendaPrefixNum}.0 Opening of the session, registration of documents`)
@@ -6080,35 +6099,58 @@ function buildSkeletonWithTdocTables() {
       return; // Skip - already created above
     }
     
-    // SA4-PROD-002: this branch's template copy + forced "Registration of
-    // Documents" subsection is the MAIN-meeting SWG template's own X.1.1/
-    // X.1.2 nested-subsection convention (verified: the shared template's
-    // own X.1 content literally contains "X.1.1"/"X.1.2" sub-headings,
-    // carried through verbatim by copySectionContentWithReplacement_'s text
-    // substitution). Real evidence from meeting 86178 shows an ad-hoc
-    // meeting's actual agenda has NO such subsections under its real "5.1"
-    // item -- forcing this in produced a synthetic "5.1.1 Opening of the
-    // session" / "5.1.2 Registration of documents" with no basis in the
-    // real agenda. For ad-hoc meetings this item is left to fall through to
-    // the generic "regular agenda item" handling below (same path "5.2"
-    // IPR already uses for a 6G report type), rendering its own real TDoc
-    // group (the agenda TDoc itself) with no synthetic subsection. Main
-    // meetings are unaffected: context.meeting.type is 'main' there.
-    if (item.number === openingSection && context.meeting.type !== 'adhoc') {
+    // SA4-PROD-002 gated this branch off for ad-hoc meetings, on the
+    // assumption that a real ad-hoc agenda never wants the X.1.1/X.1.2
+    // subsections this branch produces. SA4-PROD-003 corrected that
+    // assumption (clarified production requirement): meeting 86178 DOES
+    // want the standard X.1.1 Opening / X.1.2 Registration / X.1.3
+    // Document Reallocations / X.1.4 Documents structure under its real
+    // X.1 item, identical to a main SWG meeting. This branch is therefore
+    // unconditional again (byte-identical to its pre-PROD-002 form) --
+    // main-meeting behavior is unaffected either way, since meeting.type
+    // was never consulted by anything downstream of this branch.
+    if (item.number === openingSection) {
       // Opening section for SWG reports - copy X.1 content from template
       const openingHeader = findHeading_(sourceBody, /^X\.1\s+/);
       if (openingHeader) {
         copySectionContentWithReplacement_(openingHeader, body, /^X\.2\s+/, 'X', agendaPrefixNum);
       }
-      
+
       // Always ensure Registration of Documents section exists with the summary table
       if (!documentContainsHeading_(body, registrationSection)) {
         body.appendParagraph(`${registrationSection} Registration of Documents`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
       }
-      
+
       // Always add/update the registered documents summary table
       if (allTdocs.length > 0) {
         createSummaryTable_(body, allTdocs, allTdocs[0].tdocCol, allTdocs[0].titleCol, allTdocs[0].sourceCol, -1);
+      }
+
+      // SA4-PROD-003: {agendaPrefixNum}.1.4 "Documents" -- collects every
+      // TDoc whose ORIGINAL TDoc-list agenda assignment is before the
+      // normal agenda sections begin (numerically < "{agendaPrefixNum}.3":
+      // e.g. "5", "5.0", "5.1", "5.2" for prefix "5"), extracted from
+      // tdocGroups further above via isBeforeRegistrationBoundary_() into
+      // `registrationDocs`. Such a document has no real numbered
+      // subsection of its own to render under (X.1/X.2 are always
+      // special-cased, never a plain TDoc-table target) and would
+      // otherwise simply vanish from the report -- exactly the
+      // S4aP260089/S4aP260098 problem SA4-PROD-001/002 found. Each row
+      // preserves its OWN original agenda-item value (not this loop's
+      // item.number) so the existing Document Reallocations workflow
+      // (X.1.3, ensureReallocationTable_()/addDocumentReallocation()) can
+      // read where it came from. Only created when non-empty: every
+      // existing main-meeting report has nothing to put here (X.1/X.2 are
+      // never a raw tdocGroups[...] lookup target for main meetings
+      // either), so this is a pure no-op there -- no new heading appears.
+      if (registrationDocs.length > 0) {
+        const documentsSection = `${agendaPrefixNum}.1.4`;
+        if (!documentContainsHeading_(body, documentsSection)) {
+          body.appendParagraph(`${documentsSection} Documents`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+        }
+        orderTdocsByRevision_(registrationDocs).forEach(tdocData => {
+          appendTdocDetailTable_(body, tdocData, tdocData.row[tdocData.agendaCol]);
+        });
       }
     } else if (item.number === iprSection) {
       // IPR section - only copy template content for SWG reports (Audio, Video, MBS, RTC)
@@ -6596,6 +6638,88 @@ function documentContainsHeading_(body, headingPrefix) {
     }
   }
   return false;
+}
+
+/**
+ * SA4-PROD-003: true when `agendaItemValue` (a TDoc-list row's raw,
+ * unprocessed "Agenda item" cell) is numerically BEFORE
+ * "<agendaPrefixNum>.3" -- i.e. its first dotted component equals
+ * agendaPrefixNum and its second component is absent or < 3. Generic and
+ * prefix-driven, no literal "5": for prefix "5" this is 5 / 5.0 / 5.1 / 5.2
+ * (and any 5.2.x); for prefix "11" it would be 11 / 11.0 / 11.1 / 11.2.
+ *
+ * Used only to route a document filed under a pre-agenda registration slot
+ * into the {agendaPrefixNum}.1.4 "Documents" bucket instead of silently
+ * vanishing from the report -- it does NOT change
+ * agendaSelectorMatches_()/projectAgendaItems_() or any other canonical
+ * agenda-membership decision; both remain untouched by this task.
+ */
+function isBeforeRegistrationBoundary_(agendaItemValue, agendaPrefixNum) {
+  const parts = String(agendaItemValue || '').trim().split('.').map(Number);
+  const prefixNum = Number(agendaPrefixNum);
+  if (!parts.length || isNaN(parts[0]) || isNaN(prefixNum) || parts[0] !== prefixNum) return false;
+  const second = parts.length > 1 ? parts[1] : -1;
+  return isNaN(second) ? false : second < 3;
+}
+
+/**
+ * SA4-PROD-003: renders one TDoc's standard detail table (TDoc / Title /
+ * Source / Contact / Agenda Item / Type-For / E-mail Discussion /
+ * Revisions / Minutes / Disposition / Status) -- identical row schema and
+ * cell logic to the two existing inline per-TDoc-table blocks inside
+ * buildSkeletonWithTdocTables() (both left untouched by this task).
+ * Extracted here only so the NEW {agendaPrefixNum}.1.4 "Documents" section
+ * does not become a third verbatim copy of that block; the two existing
+ * call sites are not migrated to it.
+ *
+ * `agendaItemLabel` is passed explicitly (not read from a loop item) so a
+ * caller can preserve a TDoc's ORIGINAL agenda-item value even when the
+ * section it is rendered under (here, "{agendaPrefixNum}.1.4") is not that
+ * value -- required so the Document Reallocations workflow can see where
+ * the document actually came from.
+ */
+function appendTdocDetailTable_(body, tdocData, agendaItemLabel) {
+  const row = tdocData.row;
+  const revisedTo = getRevisedTo_(tdocData);
+  const typeCol = tdocData.typeCol;
+  const forCol = tdocData.forCol;
+  const typeFor = (typeCol >= 0 && forCol >= 0 && row[typeCol] && row[forCol])
+    ? `${row[typeCol]} for ${row[forCol]}`
+    : (typeCol >= 0 && row[typeCol]) ? row[typeCol]
+    : (forCol >= 0 && row[forCol]) ? row[forCol]
+    : '';
+
+  const tempData = [
+    ['TDoc', row[tdocData.tdocCol]],
+    ['Title', row[tdocData.titleCol]],
+    ['Source', row[tdocData.sourceCol]],
+    ['Contact', tdocData.contactCol >= 0 ? row[tdocData.contactCol] : ''],
+    ['Agenda Item', agendaItemLabel],
+    ['Type/For', typeFor],
+    ['E-mail Discussion', ''],
+    ['Revisions', ''],
+    ['Minutes', ''],
+    ['Disposition', revisedTo ? 'Revised to ' + revisedTo : ''],
+    ['Status', tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '']
+  ];
+  const table = body.appendTable();
+  removeInitialEmptyRow_(table);
+  tempData.forEach(rowData => {
+    const tr = table.appendTableRow();
+    tr.appendTableCell(rowData[0]);
+    tr.appendTableCell(String(rowData[1] || ''));
+  });
+  if (tdocData.richTextRow && tdocData.richTextRow[tdocData.tdocCol]) {
+    const richText = tdocData.richTextRow[tdocData.tdocCol];
+    if (richText.getLinkUrl && richText.getLinkUrl()) {
+      const cell = table.getRow(0).getCell(1);
+      const tdocValue = String(row[tdocData.tdocCol]);
+      if (tdocValue.length > 0) {
+        cell.editAsText().setLinkUrl(0, tdocValue.length - 1, richText.getLinkUrl());
+      }
+    }
+  }
+  styleStatusCell_(table);
 }
 
 /**
