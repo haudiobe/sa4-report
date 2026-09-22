@@ -964,6 +964,58 @@ function agendaSelectorMatches_(selector, agendaItem) {
   return normalized.value.indexOf(item) !== -1;
 }
 
+/**
+ * SA4-IMPL-006: pure list-level agenda projection. Converts a complete
+ * parsed agenda-item array (as produced by parseAgendaFromHeadings_()/
+ * parseAgendaFromTables_(), each item shaped {number, title, level, heading,
+ * text}) into the ordered subset selected for the report.
+ *
+ * Deliberately simple, by design, not by omission -- see the SA4-ARCH-007
+ * report for the evidence behind each of these decisions:
+ *
+ *   - No ancestor retention. The current parseAgendaForReport_() ZIP-path
+ *     filter DOES retain a bare parent (e.g. "7" alongside "7.1"/"7.2"), but
+ *     SA4-ARCH-007 traced its sole real consumer (buildSkeletonWithTdocTables)
+ *     and found it immediately, redundantly re-filters the parent back OUT
+ *     before rendering anything -- the parent has zero observable effect
+ *     today. Reproducing that intermediate, unused state here would just be
+ *     copying an accident, not preserving a requirement.
+ *   - No descendant expansion beyond what 'prefix' membership itself already
+ *     provides via String.startsWith() (a descendant's own number already
+ *     starts with the prefix, so it's already a direct member -- there is
+ *     nothing extra to "expand").
+ *   - No node synthesis: if an ancestor/parent was never present in the
+ *     source document, it is never invented (SA4-ARCH-007 confirmed this is
+ *     already true of every existing parser; this function preserves it by
+ *     construction -- it can only ever return items that were passed in).
+ *   - No sorting: SA4-ARCH-007 confirmed agenda-item order is always
+ *     source-document order, never re-derived from the number string. This
+ *     function preserves that via Array.prototype.filter, which never
+ *     reorders.
+ *   - itemList is EXACT-selected-items-only (Model A from the SA4-ARCH-007
+ *     analysis): the one real recurring-telco example evidenced (DaCAS=1.5,
+ *     ATIAS_Ph3-MED=1.6, SA4-ARCH-006) shows leaf slots with no observed
+ *     nested children. This is not proven to generalize -- if subtree
+ *     selection is ever genuinely required, 'prefix' mode is the
+ *     architecturally correct tool for that, not itemList.
+ *
+ * All membership semantics are delegated to the UNCHANGED
+ * agendaSelectorMatches_(selector, item.number) -- this function adds no
+ * second switch over 'prefix'/'all'/'itemList' and no new flags on the
+ * matching predicate.
+ *
+ * Pure: no Google APIs, no PropertiesService, does not mutate `agendaItems`
+ * or any item object, and returns the ORIGINAL item object references for
+ * every retained entry (a filter, not a clone/rewrite).
+ */
+function projectAgendaItems_(agendaItems, selector) {
+  if (!Array.isArray(agendaItems)) {
+    throw new Error('projectAgendaItems_: expected an array of agenda items, got ' + JSON.stringify(agendaItems));
+  }
+
+  return agendaItems.filter(item => agendaSelectorMatches_(selector, item ? item.number : undefined));
+}
+
 function getMeetingContext_() {
   const cfg = getReportConfig_();
   const identity = getMeetingIdentityConfig_();
