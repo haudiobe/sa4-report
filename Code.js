@@ -1057,21 +1057,30 @@ function enableAutomaticUpdatesForAddon() {
   const context = { documentId: documentId, mode: 'addon-interactive' };
 
   withAddonScriptLock_(function () {
-    let registryEntry = getRegisteredReportDocument_(documentId);
-
-    if (!registryEntry) {
-      const adoption = adoptReportDocumentForAddon_(context);
-      if (!adoption.verified) {
-        ui.alert('Could Not Enable Automatic Updates',
-          'Adopting this document failed to verify: ' + adoption.mismatches.join(', ') + '.\n' +
-          'No automatic updates were enabled.',
-          ui.ButtonSet.OK);
-        return;
-      }
-      registryEntry = adoption.registryEntry;
+    // ADDON-005 (live-test follow-up): always (re-)adopt, not just when
+    // never-before-registered. adoptReportDocumentForAddon_() is
+    // idempotent (ADDON-003) -- re-running it on an already-adopted
+    // document simply re-copies the CURRENT Document Properties values
+    // into central state. Without this, "Enable Automatic Updates" on an
+    // already-adopted document silently kept the STALE central-state
+    // snapshot from first adoption, with no way to pick up a config
+    // change (e.g. TDOC_LIST_URL) saved afterward via "Configure Meeting
+    // Settings" (which still writes Document Properties, unchanged --
+    // see ADDON-004 report Section 5) -- discovered during the live
+    // scratch-document acceptance test itself. "Enable" is the one
+    // button that already both reads AND writes registration state, so
+    // it's the natural place to also (re-)sync, without adding a
+    // separate new menu item for it.
+    const adoption = adoptReportDocumentForAddon_(context);
+    if (!adoption.verified) {
+      ui.alert('Could Not Enable Automatic Updates',
+        'Adopting this document failed to verify: ' + adoption.mismatches.join(', ') + '.\n' +
+        'No automatic updates were enabled.',
+        ui.ButtonSet.OK);
+      return;
     }
 
-    registryEntry = registerReportDocument_(documentId, { enabled: true });
+    const registryEntry = registerReportDocument_(documentId, { enabled: true });
     const triggerResult = ensureAddonSchedulerTrigger_();
 
     ui.alert('Automatic Updates Enabled',
@@ -2024,10 +2033,25 @@ function reportStateKeysToAdopt_(sourceStore) {
  * never deleted -- Document Properties remains fully intact and usable by
  * the existing bound-script/interactive path exactly as before.
  *
+ * The SOURCE is always the real PropertiesService.getDocumentProperties()
+ * directly -- deliberately NOT routed through getReportStateStore_(context),
+ * even though every other function in this file goes through that seam.
+ * Adoption's entire purpose is "copy FROM the legacy per-document backend
+ * INTO the central one"; once ADDON-004 made getReportStateStore_()'s
+ * addon-interactive mode resolve an ALREADY-registered document to the
+ * central backend itself, routing adoption's source through that same
+ * seam would make re-running adoption on an already-adopted document copy
+ * central state onto itself (a silent no-op) instead of picking up
+ * whatever has changed in Document Properties since -- found live, during
+ * the ADDON-005 scratch-document acceptance test, when "Enable Automatic
+ * Updates" (which re-adopts, see below) stopped picking up a TDOC_LIST_URL
+ * change made via the legacy "Configure Meeting Settings" dialog.
+ *
  * Idempotent: calling this again on an already-adopted document re-copies
- * the CURRENT source values (a merge write, never deleteAllOthers) and
- * re-verifies; registerReportDocument_()'s own upsert behavior means
- * registeredAt is preserved from the first adoption, not reset.
+ * the CURRENT Document Properties values (a merge write, never
+ * deleteAllOthers) and re-verifies; registerReportDocument_()'s own
+ * upsert behavior means registeredAt is preserved from the first
+ * adoption, not reset.
  *
  * On a verification failure, registerReportDocument_() is never called --
  * a document can never end up registered without its central state having
@@ -2043,7 +2067,7 @@ function adoptReportDocumentForAddon_(context) {
   }
 
   const documentId = getReportDocumentId_(context);
-  const source = getReportStateStore_(context);
+  const source = PropertiesService.getDocumentProperties();
   const target = getReportStateStore_({ documentId: documentId, mode: 'addon-background' });
 
   const keysToCopy = reportStateKeysToAdopt_(source);
@@ -2060,7 +2084,11 @@ function adoptReportDocumentForAddon_(context) {
   let registryEntry = null;
 
   if (verified) {
-    const cfg = getReportConfig_(context);
+    // Same reasoning as `source` above: read the just-copied identity
+    // fields straight back from the source Document Properties (via
+    // getReportConfig_({mode:'bound'}), which always uses Backend A),
+    // never through the possibly-already-central addon-interactive path.
+    const cfg = getReportConfig_({ mode: 'bound' });
     registryEntry = registerReportDocument_(documentId, {
       meetingId: cfg.MEETING_ID,
       meetingName: cfg.MEETING_NAME || cfg.MEETING_FOLDER

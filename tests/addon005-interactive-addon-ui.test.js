@@ -85,7 +85,7 @@ console.log('enableAutomaticUpdatesForAddon() -- adopts an unregistered document
   check('Document Properties untouched by the adoption', docProps.getProperty('MEETING_ID'), '1');
 }
 
-console.log('enableAutomaticUpdatesForAddon() -- already-adopted document: does not re-adopt, just enables + ensures trigger');
+console.log('enableAutomaticUpdatesForAddon() -- already-adopted document: re-adoption is idempotent (registeredAt preserved), just enables + ensures trigger');
 
 {
   const { sandbox } = loadCode({ documentProperties: { MEETING_ID: '1', MEETING_FOLDER: 'X' } });
@@ -97,9 +97,34 @@ console.log('enableAutomaticUpdatesForAddon() -- already-adopted document: does 
 
   sandbox.enableAutomaticUpdatesForAddon();
 
-  check('registeredAt is unchanged (not re-adopted from scratch)',
+  check('registeredAt is unchanged (adoptReportDocumentForAddon_() is idempotent, not a fresh registration)',
     sandbox.getRegisteredReportDocument_('DOC_ALREADY').registeredAt, registeredAtBefore);
   check('now enabled', sandbox.getRegisteredReportDocument_('DOC_ALREADY').enabled, true);
+}
+
+console.log('enableAutomaticUpdatesForAddon() -- RE-SYNCS central state from Document Properties every time it runs (not just on first adoption)');
+
+{
+  const { sandbox, docProps } = loadCode({ documentProperties: { MEETING_ID: '1', MEETING_FOLDER: 'X', TDOC_LIST_URL: 'https://example.invalid/first.xlsx' } });
+  sandbox.ScriptApp = makeFakeScriptApp();
+  withActiveDocument(sandbox, 'DOC_RESYNC');
+  alertRecorder(sandbox);
+
+  sandbox.enableAutomaticUpdatesForAddon();
+  const centralBefore = sandbox.getReportStateStore_({ mode: 'addon-background', documentId: 'DOC_RESYNC' });
+  check('central state reflects the value present at first enable',
+    centralBefore.getProperty('TDOC_LIST_URL'), 'https://example.invalid/first.xlsx');
+
+  // Simulate an interactive config edit made AFTER adoption (e.g. via the
+  // legacy "Configure Meeting Settings" dialog, which still writes
+  // Document Properties -- see ADDON-004 report Section 5).
+  docProps.setProperty('TDOC_LIST_URL', 'https://example.invalid/updated.xlsx');
+
+  sandbox.enableAutomaticUpdatesForAddon(); // click "Enable" again
+
+  const centralAfter = sandbox.getReportStateStore_({ mode: 'addon-background', documentId: 'DOC_RESYNC' });
+  check('central state now reflects the UPDATED Document Properties value',
+    centralAfter.getProperty('TDOC_LIST_URL'), 'https://example.invalid/updated.xlsx');
 }
 
 console.log('enableAutomaticUpdatesForAddon() -- second document reuses the SAME single trigger (does not create a second)');
