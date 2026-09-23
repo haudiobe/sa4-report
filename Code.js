@@ -6408,7 +6408,7 @@ function removeRowHeightAndSpacing(context) {
   }
   perfAddTime_('  formatting: per-table row/cell/paragraph write loop', Date.now() - formattingWriteLoopStart);
 
-  perfTimed_('  formatting: removeEmptyParagraphs_ (own full-document paragraph scan)', () => removeEmptyParagraphs_());
+  perfTimed_('  formatting: removeEmptyParagraphs_ (own full-document paragraph scan)', () => removeEmptyParagraphs_(context));
 }
 
 /**
@@ -6445,8 +6445,8 @@ function setTwoColumnTDocTableWidths_(context) {
  * Removes empty paragraphs only between "E-Mail Discussion" and "Revisions:"
  * (same logic you had).
  */
-function removeEmptyParagraphs_() {
-  const body = getActiveDocumentBodyCounted_('removeEmptyParagraphs_');
+function removeEmptyParagraphs_(context) {
+  const body = getActiveDocumentBodyCounted_('removeEmptyParagraphs_', context);
   const paragraphs = body.getParagraphs();
   perfCount_('body.getParagraphs() calls (total)');
   perfCount_('body.getParagraphs() call site: removeEmptyParagraphs_');
