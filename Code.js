@@ -2338,7 +2338,24 @@ function fetchAndAddAbstract_(table, tdocNumber) {
       Logger.log('No REVIEWER_API_TOKEN found in script properties');
       return;
     }
-    
+
+    // PERF-006 (Part A): canonicalize via the central SA4 document-ID
+    // registry (never a second parser) before touching the negative
+    // cache. Both existing call sites already pass an already-canonical
+    // tdocNumber (parsedTdoc.raw from parseExactSA4DocumentId_()), but
+    // re-deriving it here makes the cache self-contained rather than
+    // relying on every future caller to canonicalize first. If somehow
+    // not a recognized identifier, the cache is simply not consulted --
+    // the request still proceeds exactly as before (no behavior change).
+    const canonical = parseExactSA4DocumentId_(tdocNumber);
+    const cacheId = canonical.isValid ? canonical.raw : null;
+
+    if (cacheId && isReviewerNoSummaryCached_(cacheId)) {
+      perfCount_('Reviewer negative-cache hits');
+      Logger.log(`Skipping Reviewer API for ${tdocNumber}: no summary was available on a previous run (cached, within TTL)`);
+      return;
+    }
+
     const apiUrl = `https://reviewer.bouazizi.dev/api/v1/documents/${tdocNumber}/summary?type=summary`;
 
     perfCount_('UrlFetchApp.fetch() calls (total)');
@@ -2352,14 +2369,19 @@ function fetchAndAddAbstract_(table, tdocNumber) {
       },
       muteHttpExceptions: true
     });
-    
+
     const statusCode = response.getResponseCode();
-    
+
     if (statusCode === 200) {
       const result = JSON.parse(response.getContentText());
       const abstractText = result.text || '';
-      
+
       if (abstractText) {
+        // PERF-006 (Part A): a real summary just arrived -- clear any
+        // stale negative-cache entry (e.g. Reviewer had not yet finished
+        // processing this TDoc on an earlier run and returned 404 then).
+        if (cacheId) clearReviewerNoSummaryCache_(cacheId);
+
         const insertIndex = findAbstractInsertIndex_(table);
         // PERF-003B (Part 3): this inserts a brand-new ROW into an
         // EXISTING table -- a genuine structural change (new row/cells
@@ -2383,7 +2405,27 @@ function fetchAndAddAbstract_(table, tdocNumber) {
         Logger.log(`Added abstract for ${tdocNumber}`);
       }
     } else if (statusCode === 404) {
+      // PERF-006 (Part A): 404 is the Reviewer API's own explicit "no
+      // summary exists for this document" contract -- the one genuinely
+      // definitive "does not exist" signal this endpoint returns, and
+      // exactly the case PERF-005 measured recurring every run. This is
+      // the ONLY status cached negative. Deliberately NOT cached:
+      //  - any other 4xx (e.g. 401/403 auth failures, 400 bad request) --
+      //    a client/auth/config problem, not "no summary", and caching it
+      //    would silently hide a real misconfiguration on every future run;
+      //  - any 5xx -- a server-side/transient failure, not a content fact;
+      //  - a 200 with an empty body -- Reviewer accepted the request but
+      //    may simply not have finished processing this TDoc yet, which is
+      //    not proven permanent, so it is left exactly as before (no
+      //    insertion, no cache write, retried next run, same as pre-PERF-006);
+      //  - the catch block below (exceptions: network failures, JSON parse
+      //    failures, malformed responses) -- none of these are a content
+      //    fact about the document, so none are cached.
       Logger.log(`No summary available for ${tdocNumber}`);
+      if (cacheId) {
+        markReviewerNoSummary_(cacheId, statusCode);
+        perfCount_('Reviewer negative-cache writes');
+      }
     } else {
       Logger.log(`API error for ${tdocNumber}: ${statusCode}`);
     }
@@ -3085,6 +3127,16 @@ function updateRevisions_(cfg) {
   const body = getActiveDocumentBodyCounted_('updateRevisions_');
   const tables = getTablesCounted_(body, 'updateRevisions_');
 
+  // PERF-006 (Part B): pre-parse every anchor into a
+  // Map<canonicalTdocId, DraftEntry[]> ONCE, instead of the per-table
+  // anchors.forEach(parseDraftAnchor_) loop below re-parsing the SAME
+  // anchor once per TDoc table (O(tables*anchors) -> O(anchors)). See
+  // buildRevisionAnchorIndex_()'s own header comment -- PERF-005 measured
+  // the old matching loop at only ~9ms for this workload, so this is a
+  // complexity/code-quality improvement, not a runtime-bottleneck fix.
+  const anchorIndex = buildRevisionAnchorIndex_(anchors, url);
+  perfCount_('revision anchors parsed', anchors.length);
+
   let revisionFilesProcessed = 0;
   let matchingMs = 0;
   let renderingMs = 0;
@@ -3104,19 +3156,16 @@ function updateRevisions_(cfg) {
     const storeKey = 'REVIS_' + tdoc;
     const store = loadJsonObject_(props.getProperty(storeKey));
 
-    // PERF-001 stage: "revision matching" -- per TDoc table, scanning
-    // every discovered anchor for a canonical-identity match.
+    // PERF-001 stage: "revision matching" -- per TDoc table, looking up
+    // this TDoc's already-parsed drafts (PERF-006 Part B: an O(1) bucket
+    // lookup into anchorIndex, instead of re-scanning+re-parsing every
+    // anchor here). Canonical-identity match semantics are unchanged --
+    // buildRevisionAnchorIndex_() bucketed by the exact same draft.tdocId
+    // this loop used to compare against.
     const matchStart = Date.now();
-    anchors.forEach(a => {
-      // PROD-017: match by CANONICAL TDoc identity (parsed out of the
-      // anchor's filename via the central registry -- parseDraftAnchor_()),
-      // never literal substring containment. The old
-      // `new RegExp(escapeRegExp_(tdoc)).test(text)` would also match an
-      // unrelated, longer TDoc number sharing the same leading digits
-      // (e.g. tdoc "S4-261834" is also a substring of "S4-2618345.docx").
-      // Exact canonical-string equality against `tdoc` rules that out.
-      const draft = parseDraftAnchor_(a, url);
-      if (!draft || draft.tdocId !== tdoc) return;
+    perfCount_('revision TDoc bucket lookups');
+    const drafts = anchorIndex.get(tdoc) || [];
+    drafts.forEach(draft => {
       const id = normalizeRevisionKey_({ link: draft.url, text: draft.fileName });
       if (!id) return;
       if (!store[id]) { store[id] = { text: draft.fileName, link: draft.url }; revisionFilesProcessed++; }
@@ -3376,6 +3425,40 @@ function parseDraftAnchor_(anchor, baseUrl) {
     fileName: fileName,
     url: toAbsoluteUrl_(baseUrl, anchor && anchor.href)
   };
+}
+
+/**
+ * PERF-006 (Part B): pre-parses every revision-folder anchor ONCE into a
+ * Map<canonicalTdocId, DraftEntry[]> bucket, instead of updateRevisions_()
+ * re-running parseDraftAnchor_() (and the parseSA4DocumentId_() regex
+ * match it does internally) once per (table, anchor) pair.
+ * parseDraftAnchor_(a, baseUrl) depends only on the anchor and the
+ * (per-run-constant) baseUrl -- never on which TDoc table is currently
+ * being processed -- so recomputing it per table was pure redundant work:
+ * for a 34-table/65-anchor workload that is up to 2,210 parse calls
+ * collapsed down to exactly 65. PERF-005 measured the OLD nested-loop
+ * matching stage at only ~9ms for that same workload, so this is a
+ * complexity/code-quality improvement (same class of fix as PERF-003
+ * Part A's TDoc table index), not a runtime-bottleneck fix -- do not
+ * expect a large wall-clock improvement from this alone.
+ *
+ * Uses the SAME parseDraftAnchor_() every other caller uses (never a
+ * second filename/TDoc parser), and preserves each anchor's original
+ * relative order within its TDoc's bucket -- iterating `anchors` in the
+ * same order the old anchors.forEach() loop did, so
+ * updateRevisions_()'s per-table dedup/ordering logic downstream (which
+ * only depends on the SET and relative order of matched drafts, both
+ * unchanged here) sees byte-identical input to before.
+ */
+function buildRevisionAnchorIndex_(anchors, baseUrl) {
+  const index = new Map();
+  (anchors || []).forEach(a => {
+    const draft = parseDraftAnchor_(a, baseUrl);
+    if (!draft) return;
+    if (!index.has(draft.tdocId)) index.set(draft.tdocId, []);
+    index.get(draft.tdocId).push(draft);
+  });
+  return index;
 }
 
 // =========================================================
@@ -4550,6 +4633,49 @@ function clearA1EmptyCache_() {
   const props = PropertiesService.getDocumentProperties();
   props.getKeys().forEach(k => { if (k.startsWith('A1_EMPTY_CACHE_')) props.deleteProperty(k); });
   Logger.log('A1 empty-week cache cleared');
+}
+
+// =========================================================
+// PERF-006 (Part A): Reviewer API "no summary" negative cache
+// =========================================================
+// PERF-005 found that fetchAndAddAbstract_() retries the exact same
+// Reviewer API request every automatic run for a TDoc whose summary is
+// permanently unavailable (a 404 response persists nothing, so the next
+// run's addAbstractsForTables_() sweep -- which only skips a table that
+// already HAS an Abstract cell -- always finds this one still missing and
+// tries again). This mirrors the existing A1 empty-page cache above:
+// same {ts, ...} + TTL shape, same Document Properties storage, same
+// conservative 24h default -- but keyed by canonical TDoc identity (via
+// the central parseExactSA4DocumentId_() registry, never a second parser)
+// rather than by URL, and deliberately narrower in what it caches (see
+// fetchAndAddAbstract_()'s own comment for exactly which response is
+// treated as "definitive no summary" vs. left uncached).
+var REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 24;
+
+function reviewerNoSummaryCacheKey_(canonicalTdocId) {
+  return 'REVIEWER_NO_SUMMARY_CACHE_' + canonicalTdocId;
+}
+
+function isReviewerNoSummaryCached_(canonicalTdocId) {
+  const raw = PropertiesService.getDocumentProperties().getProperty(reviewerNoSummaryCacheKey_(canonicalTdocId));
+  if (!raw) return false;
+  try {
+    const obj = JSON.parse(raw);
+    const ttlMs = REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS * 3600 * 1000;
+    if ((Date.now() - obj.ts) > ttlMs) return false;
+    return true;
+  } catch (e) { return false; }
+}
+
+function markReviewerNoSummary_(canonicalTdocId, statusCode) {
+  PropertiesService.getDocumentProperties().setProperty(
+    reviewerNoSummaryCacheKey_(canonicalTdocId),
+    JSON.stringify({ ts: Date.now(), statusCode: statusCode })
+  );
+}
+
+function clearReviewerNoSummaryCache_(canonicalTdocId) {
+  PropertiesService.getDocumentProperties().deleteProperty(reviewerNoSummaryCacheKey_(canonicalTdocId));
 }
 
 function toAbsoluteUrl_(baseUrl, href) {
