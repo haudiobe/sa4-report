@@ -1150,6 +1150,304 @@ function getReportStateStore_(context) {
 }
 
 // =========================================================
+// ADDON-003 -- CENTRAL DOCUMENT REGISTRY
+// =========================================================
+//
+// A separate Script-Properties namespace from Backend B's
+// 'SA4_STATE|<documentId>|<key>' report state (ADDON-002) -- the registry
+// records WHICH documents the future scheduler (ADDON-004) should look at;
+// it never holds report state itself. Nothing in this file creates a
+// trigger or reads this registry yet.
+//
+// Deliberately NOT one ever-growing JSON blob: a small index (just the
+// list of documentIds) plus one small property PER registered document.
+// Registering another document grows the index by one short string and
+// adds one new, small, bounded-size property -- it never grows any
+// EXISTING document's own property, and the whole registry stays far
+// under the 500KB/store or 9KB/value limits (ADDON-002's capacity
+// analysis) for any realistic number of meeting documents.
+function reportRegistryIndexKey_() {
+  return 'SA4_REGISTRY_INDEX';
+}
+
+function reportRegistryDocKey_(documentId) {
+  if (!documentId) throw new Error('reportRegistryDocKey_: documentId is required.');
+  return 'SA4_REGISTRY_DOC|' + documentId;
+}
+
+// Add-on time-driven triggers cannot run more frequently than once per
+// hour (ADDON-001B, verified against Apps Script's Editor-add-on trigger
+// documentation) -- so, unlike the bound-script UI's 15/30/60-minute
+// options (Code.js manageTriggers(), unchanged here), no sub-hour value is
+// ever valid for a registry entry's intervalHours.
+var REPORT_REGISTRY_ALLOWED_INTERVAL_HOURS_ = [1, 2, 4, 6, 12, 24];
+
+function loadReportRegistryIndex_() {
+  const raw = PropertiesService.getScriptProperties().getProperty(reportRegistryIndexKey_());
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    // Malformed/unexpected-shape index data fails safe -- treated as an
+    // empty registry rather than throwing, so a corrupted index never
+    // blocks every other registry operation.
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(function (id) { return typeof id === 'string' && id; });
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveReportRegistryIndex_(documentIds) {
+  PropertiesService.getScriptProperties().setProperty(reportRegistryIndexKey_(), JSON.stringify(documentIds));
+}
+
+/**
+ * Registers a document, or updates its entry if already registered
+ * (upsert -- this is also what updateRegisteredReportDocument_() and
+ * repeat adoption calls go through). registeredAt and lastRunAt are
+ * preserved from any existing entry (registeredAt is set once, at first
+ * registration; lastRunAt is owned by the future scheduler, ADDON-004,
+ * and is never touched here -- it starts null and stays whatever it was).
+ */
+function registerReportDocument_(documentId, details) {
+  if (!documentId) throw new Error('registerReportDocument_: documentId is required.');
+  const info = details || {};
+
+  if (info.intervalHours !== undefined &&
+      REPORT_REGISTRY_ALLOWED_INTERVAL_HOURS_.indexOf(info.intervalHours) === -1) {
+    throw new Error(
+      'registerReportDocument_: intervalHours must be one of ' +
+      REPORT_REGISTRY_ALLOWED_INTERVAL_HOURS_.join(', ') + ' (add-on time-driven ' +
+      'triggers cannot run more frequently than once per hour) -- got ' + info.intervalHours + '.'
+    );
+  }
+
+  const existing = getRegisteredReportDocument_(documentId);
+
+  const entry = {
+    documentId: documentId,
+    enabled: info.enabled !== undefined ? !!info.enabled : (existing ? existing.enabled : false),
+    meetingId: info.meetingId !== undefined ? info.meetingId : (existing ? existing.meetingId : ''),
+    meetingName: info.meetingName !== undefined ? info.meetingName : (existing ? existing.meetingName : ''),
+    registeredAt: existing ? existing.registeredAt : new Date().toISOString(),
+    lastRunAt: existing ? existing.lastRunAt : null,
+    intervalHours: info.intervalHours !== undefined ? info.intervalHours : (existing ? existing.intervalHours : 1)
+  };
+
+  PropertiesService.getScriptProperties().setProperty(reportRegistryDocKey_(documentId), JSON.stringify(entry));
+
+  const index = loadReportRegistryIndex_();
+  if (index.indexOf(documentId) === -1) {
+    index.push(documentId);
+    saveReportRegistryIndex_(index);
+  }
+
+  return entry;
+}
+
+/**
+ * Removes a document from the scheduler registry only. Does NOT touch
+ * Document Properties (the bound-script source of truth is never affected
+ * by registry membership) and does NOT touch the document's central
+ * report state (SA4_STATE|<documentId>|... survives unregistration, so a
+ * document can be re-registered later without re-adopting from scratch --
+ * see deleteCentralReportState_() below for the separate, explicit,
+ * destructive operation if that state ever needs to be purged).
+ */
+function unregisterReportDocument_(documentId) {
+  if (!documentId) throw new Error('unregisterReportDocument_: documentId is required.');
+
+  PropertiesService.getScriptProperties().deleteProperty(reportRegistryDocKey_(documentId));
+
+  const index = loadReportRegistryIndex_().filter(function (id) { return id !== documentId; });
+  saveReportRegistryIndex_(index);
+}
+
+function getRegisteredReportDocument_(documentId) {
+  if (!documentId) return null;
+  const raw = PropertiesService.getScriptProperties().getProperty(reportRegistryDocKey_(documentId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    // Malformed entry fails safe -- treated as "not registered" rather
+    // than throwing or returning corrupt data to a caller.
+    return null;
+  }
+}
+
+function listRegisteredReportDocuments_() {
+  return loadReportRegistryIndex_()
+    .map(function (id) { return getRegisteredReportDocument_(id); })
+    .filter(function (entry) { return entry !== null; });
+}
+
+function updateRegisteredReportDocument_(documentId, patch) {
+  const existing = getRegisteredReportDocument_(documentId);
+  if (!existing) {
+    throw new Error('updateRegisteredReportDocument_: document ' + documentId + ' is not registered.');
+  }
+  return registerReportDocument_(documentId, Object.assign({}, existing, patch || {}));
+}
+
+/**
+ * Destructive, explicit-only: deletes a document's ENTIRE central report
+ * state (Backend B, every 'SA4_STATE|<documentId>|...' key). Does NOT
+ * touch the registry entry (a separate, orthogonal piece of state -- see
+ * unregisterReportDocument_() above) and does NOT touch Document
+ * Properties. Never called automatically anywhere in this file.
+ */
+function deleteCentralReportState_(documentId) {
+  if (!documentId) throw new Error('deleteCentralReportState_: documentId is required.');
+  const store = makeCentralReportStateStore_(documentId);
+  store.getKeys().forEach(function (key) { store.deleteProperty(key); });
+}
+
+// ---------------------------------------------------------------
+// ADDON-003 -- DOCUMENT ADOPTION (Document Properties -> Backend B)
+// ---------------------------------------------------------------
+//
+// Property classification driving what gets copied (see the ADDON-003
+// report for the full call-graph trace behind this):
+//
+//   REQUIRED for a future continuousUpdateForDocument_(documentId) to
+//   behave correctly with NO Document Properties access:
+//     - every getReportConfig_()/getMeetingIdentityConfig_() field
+//       (meeting/report identity, paths, agenda, options)
+//     - FETCH_ABSTRACTS_ON_UPDATE (the user's own automation choice --
+//       omitting it would silently change what the user asked for)
+//     - REVISION_MAP (genuinely cross-run state: continuousUpdateCore_()
+//       reads last run's map via findParentRevisedToTable_() BEFORE
+//       rearrangeRevisionTables_() recomputes and overwrites it for next
+//       time -- not just a performance cache)
+//     - DISCUSS_<tdoc>/REVIS_<tdoc> (the collector's per-TDoc dedupe
+//       ledgers -- omitting these risks re-inserting emails/revisions
+//       already present in the document body as apparent duplicates)
+//
+//   USEFUL BUT OPTIONAL (safe to omit -- self-healing, TTL'd negative
+//   caches; omitting only costs a redundant fetch on the next run, no
+//   correctness impact):
+//     - REVIEWER_NO_SUMMARY_CACHE_<id>, A1_EMPTY_CACHE_<md5>
+//     - DEADLINE_EXTENSIONS (mirrors an in-document table that is itself
+//       already background-readable via getReportBody_(); the property is
+//       only a fallback for when that table is temporarily missing)
+//
+//   INTERACTIVE-ONLY (never read by continuousUpdateCore_() or anything
+//   it calls -- NOT copied):
+//     - PARSED_AGENDA, PARSED_AGENDA_ALL (menu-driven skeleton building
+//       only: parseAgendaForReport_(), autoCreateReportStructure(),
+//       addTdocTablesOnly())
+//     - SKIP_ABSTRACTS_DURING_TABLE_BUILD (createTDocTableFromData_(),
+//       interactive skeleton build only)
+//
+// REVIEWER_API_TOKEN is intentionally never in scope here at all -- it
+// already lives in Script Properties (global, not per-document) and stays
+// exactly where it is under either backend (see ADDON-002's parity tests).
+var ADDON003_ADOPTION_FIXED_KEYS_ = [
+  'MEETING_FOLDER', 'MEETING_NUMBER', 'MEETING_ID',
+  'FTP_BASE', 'TDOC_LIST_URL',
+  'REPORT_SUFFIX', 'AGENDA_ITEM_PREFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC', 'MEETING_DATE',
+  'SHOW_PREVIEW_SNIPPET',
+  'MEETING_TYPE', 'MEETING_NAME', 'REVISIONS_URL', 'MAILING_LIST',
+  'FETCH_ABSTRACTS_ON_UPDATE',
+  'REVISION_MAP',
+  'DEADLINE_EXTENSIONS'
+];
+
+var ADDON003_ADOPTION_PREFIX_FAMILIES_ = [
+  'DISCUSS_', 'REVIS_', 'A1_EMPTY_CACHE_', 'REVIEWER_NO_SUMMARY_CACHE_'
+];
+
+/**
+ * The exact set of keys adoptReportDocumentForAddon_() will copy from a
+ * given source store: every fixed key that is actually set (skips absent
+ * ones -- nothing invents a value), plus every key belonging to one of the
+ * per-TDoc/per-URL cache families, discovered via the store's own
+ * getKeys() rather than hardcoded. Pure/read-only, exposed separately so
+ * it's independently testable.
+ */
+function reportStateKeysToAdopt_(sourceStore) {
+  const keys = [];
+
+  ADDON003_ADOPTION_FIXED_KEYS_.forEach(function (key) {
+    if (sourceStore.getProperty(key) !== null) keys.push(key);
+  });
+
+  sourceStore.getKeys().forEach(function (key) {
+    if (keys.indexOf(key) !== -1) return;
+    const inFamily = ADDON003_ADOPTION_PREFIX_FAMILIES_.some(function (prefix) {
+      return key.indexOf(prefix) === 0;
+    });
+    if (inFamily) keys.push(key);
+  });
+
+  return keys;
+}
+
+/**
+ * Explicit, interactive-only infrastructure operation (ADDON-003 scope --
+ * NOT wired into onOpen() or any menu item). Copies the current
+ * document's report state from Document Properties (Backend A) into the
+ * central, documentId-namespaced backend (Backend B), verifies the copy,
+ * and only then registers the document. The source is never modified and
+ * never deleted -- Document Properties remains fully intact and usable by
+ * the existing bound-script/interactive path exactly as before.
+ *
+ * Idempotent: calling this again on an already-adopted document re-copies
+ * the CURRENT source values (a merge write, never deleteAllOthers) and
+ * re-verifies; registerReportDocument_()'s own upsert behavior means
+ * registeredAt is preserved from the first adoption, not reset.
+ *
+ * On a verification failure, registerReportDocument_() is never called --
+ * a document can never end up registered without its central state having
+ * been verified first (no half-registered state).
+ */
+function adoptReportDocumentForAddon_(context) {
+  if (context && context.mode === 'addon-background') {
+    throw new Error(
+      'adoptReportDocumentForAddon_: interactive-only -- must run in the ' +
+      'document\'s real bound/addon-interactive session (source of truth is ' +
+      'live Document Properties), not addon-background mode.'
+    );
+  }
+
+  const documentId = getReportDocumentId_(context);
+  const source = getReportStateStore_(context);
+  const target = getReportStateStore_({ documentId: documentId, mode: 'addon-background' });
+
+  const keysToCopy = reportStateKeysToAdopt_(source);
+  const toWrite = {};
+  keysToCopy.forEach(function (key) { toWrite[key] = source.getProperty(key); });
+  target.setProperties(toWrite);
+
+  const mismatches = keysToCopy.filter(function (key) {
+    return target.getProperty(key) !== source.getProperty(key);
+  });
+  const verified = mismatches.length === 0;
+
+  let registered = false;
+  let registryEntry = null;
+
+  if (verified) {
+    const cfg = getReportConfig_(context);
+    registryEntry = registerReportDocument_(documentId, {
+      meetingId: cfg.MEETING_ID,
+      meetingName: cfg.MEETING_NAME || cfg.MEETING_FOLDER
+    });
+    registered = true;
+  }
+
+  return {
+    documentId: documentId,
+    copiedKeys: keysToCopy,
+    verified: verified,
+    mismatches: mismatches,
+    registered: registered,
+    registryEntry: registryEntry
+  };
+}
+
+// =========================================================
 // CENTRALIZED CONFIGURATION
 // =========================================================
 
