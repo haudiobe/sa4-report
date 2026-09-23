@@ -1971,6 +1971,32 @@ function deleteCentralReportState_(documentId) {
   store.getKeys().forEach(function (key) { store.deleteProperty(key); });
 }
 
+// =========================================================
+// ADDON-005D -- TEMPORARY one-off cleanup wrapper
+// =========================================================
+//
+// TEMPORARY: exists only so this ONE disable action can be run from the
+// Apps Script editor's Run button (which cannot pass arguments to a
+// parameterized function like updateRegisteredReportDocument_(documentId,
+// patch) -- see the ADDON-005D report). Hardcodes the OLD SA4#136 scratch
+// document's id (confirmed unambiguously by Thomas, not guessed) and
+// patches ONLY its `enabled` field to false via the existing, unmodified
+// updateRegisteredReportDocument_() -- which already preserves every
+// other registry field (meetingId, meetingName, intervalHours,
+// registeredAt, lastRunAt), never touches central report state
+// (SA4_STATE|...), never touches the scheduler trigger, and -- being
+// namespaced strictly by this one documentId -- cannot affect the NEW
+// example.invalid document or any other registered document.
+//
+// Remove this function (and this section) once Thomas confirms he has
+// run it once -- do not leave it in the codebase permanently.
+function TEMP_disableOldSa4136ScratchDocument_ADDON005D() {
+  return updateRegisteredReportDocument_(
+    'REDACTED-OLD-SCRATCH-DOCUMENT-ID',
+    { enabled: false }
+  );
+}
+
 // ---------------------------------------------------------------
 // ADDON-003 -- DOCUMENT ADOPTION (Document Properties -> Backend B)
 // ---------------------------------------------------------------
