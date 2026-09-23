@@ -6,15 +6,19 @@
  * backend, opens the correct document by id, and only advances
  * `lastRunAt` on success.
  *
- * continuousUpdateCore_() itself catches and logs its own internal
- * per-stage errors (unchanged legacy behavior -- see its header comment),
- * so these tests exercise it through its REAL, un-stubbed body with a
- * document configuration that lets it complete its full pipeline safely
- * offline (no TDOC_LIST_URL override needed -- downloadAndGroupTdocs_()
- * and every RSS/A1/revision fetch go through UrlFetchApp.fetch(), which
- * the default sandbox stub makes throw, and safeFetch_()/
- * downloadAndGroupTdocs_()'s own surrounding try/catch already swallow
- * that, exactly as they do in production when a network call fails).
+ * continuousUpdateCore_() catches and logs its own internal per-stage
+ * errors (unchanged legacy behavior -- see its header comment) but now
+ * (as of the live-test follow-up fix) reports that failure back via its
+ * {success, error} return value, which continuousUpdateForDocument_()
+ * checks before advancing lastRunAt. Tests below that are NOT specifically
+ * about a failing TDoc-list fetch stub `downloadAndGroupTdocs_` to a
+ * trivial `() => ({})` -- its raw UrlFetchApp.fetch() call is NOT wrapped
+ * in its own try/catch (confirmed by trace: only the OUTER
+ * continuousUpdateCore_() try/catch catches it), so leaving it un-stubbed
+ * against the default throwing sandbox fetch would make EVERY run fail,
+ * which is correct production behavior but not what most of these tests
+ * are individually isolating. The "internal per-stage failure" section
+ * below deliberately does NOT stub it, to exercise exactly that path.
  *
  * Run: node tests/addon004-background-update.test.js
  */
@@ -123,6 +127,7 @@ console.log('continuousUpdateForDocument_() -- structurally never uses getActive
   sandbox.PropertiesService.getDocumentProperties = () => { docPropsCalls++; return realGetDocProps(); };
 
   sandbox.LockService.getDocumentLock = () => { docLockCalls++; throw new Error('must not be called from background execution'); };
+  sandbox.downloadAndGroupTdocs_ = () => ({}); // isolate: this test is about structural access, not fetch behavior
 
   const result = sandbox.continuousUpdateForDocument_('DOC_STRUCT');
 
@@ -145,6 +150,7 @@ console.log('continuousUpdateForDocument_() -- opens the correct document, not s
 
   let openedIds = [];
   sandbox.DocumentApp.openById = (id) => { openedIds.push(id); return makeFakeDocument(id); };
+  sandbox.downloadAndGroupTdocs_ = () => ({});
 
   sandbox.continuousUpdateForDocument_('DOC_B');
 
@@ -163,6 +169,7 @@ console.log('continuousUpdateForDocument_() -- all required config comes from ce
   });
   setUpAdoptedEnabledDocument(sandbox, 'DOC_CFG', { REPORT_SUFFIX: 'Video' });
   sandbox.DocumentApp.openById = (id) => makeFakeDocument(id);
+  sandbox.downloadAndGroupTdocs_ = () => ({});
 
   // Spy on getReportConfig_ to capture what REPORT_SUFFIX it actually resolved.
   const realGetReportConfig = sandbox.getReportConfig_;
@@ -211,6 +218,7 @@ console.log('continuousUpdateForDocument_() -- successful run updates lastRunAt'
   const { sandbox } = loadCode();
   setUpAdoptedEnabledDocument(sandbox, 'DOC_SUCCESS');
   sandbox.DocumentApp.openById = (id) => makeFakeDocument(id);
+  sandbox.downloadAndGroupTdocs_ = () => ({});
 
   const before = sandbox.getRegisteredReportDocument_('DOC_SUCCESS').lastRunAt;
   check('lastRunAt starts null', before, null);
@@ -221,6 +229,35 @@ console.log('continuousUpdateForDocument_() -- successful run updates lastRunAt'
   const after = sandbox.getRegisteredReportDocument_('DOC_SUCCESS').lastRunAt;
   check('lastRunAt is now set', after !== null, true);
   check('result.lastRunAt matches the registry', result.lastRunAt, after);
+}
+
+console.log('continuousUpdateForDocument_() -- an INTERNAL per-stage failure (e.g. a bad TDoc-list URL) is caught inside continuousUpdateCore_(), but still does NOT update lastRunAt');
+
+{
+  // This is the exact class of failure a real TDOC_LIST_URL pointing at
+  // an unresolvable host (e.g. https://example.invalid/...) produces in
+  // production: downloadAndGroupTdocs_()'s raw UrlFetchApp.fetch() call
+  // throws, that throw is caught by continuousUpdateCore_()'s OWN try/
+  // catch (never propagates on its own), and continuousUpdateCore_()
+  // returns {success:false, error}. Simulated directly here via a
+  // throwing downloadAndGroupTdocs_ stub, rather than a real network
+  // call, so this test has no external dependency -- the throw site
+  // (inside continuousUpdateCore_()'s try block, not before it) is what
+  // matters, not the specific reason.
+  const { sandbox } = loadCode();
+  setUpAdoptedEnabledDocument(sandbox, 'DOC_INTERNAL_FAIL');
+  sandbox.DocumentApp.openById = (id) => makeFakeDocument(id);
+  sandbox.downloadAndGroupTdocs_ = () => { throw new Error('Could not download TDOC list: fetch failed (simulated example.invalid)'); };
+
+  const before = sandbox.getRegisteredReportDocument_('DOC_INTERNAL_FAIL').lastRunAt;
+  check('lastRunAt starts null', before, null);
+
+  expectThrows('continuousUpdateForDocument_ throws for an internally-caught core failure (not silently "successful")',
+    () => sandbox.continuousUpdateForDocument_('DOC_INTERNAL_FAIL'),
+    'did not complete successfully');
+
+  check('lastRunAt remains null after an internally-caught failure',
+    sandbox.getRegisteredReportDocument_('DOC_INTERNAL_FAIL').lastRunAt, null);
 }
 
 console.log('continuousUpdateForDocument_() -- a failed run (setup-phase throw) does NOT update lastRunAt');

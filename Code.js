@@ -530,6 +530,17 @@ function continuousUpdateCore_(context) {
 
   Logger.log('=== CONTINUOUS UPDATE START ===');
 
+  // ADDON-004 (live-test follow-up): this result is new -- previously
+  // this function returned nothing (implicit undefined) on EITHER path,
+  // which meant continuousUpdateForDocument_() had no way to tell a real
+  // completion apart from a failure this catch below swallowed. The
+  // catch's own swallow-and-log behavior is UNCHANGED (still never
+  // rethrows -- continuousUpdate(), the legacy/interactive caller, relies
+  // on that and already ignores this function's return value entirely,
+  // so this is purely additive for it). Only the NEW caller,
+  // continuousUpdateForDocument_(), reads this.
+  let result = { success: true, error: null };
+
   try {
     // Download latest TDOC list
     const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context));
@@ -643,6 +654,7 @@ function continuousUpdateCore_(context) {
   } catch (e) {
     Logger.log('ERROR: ' + e.message);
     Logger.log(e.stack);
+    result = { success: false, error: e.message };
   } finally {
     // PERF-002: this `finally` guarantees the summary runs after a normal
     // completion OR a catchable in-script exception (the `catch` above) --
@@ -658,6 +670,8 @@ function continuousUpdateCore_(context) {
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
     perfLogSummary_();
   }
+
+  return result;
 }
 
 // =========================================================
@@ -697,19 +711,33 @@ function continuousUpdateForDocument_(documentId) {
   const context = { documentId: documentId, mode: 'addon-background' };
   const startedAt = Date.now();
 
-  // continuousUpdateCore_() -- unchanged by this stage -- catches and logs
-  // its OWN internal per-stage errors rather than propagating them (see
-  // its header comment), exactly as it already does for the legacy
-  // interactive/trigger path. That means a throw reaching HERE only
-  // happens for a setup-phase failure (invalid/unreadable central state,
-  // or the document itself failing to open via getReportBody_()) -- the
-  // same class of failure that would already have stopped
-  // continuousUpdate() before this stage existed. lastRunAt is
-  // deliberately updated only AFTER continuousUpdateCore_() returns
-  // without throwing, so a setup-phase failure here leaves lastRunAt
-  // untouched and the scheduler (which wraps this call in its own
-  // per-document try/catch) sees it as a failed run, not a silent skip.
-  continuousUpdateCore_(context);
+  // continuousUpdateCore_() can fail two distinguishable ways, and only
+  // one of them should advance lastRunAt:
+  //
+  //   (a) a SETUP-PHASE failure (invalid/unreadable central state, or the
+  //       document itself failing to open via getReportBody_()) -- these
+  //       happen BEFORE continuousUpdateCore_()'s own try block and so
+  //       genuinely throw/propagate out of it, straight past this call;
+  //   (b) an INTERNAL per-stage failure (e.g. the TDoc-list fetch itself
+  //       failing) -- continuousUpdateCore_() catches and logs these
+  //       itself (unchanged legacy behavior, relied on by continuousUpdate()),
+  //       so they never throw here -- they surface only in the {success,
+  //       error} result it now returns.
+  //
+  // Both must be treated as a failed run: lastRunAt is advanced ONLY when
+  // continuousUpdateCore_() both returns AND reports success. A (b)-class
+  // failure is converted into a thrown error here specifically so the
+  // scheduler's per-document try/catch (runAddonScheduler_()) counts it
+  // as failed, not succeeded -- exactly like an (a)-class failure already
+  // did by simply propagating.
+  const coreResult = continuousUpdateCore_(context);
+
+  if (!coreResult || !coreResult.success) {
+    throw new Error(
+      'continuousUpdateForDocument_: continuousUpdateCore_() did not complete successfully for ' +
+      documentId + (coreResult && coreResult.error ? (': ' + coreResult.error) : '.')
+    );
+  }
 
   const updated = updateRegisteredReportDocument_(documentId, { lastRunAt: new Date().toISOString() });
 
