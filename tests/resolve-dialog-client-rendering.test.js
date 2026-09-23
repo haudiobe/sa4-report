@@ -85,7 +85,7 @@ const REAL_ELEMENT_IDS = [
   'tdocUrl', 'showPreview', 'apiToken',
   // ADDON-007B1 additions: summary/status elements and the token/family controls.
   'meetingSummary', 'agendaStructure', 'tdocUrlHint', 'mailingListHint',
-  'mainMeetingFields', 'clearApiToken', 'familyInfo'
+  'mainMeetingFields', 'clearApiToken', 'familyInfo', 'familyStatus', 'mailingListReset'
 ];
 
 function makeFakeElement(id) {
@@ -214,7 +214,9 @@ console.log('resolveMeeting() -- an unresolved/degraded real preview (no existin
   check('does not throw even with a fully-blank existing configuration', threw, null);
   check('status is not stuck on "Resolving from 3GPP…"', fakeDocument._registry.resolveStatus.textContent.indexOf('Resolving from 3GPP') === -1, true);
   check('agendaTdoc input is left blank (genuinely unresolved, never guessed)', fakeDocument._registry.agendaTdoc.value, '');
-  check('mailingList input is left blank (never auto-resolved)', fakeDocument._registry.mailingList.value, '');
+  // ADDON-007B2: the resolver still never proposes a list; the input shows the default DERIVED from the auto-detected family (not persisted).
+  check('mailingList input shows the list derived from the auto-detected family', fakeDocument._registry.mailingList.value, '3GPP_TSG_SA_WG4_AUDIO');
+  check('the family was auto-detected from the Audio SWG title', fakeDocument._registry.reportType.value, 'Audio');
 }
 
 // ==================== 3. an invalid Meeting ID (ok:false) still renders ====

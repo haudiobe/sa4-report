@@ -62,7 +62,7 @@ function runClientScript(html, values) {
   const ids = ['meetingId', 'agendaStructure', 'tdocUrlHint', 'mailingListHint', 'mainMeetingFields', 'meetingType', 'reportType', 'familyInfo',
     'meetingSummary', 'resolveStatus', 'resolveBtn', 'discoverStatus', 'discoverBtn', 'portalTypeHint', 'dateRangeHint', 'agendaCandidates',
     'meetingName', 'meetingDate', 'ftpBase', 'agendaTdoc', 'mailingList', 'revisionsUrl', 'apiToken', 'clearApiToken', 'meetingFolder',
-    'meetingNumber', 'agendaSourceDocId', 'tdocUrl', 'showPreview'];
+    'meetingNumber', 'agendaSourceDocId', 'tdocUrl', 'showPreview', 'familyStatus', 'mailingListReset'];
   const registry = {};
   ids.forEach((id) => { registry[id] = { id, value: '', textContent: '', innerHTML: '', checked: false, disabled: false, style: {}, className: '' }; });
   // the hidden familyInfo input carries the server-rendered JSON (HTML-unescaped by a real browser)

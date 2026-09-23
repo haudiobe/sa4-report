@@ -4749,12 +4749,12 @@ function parseAnchors_(html) {
 // Both parseSA4DocumentId_() below and any future exact-match use wrap this
 // fragment with `^...$` themselves; the registry stores the fragment once.
 const SA4_TDOC_FAMILIES = [
-  { key: 'main',          family: 'main',  seriesCode: null, prefix: 'S4-',  body: 'S4-(\\d{6})(?!\\d)' },
-  { key: 'audio-adhoc',   family: 'adhoc', seriesCode: 'A',  prefix: 'S4aA', body: 'S4aA(\\d{6})(?!\\d)' },
-  { key: 'plenary-adhoc', family: 'adhoc', seriesCode: 'P',  prefix: 'S4aP', body: 'S4aP(\\d{6})(?!\\d)' },
-  { key: 'video-adhoc',   family: 'adhoc', seriesCode: 'V',  prefix: 'S4aV', body: 'S4aV(\\d{6})(?!\\d)' },
-  { key: 'mbs-adhoc',     family: 'adhoc', seriesCode: 'I',  prefix: 'S4aI', body: 'S4aI(\\d{6})(?!\\d)' },
-  { key: 'rtc-adhoc',     family: 'adhoc', seriesCode: 'R',  prefix: 'A4aR', body: 'A4aR(\\d{6})(?!\\d)' }
+  { key: 'main',          family: 'main',  seriesCode: null, prefix: 'S4-',  reportFamily: null, body: 'S4-(\\d{6})(?!\\d)' },
+  { key: 'audio-adhoc',   family: 'adhoc', seriesCode: 'A',  prefix: 'S4aA', reportFamily: 'Audio', body: 'S4aA(\\d{6})(?!\\d)' },
+  { key: 'plenary-adhoc', family: 'adhoc', seriesCode: 'P',  prefix: 'S4aP', reportFamily: null, body: 'S4aP(\\d{6})(?!\\d)' },
+  { key: 'video-adhoc',   family: 'adhoc', seriesCode: 'V',  prefix: 'S4aV', reportFamily: 'Video', body: 'S4aV(\\d{6})(?!\\d)' },
+  { key: 'mbs-adhoc',     family: 'adhoc', seriesCode: 'I',  prefix: 'S4aI', reportFamily: 'MBS', body: 'S4aI(\\d{6})(?!\\d)' },
+  { key: 'rtc-adhoc',     family: 'adhoc', seriesCode: 'R',  prefix: 'A4aR', reportFamily: 'RTC', body: 'A4aR(\\d{6})(?!\\d)' }
 ];
 
 /**
@@ -6880,10 +6880,11 @@ function configureMeetingSettings() {
       <h3>2. Report setup</h3>
 
       <label>Report Family:</label>
-      <select id="reportType" onchange="updateDependentUi()">
+      <select id="reportType" onchange="onFamilyChanged()">
         <option value=""${currentSuffix === '' ? ' selected' : ''}>Select report family...</option>
         ${familyOptions}
       </select>
+      <div class="hint" id="familyStatus"></div>
       <div class="hint" id="agendaStructure"></div>
 
       <label>Agenda TDoc: <span id="agendaTdocBadge">${sourceLabel(initialPreview.agendaTdoc.source)}</span></label>
@@ -6900,8 +6901,8 @@ function configureMeetingSettings() {
       <div class="hint" id="tdocUrlHint"></div>
 
       <label>Mailing List:</label>
-      <input type="text" id="mailingList" value="${esc(initialPreview.mailingList.value)}" placeholder="Mailing list name">
-      <div class="hint" id="mailingListHint"></div>
+      <input type="text" id="mailingList" value="${esc(initialPreview.mailingList.value)}" placeholder="Mailing list name" oninput="onMailingListEdited()">
+      <div class="hint"><span id="mailingListHint"></span> <a href="#" id="mailingListReset" style="display:none" onclick="resetMailingList(); return false;">Use the default</a></div>
 
       <label>Revisions / Drafts URL: <span id="revisionsUrlBadge">${sourceLabel(initialPreview.revisionsUrl.source)}</span></label>
       <input type="text" id="revisionsUrl" value="${esc(initialPreview.revisionsUrl.value)}" placeholder="https://www.3gpp.org/ftp/.../inbox/drafts/">
@@ -6987,6 +6988,82 @@ function configureMeetingSettings() {
         }
       }
 
+      // ADDON-007B2: what the user has decided versus what was derived.
+      // An explicit family choice (or a saved one) is never replaced by an
+      // automatic suggestion; a mailing list is either the family's derived
+      // default or an explicit override the user typed / saved earlier.
+      let familyUserChosen = !!document.getElementById('reportType').value;
+      let familyAutoApplied = null;
+      let familyInference = null;
+      let mailingListOverridden = !!document.getElementById('mailingList').value;
+      let mailingListTouched = false;
+
+      function familyLabel(family) {
+        const entry = readFamilyInfo()[family];
+        return entry ? entry.label : family;
+      }
+
+      function familySourceText(inf) {
+        const parts = [];
+        if (inf.sources.indexOf('meeting-name') !== -1) parts.push('meeting name');
+        if (inf.sources.indexOf('tdoc-family') !== -1) parts.push((inf.tdocPrefixes || []).join('/') + ' documents');
+        return parts.join(' and ');
+      }
+
+      function familyStatusText() {
+        const inf = familyInference;
+        if (!inf || !inf.applicable) return '';
+        const family = document.getElementById('reportType').value;
+        if (familyUserChosen) {
+          if (family && inf.family && inf.family !== family) {
+            return familyLabel(family) + ' \\u2014 selected (meeting information suggests ' + familyLabel(inf.family) + ')';
+          }
+          return '';
+        }
+        if (family && family === familyAutoApplied && inf.family === family) {
+          return familyLabel(family) + (inf.confidence === 'confident'
+            ? ' \\u2014 confirmed by ' + familySourceText(inf)
+            : ' \\u2014 suggested from ' + familySourceText(inf));
+        }
+        if (inf.confidence === 'conflict') return 'Needs input \\u2014 conflicting family information found';
+        return 'Needs input \\u2014 family could not be determined';
+      }
+
+      // Called with the server's inference after Resolve / Discover.
+      function applyFamilyInference(inf) {
+        familyInference = inf || null;
+        const select = document.getElementById('reportType');
+        if (!familyUserChosen) {
+          if (inf && inf.applicable && inf.family) {
+            select.value = inf.family;
+            familyAutoApplied = inf.family;
+          } else if (familyAutoApplied) {
+            // earlier suggestion no longer holds (conflict / new meeting): never silently switch
+            select.value = '';
+            familyAutoApplied = null;
+          }
+        }
+      }
+
+      // The select's own change handler: a manual choice always wins.
+      function onFamilyChanged() {
+        familyUserChosen = !!document.getElementById('reportType').value;
+        familyAutoApplied = null;
+        updateDependentUi();
+      }
+
+      function onMailingListEdited() {
+        mailingListOverridden = true;
+        mailingListTouched = true;
+        updateDependentUi();
+      }
+
+      function resetMailingList() {
+        mailingListOverridden = false;
+        mailingListTouched = true;
+        updateDependentUi();
+      }
+
       // Family and agenda structure are separate concepts: the family only
       // names the report; the agenda structure depends on the meeting type.
       function updateDependentUi() {
@@ -7012,9 +7089,22 @@ function configureMeetingSettings() {
           ? 'The TDoc list could not be determined automatically for this meeting. Paste the meeting\\'s TDoc list URL.'
           : 'Main meetings: leave empty to find the TDoc list automatically. Ad-hoc meetings: paste the TDoc list URL.';
 
-        document.getElementById('mailingListHint').textContent = familyEntry
-          ? 'Used to collect meeting-related email. Leave empty to use the default list for ' + familyEntry.label + ' (' + familyEntry.mailingList + ').'
-          : 'Used to collect meeting-related email. It can be derived from the report family \\u2014 select a family first.';
+        document.getElementById('familyStatus').textContent = familyStatusText();
+
+        const mailingInput = document.getElementById('mailingList');
+        const resetLink = document.getElementById('mailingListReset');
+        if (!mailingListOverridden) mailingInput.value = familyEntry ? familyEntry.mailingList : '';
+        if (mailingListOverridden) {
+          document.getElementById('mailingListHint').textContent = familyEntry
+            ? 'Custom value \\u2014 overrides the ' + familyEntry.label + ' default (' + familyEntry.mailingList + ').'
+            : 'Custom value.';
+          resetLink.style.display = '';
+        } else {
+          document.getElementById('mailingListHint').textContent = familyEntry
+            ? 'Default for ' + familyEntry.label + ' (' + familyEntry.mailingList + ') \\u2014 derived from the report family. Edit to override.'
+            : 'Used to collect meeting-related email. Derived from the report family \\u2014 select a family first.';
+          resetLink.style.display = 'none';
+        }
 
         document.getElementById('mainMeetingFields').style.display = type === 'adhoc' ? 'none' : '';
       }
@@ -7025,7 +7115,11 @@ function configureMeetingSettings() {
         setFieldWithBadge('meetingDate', 'meetingDateBadge', preview.meetingDate);
         setFieldWithBadge('ftpBase', 'ftpBaseBadge', preview.ftpBase);
         setFieldWithBadge('agendaTdoc', 'agendaTdocBadge', preview.agendaTdoc);
-        setFieldWithBadge('mailingList', 'mailingListBadge', preview.mailingList);
+        // a saved value is an explicit override; otherwise the list is derived from the family
+        if (!mailingListTouched && preview.mailingList.source === 'existing') {
+          document.getElementById('mailingList').value = preview.mailingList.value;
+          mailingListOverridden = true;
+        }
         setFieldWithBadge('revisionsUrl', 'revisionsUrlBadge', preview.revisionsUrl);
 
         document.getElementById('meetingSummary').textContent = preview.summary || '';
@@ -7051,6 +7145,7 @@ function configureMeetingSettings() {
           candBox.textContent = '';
         }
 
+        applyFamilyInference(preview.familyInference);
         updateDependentUi();
       }
 
@@ -7170,7 +7265,8 @@ function configureMeetingSettings() {
           meetingName: document.getElementById('meetingName').value,
           meetingDate: document.getElementById('meetingDate').value,
           ftpBase: document.getElementById('ftpBase').value,
-          mailingList: document.getElementById('mailingList').value,
+          mailingList: mailingListOverridden ? document.getElementById('mailingList').value.trim() : '',
+          mailingListMode: mailingListOverridden && document.getElementById('mailingList').value.trim() ? 'override' : 'derived',
           revisionsUrl: document.getElementById('revisionsUrl').value,
           reportType: document.getElementById('reportType').value,
           agendaSourceDocId: document.getElementById('agendaSourceDocId').value,
@@ -7337,8 +7433,15 @@ function persistConfigurationSettings_(config) {
   if (config.ftpBase && config.ftpBase.trim()) {
     docProps.setProperty('FTP_BASE', config.ftpBase.trim());
   }
-  if (config.mailingList && config.mailingList.trim()) {
-    docProps.setProperty('MAILING_LIST', config.mailingList.trim());
+  // ADDON-007B2: an explicit dialog mode separates a user override from the
+  // family-derived default. 'derived' removes the property so normal
+  // derivation resumes; 'override' stores it. A caller sending no mode keeps
+  // the historical skip-if-blank behaviour.
+  const mailingListValue = String(config.mailingList || '').trim();
+  if (config.mailingListMode === 'derived' || (config.mailingListMode === 'override' && !mailingListValue)) {
+    docProps.deleteProperty('MAILING_LIST');
+  } else if (mailingListValue) {
+    docProps.setProperty('MAILING_LIST', mailingListValue);
   }
   // ARCH-012: same skip-if-blank protection for REVISIONS_URL.
   if (config.revisionsUrl && config.revisionsUrl.trim()) {
@@ -7413,6 +7516,89 @@ function buildReportFamilyInfo_() {
     };
   });
   return info;
+}
+
+// Report families that are never inferred from words in a meeting name or
+// path ("New"/"Liaison" are ordinary words, not SWG identifiers).
+const REPORT_FAMILIES_NOT_NAME_INFERRED_ = ['Liaison', 'New'];
+
+/**
+ * ADDON-007B2: splits free text into lower-case alphanumeric tokens
+ * (underscores, dashes and slashes separate), so "FS_6G_MED" yields
+ * fs / 6g / med and "Audio" never matches inside a longer word.
+ */
+function tokenizeFamilyEvidenceText_(text) {
+  return String(text || '').toLowerCase().split(/[^a-z0-9]+/).filter(function (t) { return t; });
+}
+
+/** Report families whose own name appears as a whole token in `text`. */
+function reportFamiliesNamedIn_(text) {
+  const tokens = tokenizeFamilyEvidenceText_(text);
+  return Object.keys(REPORT_FAMILY_LABELS_).filter(function (family) {
+    return REPORT_FAMILIES_NOT_NAME_INFERRED_.indexOf(family) === -1 && tokens.indexOf(family.toLowerCase()) !== -1;
+  });
+}
+
+/**
+ * ADDON-007B2: pure, generic report-family inference for AD-HOC meetings.
+ *
+ * evidence: { meetingType, meetingName, ftpBase, tdocFamilyKeys }, where
+ * tdocFamilyKeys is an array (or an object keyed by) SA4_TDOC_FAMILIES keys
+ * seen in the meeting's TDoc list.
+ *
+ * Strong evidence: whole-word family tokens in the meeting name, and the
+ * report family of the TDoc series seen (SA4_TDOC_FAMILIES.reportFamily --
+ * null for S4aP, so plenary documents can never decide anything). The FTP
+ * path only ever confirms a family the strong evidence already chose.
+ *
+ * confidence: 'confident' (name and TDocs agree), 'suggested' (one
+ * unambiguous source), 'unresolved' (nothing usable) or 'conflict'
+ * (incompatible evidence -- nothing is chosen). 'none' with
+ * applicable:false for a non-ad-hoc meeting: one main meeting holds several
+ * report families, so the family is never inferred from the meeting itself.
+ */
+function inferReportFamily_(evidence) {
+  const e = evidence || {};
+  const result = { applicable: true, family: null, confidence: 'unresolved', sources: [], tdocPrefixes: [], reason: null };
+  if (String(e.meetingType || '').trim().toLowerCase() !== 'adhoc') {
+    result.applicable = false;
+    result.confidence = 'none';
+    result.reason = 'not-adhoc';
+    return result;
+  }
+
+  const nameFamilies = reportFamiliesNamedIn_(e.meetingName);
+
+  const keys = Array.isArray(e.tdocFamilyKeys) ? e.tdocFamilyKeys : Object.keys(e.tdocFamilyKeys || {});
+  const tdocFamilies = [];
+  keys.forEach(function (key) {
+    SA4_TDOC_FAMILIES.forEach(function (entry) {
+      if (entry.key === key && entry.reportFamily) {
+        if (tdocFamilies.indexOf(entry.reportFamily) === -1) tdocFamilies.push(entry.reportFamily);
+        if (result.tdocPrefixes.indexOf(entry.prefix) === -1) result.tdocPrefixes.push(entry.prefix);
+      }
+    });
+  });
+
+  if (nameFamilies.length > 1 || tdocFamilies.length > 1 ||
+      (nameFamilies.length === 1 && tdocFamilies.length === 1 && nameFamilies[0] !== tdocFamilies[0])) {
+    result.confidence = 'conflict';
+    result.reason = 'conflicting-evidence';
+    return result;
+  }
+
+  const family = nameFamilies[0] || tdocFamilies[0] || null;
+  if (!family) {
+    result.reason = keys.length > 0 ? 'ambiguous-tdoc-series' : 'no-evidence';
+    return result;
+  }
+  result.family = family;
+  if (nameFamilies.length) result.sources.push('meeting-name');
+  if (tdocFamilies.length) result.sources.push('tdoc-family');
+  result.confidence = nameFamilies.length && tdocFamilies.length ? 'confident' : 'suggested';
+  const ftpFamilies = reportFamiliesNamedIn_(e.ftpBase);
+  if (ftpFamilies.length === 1 && ftpFamilies[0] === family) result.sources.push('ftp-path');
+  return result;
 }
 
 /**
@@ -11361,6 +11547,12 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     unresolved: resolved ? resolved.unresolved : [],
     location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null
   };
+  preview.familyInference = inferReportFamily_({
+    meetingType: preview.meetingType.value,
+    meetingName: preview.meetingName.value,
+    ftpBase: preview.ftpBase.value,
+    tdocFamilyKeys: resolvedDocuments ? resolvedDocuments.familiesSeen : null
+  });
   preview.summary = buildMeetingSummary_(preview);
   return preview;
 }
