@@ -126,7 +126,7 @@ function runBuild(props, agendaItems, tdocsByItem) {
   return { sandbox, body, docProps };
 }
 
-const ADHOC = (suffix) => ({ MEETING_TYPE: 'adhoc', MEETING_NAME: 'Synthetic AH', REPORT_SUFFIX: suffix, AGENDA_TDOC: 'S4aA000001' });
+const ADHOC = (suffix) => ({ MEETING_TYPE: 'adhoc', MEETING_NAME: 'Synthetic AH', REPORT_SUFFIX: suffix, AGENDA_TDOC: 'S4aA000001', FTP_BASE: 'https://example.invalid/Docs/', TDOC_LIST_URL: 'https://example.invalid/list.xlsx' });
 
 const SYNTHETIC_ADHOC_AGENDA = [
   item('1', 'Opening of the session'),

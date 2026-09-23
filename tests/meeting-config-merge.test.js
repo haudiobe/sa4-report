@@ -199,37 +199,11 @@ console.log('computeResolvedMeetingPreview_() -- resolved > existing > unresolve
     previewNoResolveNoExisting.revisionsUrl, { value: '', source: 'unresolved' });
 }
 
-// ============================== 3. computeMeetingConfigReadiness_() ========
-
-console.log('computeMeetingConfigReadiness_() -- only fields the production build actually depends on');
-
-{
-  const { sandbox } = loadCode();
-  const fn = sandbox.computeMeetingConfigReadiness_;
-
-  check('fully configured ad-hoc meeting -> ready',
-    fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: 'x', AGENDA_TDOC: 'S4aP260098', MAILING_LIST: 'list' }).ready, true);
-
-  const adhocMissing = fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: '', AGENDA_TDOC: '', MAILING_LIST: '' });
-  check('ad-hoc meeting missing everything -> not ready', adhocMissing.ready, false);
-  check('ad-hoc meeting missing everything -> 3 issues (TDoc List URL, Agenda TDoc, Mailing list)', adhocMissing.issues.length, 3);
-
-  const mainMissingTdocAndAgenda = fn({ MEETING_TYPE: 'main', TDOC_LIST_URL: '', AGENDA_TDOC: '', MAILING_LIST: 'list' });
-  check('main meeting missing TDOC_LIST_URL/AGENDA_TDOC -> still ready (working fallback formulas exist for main meetings)',
-    mainMissingTdocAndAgenda.ready, true);
-
-  const mainMissingMailingList = fn({ MEETING_TYPE: 'main', TDOC_LIST_URL: 'x', AGENDA_TDOC: 'x', MAILING_LIST: '' });
-  check('main meeting missing MAILING_LIST -> not ready (mailing list always required, resolver can never supply it)',
-    mainMissingMailingList.ready, false);
-  check('main meeting missing MAILING_LIST -> exactly 1 issue', mainMissingMailingList.issues.length, 1);
-
-  check('optional Revisions URL is never checked (not a readiness field at all)',
-    fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: 'x', AGENDA_TDOC: 'x', MAILING_LIST: 'x', REVISIONS_URL: '' }).ready, true);
-  check('ARCH-012: missing REVISIONS_URL alone does not add an issue, ready meeting stays ready',
-    fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: 'x', AGENDA_TDOC: 'x', MAILING_LIST: 'x', REVISIONS_URL: '' }).issues.length, 0);
-  check('ARCH-012: missing REVISIONS_URL on an otherwise-unready meeting does not add a 4th issue',
-    fn({ MEETING_TYPE: 'adhoc', TDOC_LIST_URL: '', AGENDA_TDOC: '', MAILING_LIST: '', REVISIONS_URL: '' }).issues.length, 3);
-}
+// ============================== 3. readiness ================================
+//
+// ADDON-007B3: the old computeMeetingConfigReadiness_() was replaced by the
+// canonical evaluateMeetingReadiness_() rule set; see
+// tests/addon007b3-readiness.test.js.
 
 // ============================== 4. saveConfigurationSettings() workflow ====
 

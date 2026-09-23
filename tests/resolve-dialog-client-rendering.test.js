@@ -65,6 +65,8 @@ function extractConfigureMeetingSettingsScript() {
   // unicode escape). Un-escape exactly that, so this test runs the exact
   // same text a real browser would receive and execute.
   scriptText = scriptText.replace(/\\\\/g, '\\');
+  // ADDON-007B3: the one interpolation -- the shipped readiness evaluator's own source.
+  scriptText = scriptText.replace('${readinessEvaluatorSource}', () => loadCode().sandbox.evaluateMeetingReadiness_.toString());
   return scriptText;
 }
 
@@ -85,7 +87,7 @@ const REAL_ELEMENT_IDS = [
   'tdocUrl', 'showPreview', 'apiToken',
   // ADDON-007B1 additions: summary/status elements and the token/family controls.
   'meetingSummary', 'agendaStructure', 'tdocUrlHint', 'mailingListHint',
-  'mainMeetingFields', 'clearApiToken', 'familyInfo', 'familyStatus', 'mailingListReset'
+  'mainMeetingFields', 'clearApiToken', 'familyInfo', 'familyStatus', 'mailingListReset', 'readinessRules', 'readinessStatus'
 ];
 
 function makeFakeElement(id) {
@@ -96,6 +98,7 @@ function makeFakeDocument() {
   const registry = {};
   REAL_ELEMENT_IDS.forEach(id => { registry[id] = makeFakeElement(id); });
   registry.familyInfo.value = JSON.stringify(loadCode().sandbox.buildReportFamilyInfo_());
+  registry.readinessRules.value = vm.runInContext('JSON.stringify(MEETING_READINESS_RULES_)', loadCode().sandbox);
   return { getElementById: (id) => (Object.prototype.hasOwnProperty.call(registry, id) ? registry[id] : null), _registry: registry };
 }
 

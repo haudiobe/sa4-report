@@ -632,6 +632,10 @@ function continuousUpdateCore_(context) {
   let result = { success: true, error: null };
 
   try {
+    // ADDON-007B3: fail before any document change (a background run then
+    // counts as failed and does not advance lastRunAt).
+    assertMeetingReadyToBuild_(context);
+
     // Download latest TDOC list
     const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context));
     const allTdocs = [];
@@ -6817,6 +6821,10 @@ function configureMeetingSettings() {
   const initialPreview = computeResolvedMeetingPreview_(existingForPreview, null);
   const initiallyAdhoc = String(initialPreview.meetingType.value || '').trim().toLowerCase() === 'adhoc';
   const familyInfo = buildReportFamilyInfo_();
+  // ADDON-007B3: the canonical rules and the evaluator's own source are
+  // handed to the browser, so the live status uses exactly the server rules.
+  const readinessRules = MEETING_READINESS_RULES_;
+  const readinessEvaluatorSource = evaluateMeetingReadiness_.toString();
 
   function esc(v) {
     return String(v === null || v === undefined ? '' : v)
@@ -6858,6 +6866,11 @@ function configureMeetingSettings() {
       #resolveStatus.ok { color: #2d7d2d; }
       #meetingSummary { margin-top: 10px; font-size: 13px; font-weight: bold; }
       #agendaCandidates { margin-top: 8px; font-size: 12px; }
+      #readinessStatus { margin-top: 15px; padding: 10px; border-left: 3px solid #999; background: #f5f5f5; font-size: 13px; }
+      #readinessStatus.ready { border-left-color: #2d7d2d; background: #eaf6ea; }
+      #readinessStatus.attention { border-left-color: #c77c00; background: #fff6e0; }
+      #readinessStatus .readiness-title { font-weight: bold; }
+      #readinessStatus ul { margin: 6px 0 0 0; padding-left: 18px; }
       details.advanced { margin-top: 20px; }
       details.advanced summary { cursor: pointer; font-weight: bold; color: #4285f4; padding: 8px 0; }
     </style>
@@ -6868,7 +6881,7 @@ function configureMeetingSettings() {
       <h3>1. Meeting</h3>
       <label>3GPP Portal Meeting ID:</label>
       <div class="resolve-row">
-        <input type="text" id="meetingId" value="${esc(initialPreview.meetingId.value)}" placeholder="Portal meeting ID (digits)">
+        <input type="text" id="meetingId" value="${esc(initialPreview.meetingId.value)}" placeholder="Portal meeting ID (digits)" oninput="updateDependentUi()">
         <button type="button" id="resolveBtn" onclick="resolveMeeting()">Resolve</button>
       </div>
       <div class="hint">Find the ID in the meeting's 3GPP portal address (...MtgId=NNNNN). Resolving reads public meeting details and does not save anything.</div>
@@ -6889,7 +6902,7 @@ function configureMeetingSettings() {
 
       <label>Agenda TDoc: <span id="agendaTdocBadge">${sourceLabel(initialPreview.agendaTdoc.source)}</span></label>
       <div class="resolve-row">
-        <input type="text" id="agendaTdoc" value="${esc(initialPreview.agendaTdoc.value)}" placeholder="Agenda TDoc number (or enter manually)">
+        <input type="text" id="agendaTdoc" value="${esc(initialPreview.agendaTdoc.value)}" placeholder="Agenda TDoc number (or enter manually)" oninput="updateDependentUi()">
         <button type="button" id="discoverBtn" onclick="discoverAgendaTdocs()">Discover Agenda / TDocs</button>
       </div>
       <div class="hint">Finds the agenda document and TDocs in the meeting's document list. This can take a moment.</div>
@@ -6897,7 +6910,7 @@ function configureMeetingSettings() {
       <div id="agendaCandidates"></div>
 
       <label>TDoc List URL:</label>
-      <input type="text" id="tdocUrl" value="${esc(currentTdocUrl)}" placeholder="https://.../TDoc_List....xlsx">
+      <input type="text" id="tdocUrl" value="${esc(currentTdocUrl)}" placeholder="https://.../TDoc_List....xlsx" oninput="updateDependentUi()">
       <div class="hint" id="tdocUrlHint"></div>
 
       <label>Mailing List:</label>
@@ -6905,7 +6918,7 @@ function configureMeetingSettings() {
       <div class="hint"><span id="mailingListHint"></span> <a href="#" id="mailingListReset" style="display:none" onclick="resetMailingList(); return false;">Use the default</a></div>
 
       <label>Revisions / Drafts URL: <span id="revisionsUrlBadge">${sourceLabel(initialPreview.revisionsUrl.source)}</span></label>
-      <input type="text" id="revisionsUrl" value="${esc(initialPreview.revisionsUrl.value)}" placeholder="https://www.3gpp.org/ftp/.../inbox/drafts/">
+      <input type="text" id="revisionsUrl" value="${esc(initialPreview.revisionsUrl.value)}" placeholder="https://www.3gpp.org/ftp/.../inbox/drafts/" oninput="updateDependentUi()">
       <div class="hint">Suggested drafts/revisions folder. Review if needed.</div>
     </div>
 
@@ -6923,7 +6936,7 @@ function configureMeetingSettings() {
 
       <div class="section">
         <label>FTP Base: <span id="ftpBaseBadge">${sourceLabel(initialPreview.ftpBase.source)}</span></label>
-        <input type="text" id="ftpBase" value="${esc(initialPreview.ftpBase.value)}" placeholder="https://www.3gpp.org/ftp/.../Docs/">
+        <input type="text" id="ftpBase" value="${esc(initialPreview.ftpBase.value)}" placeholder="https://www.3gpp.org/ftp/.../Docs/" oninput="updateDependentUi()">
         <div class="hint">Location of the meeting's documents. Found automatically when the meeting is resolved.</div>
 
         <label>Meeting Report Template (Google Doc):</label>
@@ -6935,7 +6948,7 @@ function configureMeetingSettings() {
         <div class="hint" id="portalTypeHint"></div>
 
         <label>Meeting Name:</label>
-        <input type="text" id="meetingName" value="${esc(initialPreview.meetingName.value)}" placeholder="Meeting name">
+        <input type="text" id="meetingName" value="${esc(initialPreview.meetingName.value)}" placeholder="Meeting name" oninput="updateDependentUi()">
 
         <label>Meeting Date:</label>
         <input type="text" id="meetingDate" value="${esc(initialPreview.meetingDate.value)}" placeholder="September 22, 2026">
@@ -6943,11 +6956,11 @@ function configureMeetingSettings() {
 
         <div id="mainMeetingFields"${initiallyAdhoc ? ' style="display:none"' : ''}>
           <label>Meeting Folder (main meetings):</label>
-          <input type="text" id="meetingFolder" value="${esc(currentMeetingFolder)}" placeholder="Folder name on the 3GPP FTP">
+          <input type="text" id="meetingFolder" value="${esc(currentMeetingFolder)}" placeholder="Folder name on the 3GPP FTP" oninput="updateDependentUi()">
           <div class="hint">Folder name on the 3GPP FTP for a main meeting.</div>
 
           <label>Meeting Number (main meetings):</label>
-          <input type="text" id="meetingNumber" value="${esc(currentMeetingNumber)}" placeholder="Meeting number">
+          <input type="text" id="meetingNumber" value="${esc(currentMeetingNumber)}" placeholder="Meeting number" oninput="updateDependentUi()">
           <div class="hint">Meeting number used in the TDoc list filename of a main meeting.</div>
         </div>
 
@@ -6962,11 +6975,16 @@ function configureMeetingSettings() {
     </details>
 
     <input type="hidden" id="familyInfo" value="${esc(JSON.stringify(familyInfo))}">
+    <input type="hidden" id="readinessRules" value="${esc(JSON.stringify(readinessRules))}">
+
+    <div id="readinessStatus" aria-live="polite"></div>
 
     <button onclick="saveConfig()">Save Configuration</button>
     <button onclick="google.script.host.close()" style="background: #666;">Cancel</button>
 
     <script>
+      ${readinessEvaluatorSource}
+
       function sourceBadgeHtml(source) {
         if (source === 'resolved') return '<span class="badge badge-resolved">found automatically</span>';
         if (source === 'existing') return '<span class="badge badge-existing">saved value</span>';
@@ -7064,6 +7082,51 @@ function configureMeetingSettings() {
         updateDependentUi();
       }
 
+      function readReadinessRules() {
+        try {
+          return JSON.parse(document.getElementById('readinessRules').value) || [];
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function readinessFields() {
+        function val(id) {
+          const el = document.getElementById(id);
+          return el ? el.value : '';
+        }
+        return {
+          meetingType: val('meetingType'), meetingId: val('meetingId'), meetingName: val('meetingName'),
+          ftpBase: val('ftpBase'), reportFamily: val('reportType'), agendaTdoc: val('agendaTdoc'),
+          tdocListUrl: val('tdocUrl'), mailingList: val('mailingList'),
+          meetingFolder: val('meetingFolder'), meetingNumber: val('meetingNumber')
+        };
+      }
+
+      function escapeHtml(text) {
+        return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      // Same rules and evaluator as the server (shipped with the dialog);
+      // purely local, no server call.
+      function updateReadiness() {
+        const box = document.getElementById('readinessStatus');
+        if (!box) return null;
+        const result = evaluateMeetingReadiness_(readinessFields(), readReadinessRules());
+        function bullets(list) {
+          return '<ul>' + list.map(function (item) { return '<li>' + escapeHtml(item.message) + '</li>'; }).join('') + '</ul>';
+        }
+        if (result.ready) {
+          box.className = 'ready';
+          box.innerHTML = '<div class="readiness-title">Ready to build</div>All required meeting sources are configured.' +
+            (result.warnings.length ? '<div style="margin-top:6px">Warnings:</div>' + bullets(result.warnings) : '');
+        } else {
+          box.className = 'attention';
+          box.innerHTML = '<div class="readiness-title">Needs attention</div>' + bullets(result.issues);
+        }
+        return result;
+      }
+
       // Family and agenda structure are separate concepts: the family only
       // names the report; the agenda structure depends on the meeting type.
       function updateDependentUi() {
@@ -7105,6 +7168,8 @@ function configureMeetingSettings() {
             : 'Used to collect meeting-related email. Derived from the report family \\u2014 select a family first.';
           resetLink.style.display = 'none';
         }
+
+        updateReadiness();
 
         document.getElementById('mainMeetingFields').style.display = type === 'adhoc' ? 'none' : '';
       }
@@ -7278,7 +7343,11 @@ function configureMeetingSettings() {
         };
         google.script.run
           .withSuccessHandler(() => {
-            alert('\\u2705 Configuration saved.');
+            // Saved is not the same as ready to build.
+            const readiness = updateReadiness();
+            alert('\\u2705 Configuration saved.' + (readiness && !readiness.ready
+              ? '\\n\\n\\u26A0\\uFE0F It is not ready to build yet:\\n' + readiness.issues.map(function (issue) { return '\\u2022 ' + issue.message; }).join('\\n')
+              : ''));
             google.script.host.close();
           })
           .withFailureHandler((error) => {
@@ -8855,6 +8924,9 @@ function runFullReportBuild() {
  * 6. Append "Registered Documents" summary table at the end
  */
 function buildSkeletonWithTdocTables() {
+  // ADDON-007B3: an ad-hoc meeting with missing sources fails here, before
+  // the document is cleared, instead of building an empty/wrong report.
+  assertMeetingReadyToBuild_();
   const cfg = getReportConfig_();
 
   if (!cfg.TDOC_LIST_URL) {
@@ -11407,7 +11479,7 @@ function diagnoseMeetingResolverTiming_(meetingId, only) {
 // involved):
 //   - computeMeetingDateFromStartDate_(startDate)
 //   - computeResolvedMeetingPreview_(existingProps, resolverResult)
-//   - computeMeetingConfigReadiness_(props)
+//   - evaluateMeetingReadiness_(fields, rules, options)
 // plus one impure orchestrator (resolveMeetingForConfigDialog_) that reads
 // current Document Properties and calls resolveMeetingById_() -- it NEVER
 // writes. configureMeetingSettings()/saveConfigurationSettings() (below,
@@ -11558,38 +11630,111 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
 }
 
 /**
- * ARCH-010: pure, minimal configuration-readiness check over the fields
- * the EXISTING production build actually depends on (buildSkeletonWithTdocTables()
- * / downloadAndGroupTdocs_()). Deliberately NOT based on every field this
- * dialog exposes -- e.g. the optional Revisions URL is never flagged.
+ * ADDON-007B3: the ONE canonical "is this meeting ready to build?" rule set.
+ * Declarative on purpose, so the exact same rules drive the dialog's live
+ * status (rendered into the client with the evaluator below), the save
+ * feedback and the build boundary.
  *
- * TDOC_LIST_URL and AGENDA_TDOC only need to be flagged for an AD-HOC
- * meeting: getReportConfig_() already has a working (main-meeting)
- * fallback formula for TDOC_LIST_URL that always produces SOME value, and
- * parseAgendaForReport_() has a template-based fallback path when
- * AGENDA_TDOC is blank -- neither fallback is meaningful for ad hoc, which
- * is exactly the class of meeting this whole resolver exists for.
- * MAILING_LIST is flagged unconditionally when blank, matching the
- * resolver's own permanent inability to determine it. REVISIONS_URL
- * (ARCH-011/ARCH-012) is deliberately never checked here -- it is optional,
- * purely informational evidence, and no existing build path depends on it.
+ * Each rule: `anyOf` -- at least one of these fields must be non-blank;
+ * `appliesTo` -- meeting types the rule is checked for ('unresolved' = no
+ * meeting type known yet); `severity` -- 'blocking' or 'warning'; `buildFor`
+ * -- meeting types for which the BUILD ENTRY POINTS refuse to run when the
+ * rule fails. Checked against the real runtime: an ad-hoc build reads its
+ * sources raw (no main-meeting fallbacks) and its family, agenda TDoc, TDoc
+ * list and document folder have no working default, so those are enforced at
+ * build. Main meetings keep every existing fallback (Meeting Folder/Number,
+ * TDoc-list derivation, template agenda), so NO rule is enforced for main at
+ * build -- the dialog is only stricter for a newly configured document.
+ * Meeting identity/name, the mailing list, Revisions URL, Reviewer token and
+ * email preview are never build-blocking.
  */
-function computeMeetingConfigReadiness_(props) {
-  const p = props || {};
-  const isAdhoc = String(p.MEETING_TYPE || '').trim().toLowerCase() === 'adhoc';
+const MEETING_READINESS_RULES_ = [
+  { code: 'MEETING_NOT_RESOLVED', appliesTo: ['unresolved'], severity: 'blocking', anyOf: [], buildFor: [],
+    message: 'Resolve the 3GPP meeting first.' },
+  { code: 'MEETING_NOT_RESOLVED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['meetingId'], buildFor: [],
+    message: 'Resolve the 3GPP meeting first.' },
+  { code: 'REPORT_FAMILY_REQUIRED', appliesTo: ['unresolved', 'adhoc', 'main'], severity: 'blocking', anyOf: ['reportFamily'], buildFor: ['adhoc'],
+    message: 'Select a report family.' },
+  { code: 'MEETING_NAME_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['meetingName'], buildFor: [],
+    message: 'The meeting name is missing. Resolve the meeting or enter it under Advanced.' },
+  { code: 'AGENDA_TDOC_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['agendaTdoc'], buildFor: ['adhoc'],
+    message: 'Discover or select the agenda document.' },
+  { code: 'TDOC_LIST_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['tdocListUrl'], buildFor: ['adhoc'],
+    message: 'Paste the meeting\'s TDoc list URL.' },
+  { code: 'FTP_BASE_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['ftpBase'], buildFor: ['adhoc'],
+    message: 'The meeting document folder could not be determined. Review the meeting source under Advanced.' },
+  { code: 'MAIN_MEETING_FOLDER_REQUIRED', appliesTo: ['main'], severity: 'blocking', anyOf: ['meetingFolder', 'ftpBase'], buildFor: [],
+    message: 'Enter the meeting folder, or resolve the meeting.' },
+  { code: 'MAIN_MEETING_NUMBER_REQUIRED', appliesTo: ['main'], severity: 'blocking', anyOf: ['meetingNumber', 'tdocListUrl'], buildFor: [],
+    message: 'Enter the meeting number, or paste the TDoc list URL.' },
+  { code: 'MAILING_LIST_MISSING', appliesTo: ['adhoc', 'main'], severity: 'warning', anyOf: ['mailingList'], buildFor: [],
+    message: 'No mailing list is configured. Email collection will be unavailable.' }
+];
+
+/**
+ * ADDON-007B3: pure evaluator for MEETING_READINESS_RULES_. Self-contained
+ * (no helpers, no globals, no backslashes) because the dialog ships this
+ * function's own source to the browser -- one implementation, not a client
+ * copy of a server rule.
+ *
+ * fields: { meetingType, meetingId, meetingName, ftpBase, reportFamily,
+ * agendaTdoc, tdocListUrl, mailingList, meetingFolder, meetingNumber }.
+ * A blank meetingType means a legacy main document only when it has a
+ * folder or number; otherwise the meeting is simply not resolved yet.
+ * options.forBuild: only rules enforced at the build boundary for this type.
+ */
+function evaluateMeetingReadiness_(fields, rules, options) {
+  const f = fields || {};
+  const forBuild = !!(options && options.forBuild);
+  function has(name) {
+    const v = f[name];
+    return String(v === null || v === undefined ? '' : v).trim() !== '';
+  }
+  let type = String(f.meetingType || '').trim().toLowerCase();
+  if (!type) type = (has('meetingFolder') || has('meetingNumber')) ? 'main' : 'unresolved';
+
   const issues = [];
+  const warnings = [];
+  (rules || []).forEach(function (rule) {
+    if (rule.appliesTo.indexOf(type) === -1) return;
+    if (forBuild && rule.buildFor.indexOf(type) === -1) return;
+    if (rule.anyOf.some(has)) return;
+    (rule.severity === 'warning' ? warnings : issues).push({ code: rule.code, message: rule.message });
+  });
+  return { ready: issues.length === 0, meetingType: type, issues: issues, warnings: warnings };
+}
 
-  if (isAdhoc && !String(p.TDOC_LIST_URL || '').trim()) {
-    issues.push('TDoc List URL not configured (required for ad-hoc meetings -- no reliable default exists).');
-  }
-  if (isAdhoc && !String(p.AGENDA_TDOC || '').trim()) {
-    issues.push('Agenda TDoc not configured (required for ad-hoc meetings -- no template fallback exists).');
-  }
-  if (!String(p.MAILING_LIST || '').trim()) {
-    issues.push('Mailing list not configured.');
-  }
+/**
+ * ADDON-007B3: build-boundary readiness, read from the SAME state the build
+ * itself reads (document properties, or the central copy for a background
+ * context). Ad-hoc sources are read raw -- exactly like getMeetingContext_()
+ * -- so a missing value is missing here instead of being masked by a
+ * main-meeting fallback.
+ */
+function getBuildReadiness_(context) {
+  const identity = getMeetingIdentityConfig_(context);
+  const props = getReportStateStore_(context);
+  return evaluateMeetingReadiness_({
+    meetingType: identity.MEETING_TYPE,
+    meetingName: identity.MEETING_NAME,
+    ftpBase: identity.FTP_BASE,
+    reportFamily: props.getProperty('REPORT_SUFFIX'),
+    agendaTdoc: identity.AGENDA_TDOC,
+    tdocListUrl: identity.TDOC_LIST_URL
+  }, MEETING_READINESS_RULES_, { forBuild: true });
+}
 
-  return { ready: issues.length === 0, issues: issues };
+/**
+ * ADDON-007B3: refuses to build/update an ad-hoc report whose required
+ * sources are missing -- before anything in the document is touched. Main
+ * meetings are never blocked here (legacy fallbacks keep working).
+ */
+function assertMeetingReadyToBuild_(context) {
+  const readiness = getBuildReadiness_(context);
+  if (readiness.ready) return;
+  throw new Error('Cannot build report yet.\n\n' +
+    readiness.issues.map(function (issue) { return '• ' + issue.message; }).join('\n') +
+    '\n\nOpen Configure Meeting to finish the setup.');
 }
 
 /**
