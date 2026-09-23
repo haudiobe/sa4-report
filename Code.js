@@ -2837,6 +2837,39 @@ function ensureCollectorConfigTable_() {
  * Create or ensure reallocation table exists
  */
 /**
+ * ADDON-007A: reads the administrative anchors back out of an already-built
+ * report body by finding the real "<number> Registration of Documents"
+ * heading (which the build places as a child of the opening item). Returns
+ * null when no such heading exists. No report-family knowledge involved.
+ */
+function deriveAdminAnchorsFromBuiltDocument_(body) {
+  for (let i = 0; i < body.getNumChildren(); i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+    const para = child.asParagraph();
+    if (para.getHeading() === DocumentApp.ParagraphHeading.NORMAL) continue;
+    const m = para.getText().trim().match(/^(\d+(?:\.\d+)*)\s+Registration of Documents\b/);
+    if (!m) continue;
+    const parts = m[1].split('.');
+    if (parts.length < 2) continue;
+    const last = parseInt(parts.pop(), 10);
+    const parent = parts.join('.');
+    return {
+      source: 'adhoc-built-document',
+      prefixNum: parent,
+      openingSection: parent,
+      registrationSection: m[1],
+      reallocationSection: `${parent}.${last + 1}`,
+      documentsSection: `${parent}.${last + 2}`,
+      afterDocumentsSection: `${parent}.${last + 3}`,
+      iprSection: null,
+      iprSyntheticSection: null
+    };
+  }
+  return null;
+}
+
+/**
  * Create or ensure reallocation table exists as subsection X.1.3
  */
 function ensureReallocationTable_() {
@@ -2861,7 +2894,33 @@ function ensureReallocationTable_() {
   // Get the agenda prefix from config (e.g., "7." for Audio, "11." for 6G)
   const cfg = getReportConfig_();
   const agendaPrefix = cfg.AGENDA_ITEM_PREFIX || '7.';
-  const targetSection = `${agendaPrefix}1.3`; // e.g., "7.1.3" or "11.1.3"
+  // ADDON-007A: main meetings keep the configured-prefix strings exactly
+  // ("7.1.3", "11.1.3", ...). An ad-hoc meeting never uses the report-family
+  // prefix: its administrative anchor is read from what the build actually
+  // produced (the real "... Registration of Documents" heading), with the real
+  // parsed agenda (PARSED_AGENDA) supplying the IPR boundary when available.
+  let parsedAgenda = [];
+  try {
+    const parsed = JSON.parse(PropertiesService.getDocumentProperties().getProperty('PARSED_AGENDA') || '[]');
+    if (Array.isArray(parsed)) parsedAgenda = parsed;
+  } catch (e) { /* treated as no parsed agenda */ }
+  const meetingContext = getMeetingContext_();
+  let anchors = getAdministrativeAgendaAnchors_(meetingContext, parsedAgenda, agendaPrefix);
+  if (meetingContext.meeting.type === 'adhoc') {
+    const built = deriveAdminAnchorsFromBuiltDocument_(body);
+    if (built) {
+      anchors = Object.assign({}, built, {
+        iprSection: anchors.iprSection,
+        iprSyntheticSection: anchors.iprSyntheticSection
+      });
+    }
+  }
+  if (!anchors.openingSection) {
+    Logger.log('ensureReallocationTable_: ad-hoc meeting with no built/parsed administrative anchor -- Document Reallocations not created.');
+    return;
+  }
+  const targetSection = anchors.reallocationSection; // e.g. "7.1.3" (main) or the real opening item's sibling (ad-hoc)
+  const beforeMarkers = [anchors.documentsSection, anchors.afterDocumentsSection, anchors.iprSection || anchors.iprSyntheticSection].filter(Boolean);
   
   // Find insertion point: before X.1.4 (preferred) or after X.1.2 (fallback)
   //
@@ -2896,9 +2955,7 @@ function ensureReallocationTable_() {
     const heading = para.getHeading();
 
     if (heading !== DocumentApp.ParagraphHeading.NORMAL &&
-        (text.startsWith(`${agendaPrefix}1.4`) ||
-         text.startsWith(`${agendaPrefix}1.5`) ||
-         text.startsWith(`${agendaPrefix}2`))) {
+        beforeMarkers.some(m => text.startsWith(m))) {
       insertIndex = i;
       foundSection = true;
       break;
@@ -2915,7 +2972,7 @@ function ensureReallocationTable_() {
       const heading = para.getHeading();
 
       if (heading !== DocumentApp.ParagraphHeading.NORMAL &&
-          text.startsWith(`${agendaPrefix}1.2`)) {
+          text.startsWith(anchors.registrationSection)) {
         insertIndex = i + 1;
         foundSection = true;
         break;
@@ -2934,7 +2991,7 @@ function ensureReallocationTable_() {
       const heading = para.getHeading();
       
       if (heading !== DocumentApp.ParagraphHeading.NORMAL && 
-          text.startsWith(`${agendaPrefix}1 `)) {
+          text.startsWith(`${anchors.openingSection} `)) {
         insertIndex = i + 1;
         foundSection = true;
         break;
@@ -8419,9 +8476,15 @@ function buildSkeletonWithTdocTables() {
   
   // Filter out the parent item (e.g., "9 Video SWG") - we only want sub-items (9.1, 9.2, etc.)
   const agendaPrefix = getConfiguredAgendaPrefix_();
+  // ADDON-007A: this parent-removal rule is a MAIN-meeting convention (a main
+  // agenda's SWG section "9 Video SWG" is a parent of 9.x). For an ad-hoc
+  // meeting the real agenda numbering is independent of the report-family
+  // prefix, so a real item that happens to be numbered like the family digit
+  // must not be dropped. Main-meeting behavior is unchanged.
+  const isAdhocForParentFilter = getMeetingContext_().meeting.type === 'adhoc';
   const filteredAgendaItems = agendaItems.filter(item => {
     // Keep items that have a dot after the prefix (e.g., 9.1, 9.2, not just 9)
-    return item.number !== agendaPrefix.replace(/\.$/, '');
+    return isAdhocForParentFilter || item.number !== agendaPrefix.replace(/\.$/, '');
   });
   
   if (filteredAgendaItems.length === 0) {
@@ -8476,10 +8539,16 @@ function buildSkeletonWithTdocTables() {
   // only prevents a pre-agenda document from silently vanishing. Rendered
   // under {agendaPrefixNum}.1.4 "Documents" inside the openingSection
   // branch below.
+  // ADDON-007A: administrative-section anchors. MAIN meetings: the exact
+  // configured-prefix strings used before (byte-identical). ADHOC meetings:
+  // derived from the REAL parsed agenda, never from the report-family
+  // prefix -- see getAdministrativeAgendaAnchors_().
+  const anchors = is6G ? null : getAdministrativeAgendaAnchors_(context, filteredAgendaItems, cfg.AGENDA_ITEM_PREFIX || '0.');
+
   const registrationDocs = [];
   if (!is6G) {
     Object.keys(tdocGroups).forEach(key => {
-      if (isBeforeRegistrationBoundary_(key, agendaPrefixNum)) {
+      if (isBeforeAdminBoundary_(key, anchors)) {
         registrationDocs.push(...tdocGroups[key].tdocs);
         delete tdocGroups[key];
       }
@@ -8546,6 +8615,73 @@ function buildSkeletonWithTdocTables() {
   let hasAOB = false;
   let hasCloseOfSession = false;
   
+  // ADDON-007A: the opening/registration/documents block, emitted at the
+  // anchor's emit-after item (the opening item itself for every main meeting
+  // and for an ad-hoc agenda with no real opening children).
+  const emitOpeningAdminBlock = () => {
+    if (context.meeting.type === 'adhoc') {
+      // SA4-PROD-007A: generated directly, not copied from the template.
+      // No CHAIR_NAME/START_TIME property is introduced -- those remain
+      // literal, editable placeholders for the chair to fill in by hand.
+      // MEETING_DATE is optional and generic (no meeting-ID-specific
+      // value baked in here); when unset, "<meeting date>" is used
+      // instead of inventing or assuming any specific date.
+      const openingSubSection = anchors.openingSubSection;
+      body.appendParagraph(`${openingSubSection} Opening of the session`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+      const meetingDateText = (cfg.MEETING_DATE || '').trim() || '<meeting date>';
+      body.appendParagraph(`<Chair> opens the session on ${meetingDateText} at <start> CEST.`);
+    } else {
+      // Opening section for SWG reports - copy X.1 content from template
+      const openingHeader = findHeading_(sourceBody, /^X\.1\s+/);
+      if (openingHeader) {
+        copySectionContentWithReplacement_(openingHeader, body, /^X\.2\s+/, 'X', agendaPrefixNum);
+      }
+    }
+
+    // Always ensure Registration of Documents section exists with the summary table
+    if (!documentContainsHeading_(body, anchors.registrationSection)) {
+      body.appendParagraph(`${anchors.registrationSection} Registration of Documents`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+    }
+
+    // Always add/update the registered documents summary table
+    if (allTdocs.length > 0) {
+      createSummaryTable_(body, allTdocs, allTdocs[0].tdocCol, allTdocs[0].titleCol, allTdocs[0].sourceCol, -1);
+    }
+
+    // SA4-PROD-003: {agendaPrefixNum}.1.4 "Documents" -- collects every
+    // TDoc whose ORIGINAL TDoc-list agenda assignment is before the
+    // normal agenda sections begin (numerically < "{agendaPrefixNum}.3":
+    // e.g. "5", "5.0", "5.1", "5.2" for prefix "5"), extracted from
+    // tdocGroups further above via isBeforeRegistrationBoundary_() into
+    // `registrationDocs`. Such a document has no real numbered
+    // subsection of its own to render under (X.1/X.2 are always
+    // special-cased, never a plain TDoc-table target) and would
+    // otherwise simply vanish from the report -- exactly the
+    // S4aP260089/S4aP260098 problem SA4-PROD-001/002 found. Each row
+    // preserves its OWN original agenda-item value (not this loop's
+    // item.number) so the existing Document Reallocations workflow
+    // (X.1.3, ensureReallocationTable_()/addDocumentReallocation()) can
+    // read where it came from. Only created when non-empty: every
+    // existing main-meeting report has nothing to put here (X.1/X.2 are
+    // never a raw tdocGroups[...] lookup target for main meetings
+    // either), so this is a pure no-op there -- no new heading appears.
+    if (registrationDocs.length > 0) {
+      const documentsSection = anchors.documentsSection;
+      if (!documentContainsHeading_(body, documentsSection)) {
+        body.appendParagraph(`${documentsSection} Documents`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+      }
+      orderTdocsByRevision_(registrationDocs).forEach(tdocData => {
+        appendTdocDetailTable_(body, tdocData, tdocData.row[tdocData.agendaCol]);
+      });
+    }
+    // ADDON-007A: an ad-hoc agenda with no real IPR item gets the standard
+    // IPR content as a synthetic child of the opening item instead of losing it.
+    if (anchors.iprSyntheticSection) {
+      body.appendParagraph(`${anchors.iprSyntheticSection} IPR and antitrust reminder`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+      appendStandardIprSection_(body, agendaPrefixNum, anchors.iprSyntheticSection, 0);
+    }
+  };
+
   filteredAgendaItems.forEach((item, idx) => {
     const headingText = `${item.number} ${item.title}`;
     const heading = body.appendParagraph(headingText);
@@ -8564,10 +8700,10 @@ function buildSkeletonWithTdocTables() {
     // Special handling based on agenda number (not index)
     // For 6G: sections 11.0.x are already created above, so skip them
     // For SWG reports: use X.1, X.2 as before
-    const openingSection = is6G ? `${agendaPrefixNum}.0.1` : `${agendaPrefixNum}.1`;
-    const registrationSection = is6G ? `${agendaPrefixNum}.0.2` : `${agendaPrefixNum}.1.2`;
+    const openingSection = is6G ? `${agendaPrefixNum}.0.1` : anchors.openingSection;
+    const registrationSection = is6G ? `${agendaPrefixNum}.0.2` : anchors.registrationSection;
     const reallocationSection = is6G ? `${agendaPrefixNum}.0.3` : null;
-    const iprSection = is6G ? `${agendaPrefixNum}.0.4` : `${agendaPrefixNum}.2`;
+    const iprSection = is6G ? `${agendaPrefixNum}.0.4` : anchors.iprSection;
     
     // Skip 11.0.x sections for 6G as they're already created
     if (is6G && (item.number === openingSection || item.number === registrationSection || 
@@ -8593,61 +8729,7 @@ function buildSkeletonWithTdocTables() {
     // Reallocation/Documents handling below is completely unchanged and
     // shared by both meeting types.
     if (item.number === openingSection) {
-      if (context.meeting.type === 'adhoc') {
-        // SA4-PROD-007A: generated directly, not copied from the template.
-        // No CHAIR_NAME/START_TIME property is introduced -- those remain
-        // literal, editable placeholders for the chair to fill in by hand.
-        // MEETING_DATE is optional and generic (no meeting-ID-specific
-        // value baked in here); when unset, "<meeting date>" is used
-        // instead of inventing or assuming any specific date.
-        const openingSubSection = `${agendaPrefixNum}.1.1`;
-        body.appendParagraph(`${openingSubSection} Opening of the session`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
-        const meetingDateText = (cfg.MEETING_DATE || '').trim() || '<meeting date>';
-        body.appendParagraph(`<Chair> opens the session on ${meetingDateText} at <start> CEST.`);
-      } else {
-        // Opening section for SWG reports - copy X.1 content from template
-        const openingHeader = findHeading_(sourceBody, /^X\.1\s+/);
-        if (openingHeader) {
-          copySectionContentWithReplacement_(openingHeader, body, /^X\.2\s+/, 'X', agendaPrefixNum);
-        }
-      }
-
-      // Always ensure Registration of Documents section exists with the summary table
-      if (!documentContainsHeading_(body, registrationSection)) {
-        body.appendParagraph(`${registrationSection} Registration of Documents`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
-      }
-
-      // Always add/update the registered documents summary table
-      if (allTdocs.length > 0) {
-        createSummaryTable_(body, allTdocs, allTdocs[0].tdocCol, allTdocs[0].titleCol, allTdocs[0].sourceCol, -1);
-      }
-
-      // SA4-PROD-003: {agendaPrefixNum}.1.4 "Documents" -- collects every
-      // TDoc whose ORIGINAL TDoc-list agenda assignment is before the
-      // normal agenda sections begin (numerically < "{agendaPrefixNum}.3":
-      // e.g. "5", "5.0", "5.1", "5.2" for prefix "5"), extracted from
-      // tdocGroups further above via isBeforeRegistrationBoundary_() into
-      // `registrationDocs`. Such a document has no real numbered
-      // subsection of its own to render under (X.1/X.2 are always
-      // special-cased, never a plain TDoc-table target) and would
-      // otherwise simply vanish from the report -- exactly the
-      // S4aP260089/S4aP260098 problem SA4-PROD-001/002 found. Each row
-      // preserves its OWN original agenda-item value (not this loop's
-      // item.number) so the existing Document Reallocations workflow
-      // (X.1.3, ensureReallocationTable_()/addDocumentReallocation()) can
-      // read where it came from. Only created when non-empty: every
-      // existing main-meeting report has nothing to put here (X.1/X.2 are
-      // never a raw tdocGroups[...] lookup target for main meetings
-      // either), so this is a pure no-op there -- no new heading appears.
-      if (registrationDocs.length > 0) {
-        const documentsSection = `${agendaPrefixNum}.1.4`;
-        if (!documentContainsHeading_(body, documentsSection)) {
-          body.appendParagraph(`${documentsSection} Documents`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
-        }
-        orderTdocsByRevision_(registrationDocs).forEach(tdocData => {
-          appendTdocDetailTable_(body, tdocData, tdocData.row[tdocData.agendaCol]);
-        });
-      }
+      // ADDON-007A: emitted after this item's subtree (see emitOpeningAdminBlock).
     } else if (item.number === iprSection) {
       // SA4-PROD-008: standard IPR/antitrust/consensus boilerplate,
       // generated directly for EVERY report type (previously: SWG reports
@@ -8663,7 +8745,9 @@ function buildSkeletonWithTdocTables() {
       // dead code post-PROD-007. The agenda's own "X.2 ..." heading
       // (already appended above from the real parsed agenda item) remains
       // the section anchor; this only appends its standard child content.
-      appendStandardIprSection_(body, agendaPrefixNum);
+      if (anchors.iprEmitAfter === iprSection) {
+        appendStandardIprSection_(body, agendaPrefixNum, anchors.source === 'main-prefix' ? undefined : iprSection, anchors.iprChildOffset);
+      }
     } else if (item.title.toLowerCase().includes('any other business') || item.title.toLowerCase().includes('aob')) {
       // AOB section - copy template content
       const aobHeader = findHeading_(sourceBody, /^X\.Y\s+/);
@@ -8727,6 +8811,16 @@ function buildSkeletonWithTdocTables() {
           styleStatusCell_(table);
         });
       }
+    }
+
+    // ADDON-007A: administrative blocks are emitted at their emit-after item
+    // (the anchor itself unless it has real child items, so a main meeting
+    // and a childless ad-hoc anchor render exactly where they always did).
+    if (!is6G && anchors.openingEmitAfter && item.number === anchors.openingEmitAfter) {
+      emitOpeningAdminBlock();
+    }
+    if (!is6G && anchors.iprSection && anchors.iprEmitAfter !== anchors.iprSection && item.number === anchors.iprEmitAfter) {
+      appendStandardIprSection_(body, agendaPrefixNum, anchors.iprSection, anchors.iprChildOffset);
     }
   });
   
@@ -9125,6 +9219,153 @@ function isBeforeRegistrationBoundary_(agendaItemValue, agendaPrefixNum) {
 }
 
 /**
+ * ADDON-007A: where the report's ADMINISTRATIVE sections live -- the
+ * Opening-of-the-session content, the Registration-of-Documents summary,
+ * the Document Reallocations slot, the "Documents" bucket and the
+ * IPR/antitrust reminder -- as full section numbers.
+ *
+ * Report family (Audio/Video/6G/...) and meeting structure (main/adhoc)
+ * are separate concepts:
+ *
+ *   MAIN meeting: unchanged. Anchors are the configured report-type
+ *   prefix + the fixed SWG layout (X.1 opening, X.1.1/X.1.2/X.1.3/X.1.4
+ *   children, X.2 IPR) -- exactly the strings the build always used.
+ *
+ *   ADHOC meeting: the report-type prefix is NEVER consulted (an ad-hoc
+ *   agenda's numbering is independent of it). Anchors come from the REAL
+ *   parsed agenda:
+ *     - opening: the shallowest (then first) real item whose title reads
+ *       as an opening ("Opening ...", "... opening of the session/
+ *       meeting"). Fallback (documented, generic): the first real
+ *       top-level item -- the administrative block then hangs off the
+ *       start of the real agenda.
+ *     - IPR: the shallowest (then first) real item mentioning IPR /
+ *       antitrust / competition law. If the real agenda has none, the
+ *       standard IPR content is generated as a synthetic child of the
+ *       opening item (iprSyntheticSection) rather than dropped.
+ *   Synthetic children are numbered AFTER any real children of the anchor
+ *   item (childOffset), so they never collide with real numbering, and
+ *   are emitted after the last real descendant (openingEmitAfter /
+ *   iprEmitAfter) so document order matches numeric order. With no real
+ *   children the offsets are 0 and emission happens at the anchor itself,
+ *   i.e. the same shape as the main layout.
+ */
+function getAdministrativeAgendaAnchors_(context, agendaItems, configuredPrefix) {
+  const isAdhoc = !!(context && context.meeting && context.meeting.type === 'adhoc');
+
+  if (!isAdhoc) {
+    const n = String(configuredPrefix || '').replace(/\.$/, '');
+    return {
+      source: 'main-prefix',
+      prefixNum: n,
+      openingSection: `${n}.1`,
+      openingSubSection: `${n}.1.1`,
+      registrationSection: `${n}.1.2`,
+      reallocationSection: `${n}.1.3`,
+      documentsSection: `${n}.1.4`,
+      afterDocumentsSection: `${n}.1.5`,
+      iprSection: `${n}.2`,
+      iprSyntheticSection: null,
+      iprChildOffset: 0,
+      openingEmitAfter: `${n}.1`,
+      iprEmitAfter: `${n}.2`
+    };
+  }
+
+  const items = (Array.isArray(agendaItems) ? agendaItems : [])
+    .filter(it => it && typeof it.number === 'string' && it.number.trim() !== '');
+  const levelOf = num => String(num).split('.').length;
+  function shallowestFirst(predicate) {
+    let best = null;
+    items.forEach(it => {
+      if (!predicate(it)) return;
+      if (!best || levelOf(it.number) < levelOf(best.number)) best = it;
+    });
+    return best;
+  }
+  function childOffsetOf(num) {
+    let max = 0;
+    items.forEach(it => {
+      if (it.number.indexOf(num + '.') !== 0) return;
+      const rest = it.number.slice(num.length + 1);
+      if (/^\d+$/.test(rest)) max = Math.max(max, parseInt(rest, 10));
+    });
+    return max;
+  }
+  function lastInSubtree(num) {
+    let last = num;
+    items.forEach(it => {
+      if (it.number === num || it.number.indexOf(num + '.') === 0) last = it.number;
+    });
+    return last;
+  }
+
+  let source = 'adhoc-semantic';
+  let opening = shallowestFirst(it =>
+    /^\s*opening\b|\bopening of (the )?(session|meeting)\b/i.test(it.title || ''));
+  if (!opening) {
+    opening = shallowestFirst(() => true);
+    source = 'adhoc-fallback';
+  }
+  if (!opening) {
+    return {
+      source: 'adhoc-none', prefixNum: null, openingSection: null, openingSubSection: null,
+      registrationSection: null, reallocationSection: null, documentsSection: null,
+      afterDocumentsSection: null, iprSection: null, iprSyntheticSection: null,
+      iprChildOffset: 0, openingEmitAfter: null, iprEmitAfter: null
+    };
+  }
+
+  const o = opening.number;
+  const ipr = shallowestFirst(it =>
+    it.number !== o && /\b(ipr|antitrust|competition law)\b/i.test(it.title || ''));
+  const k = childOffsetOf(o);
+
+  return {
+    source: source,
+    prefixNum: o,
+    openingSection: o,
+    openingSubSection: `${o}.${k + 1}`,
+    registrationSection: `${o}.${k + 2}`,
+    reallocationSection: `${o}.${k + 3}`,
+    documentsSection: `${o}.${k + 4}`,
+    afterDocumentsSection: `${o}.${k + 5}`,
+    iprSection: ipr ? ipr.number : null,
+    iprSyntheticSection: ipr ? null : `${o}.${k + 5}`,
+    iprChildOffset: ipr ? childOffsetOf(ipr.number) : 0,
+    openingEmitAfter: lastInSubtree(o),
+    iprEmitAfter: ipr ? lastInSubtree(ipr.number) : null,
+    _realNumbers: items.reduce((m, it) => { m[it.number] = true; return m; }, {})
+  };
+}
+
+/**
+ * ADDON-007A: the "pre-agenda" TDoc capture rule (see
+ * isBeforeRegistrationBoundary_()) for the resolved anchors. Main meetings
+ * keep the existing prefix rule exactly. For ad-hoc meetings a TDoc is
+ * captured only when it is filed under an administrative anchor item
+ * itself (the opening item, the IPR item, or a synthetic IPR child) --
+ * items that are special-cased and can never be a plain TDoc-table target.
+ * A TDoc filed under a REAL child item of the opening item stays with it.
+ */
+function isBeforeAdminBoundary_(agendaItemValue, anchors) {
+  if (!anchors) return false;
+  if (anchors.source === 'main-prefix') {
+    return isBeforeRegistrationBoundary_(agendaItemValue, anchors.prefixNum);
+  }
+  const v = String(agendaItemValue || '').trim();
+  if (!v || !anchors.openingSection) return false;
+  if (v === anchors.openingSection) return true;
+  if (anchors.iprSection && (v === anchors.iprSection || v.indexOf(anchors.iprSection + '.') === 0)) {
+    return v === anchors.iprSection || !isRealItemNumber_(anchors, v);
+  }
+  return false;
+}
+function isRealItemNumber_(anchors, v) {
+  return !!(anchors._realNumbers && anchors._realNumbers[v]);
+}
+
+/**
  * SA4-PROD-003: renders one TDoc's standard detail table (TDoc / Title /
  * Source / Contact / Agenda Item / Type-For / E-mail Discussion /
  * Revisions / Minutes / Disposition / Status) -- identical row schema and
@@ -9202,22 +9443,27 @@ function appendTdocDetailTable_(body, tdocData, agendaItemLabel) {
  * principles reminder) -- do not "fix" this without a separate, explicit
  * decision to do so.
  */
-function appendStandardIprSection_(body, agendaPrefixNum) {
-  body.appendParagraph(`${agendaPrefixNum}.2.1 Introduction`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+// ADDON-007A: optional iprSectionNumber/childOffset let an ad-hoc meeting
+// anchor these children under its REAL IPR agenda item; omitted (every main
+// meeting), the numbers are the unchanged `${agendaPrefixNum}.2.1`..`.2.4`.
+function appendStandardIprSection_(body, agendaPrefixNum, iprSectionNumber, childOffset) {
+  const base = iprSectionNumber || `${agendaPrefixNum}.2`;
+  const off = childOffset || 0;
+  body.appendParagraph(`${base}.${off + 1} Introduction`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
   body.appendParagraph('The chair read the antitrust and IPR clause at the opening of the meeting session.');
 
-  body.appendParagraph(`${agendaPrefixNum}.2.2 Call for IPRs`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph(`${base}.${off + 2} Call for IPRs`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
   body.appendParagraph('“I draw your attention to your obligations under the 3GPP Partner Organizations’ IPR policies. Every Individual Member organization is obliged to declare to the Partner Organization or Organizations of which it is a member any IPR owned by the Individual Member or any other organization which is or is likely to become essential to the work of 3GPP.');
   body.appendParagraph('Delegates are asked to take note that they are thereby invited:');
   body.appendListItem('to investigate whether their organization or any other organization owns IPRs which were, or were likely to become Essential in respect of the work of 3GPP.').setGlyphType(DocumentApp.GlyphType.BULLET);
   body.appendListItem('to notify their respective Organizational Partners of all potential IPRs, e.g., for ETSI, by means of the IPR Information Statement and the Licensing declaration forms"').setGlyphType(DocumentApp.GlyphType.BULLET);
 
-  body.appendParagraph(`${agendaPrefixNum}.2.3 Statement regarding competition law`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph(`${base}.${off + 3} Statement regarding competition law`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
   body.appendParagraph('“I also draw your attention to the fact that 3GPP activities are subject to all applicable antitrust and competition laws and that compliance with said laws is therefore required of any participant of this TSG/WG/SWG meeting including the Chair and Vice Chairs. In case of question I recommend that you contact your legal counsel.');
   body.appendParagraph('The leadership shall conduct the present meeting with impartiality and in the interests of 3GPP.');
   body.appendParagraph('Furthermore, I would like to remind you that timely submission of work items in advance of TSG/WG/SWG meetings is important to allow for full and fair consideration of such matters.”');
 
-  body.appendParagraph(`${agendaPrefixNum}.2.4 Consensus principles reminder`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph(`${base}.${off + 4} Consensus principles reminder`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
   body.appendParagraph('“I also draw your attention to the fact that 3GPP endeavours to reach consensus on all decisions and therefore depends on a cooperative spirit of the Individual Members. In particular, Individual Members are encouraged to seek a consensus-based solution and only to sustain objections as a very last resort, and where absolutely necessary and well justified. The leadership will conduct the present meeting in a manner whereby informal methods of reaching consensus are encouraged, whilst ensuring that well justified concerns are taken into account.”');
 }
 

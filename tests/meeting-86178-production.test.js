@@ -211,7 +211,10 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
     check('buildSkeletonWithTdocTables() now builds registrationDocs via isBeforeRegistrationBoundary_(), gated on !is6G',
       /if\s*\(!is6G\)\s*\{[\s\S]*?isBeforeRegistrationBoundary_\(/.test(body), true);
     check('buildSkeletonWithTdocTables() now creates a "{agendaPrefixNum}.1.4" Documents section when registrationDocs is non-empty',
-      /documentsSection\s*=\s*`\$\{agendaPrefixNum\}\.1\.4`/.test(body), true);
+      // ADDON-007A: the section number now comes from the anchors helper; the
+      // main-meeting string that helper produces is asserted alongside.
+      /documentsSection\s*=\s*anchors\.documentsSection/.test(body) &&
+      /documentsSection:\s*`\$\{n\}\.1\.4`/.test(source), true);
     check('the new X.1.4 section renders each doc via appendTdocDetailTable_() with its OWN preserved original agenda-item label (not the loop item.number)',
       /appendTdocDetailTable_\(body,\s*tdocData,\s*tdocData\.row\[tdocData\.agendaCol\]\)/.test(body), true);
 
@@ -220,7 +223,9 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
     check('the openingSection branch now has an ad-hoc-only sub-branch (context.meeting.type === \'adhoc\')',
       /if\s*\(context\.meeting\.type === 'adhoc'\)\s*\{/.test(stripComments(body)), true);
     check('the ad-hoc sub-branch creates a "{agendaPrefixNum}.1.1 Opening of the session" heading',
-      /openingSubSection\s*=\s*`\$\{agendaPrefixNum\}\.1\.1`/.test(body), true);
+      // ADDON-007A: via the anchors helper (main strings asserted alongside).
+      /openingSubSection\s*=\s*anchors\.openingSubSection/.test(body) &&
+      /openingSubSection:\s*`\$\{n\}\.1\.1`/.test(source), true);
     check('the ad-hoc sub-branch reads cfg.MEETING_DATE with a non-invented placeholder fallback',
       /\(cfg\.MEETING_DATE \|\| ''\)\.trim\(\) \|\| '<meeting date>'/.test(body), true);
     check('the ad-hoc opening text retains the literal "<Chair>" placeholder (never invented in code)',

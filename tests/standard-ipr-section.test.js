@@ -112,10 +112,12 @@ console.log('source-structure: appendStandardIprSection_() exists, is prefix-ind
     check('appendStandardIprSection_() never creates a bare "X.2 " heading itself (only X.2.1-X.2.4 -- the caller\'s own agenda heading remains the anchor)',
       /`\$\{agendaPrefixNum\}\.2\s/.test(iprFnBody), false);
     check('appendStandardIprSection_() creates X.2.1 through X.2.4', [
-      /\$\{agendaPrefixNum\}\.2\.1 Introduction/.test(iprFnBody),
-      /\$\{agendaPrefixNum\}\.2\.2 Call for IPRs/.test(iprFnBody),
-      /\$\{agendaPrefixNum\}\.2\.3 Statement regarding competition law/.test(iprFnBody),
-      /\$\{agendaPrefixNum\}\.2\.4 Consensus principles reminder/.test(iprFnBody)
+      // ADDON-007A: children are `${base}.${off + N}`; base defaults to
+      // `${agendaPrefixNum}.2` and off to 0 -- identical output for main meetings.
+      /\$\{base\}\.\$\{off \+ 1\} Introduction/.test(iprFnBody),
+      /\$\{base\}\.\$\{off \+ 2\} Call for IPRs/.test(iprFnBody),
+      /\$\{base\}\.\$\{off \+ 3\} Statement regarding competition law/.test(iprFnBody),
+      /\$\{base\}\.\$\{off \+ 4\} Consensus principles reminder/.test(iprFnBody)
     ], [true, true, true, true]);
     check('appendStandardIprSection_() uses two appendListItem() calls (the IPR invitation bullets)',
       (iprFnBody.match(/appendListItem\(/g) || []).length, 2);
@@ -127,7 +129,7 @@ console.log('source-structure: appendStandardIprSection_() exists, is prefix-ind
     console.log('  FAIL could not locate "function buildSkeletonWithTdocTables(" in Code.js');
   } else {
     check('buildSkeletonWithTdocTables() calls appendStandardIprSection_(body, agendaPrefixNum) in the iprSection branch',
-      /appendStandardIprSection_\(body,\s*agendaPrefixNum\)/.test(skeletonBody), true);
+      /appendStandardIprSection_\(body,\s*agendaPrefixNum,/.test(skeletonBody), true);
     check('the old isSWGReport branching for the IPR section is gone (no report-type-specific IPR handling remains)',
       /isSWGReport/.test(stripComments(skeletonBody)), false);
     // Registration-boundary extraction (SA4-PROD-007), reallocation
