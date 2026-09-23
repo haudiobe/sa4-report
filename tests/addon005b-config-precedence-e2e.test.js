@@ -100,8 +100,11 @@ console.log('end-to-end: Configure Meeting Settings -> Save -> Enable -> [edit] 
 
   check('3a. Document Properties now has the explicit scratch URL',
     docProps.getProperty('TDOC_LIST_URL'), SCRATCH_URL);
-  check('3b. central state does NOT yet have it (adoption not re-run yet)',
-    centralAfterFirstEnable.getProperty('TDOC_LIST_URL'), null);
+  // ADDON-007B1: Save on a registered document now mirrors the saved
+  // configuration into central state itself, so the value is already there
+  // BEFORE Enable Automatic Updates is re-run (previously it was not).
+  check('3b. central state already has it right after Save (no re-adoption needed)',
+    centralAfterFirstEnable.getProperty('TDOC_LIST_URL'), SCRATCH_URL);
 
   // Step 4: "Enable Automatic Updates" AGAIN, specifically to re-sync.
   sandbox.enableAutomaticUpdatesForAddon();

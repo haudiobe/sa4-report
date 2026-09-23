@@ -17,8 +17,8 @@
  * The fake DOM's element registry is built from an EXPLICIT, exact list of
  * the ids the real HTML actually defines (verified directly against
  * Code.js below) -- including the known gap that meetingName/meetingType/
- * meetingDate/ftpBase/mailingList have NO corresponding "...Badge" <span>
- * element in the HTML (only agendaTdocBadge and revisionsUrlBadge exist).
+ * meetingDate/mailingList have NO corresponding "...Badge" <span>
+ * element in the HTML (only agendaTdocBadge, revisionsUrlBadge and ftpBaseBadge exist).
  * getElementById() for a missing id correctly returns null here, exactly
  * like a real browser, so this test can prove whether setFieldWithBadge()'s
  * `if (badgeHost)` guard actually protects every call site or not.
@@ -73,25 +73,29 @@ function extractConfigureMeetingSettingsScript() {
 // The EXACT set of element ids the real HTML defines (cross-checked
 // against Code.js by hand while writing this test) -- deliberately does
 // NOT include "meetingNameBadge"/"meetingTypeBadge"/"meetingDateBadge"/
-// "ftpBaseBadge"/"mailingListBadge", which the script REFERENCES but the
+// "mailingListBadge", which the script REFERENCES but the
 // HTML never actually defines a <span> for.
 const REAL_ELEMENT_IDS = [
   'meetingId', 'resolveBtn', 'resolveStatus', 'agendaCandidates',
   'portalTypeHint', 'dateRangeHint',
-  'meetingName', 'meetingType', 'meetingDate', 'ftpBase',
+  'meetingName', 'meetingType', 'meetingDate', 'ftpBase', 'ftpBaseBadge',
   'agendaTdoc', 'agendaTdocBadge', 'discoverBtn', 'discoverStatus',
   'mailingList', 'revisionsUrl', 'revisionsUrlBadge',
   'meetingFolder', 'meetingNumber', 'reportType', 'agendaSourceDocId',
-  'tdocUrl', 'showPreview', 'apiToken'
+  'tdocUrl', 'showPreview', 'apiToken',
+  // ADDON-007B1 additions: summary/status elements and the token/family controls.
+  'meetingSummary', 'agendaStructure', 'tdocUrlHint', 'mailingListHint',
+  'mainMeetingFields', 'clearApiToken', 'familyInfo'
 ];
 
 function makeFakeElement(id) {
-  return { id, value: '', textContent: '', className: '', disabled: false, innerHTML: '', checked: false };
+  return { id, value: '', textContent: '', className: '', disabled: false, innerHTML: '', checked: false, style: {} };
 }
 
 function makeFakeDocument() {
   const registry = {};
   REAL_ELEMENT_IDS.forEach(id => { registry[id] = makeFakeElement(id); });
+  registry.familyInfo.value = JSON.stringify(loadCode().sandbox.buildReportFamilyInfo_());
   return { getElementById: (id) => (Object.prototype.hasOwnProperty.call(registry, id) ? registry[id] : null), _registry: registry };
 }
 
@@ -166,8 +170,8 @@ console.log('resolveMeeting() -- real server preview objects rendered by the rea
   check('resolveMeeting() success handler does not throw when rendering a REAL 86178 preview', threw, null);
   check('status text is NOT stuck on "Resolving from 3GPP…" after a successful resolve',
     fakeDocument._registry.resolveStatus.textContent.indexOf('Resolving from 3GPP') === -1, true);
-  check('status text ends up showing the "Resolved" message (since 86178 core-resolves cleanly, no warnings)',
-    fakeDocument._registry.resolveStatus.textContent.indexOf('Resolved.') !== -1, true);
+  check('status text ends up showing the "Meeting found" message (since 86178 core-resolves cleanly, no warnings)',
+    fakeDocument._registry.resolveStatus.textContent.indexOf('Meeting found.') !== -1, true);
   check('resolve button is re-enabled', fakeDocument._registry.resolveBtn.disabled, false);
   check('meetingName input reflects the real resolved value', fakeDocument._registry.meetingName.value, 'SA4-e (AH) on FS_6G_MED');
   check('meetingType input reflects the real resolved value', fakeDocument._registry.meetingType.value, 'adhoc');
@@ -180,8 +184,13 @@ console.log('resolveMeeting() -- real server preview objects rendered by the rea
   // throw (guarded), and are simply left unset -- proving the guard works
   // for every one of them, not just the two that DO have real spans.
   check('non-existent "...Badge" elements are correctly null in this fake DOM (matches the real HTML gap)',
-    ['meetingNameBadge', 'meetingTypeBadge', 'meetingDateBadge', 'ftpBaseBadge', 'mailingListBadge'].every(id => fakeDocument.getElementById(id) === null),
+    ['meetingNameBadge', 'meetingTypeBadge', 'meetingDateBadge', 'mailingListBadge'].every(id => fakeDocument.getElementById(id) === null),
     true);
+  check('the meeting summary shows the resolved name and "Ad-hoc meeting"',
+    fakeDocument._registry.meetingSummary.textContent.indexOf('SA4-e (AH) on FS_6G_MED') === 0 && /Ad-hoc meeting/.test(fakeDocument._registry.meetingSummary.textContent), true);
+  check('agenda structure status for a resolved ad-hoc meeting is the discovered-agenda wording, independent of family',
+    fakeDocument._registry.agendaStructure.textContent, 'Ad-hoc — use complete discovered agenda');
+  check('main-only Meeting Folder/Number block is hidden for an ad-hoc meeting', fakeDocument._registry.mainMeetingFields.style.display, 'none');
   check('agendaTdocBadge (which DOES exist in the real HTML) was actually updated', fakeDocument._registry.agendaTdocBadge.innerHTML !== '', true);
   check('revisionsUrlBadge (which DOES exist in the real HTML) was actually updated', fakeDocument._registry.revisionsUrlBadge.innerHTML !== '', true);
 }
