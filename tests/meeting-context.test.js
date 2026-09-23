@@ -282,10 +282,14 @@ console.log('getMeetingContext_() production wiring: resolver is used, with no o
   const { CODE_JS_PATH } = require('./helpers/load-code.js');
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
 
-  const startMatch = source.match(/^function getMeetingContext_\(\)/m);
+  // ADDON-002: getMeetingContext_() now takes an optional `context`
+  // parameter (source-structure only -- no production caller passes one),
+  // so this locator tolerates an optional argument name instead of
+  // requiring an exactly-empty `()`.
+  const startMatch = source.match(/^function getMeetingContext_\([A-Za-z0-9_$]*\)/m);
   if (!startMatch) {
     failures++;
-    console.log('  FAIL could not locate "function getMeetingContext_()" in Code.js');
+    console.log('  FAIL could not locate "function getMeetingContext_(...)" in Code.js');
   } else {
     const startIndex = startMatch.index;
     const nextFnRe = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;

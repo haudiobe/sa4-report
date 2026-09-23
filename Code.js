@@ -989,12 +989,180 @@ function updateAll() {
 }
 
 // =========================================================
+// ADDON-002 -- REPORT EXECUTION CONTEXT
+// =========================================================
+//
+// Infrastructure only (per ADDON-001/ADDON-001B): a small, optional context
+// shape so business logic can eventually run without an active document
+// (a background/trigger execution), without changing how it runs TODAY.
+// Nothing in this file constructs or passes a context yet -- every existing
+// caller continues to call getReportDocument_()/getReportBody_()/
+// getReportConfig_()/getMeetingContext_() with no arguments, which is
+// guaranteed (see each function below) to behave EXACTLY as
+// DocumentApp.getActiveDocument()/getBody() and the direct
+// PropertiesService.getDocumentProperties() calls they replace.
+//
+// Shape (plain object, deliberately not a class -- nothing here needs
+// inheritance, private fields, or identity beyond "a bag of optional
+// values"):
+//   {
+//     documentId: string | null,   // required for addon-background mode
+//     document:   Document | null, // an already-open Document, reused as-is
+//     mode:       'bound' | 'addon-interactive' | 'addon-background'
+//   }
+//
+// mode is informational/selects the state-store backend (see
+// getReportStateStore_() below); getReportDocument_() itself only looks at
+// document/documentId, not mode, because "does this execution have a
+// Document to work with" and "where does its Properties state live" are
+// two separate questions (ADDON-001B found DocumentApp.openById() does NOT
+// establish a PropertiesService document context -- so a context can
+// legitimately have a resolvable document while still needing the central,
+// documentId-keyed Properties backend).
+function getReportDocument_(context) {
+  if (context && context.document) return context.document;
+  if (context && context.documentId) {
+    // Cache on the context object itself so a single execution that calls
+    // getReportDocument_()/getReportBody_() many times (continuousUpdateCore_()
+    // and friends do, today via getActiveDocumentBodyCounted_()) only pays
+    // for one DocumentApp.openById() round trip, not one per call site.
+    if (!context._resolvedDocument) {
+      context._resolvedDocument = DocumentApp.openById(context.documentId);
+    }
+    return context._resolvedDocument;
+  }
+  return DocumentApp.getActiveDocument();
+}
+
+function getReportBody_(context) {
+  return getReportDocument_(context).getBody();
+}
+
+function getReportDocumentId_(context) {
+  if (context && context.documentId) return context.documentId;
+  return getReportDocument_(context).getId();
+}
+
+// ---------------------------------------------------------------
+// ADDON-002 -- REPORT STATE STORE (Document Properties abstraction)
+// ---------------------------------------------------------------
+//
+// Two backends behind one Properties-compatible surface
+// (getProperty/setProperty/deleteProperty/getKeys/getProperties/
+// setProperties -- the exact subset of the real Properties API this file
+// actually uses today, see the ADDON-002 report's property inventory).
+//
+// Backend A (default, unchanged): the real
+// PropertiesService.getDocumentProperties() object, returned as-is -- not
+// wrapped, not reimplemented. This is why "no context" is byte-for-byte
+// identical to pre-ADDON-002 behavior: it IS the same call.
+//
+// Backend B (central/background, net-new, NOT wired into production
+// state yet): one Script Property per ORIGINAL key, namespaced by
+// documentId, not one combined JSON blob -- see the ADDON-002 report's
+// capacity analysis for why (several existing per-document keys, e.g.
+// PARSED_AGENDA_ALL, plus dozens-to-hundreds of per-TDoc DISCUSS_/REVIS_/
+// cache keys, can together approach the 500KB per-store limit; a single
+// JSON blob would additionally be capped at the 9KB per-value limit, which
+// a meeting's full state can easily exceed even though no single existing
+// key does).
+function reportStateScriptPropertyPrefix_(documentId) {
+  if (!documentId) {
+    throw new Error('reportStateScriptPropertyPrefix_: documentId is required.');
+  }
+  return 'SA4_STATE|' + documentId + '|';
+}
+
+function makeCentralReportStateStore_(documentId) {
+  const scriptProps = PropertiesService.getScriptProperties();
+  const prefix = reportStateScriptPropertyPrefix_(documentId);
+
+  return {
+    getProperty: function (key) {
+      return scriptProps.getProperty(prefix + key);
+    },
+    setProperty: function (key, value) {
+      scriptProps.setProperty(prefix + key, value);
+    },
+    deleteProperty: function (key) {
+      scriptProps.deleteProperty(prefix + key);
+    },
+    // Real Properties.getKeys() returns every key in the store; this
+    // backend narrows that to just this document's namespace and strips
+    // the prefix back off, so callers see the same bare key names Backend
+    // A would give them (e.g. 'DISCUSS_S4-260123', not the namespaced form).
+    getKeys: function () {
+      return scriptProps.getKeys()
+        .filter(function (k) { return k.indexOf(prefix) === 0; })
+        .map(function (k) { return k.slice(prefix.length); });
+    },
+    getProperties: function () {
+      const self = this;
+      const result = {};
+      this.getKeys().forEach(function (key) {
+        result[key] = self.getProperty(key);
+      });
+      return result;
+    },
+    // Mirrors real Properties.setProperties(properties, deleteAllOthers):
+    // deleteAllOthers, if true, clears every OTHER key in this document's
+    // namespace first (never touches other documents' namespaced keys, and
+    // never touches non-namespaced Script Properties like REVIEWER_API_TOKEN).
+    setProperties: function (properties, deleteAllOthers) {
+      const self = this;
+      if (deleteAllOthers) {
+        this.getKeys().forEach(function (key) { self.deleteProperty(key); });
+      }
+      Object.keys(properties || {}).forEach(function (key) {
+        self.setProperty(key, properties[key]);
+      });
+    }
+  };
+}
+
+/**
+ * ADDON-002: the single seam business logic should go through instead of
+ * calling PropertiesService.getDocumentProperties() directly, so that a
+ * future background/trigger execution (ADDON-004+) can supply a
+ * documentId-keyed backend without every call site needing to know which
+ * backend it's talking to.
+ *
+ * Backend selection:
+ *   - no context, or context.mode is 'bound'/'addon-interactive'/omitted:
+ *     Backend A (PropertiesService.getDocumentProperties()) -- i.e. the
+ *     REAL current document's properties, exactly as today. This is
+ *     correct specifically because 'bound' and 'addon-interactive'
+ *     executions are only ever entered from that document's own real
+ *     session (a bound script, or a menu/dialog action) -- never
+ *     constructed pointing at a document other than the one actually
+ *     executing right now.
+ *   - context.mode === 'addon-background': Backend B, namespaced by
+ *     context.documentId (falling back to context.document.getId() if
+ *     only a Document object was supplied).
+ */
+function getReportStateStore_(context) {
+  if (context && context.mode === 'addon-background') {
+    const documentId = context.documentId ||
+      (context.document && context.document.getId());
+    return makeCentralReportStateStore_(documentId);
+  }
+  return PropertiesService.getDocumentProperties();
+}
+
+// =========================================================
 // CENTRALIZED CONFIGURATION
 // =========================================================
 
-function getReportConfig_() {
-  const props = PropertiesService.getDocumentProperties();
-  
+function getReportConfig_(context) {
+  // ADDON-002: routed through getReportStateStore_() instead of calling
+  // PropertiesService.getDocumentProperties() directly, so a future
+  // background execution can supply a documentId-keyed backend. With no
+  // context (every existing caller, unchanged) getReportStateStore_()
+  // returns PropertiesService.getDocumentProperties() itself -- same
+  // object, same calls, same behavior as before this function took a
+  // parameter at all.
+  const props = getReportStateStore_(context);
+
   // ========================================
   // 1. MEETING CONFIGURATION
   // ========================================
@@ -1239,8 +1407,10 @@ function normalizeMeetingType_(value) {
  * wrong main-meeting default. No new property names are introduced: these
  * are the exact same properties getReportConfig_() already reads.
  */
-function getMeetingIdentityConfig_() {
-  const props = PropertiesService.getDocumentProperties();
+function getMeetingIdentityConfig_(context) {
+  // ADDON-002: same seam as getReportConfig_() above -- no behavior change
+  // for the existing no-argument call.
+  const props = getReportStateStore_(context);
   return {
     MEETING_TYPE: normalizeMeetingType_(props.getProperty('MEETING_TYPE')),
     MEETING_NAME: String(props.getProperty('MEETING_NAME') || '').trim(),
@@ -1406,9 +1576,12 @@ function projectAgendaItems_(agendaItems, selector) {
   return agendaItems.filter(item => agendaSelectorMatches_(selector, item ? item.number : undefined));
 }
 
-function getMeetingContext_() {
-  const cfg = getReportConfig_();
-  const identity = getMeetingIdentityConfig_();
+function getMeetingContext_(context) {
+  // ADDON-002: threads the same optional context into both underlying
+  // reads. No existing caller passes one, so this remains the same two
+  // PropertiesService.getDocumentProperties() reads it always was.
+  const cfg = getReportConfig_(context);
+  const identity = getMeetingIdentityConfig_(context);
 
   const reportType = cfg.REPORT_SUFFIX;
   const SWG_REPORT_TYPES = ['Audio', 'Video', 'MBS', 'RTC'];
