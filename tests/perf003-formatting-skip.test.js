@@ -63,11 +63,16 @@ console.log('source-structure: continuousUpdateCore_() feeds its REAL newTdocsAd
   // PERF-003B (Part 2): continuousUpdate() is now a thin lock-acquiring
   // public wrapper (see tests/perf003b-lock.test.js) -- the actual logic
   // that computes/consumes these signals lives in continuousUpdateCore_().
-  const fnStart = source.indexOf('function continuousUpdateCore_()');
-  const nextFnMatch = source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m);
+  // ADDON-004: continuousUpdateCore_() now takes an optional `context`
+  // parameter -- locator tolerates an optional argument name instead of
+  // requiring an exactly-empty `()`.
+  const fnStartMatch = source.match(/^function continuousUpdateCore_\([A-Za-z0-9_$]*\)/m);
+  const fnStart = fnStartMatch ? fnStartMatch.index : -1;
+  const nextFnMatch = fnStart >= 0 ? source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m) : null;
   const fnEnd = nextFnMatch ? fnStart + 1 + nextFnMatch.index : source.length;
-  const body = source.slice(fnStart, fnEnd);
+  const body = fnStart >= 0 ? source.slice(fnStart, fnEnd) : '';
 
+  check('continuousUpdateCore_() was located in Code.js', fnStart >= 0, true);
   check('continuousUpdate() calls shouldReformatAfterUpdate_(newTdocsAdded, rev.moved, ...)',
     /shouldReformatAfterUpdate_\(\s*newTdocsAdded,\s*rev\.moved,/.test(body), true);
   check('continuousUpdate() reads the revision-linked-table-insertion counter as the third argument',
@@ -99,17 +104,22 @@ console.log('source-structure: full-build/"Update All"/manual formatting call si
 
 {
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
-  // Every literal "removeRowHeightAndSpacing()" call site in the file,
-  // with a few characters of context to classify it.
+  // Every literal "removeRowHeightAndSpacing(...)" call site in the file,
+  // with a few characters of context to classify it. ADDON-004:
+  // removeRowHeightAndSpacing() now takes an optional `context` argument
+  // -- the ONE call site inside continuousUpdateCore_() passes it
+  // (`removeRowHeightAndSpacing(context)`); every other, still-interactive
+  // call site is unchanged and still calls it bare
+  // (`removeRowHeightAndSpacing();`). The pattern below tolerates either.
   const callSites = [];
-  const pattern = /removeRowHeightAndSpacing\(\)/g;
+  const pattern = /removeRowHeightAndSpacing\([A-Za-z0-9_$]*\)/g;
   let m;
   while ((m = pattern.exec(source)) !== null) {
     const lineStart = source.lastIndexOf('\n', m.index) + 1;
     const lineEnd = source.indexOf('\n', m.index);
     callSites.push(source.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim());
   }
-  // Excludes: the function's own `function removeRowHeightAndSpacing() {`
+  // Excludes: the function's own `function removeRowHeightAndSpacing(context) {`
   // definition line, and any line that is purely a comment reference.
   const realCallSites = callSites.filter(line =>
     !line.startsWith('function removeRowHeightAndSpacing') &&

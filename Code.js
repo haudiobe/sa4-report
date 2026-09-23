@@ -404,11 +404,18 @@ function getTablesCounted_(body, siteLabel) {
  * -- several functions each independently re-fetch the live document body
  * rather than reusing continuousUpdate()'s own `body` reference. Returns
  * the exact same Body `getBody()` would have.
+ *
+ * ADDON-004: routed through getReportBody_(context) instead of calling
+ * DocumentApp.getActiveDocument() directly, so every call site below stays
+ * background-execution-safe once it threads a context through. With no
+ * context (every pre-ADDON-004 call site, unchanged) getReportBody_()
+ * falls back to DocumentApp.getActiveDocument().getBody() -- byte-identical
+ * to this function's previous implementation.
  */
-function getActiveDocumentBodyCounted_(siteLabel) {
+function getActiveDocumentBodyCounted_(siteLabel, context) {
   perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
   if (siteLabel) perfCount_('getActiveDocument().getBody() call site: ' + siteLabel);
-  return DocumentApp.getActiveDocument().getBody();
+  return getReportBody_(context);
 }
 
 /**
@@ -437,6 +444,14 @@ function perfLogSummary_() {
  * is still executing.
  */
 function continuousUpdate() {
+  // ADDON-004: legacy/interactive entry point -- UNCHANGED DocumentLock
+  // semantics, exactly as before. This is the ONLY path a bound-script
+  // document (v2.12.0-style) or an interactive add-on menu click ever
+  // takes; it is never called by the background scheduler (see
+  // continuousUpdateForDocument_(), which calls continuousUpdateCore_()
+  // directly and owns its OWN concurrency guard via the scheduler's
+  // ScriptLock instead -- see ADDON-004 report §5/§8 for why DocumentLock
+  // is deliberately never acquired there).
   const lock = LockService.getDocumentLock();
   if (!lock.tryLock(5000)) {
     Logger.log('continuousUpdate(): another incremental update is already in progress -- skipping this run.');
@@ -450,18 +465,31 @@ function continuousUpdate() {
 }
 
 /**
- * The actual continuousUpdate() logic. Never call this directly -- always
- * go through continuousUpdate(), which holds the document lock for the
- * duration of this call. (Kept as a separate function, rather than
- * inlined, purely so the lock-acquisition wrapper above stays a small,
- * easily-audited block instead of interleaving lock logic into this
- * function's existing try/catch/finally.)
+ * The actual continuousUpdate() logic. Interactive callers (the bound
+ * script's continuousUpdate(), the menu item, an interactive add-on
+ * action) never call this directly -- always go through continuousUpdate(),
+ * which holds the document lock for the duration of this call. The
+ * background scheduler path (continuousUpdateForDocument_(), ADDON-004) is
+ * the one exception: it calls this directly, with an explicit
+ * addon-background context, and relies on the SCHEDULER's ScriptLock for
+ * concurrency protection instead (see ADDON-004 report). (Kept as a
+ * separate function, rather than inlined, purely so the lock-acquisition
+ * wrapper above stays a small, easily-audited block instead of
+ * interleaving lock logic into this function's existing try/catch/finally.)
+ *
+ * ADDON-004: accepts an optional execution context, threaded into every
+ * background-reachable call below. With no context (continuousUpdate()'s
+ * only call site, unchanged), every one of those calls resolves to EXACTLY
+ * what it did before this parameter existed -- DocumentApp.getActiveDocument()
+ * for document/body access, PropertiesService.getDocumentProperties() for
+ * state. See getReportDocument_()/getReportBody_()/getReportStateStore_()
+ * (ADDON-002) for why that fallback is guaranteed, not just intended.
  */
-function continuousUpdateCore_() {
+function continuousUpdateCore_(context) {
   perfResetState_();
   const perfTotalStart = Date.now();
-  const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_());
-  const body = DocumentApp.getActiveDocument().getBody();
+  const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_(context));
+  const body = getReportBody_(context);
   perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
   perfCount_('getActiveDocument().getBody() call site: continuousUpdate:initial');
 
@@ -469,7 +497,7 @@ function continuousUpdateCore_() {
 
   try {
     // Download latest TDOC list
-    const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg));
+    const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context));
     const allTdocs = [];
     Object.keys(tdocGroups).forEach(key => {
       tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
@@ -506,7 +534,7 @@ function continuousUpdateCore_() {
       perfCount_('TDocs processed (loop iterations)');
 
       if (!existingTdocs.has(tdocNumber)) {
-        perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg, tdocTableIndex));
+        perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg, tdocTableIndex, context));
         newTdocsAdded++;
       } else {
         if (perfTimedAccum_('status updates (updateTdocStatus_, accumulated)', () => updateTdocStatus_(body, tdocNumber, tdocData, tdocTableIndex))) {
@@ -526,24 +554,24 @@ function continuousUpdateCore_() {
     // section, so move every revision back under the document it revises and
     // fill the revised document's Disposition. Reuses the TDOC list already
     // downloaded above, so this costs no extra fetch.
-    const rev = perfTimed_('revision ordering/rearrangement (rearrangeRevisionTables_)', () => rearrangeRevisionTables_(cfg, tdocGroups, tdocTableIndex));
+    const rev = perfTimed_('revision ordering/rearrangement (rearrangeRevisionTables_)', () => rearrangeRevisionTables_(cfg, tdocGroups, tdocTableIndex, context));
     Logger.log(`Revisions: ${rev.moved} moved, ${rev.dispositions} disposition(s) filled`);
 
     // Abstracts are optional on automatic updates (OFF by default).
     // Toggle via: REPORT OPERATIONS -> Manage Auto-Update Trigger.
-    if (getFetchAbstractsSetting_()) {
+    if (getFetchAbstractsSetting_(context)) {
       // PERF-006B: addAbstractsForTables_() now returns a breakdown, not a
       // bare count -- "candidate tables processed" is NOT the same as
       // "Reviewer requests actually made" (a candidate can resolve via a
       // negative-cache skip with zero fetches). See its own header comment.
-      const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body));
+      const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body, context));
       Logger.log(`Abstracts: ${abstractsResult.candidatesProcessed} candidate table(s) processed, ${abstractsResult.requestsMade} Reviewer request(s) made, ${abstractsResult.cacheSkips} negative-cache skip(s), ${abstractsResult.rowsInserted} abstract row(s) inserted`);
     } else {
       Logger.log('Abstract fetching is disabled (trigger configuration)');
     }
 
     // Collect emails and revisions
-    perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_());
+    perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context));
 
     // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
     // full-document formatting pass is only actually needed when this run
@@ -570,7 +598,7 @@ function continuousUpdateCore_() {
 
     // Format
     if (structuralChangeThisRun) {
-      perfTimed_('formatting (removeRowHeightAndSpacing)', () => removeRowHeightAndSpacing());
+      perfTimed_('formatting (removeRowHeightAndSpacing)', () => removeRowHeightAndSpacing(context));
     } else {
       Logger.log('[PERF] formatting skipped: no structural change this run (no new/moved/inserted tables)');
     }
@@ -595,6 +623,248 @@ function continuousUpdateCore_() {
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
     perfLogSummary_();
   }
+}
+
+// =========================================================
+// ADDON-004 -- BACKGROUND EXECUTION (per-document unit of work)
+// =========================================================
+//
+// continuousUpdateForDocument_() is an INTERNAL unit of work, not the
+// clock-trigger handler itself (that is runAddonScheduler_(), below,
+// which is still not wired to any real trigger in this stage -- ADDON-004
+// implements the handler only, per the task's explicit scope).
+//
+// It never acquires LockService.getDocumentLock() -- concurrency
+// protection for the background path is the SCHEDULER's ScriptLock
+// (runAddonScheduler_()), acquired once for the whole scheduler run, not
+// per document (see that function's header comment for why). The
+// legacy/interactive continuousUpdate() keeps its own, separate
+// DocumentLock exactly as before -- the two paths never share a lock.
+//
+// Validates against the registry (getRegisteredReportDocument_()) BEFORE
+// doing anything else -- a pure Script-Properties read, no DocumentApp/
+// Document-Properties access at all -- so an invalid documentId or a
+// disabled/unadopted document fails fast, loudly (throws), before any
+// document is opened or any state is touched.
+function continuousUpdateForDocument_(documentId) {
+  if (!documentId) {
+    throw new Error('continuousUpdateForDocument_: documentId is required.');
+  }
+
+  const registryEntry = getRegisteredReportDocument_(documentId);
+  if (!registryEntry) {
+    throw new Error('continuousUpdateForDocument_: document ' + documentId + ' is not registered (adopt it first).');
+  }
+  if (!registryEntry.enabled) {
+    throw new Error('continuousUpdateForDocument_: document ' + documentId + ' is registered but not enabled.');
+  }
+
+  const context = { documentId: documentId, mode: 'addon-background' };
+  const startedAt = Date.now();
+
+  // continuousUpdateCore_() -- unchanged by this stage -- catches and logs
+  // its OWN internal per-stage errors rather than propagating them (see
+  // its header comment), exactly as it already does for the legacy
+  // interactive/trigger path. That means a throw reaching HERE only
+  // happens for a setup-phase failure (invalid/unreadable central state,
+  // or the document itself failing to open via getReportBody_()) -- the
+  // same class of failure that would already have stopped
+  // continuousUpdate() before this stage existed. lastRunAt is
+  // deliberately updated only AFTER continuousUpdateCore_() returns
+  // without throwing, so a setup-phase failure here leaves lastRunAt
+  // untouched and the scheduler (which wraps this call in its own
+  // per-document try/catch) sees it as a failed run, not a silent skip.
+  continuousUpdateCore_(context);
+
+  const updated = updateRegisteredReportDocument_(documentId, { lastRunAt: new Date().toISOString() });
+
+  return {
+    documentId: documentId,
+    success: true,
+    durationMs: Date.now() - startedAt,
+    lastRunAt: updated.lastRunAt
+  };
+}
+
+// =========================================================
+// ADDON-004 -- CENTRAL SCHEDULER (handler only -- no trigger created)
+// =========================================================
+//
+// Due calculation: never-run (lastRunAt === null) is always due; otherwise
+// due once intervalHours has elapsed since lastRunAt. Pure/testable in
+// isolation from the scheduler loop itself.
+function isReportDocumentDue_(entry, nowMs) {
+  if (!entry || !entry.enabled) return false;
+  if (!entry.lastRunAt) return true;
+
+  const intervalMs = (entry.intervalHours || 1) * 3600 * 1000;
+  const lastRunMs = new Date(entry.lastRunAt).getTime();
+  // A malformed/unparseable lastRunAt fails safe as "due" -- never
+  // permanently wedges a document out of consideration because of a
+  // corrupted timestamp.
+  if (isNaN(lastRunMs)) return true;
+
+  return (nowMs - lastRunMs) >= intervalMs;
+}
+
+/**
+ * Deterministic fair ordering for a batch of due documents: never-run
+ * documents first (they have been waiting the longest, definitionally),
+ * then oldest lastRunAt first, with a stable documentId tie-break so two
+ * documents with identical timestamps always order the same way run to
+ * run. Pure -- does not mutate its input.
+ */
+function orderDueReportDocuments_(entries) {
+  return (entries || []).slice().sort(function (a, b) {
+    const aNever = !a.lastRunAt;
+    const bNever = !b.lastRunAt;
+    if (aNever !== bNever) return aNever ? -1 : 1;
+
+    if (!aNever) {
+      const aTime = new Date(a.lastRunAt).getTime();
+      const bTime = new Date(b.lastRunAt).getTime();
+      const aValid = !isNaN(aTime);
+      const bValid = !isNaN(bTime);
+      if (aValid !== bValid) return aValid ? 1 : -1; // an unparseable timestamp sorts as if never-run (first)
+      if (aValid && bValid && aTime !== bTime) return aTime - bTime;
+    }
+
+    return a.documentId < b.documentId ? -1 : (a.documentId > b.documentId ? 1 : 0);
+  });
+}
+
+// Conservative runtime budget for one scheduler execution, well under
+// Apps Script's documented per-execution ceiling (commonly cited as 6
+// minutes for a triggered function on a standard account -- see the
+// ADDON-004 report for the exact platform reference and its
+// requires-live-verification caveat). Deliberately conservative: this
+// budget must leave room for the CURRENTLY-RUNNING document's own update
+// to finish (it is checked BEFORE starting the next document, not used to
+// interrupt one already in progress) plus genuine headroom for network
+// latency variance across TDoc-list/RSS/A1/revision fetches.
+var REPORT_SCHEDULER_RUNTIME_BUDGET_MS_ = 4 * 60 * 1000; // 4 minutes
+
+/**
+ * The scheduler HANDLER only -- not wired to any real time-driven trigger
+ * in this stage (ADDON-004 explicitly stops short of creating one). Owns
+ * the ScriptLock for the whole run (not per document -- see
+ * continuousUpdateForDocument_()'s header comment), lists/filters/orders
+ * due documents, and processes them one at a time, isolating each
+ * document's failure from the others and stopping (deferring, not
+ * failing) once the runtime budget is exhausted.
+ */
+function runAddonScheduler_() {
+  const startedAt = Date.now();
+  const summary = {
+    considered: 0,
+    due: 0,
+    succeeded: 0,
+    failed: 0,
+    skipped: 0,
+    lockAcquired: false,
+    documents: []
+  };
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    Logger.log('runAddonScheduler_(): could not acquire ScriptLock (another scheduler run or interactive update holds it) -- skipping this run.');
+    return summary;
+  }
+  summary.lockAcquired = true;
+
+  try {
+    const registered = listRegisteredReportDocuments_();
+    summary.considered = registered.length;
+
+    const now = Date.now();
+    const dueEntries = registered.filter(function (entry) { return isReportDocumentDue_(entry, now); });
+    summary.due = dueEntries.length;
+
+    const ordered = orderDueReportDocuments_(dueEntries);
+
+    ordered.forEach(function (entry) {
+      if ((Date.now() - startedAt) >= REPORT_SCHEDULER_RUNTIME_BUDGET_MS_) {
+        summary.skipped++;
+        summary.documents.push({ documentId: entry.documentId, outcome: 'deferred', reason: 'runtime budget exhausted' });
+        return;
+      }
+
+      try {
+        const result = continuousUpdateForDocument_(entry.documentId);
+        summary.succeeded++;
+        summary.documents.push({ documentId: entry.documentId, outcome: 'succeeded', durationMs: result.durationMs });
+      } catch (e) {
+        summary.failed++;
+        summary.documents.push({ documentId: entry.documentId, outcome: 'failed', error: e.message });
+        Logger.log('runAddonScheduler_(): ' + entry.documentId + ' failed: ' + e.message);
+      }
+    });
+
+    Logger.log('runAddonScheduler_() summary: ' + JSON.stringify({
+      considered: summary.considered, due: summary.due, succeeded: summary.succeeded,
+      failed: summary.failed, skipped: summary.skipped
+    }));
+
+    return summary;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// =========================================================
+// ADDON-004 -- CENTRAL STATE CAPACITY DIAGNOSTICS
+// =========================================================
+//
+// Read-only monitoring helper: approximates how much of the shared 500KB
+// Script Properties budget (ADDON-002's capacity analysis) is actual
+// report state (SA4_STATE|<documentId>|<key>, Backend B), broken down per
+// document, so old meetings can be identified for archiving
+// (deleteCentralReportState_(), ADDON-003) before that shared ceiling
+// becomes a real constraint. Never touches the registry
+// (SA4_REGISTRY_*) or global keys (REVIEWER_API_TOKEN) -- only counts
+// keys under the report-state namespace.
+//
+// Byte counts are an intentional APPROXIMATION (JavaScript string
+// .length -- UTF-16 code units, not a true UTF-8 byte count) rather than
+// a Utilities.newBlob() round trip per key -- adequate for a monitoring
+// signal over what is, in practice, ASCII-heavy JSON, and keeps this
+// diagnostic free of any extra Apps Script service dependency (so it also
+// runs unmodified in the Node test sandbox).
+function getCentralStateUsage_() {
+  const scriptProps = PropertiesService.getScriptProperties();
+  const prefix = 'SA4_STATE|';
+  const perDocument = {};
+  let totalBytesApprox = 0;
+  let keyCount = 0;
+
+  scriptProps.getKeys().forEach(function (key) {
+    if (key.indexOf(prefix) !== 0) return;
+    const rest = key.slice(prefix.length);
+    const sep = rest.indexOf('|');
+    if (sep === -1) return; // malformed/unexpected key shape -- ignore, don't throw
+
+    const documentId = rest.slice(0, sep);
+    const value = scriptProps.getProperty(key) || '';
+    const bytesApprox = key.length + value.length;
+
+    if (!perDocument[documentId]) {
+      perDocument[documentId] = { documentId: documentId, keyCount: 0, bytesApprox: 0 };
+    }
+    perDocument[documentId].keyCount++;
+    perDocument[documentId].bytesApprox += bytesApprox;
+
+    totalBytesApprox += bytesApprox;
+    keyCount++;
+  });
+
+  return {
+    totalBytesApprox: totalBytesApprox,
+    keyCount: keyCount,
+    documentCount: Object.keys(perDocument).length,
+    perDocument: Object.keys(perDocument)
+      .map(function (id) { return perDocument[id]; })
+      .sort(function (a, b) { return b.bytesApprox - a.bytesApprox; })
+  };
 }
 
 /**
@@ -715,9 +985,15 @@ function manageTriggers() {
 /**
  * Whether automatic/continuous updates should fetch abstracts.
  * Defaults to false (off) when the property was never set.
+ *
+ * ADDON-004: accepts an optional context, routed through
+ * getReportStateStore_() -- reachable from continuousUpdateCore_(), so a
+ * background execution must read this from the adopted document's central
+ * state, not always Document Properties. No context (unchanged) reads
+ * Document Properties exactly as before.
  */
-function getFetchAbstractsSetting_() {
-  return PropertiesService.getDocumentProperties()
+function getFetchAbstractsSetting_(context) {
+  return getReportStateStore_(context)
     .getProperty('FETCH_ABSTRACTS_ON_UPDATE') === 'true';
 }
 
@@ -780,7 +1056,7 @@ function getTriggerStatus() {
  * LATER new TDoc in the same continuousUpdate() run that revises THIS one
  * can still find it via the index, without needing a full rebuild mid-run.
  */
-function insertNewTdoc_(body, tdocData, cfg, index) {
+function insertNewTdoc_(body, tdocData, cfg, index, context) {
   const row = tdocData.row;
   const agendaItem = tdocData.agendaItem;
   const revisedTo = getRevisedTo_(tdocData);
@@ -789,7 +1065,7 @@ function insertNewTdoc_(body, tdocData, cfg, index) {
   // document is not in the report yet do we fall back to the end of the
   // agenda section (continuousUpdate's re-arrangement pass fixes it later).
   let insertIdx = -1;
-  const parentTable = findParentRevisedToTable_(body, tdocNumberOf_(tdocData), index);
+  const parentTable = findParentRevisedToTable_(body, tdocNumberOf_(tdocData), index, context);
   if (parentTable) {
     insertIdx = body.getChildIndex(parentTable) + 1;
     Logger.log(`Placing ${tdocNumberOf_(tdocData)} directly below its parent`);
@@ -831,12 +1107,12 @@ function insertNewTdoc_(body, tdocData, cfg, index) {
  * REVISION_MAP built from the TDOC list. Returns null when unknown or when that
  * document has no table in this report.
  */
-function findParentRevisedToTable_(body, tdocNumber, index) {
+function findParentRevisedToTable_(body, tdocNumber, index, context) {
   const want = String(tdocNumber || '').trim().toUpperCase();
   if (!want) return null;
 
   const map = loadJsonObject_(
-    PropertiesService.getDocumentProperties().getProperty('REVISION_MAP'));
+    getReportStateStore_(context).getProperty('REVISION_MAP'));
 
   for (const parent of Object.keys(map)) {
     if (String(map[parent] || '').toUpperCase() !== want) continue;
@@ -1121,30 +1397,63 @@ function makeCentralReportStateStore_(documentId) {
 }
 
 /**
- * ADDON-002: the single seam business logic should go through instead of
- * calling PropertiesService.getDocumentProperties() directly, so that a
- * future background/trigger execution (ADDON-004+) can supply a
- * documentId-keyed backend without every call site needing to know which
- * backend it's talking to.
+ * ADDON-002/ADDON-004: the single seam business logic should go through
+ * instead of calling PropertiesService.getDocumentProperties() directly,
+ * so a future background/trigger execution can supply a documentId-keyed
+ * backend without every call site needing to know which backend it's
+ * talking to.
  *
- * Backend selection:
- *   - no context, or context.mode is 'bound'/'addon-interactive'/omitted:
- *     Backend A (PropertiesService.getDocumentProperties()) -- i.e. the
- *     REAL current document's properties, exactly as today. This is
- *     correct specifically because 'bound' and 'addon-interactive'
- *     executions are only ever entered from that document's own real
- *     session (a bound script, or a menu/dialog action) -- never
+ * Backend selection -- exactly ONE authoritative backend per document,
+ * never both (ADDON-004 requirement: no dual-write, no post-adoption
+ * synchronization back into Document Properties):
+ *
+ *   - no context, or context.mode is 'bound'/omitted: Backend A
+ *     (PropertiesService.getDocumentProperties()) -- the REAL current
+ *     document's properties, exactly as today. Correct because a
+ *     'bound'/no-context execution is only ever entered from that
+ *     document's own real session (the legacy bound script) -- never
  *     constructed pointing at a document other than the one actually
- *     executing right now.
+ *     executing right now. This is also the exact behavior every existing
+ *     zero-argument caller gets, unchanged.
+ *
+ *   - context.mode === 'addon-interactive': resolves the active
+ *     document's id (context.documentId/context.document, or -- same as
+ *     the legacy path -- DocumentApp.getActiveDocument() via
+ *     getReportDocumentId_()), then looks it up with
+ *     getRegisteredReportDocument_():
+ *       - registered (adopted, via adoptReportDocumentForAddon_()):
+ *         Backend B -- central state is authoritative for an adopted
+ *         document, interactive or not, so an add-on menu/dialog action
+ *         on an adopted document reads/writes the SAME state a
+ *         background scheduler run would.
+ *       - NOT registered: Backend A (Document Properties) -- explicit,
+ *         not a fallback-by-accident. A document that has never been
+ *         adopted has no central state to speak of; silently handing
+ *         business logic an empty Backend B store here would look
+ *         indistinguishable from "this document has no configuration",
+ *         which is exactly the silent-configuration-loss ADDON-004
+ *         forbids. Document Properties remains authoritative until
+ *         adoptReportDocumentForAddon_() explicitly runs.
+ *
  *   - context.mode === 'addon-background': Backend B, namespaced by
  *     context.documentId (falling back to context.document.getId() if
- *     only a Document object was supplied).
+ *     only a Document object was supplied). No registration check here --
+ *     that gate belongs to the caller (continuousUpdateForDocument_(),
+ *     ADDON-004 §3), keeping this function a mechanical backend lookup.
  */
 function getReportStateStore_(context) {
   if (context && context.mode === 'addon-background') {
     const documentId = context.documentId ||
       (context.document && context.document.getId());
     return makeCentralReportStateStore_(documentId);
+  }
+  if (context && context.mode === 'addon-interactive') {
+    const documentId = context.documentId || getReportDocumentId_(context);
+    if (getRegisteredReportDocument_(documentId)) {
+      return makeCentralReportStateStore_(documentId);
+    }
+    // Not adopted: fall through to Backend A below, deliberately -- see
+    // the header comment above.
   }
   return PropertiesService.getDocumentProperties();
 }
@@ -1203,11 +1512,15 @@ function saveReportRegistryIndex_(documentIds) {
 
 /**
  * Registers a document, or updates its entry if already registered
- * (upsert -- this is also what updateRegisteredReportDocument_() and
- * repeat adoption calls go through). registeredAt and lastRunAt are
- * preserved from any existing entry (registeredAt is set once, at first
- * registration; lastRunAt is owned by the future scheduler, ADDON-004,
- * and is never touched here -- it starts null and stays whatever it was).
+ * (upsert -- this is also what updateRegisteredReportDocument_(),
+ * repeat adoption, and -- as of ADDON-004 -- continuousUpdateForDocument_()
+ * go through to advance lastRunAt after a successful run). registeredAt is
+ * always preserved from any existing entry (set once, at first
+ * registration, never reset). lastRunAt is preserved from the existing
+ * entry UNLESS `details.lastRunAt` is explicitly provided, in which case
+ * that explicit value wins -- this is the one field ADDON-004's scheduler
+ * path needs to actively advance; every other caller that omits
+ * `lastRunAt` continues to leave it untouched exactly as before.
  */
 function registerReportDocument_(documentId, details) {
   if (!documentId) throw new Error('registerReportDocument_: documentId is required.');
@@ -1230,7 +1543,7 @@ function registerReportDocument_(documentId, details) {
     meetingId: info.meetingId !== undefined ? info.meetingId : (existing ? existing.meetingId : ''),
     meetingName: info.meetingName !== undefined ? info.meetingName : (existing ? existing.meetingName : ''),
     registeredAt: existing ? existing.registeredAt : new Date().toISOString(),
-    lastRunAt: existing ? existing.lastRunAt : null,
+    lastRunAt: info.lastRunAt !== undefined ? info.lastRunAt : (existing ? existing.lastRunAt : null),
     intervalHours: info.intervalHours !== undefined ? info.intervalHours : (existing ? existing.intervalHours : 1)
   };
 
@@ -2018,10 +2331,10 @@ function getMeetingContext_(context) {
 // COLLECTOR CONFIG (now uses centralized config)
 // =========================================================
 
-function getCollectorConfig_() {
-  const reportConfig = getReportConfig_(); // Get centralized config
+function getCollectorConfig_(context) {
+  const reportConfig = getReportConfig_(context); // Get centralized config
   // ensureCollectorConfigTable_();
-  const collectorTableConfig = readCollectorConfigTable_();
+  const collectorTableConfig = readCollectorConfigTable_(context);
 
   const cfg = { ...reportConfig, ...collectorTableConfig }; // Merge configs
 
@@ -2203,8 +2516,8 @@ function isReallocationTable_(table) {
  * Read reallocation configuration
  * Returns: { 'S4-260123': { original: '5.3', new: '8.3', reason: '...' }, ... }
  */
-function getReallocationMap_() {
-  const body = getActiveDocumentBodyCounted_('getReallocationMap_');
+function getReallocationMap_(context) {
+  const body = getActiveDocumentBodyCounted_('getReallocationMap_', context);
   const map = {};
 
   for (const table of getTablesCounted_(body, 'getReallocationMap_')) {
@@ -2334,8 +2647,8 @@ function isCollectorConfigTable_(t) {
   }
 }
 
-function readCollectorConfigTable_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+function readCollectorConfigTable_(context) {
+  const body = getReportBody_(context);
   for (const t of body.getTables()) {
     if (!isCollectorConfigTable_(t)) continue;
     const cfg = {};
@@ -2934,7 +3247,7 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
  * Inserts Abstract row after Agenda Item, so the top rows remain:
  * TDoc, Title, Source, Contact, Agenda Item, Abstract.
  */
-function fetchAndAddAbstract_(table, tdocNumber) {
+function fetchAndAddAbstract_(table, tdocNumber, context) {
   try {
     const apiToken = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');
     if (!apiToken) {
@@ -2953,7 +3266,7 @@ function fetchAndAddAbstract_(table, tdocNumber) {
     const canonical = parseExactSA4DocumentId_(tdocNumber);
     const cacheId = canonical.isValid ? canonical.raw : null;
 
-    if (cacheId && isReviewerNoSummaryCached_(cacheId)) {
+    if (cacheId && isReviewerNoSummaryCached_(cacheId, context)) {
       perfCount_('Reviewer negative-cache hits');
       Logger.log(`Skipping Reviewer API for ${tdocNumber}: no summary was available on a previous run (cached, within TTL)`);
       return;
@@ -2983,7 +3296,7 @@ function fetchAndAddAbstract_(table, tdocNumber) {
         // PERF-006 (Part A): a real summary just arrived -- clear any
         // stale negative-cache entry (e.g. Reviewer had not yet finished
         // processing this TDoc on an earlier run and returned 404 then).
-        if (cacheId) clearReviewerNoSummaryCache_(cacheId);
+        if (cacheId) clearReviewerNoSummaryCache_(cacheId, context);
 
         const insertIndex = findAbstractInsertIndex_(table);
         // PERF-003B (Part 3): this inserts a brand-new ROW into an
@@ -3026,7 +3339,7 @@ function fetchAndAddAbstract_(table, tdocNumber) {
       //    fact about the document, so none are cached.
       Logger.log(`No summary available for ${tdocNumber}`);
       if (cacheId) {
-        markReviewerNoSummary_(cacheId, statusCode);
+        markReviewerNoSummary_(cacheId, statusCode, context);
         perfCount_('Reviewer negative-cache writes');
       }
     } else {
@@ -3264,32 +3577,32 @@ function normalizeStatus_(s) {
 // COLLECTOR: Email discussion + revisions (safe, no data loss)
 // =========================================================
 
-function collectorUpdate_() {
-  const cfg = getCollectorConfig_();
+function collectorUpdate_(context) {
+  const cfg = getCollectorConfig_(context);
   log_(cfg, '=== COLLECTOR START ===');
 
-  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg)); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); }
-  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg)); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); }
+  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg, context)); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); }
+  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg, context)); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); }
 
   log_(cfg, '=== COLLECTOR END ===');
 }
 
 // --- Email discussion ---
-function checkRSSFeed_(cfg) {
+function checkRSSFeed_(cfg, context) {
   // Guard against missing config (prevents your toLowerCase crash)
   const listName = String(cfg.LIST_NAME || LIST_NAME_LOCK);
   const listLower = listName.toLowerCase();
 
-  const msgs = perfTimed_('    RSS/mail: collectHybridListservMessages_ (fetch, all sources)', () => collectHybridListservMessages_(cfg));
+  const msgs = perfTimed_('    RSS/mail: collectHybridListservMessages_ (fetch, all sources)', () => collectHybridListservMessages_(cfg, context));
   perfCount_('RSS/mail messages collected (this run)', msgs.length);
   const tz = String(cfg.TIMEZONE || Session.getScriptTimeZone());
   const showPreview = String(cfg.SHOW_PREVIEW_SNIPPET || 'false').toLowerCase() === 'true';
 
-  const props = PropertiesService.getDocumentProperties();
-  const tables = getTablesCounted_(getActiveDocumentBodyCounted_('checkRSSFeed_'), 'checkRSSFeed_');
+  const props = getReportStateStore_(context);
+  const tables = getTablesCounted_(getActiveDocumentBodyCounted_('checkRSSFeed_', context), 'checkRSSFeed_');
 
   // Deadlines extended verbally / by e-mail, keyed by TDOC.
-  const extensions = getDeadlineExtensionMap_();
+  const extensions = getDeadlineExtensionMap_(context);
 
   const mailProcessingStart = Date.now();
   tables.forEach(t => {
@@ -3445,7 +3758,7 @@ function checkRSSFeed_(cfg) {
   perfAddTime_('    RSS/mail: per-table message matching + cell rendering', Date.now() - mailProcessingStart);
 }
 
-function collectHybridListservMessages_(cfg) {
+function collectHybridListservMessages_(cfg, context) {
   let out = [];
   // Use only RSS v2.0 to avoid duplicates (v2.0 has more items and better metadata)
   out = out.concat(collectRssItems_(cfg, cfg.RSS_URL_V2, 'rss_v2'));
@@ -3469,7 +3782,7 @@ function collectHybridListservMessages_(cfg) {
   // cost is genuine ETSI round-trip latency, not redundant work, and is
   // left unchanged.
   perfCount_('A1 archive day-URLs considered (ARCHIVE_DAYS_BACK)', a1Urls.length);
-  a1Urls.forEach(url => out = out.concat(collectA1_(cfg, url)));
+  a1Urls.forEach(url => out = out.concat(collectA1_(cfg, url, context)));
 
   return dedupePreviewFirst_(out);
 }
@@ -3533,16 +3846,16 @@ function collectRssItems_(cfg, url, tag) {
   return out;
 }
 
-function collectA1_(cfg, url) {
-  if (isA1CachedEmpty_(cfg, url)) return [];
+function collectA1_(cfg, url, context) {
+  if (isA1CachedEmpty_(cfg, url, context)) return [];
   const resp = safeFetch_(cfg, url, {}, 'A1 fetch');
-  if (!resp.ok) { markA1Empty_(cfg, url, true); return []; }
+  if (!resp.ok) { markA1Empty_(cfg, url, true, context); return []; }
 
   const html = resp.text || '';
-  if (!html.toLowerCase().includes('a2=')) { markA1Empty_(cfg, url, true); return []; }
+  if (!html.toLowerCase().includes('a2=')) { markA1Empty_(cfg, url, true, context); return []; }
 
   const rows = parseA1TableRows_(html, cfg);
-  markA1Empty_(cfg, url, rows.length === 0);
+  markA1Empty_(cfg, url, rows.length === 0, context);
   return rows;
 }
 
@@ -3713,8 +4026,8 @@ function renderRevisionsCellContent_(cell, orderedRevisions) {
   });
 }
 
-function updateRevisions_(cfg) {
-  const baseUrl = String(getMeetingContext_().sources.revisionsUrl || '').trim();
+function updateRevisions_(cfg, context) {
+  const baseUrl = String(getMeetingContext_(context).sources.revisionsUrl || '').trim();
   if (!baseUrl) return;
 
   const url = baseUrl.replace(/\/$/, '') + '/';
@@ -3726,8 +4039,8 @@ function updateRevisions_(cfg) {
 
   const anchors = perfTimed_('    revisions: parseAnchors_ (listing parse)', () => parseAnchors_(resp.text || ''));
   perfCount_('revision-folder anchors found (this run)', anchors.length);
-  const props = PropertiesService.getDocumentProperties();
-  const body = getActiveDocumentBodyCounted_('updateRevisions_');
+  const props = getReportStateStore_(context);
+  const body = getActiveDocumentBodyCounted_('updateRevisions_', context);
   const tables = getTablesCounted_(body, 'updateRevisions_');
 
   // PERF-006 (Part B): pre-parse every anchor into a
@@ -4162,9 +4475,9 @@ function orderTdocsByRevision_(tdocs) {
  * Pass an already-downloaded `groups` object (from downloadAndGroupTdocs_) to
  * avoid fetching the XLSX a second time.
  */
-function buildRevisionMapFromTdocList_(cfg, groups) {
-  cfg = cfg || getReportConfig_();
-  groups = groups || downloadAndGroupTdocs_(cfg);
+function buildRevisionMapFromTdocList_(cfg, groups, context) {
+  cfg = cfg || getReportConfig_(context);
+  groups = groups || downloadAndGroupTdocs_(cfg, context);
   const map = {};
 
   Object.keys(groups).forEach(key => {
@@ -4175,7 +4488,7 @@ function buildRevisionMapFromTdocList_(cfg, groups) {
     });
   });
 
-  PropertiesService.getDocumentProperties().setProperty('REVISION_MAP', JSON.stringify(map));
+  getReportStateStore_(context).setProperty('REVISION_MAP', JSON.stringify(map));
   Logger.log(`Revision map: ${Object.keys(map).length} revised document(s)`);
   return map;
 }
@@ -4367,10 +4680,10 @@ function rearrangeRevisionTables() {
  * LATER revision pair in the same call that also touches this TDoc still
  * gets a live, correct reference rather than a dangling one.
  */
-function rearrangeRevisionTables_(cfg, groups, index) {
-  cfg = cfg || getReportConfig_();
-  const body = getActiveDocumentBodyCounted_('rearrangeRevisionTables_');
-  const map = buildRevisionMapFromTdocList_(cfg, groups);
+function rearrangeRevisionTables_(cfg, groups, index, context) {
+  cfg = cfg || getReportConfig_(context);
+  const body = getActiveDocumentBodyCounted_('rearrangeRevisionTables_', context);
+  const map = buildRevisionMapFromTdocList_(cfg, groups, context);
   perfCount_('revision pairs processed (rearrangeRevisionTables_)', Object.keys(map).length);
 
   const stats = {
@@ -5070,9 +5383,9 @@ function isDeadlineExtensionTable_(table) {
  * which clears the body) the last known map is reused instead of silently
  * dropping every extension.
  */
-function getDeadlineExtensionMap_() {
-  const body = DocumentApp.getActiveDocument().getBody();
-  const props = PropertiesService.getDocumentProperties();
+function getDeadlineExtensionMap_(context) {
+  const body = getReportBody_(context);
+  const props = getReportStateStore_(context);
   const map = {};
   let tableFound = false;
 
@@ -5217,8 +5530,8 @@ function a1CacheKey_(url) {
   const hex = digest.map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
   return 'A1_EMPTY_CACHE_' + hex;
 }
-function isA1CachedEmpty_(cfg, url) {
-  const props = PropertiesService.getDocumentProperties();
+function isA1CachedEmpty_(cfg, url, context) {
+  const props = getReportStateStore_(context);
   const ttlHours = parseInt(cfg.A1_EMPTY_CACHE_TTL_HOURS || '24', 10);
   const ttlMs = ttlHours * 3600 * 1000;
   const raw = props.getProperty(a1CacheKey_(url));
@@ -5229,8 +5542,8 @@ function isA1CachedEmpty_(cfg, url) {
     return obj.empty === true;
   } catch (e) { return false; }
 }
-function markA1Empty_(cfg, url, empty) {
-  PropertiesService.getDocumentProperties().setProperty(a1CacheKey_(url), JSON.stringify({ ts: Date.now(), empty: !!empty }));
+function markA1Empty_(cfg, url, empty, context) {
+  getReportStateStore_(context).setProperty(a1CacheKey_(url), JSON.stringify({ ts: Date.now(), empty: !!empty }));
 }
 function clearA1EmptyCache_() {
   const props = PropertiesService.getDocumentProperties();
@@ -5259,8 +5572,8 @@ function reviewerNoSummaryCacheKey_(canonicalTdocId) {
   return 'REVIEWER_NO_SUMMARY_CACHE_' + canonicalTdocId;
 }
 
-function isReviewerNoSummaryCached_(canonicalTdocId) {
-  const raw = PropertiesService.getDocumentProperties().getProperty(reviewerNoSummaryCacheKey_(canonicalTdocId));
+function isReviewerNoSummaryCached_(canonicalTdocId, context) {
+  const raw = getReportStateStore_(context).getProperty(reviewerNoSummaryCacheKey_(canonicalTdocId));
   if (!raw) return false;
   try {
     const obj = JSON.parse(raw);
@@ -5270,15 +5583,15 @@ function isReviewerNoSummaryCached_(canonicalTdocId) {
   } catch (e) { return false; }
 }
 
-function markReviewerNoSummary_(canonicalTdocId, statusCode) {
-  PropertiesService.getDocumentProperties().setProperty(
+function markReviewerNoSummary_(canonicalTdocId, statusCode, context) {
+  getReportStateStore_(context).setProperty(
     reviewerNoSummaryCacheKey_(canonicalTdocId),
     JSON.stringify({ ts: Date.now(), statusCode: statusCode })
   );
 }
 
-function clearReviewerNoSummaryCache_(canonicalTdocId) {
-  PropertiesService.getDocumentProperties().deleteProperty(reviewerNoSummaryCacheKey_(canonicalTdocId));
+function clearReviewerNoSummaryCache_(canonicalTdocId, context) {
+  getReportStateStore_(context).deleteProperty(reviewerNoSummaryCacheKey_(canonicalTdocId));
 }
 
 function toAbsoluteUrl_(baseUrl, href) {
@@ -5647,16 +5960,15 @@ function shouldReformatAfterUpdate_(newTdocsAdded, revisionsMoved, revisionLinke
   return (newTdocsAdded || 0) > 0 || (revisionsMoved || 0) > 0 || (revisionLinkedTablesInserted || 0) > 0 || (abstractRowsInserted || 0) > 0;
 }
 
-function removeRowHeightAndSpacing() {
-  const doc = DocumentApp.getActiveDocument();
-  const body = doc.getBody();
+function removeRowHeightAndSpacing(context) {
+  const body = getReportBody_(context);
   const tables = getTablesCounted_(body, 'removeRowHeightAndSpacing');
 
   // Apply widths ONLY for 2-column TDOC tables (and leave other tables untouched)
   // PERF-001: this ALWAYS runs, unconditionally, on every continuousUpdate()
   // call, regardless of whether anything actually changed -- suspected
   // major cost driver (see this task's report). Timed as its own stage.
-  perfTimed_('  formatting: setTwoColumnTDocTableWidths_', () => setTwoColumnTDocTableWidths_());
+  perfTimed_('  formatting: setTwoColumnTDocTableWidths_', () => setTwoColumnTDocTableWidths_(context));
 
   const formattingWriteLoopStart = Date.now();
   for (let i = 0; i < tables.length; i++) {
@@ -5729,14 +6041,14 @@ function removeRowHeightAndSpacing() {
  * Only set widths for TDOC tables that have exactly 2 columns.
  * Leaves all other tables alone.
  */
-function setTwoColumnTDocTableWidths_() {
-  const cfg = getConfig_();
+function setTwoColumnTDocTableWidths_(context) {
+  const cfg = getConfig_(context);
 
   const pageWidth = parseInt(cfg.TDOC_PAGE_USABLE_WIDTH || '468', 10);
   const firstColWidth = parseInt(cfg.TDOC_COL1_WIDTH || '108', 10);
   const secondColWidth = pageWidth - firstColWidth;
 
-  const body = getActiveDocumentBodyCounted_('setTwoColumnTDocTableWidths_');
+  const body = getActiveDocumentBodyCounted_('setTwoColumnTDocTableWidths_', context);
   const tables = getTablesCounted_(body, 'setTwoColumnTDocTableWidths_');
 
   tables.forEach(t => {
@@ -5838,8 +6150,8 @@ function isConfigTable_(t) {
   }
 }
 
-function getConfig_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+function getConfig_(context) {
+  const body = getReportBody_(context);
   for (const t of body.getTables()) {
     if (!isConfigTable_(t)) continue;
 
@@ -7998,7 +8310,7 @@ function buildSkeletonWithTdocTables() {
  * Download TDOC list and group by agenda item.
  * Returns: { '9.1': { tdocs: [...] }, '9.2': { tdocs: [...] }, ... }
  */
-function downloadAndGroupTdocs_(cfg) {
+function downloadAndGroupTdocs_(cfg, context) {
   const meetingUrl = cfg.TDOC_LIST_URL;
   if (!meetingUrl) return {};
 
@@ -8059,8 +8371,8 @@ function downloadAndGroupTdocs_(cfg) {
     // before>}, agendaItem) is byte-equivalent to the old
     // agendaItem.startsWith(agendaPrefix) check -- see
     // tests/tdoc-agenda-filter.test.js.
-    const agendaSelector = getMeetingContext_().report.agendaSelector;
-    const reallocations = perfTimed_('  TDoc-list: getReallocationMap_ (own body.getTables() scan)', () => getReallocationMap_());
+    const agendaSelector = getMeetingContext_(context).report.agendaSelector;
+    const reallocations = perfTimed_('  TDoc-list: getReallocationMap_ (own body.getTables() scan)', () => getReallocationMap_(context));
     const groups = {};
 
     for (let i = 1; i < data.length; i++) {
@@ -8519,8 +8831,8 @@ function collectRevisionsOnly() {
  * brand-new TDoc table) is correctly excluded from this function's own
  * delta.
  */
-function addAbstractsForTables_(body) {
-  body = body || getActiveDocumentBodyCounted_('addAbstractsForTables_');
+function addAbstractsForTables_(body, context) {
+  body = body || getActiveDocumentBodyCounted_('addAbstractsForTables_', context);
   let candidatesProcessed = 0;
 
   const requestsBefore = perfCounterValue_('Reviewer API requests');
@@ -8540,7 +8852,7 @@ function addAbstractsForTables_(body) {
     const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
     if (!parsedTdoc.isValid) return;
 
-    perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw));
+    perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw, context));
     candidatesProcessed++;
   });
 

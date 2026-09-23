@@ -112,8 +112,11 @@ console.log('source-structure: both Reviewer gates migrated to parseExactSA4Docu
       /\bparseExactSA4DocumentId_\s*\(/.test(addBody), true);
     check('addAbstractsForTables_() no longer contains the old hardcoded /^S4-\\d{6}$/ gate',
       /\/\^S4-\\d\{6\}\$\//.test(stripComments(addBody)), false);
+    // ADDON-004: this call site now also threads an optional trailing
+    // `context` argument through to fetchAndAddAbstract_() -- tolerate it
+    // rather than requiring an exact 2-argument call.
     check('addAbstractsForTables_() passes the PARSED canonical id (parsedTdoc.raw) to fetchAndAddAbstract_()',
-      /fetchAndAddAbstract_\(table,\s*parsedTdoc\.raw\)/.test(addBody), true);
+      /fetchAndAddAbstract_\(table,\s*parsedTdoc\.raw[,)]/.test(addBody), true);
   }
 
   // Every OTHER /^S4-\d{6}$/-shaped regex in Code.js is deliberately

@@ -52,12 +52,28 @@ console.log('getReportStateStore_() -- Backend A (Document Properties) is the de
     sandbox.getReportStateStore_().getProperty('FOO'), 'bar');
 }
 
-['bound', 'addon-interactive', undefined].forEach((mode) => {
+['bound', undefined].forEach((mode) => {
   const { sandbox } = loadCode({ documentProperties: { KEY: 'val' } });
   const store = sandbox.getReportStateStore_(mode === undefined ? {} : { mode: mode });
-  check(`mode=${mode} -> Backend A (real Document Properties)`,
+  check(`mode=${mode} -> Backend A (real Document Properties), no active-document resolution needed`,
     store === sandbox.PropertiesService.getDocumentProperties(), true);
 });
+
+// ADDON-004 changed addon-interactive semantics: it is no longer an
+// unconditional alias for Backend A -- it now resolves the active
+// document and checks the registry (see the extensive header comment on
+// getReportStateStore_() in Code.js). For a document that has never been
+// adopted, the result is STILL Backend A, but reaching that conclusion
+// now requires an active document to be resolvable -- see
+// tests/addon004-authoritative-state.test.js for the full coverage of
+// both the unregistered and adopted cases.
+{
+  const { sandbox } = loadCode({ documentProperties: { KEY: 'val' } });
+  sandbox.DocumentApp.getActiveDocument = () => ({ getId: () => 'DOC_NEVER_ADOPTED', getBody: () => ({}) });
+  const store = sandbox.getReportStateStore_({ mode: 'addon-interactive' });
+  check('mode=addon-interactive, never adopted -> Backend A (real Document Properties)',
+    store === sandbox.PropertiesService.getDocumentProperties(), true);
+}
 
 {
   // A context carrying document/documentId but NOT addon-background mode

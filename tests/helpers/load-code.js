@@ -71,12 +71,18 @@ function loadCode(options) {
     ScriptApp: {},
     MimeType: {},
     XmlService: {},
-    // PERF-003B: default fake lock always succeeds and no-ops release, so
-    // any code path that happens to call LockService in a test that isn't
-    // specifically exercising lock behavior doesn't crash. Tests that DO
-    // exercise lock behavior (tryLock failure, release-on-error, etc.)
-    // override sandbox.LockService with their own controllable fake.
-    LockService: { getDocumentLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
+    // PERF-003B / ADDON-004: default fake locks always succeed and no-op
+    // release, so any code path that happens to call LockService in a test
+    // that isn't specifically exercising lock behavior doesn't crash.
+    // Tests that DO exercise lock behavior (tryLock failure, release-on-
+    // error, contention, etc.) override sandbox.LockService with their own
+    // controllable fake. getScriptLock() (ADDON-004's central scheduler)
+    // follows the exact same default-success pattern as getDocumentLock()
+    // (PERF-003B's interactive/bound path).
+    LockService: {
+      getDocumentLock: () => ({ tryLock: () => true, releaseLock: () => {} }),
+      getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} })
+    },
     console
   };
 

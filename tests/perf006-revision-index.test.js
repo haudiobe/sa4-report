@@ -84,10 +84,15 @@ console.log('source-structure: updateRevisions_() builds the anchor index ONCE a
 
 {
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
-  const fnStart = source.indexOf('function updateRevisions_(cfg)');
-  const nextFnMatch = source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m);
+  // ADDON-004: updateRevisions_() now takes an optional `context`
+  // parameter -- locator tolerates the extra argument instead of requiring
+  // an exact "function updateRevisions_(cfg)" match.
+  const fnStartMatch = source.match(/^function updateRevisions_\(cfg[A-Za-z0-9_$,\s]*\)/m);
+  const fnStart = fnStartMatch ? fnStartMatch.index : -1;
+  const nextFnMatch = fnStart >= 0 ? source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m) : null;
   const fnEnd = nextFnMatch ? fnStart + 1 + nextFnMatch.index : source.length;
-  const body = source.slice(fnStart, fnEnd);
+  const body = fnStart >= 0 ? source.slice(fnStart, fnEnd) : '';
+  check('updateRevisions_() was located in Code.js', fnStart >= 0, true);
 
   check('updateRevisions_() calls buildRevisionAnchorIndex_(anchors, url) exactly once, outside the tables.forEach loop',
     (body.match(/=\s*buildRevisionAnchorIndex_\(anchors,\s*url\)/g) || []).length, 1);

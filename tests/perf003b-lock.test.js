@@ -190,12 +190,39 @@ console.log('source-structure: both entry points use the document-scoped lock (n
   const { CODE_JS_PATH } = require('./helpers/load-code.js');
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
 
+  // ADDON-004: the central background SCHEDULER (runAddonScheduler_())
+  // legitimately introduces LockService.getScriptLock() elsewhere in this
+  // file -- a deliberate, documented, separate concurrency mechanism for
+  // the background path (see its own header comment). This check is
+  // therefore scoped to ONLY the two legacy/interactive entry points
+  // (continuousUpdate(), updateReportIncremental()), not the whole file,
+  // so it still catches a getScriptLock()/getUserLock() creeping into
+  // EITHER of those two specifically, without false-failing on the
+  // scheduler's intentional, unrelated use of getScriptLock().
+  function extractFunctionBody(name) {
+    const startMatch = source.match(new RegExp('^function ' + name + '\\([A-Za-z0-9_$]*\\)', 'm'));
+    if (!startMatch) return '';
+    const startIndex = startMatch.index;
+    const nextFnRe = /^function\s+[A-Za-z0-9_$]+\s*\(/gm;
+    nextFnRe.lastIndex = startIndex + startMatch[0].length;
+    const next = nextFnRe.exec(source);
+    const endIndex = next ? next.index : source.length;
+    return source.slice(startIndex, endIndex);
+  }
+
+  const continuousUpdateBody = extractFunctionBody('continuousUpdate');
+  const updateReportIncrementalBody = extractFunctionBody('updateReportIncremental');
+  check('both entry points were located in Code.js',
+    continuousUpdateBody.length > 0 && updateReportIncrementalBody.length > 0, true);
+
+  const bothBodies = continuousUpdateBody + '\n' + updateReportIncrementalBody;
+
   check('LockService.getDocumentLock() appears (document-scoped, matches "only one incremental update on THIS document")',
-    /LockService\.getDocumentLock\(\)/.test(source), true);
-  check('LockService.getScriptLock() is NOT used (would be shared across every document using this script)',
-    /LockService\.getScriptLock\(\)/.test(source), false);
-  check('LockService.getUserLock() is NOT used (would not block a different user/trigger identity on the SAME document)',
-    /LockService\.getUserLock\(\)/.test(source), false);
+    /LockService\.getDocumentLock\(\)/.test(bothBodies), true);
+  check('LockService.getScriptLock() is NOT used by either legacy/interactive entry point (would be shared across every document using this script)',
+    /LockService\.getScriptLock\(\)/.test(bothBodies), false);
+  check('LockService.getUserLock() is NOT used by either legacy/interactive entry point (would not block a different user/trigger identity on the SAME document)',
+    /LockService\.getUserLock\(\)/.test(bothBodies), false);
 }
 
 // ========================================================== summary =======
