@@ -1,11 +1,101 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.12.0 (2026-09-23)
+ * Version: 2.13.0 (2026-09-23)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
+ * - Central Google Docs Editor Add-on (ADDON-002..006): background
+ *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.13.0 (2026-09-23)
+ *   - Added (ADDON-002..004): a document execution-context abstraction
+ *     (getReportDocument_/getReportBody_/getReportDocumentId_) and a
+ *     report-state-store abstraction (getReportStateStore_) with two
+ *     backends -- Document Properties (legacy bound-script/interactive,
+ *     unchanged default) and a central, documentId-namespaced Script
+ *     Properties backend ('SA4_STATE|<documentId>|<key>') for background
+ *     execution. Every background-reachable function in
+ *     continuousUpdateCore_()'s call graph now threads this context
+ *     instead of assuming an active document/Document Properties.
+ *   - Added (ADDON-003): a central document registry
+ *     ('SA4_REGISTRY_INDEX' + one 'SA4_REGISTRY_DOC|<documentId>' entry
+ *     per document -- never one unbounded blob) and an explicit,
+ *     idempotent adoption operation (adoptReportDocumentForAddon_())
+ *     that copies a document's report state from Document Properties
+ *     into the central backend, verifies the copy, and only then
+ *     registers it. Document Properties are never modified or deleted by
+ *     adoption.
+ *   - Added (ADDON-004): continuousUpdateForDocument_(documentId) -- the
+ *     per-document background unit of work -- and runAddonScheduler_(), a
+ *     central scheduler handler (not yet wired to a live trigger at this
+ *     point) that acquires a ScriptLock, computes due documents
+ *     (never-run-first, then oldest-lastRunAt-first, stable tie-break),
+ *     enforces a conservative runtime budget (deferring, not failing,
+ *     documents once exhausted), and isolates each document's failure
+ *     from the others. continuousUpdateCore_() now returns
+ *     {success, error}; a background run's lastRunAt only advances when
+ *     that reports success.
+ *   - Added (ADDON-005): add-on entry points (onInstall(e)/onOpen(e), the
+ *     existing bound-script menu fully preserved and unchanged), a
+ *     separate "CENTRAL ADD-ON" menu (Enable/Disable Automatic Updates,
+ *     Set Update Interval [1/2/4/6/12/24h only -- add-on time-driven
+ *     triggers cannot run more frequently than hourly], Show Add-on
+ *     Status), the central scheduler's own hourly trigger lifecycle
+ *     (ensureAddonSchedulerTrigger_/getAddonSchedulerTriggerStatus_/
+ *     deleteAddonSchedulerTrigger_, scoped strictly to its own handler
+ *     name, never touching unrelated project triggers), and
+ *     withAddonScriptLock_() serializing the new interactive
+ *     enable/disable/set-interval actions against the scheduler on an
+ *     adopted document. Deployed to a separate, new central Apps Script
+ *     project (test-deployment install) -- the legacy production
+ *     bound-script project and its existing reports were never touched.
+ *   - Fixed (live acceptance, ADDON-005B): adoptReportDocumentForAddon_()
+ *     now always reads Document Properties directly as its source
+ *     (never through the mode-aware state-store seam), so re-adoption on
+ *     an already-adopted document correctly re-syncs a changed value
+ *     instead of copying central state onto itself.
+ *   - Fixed (live acceptance, ADDON-005B): removeEmptyParagraphs_() --
+ *     called from removeRowHeightAndSpacing()'s formatting stage -- now
+ *     accepts and threads the execution context; it was the one
+ *     get-active-document-body call site missed by the original
+ *     background-reachability audit, and crashed a real background
+ *     scheduler run with "Cannot read properties of null (reading
+ *     'getBody')". A full re-audit of every DocumentApp.getActiveDocument()
+ *     and getActiveDocumentBodyCounted_() call site found no further gaps.
+ *   - Live acceptance evidence (manual scheduler invocation, real scratch
+ *     Google Docs, no production report or meeting 85916 involved):
+ *       * Failure path: an explicit TDoc-list URL pointing at a
+ *         guaranteed-unreachable host reached the background execution
+ *         correctly, failed with the expected error,
+ *         continuousUpdateCore_() reported failure,
+ *         continuousUpdateForDocument_() propagated it, the scheduler
+ *         counted it as failed (not succeeded), lastRunAt was NOT
+ *         advanced, and a second, independently-registered document was
+ *         still processed afterward (failure isolation confirmed live,
+ *         not just in unit tests).
+ *       * Success path: a synthetic header-only XLSX (columns "TDoc",
+ *         "Agenda item", "Revised to", zero data rows) was downloaded and
+ *         parsed for real; zero TDocs were found, zero existing TDocs
+ *         were found, zero document structural mutations occurred, the
+ *         collector stage completed, continuousUpdateCore_() reached its
+ *         normal COMPLETE path, the scheduler summary was
+ *         {"considered":2,"due":1,"succeeded":1,"failed":0,"skipped":0},
+ *         lastRunAt advanced to a real timestamp
+ *         (2026-09-23T12:34:47.457Z), and exactly one central scheduler
+ *         trigger existed throughout.
+ *   - Distribution finding (ADDON-006, research only, no code impact): a
+ *     personal (non-Workspace) Google account cannot install a private
+ *     Editor Add-on once for all Docs -- confirmed against current Google
+ *     documentation that only public Marketplace visibility is available
+ *     to consumer accounts (private/unlisted both require a Workspace
+ *     domain). Decision: keep the central project + one Apps Script test
+ *     deployment, accepting one extra "add this document as a test
+ *     document" step per new report document; defer public Marketplace
+ *     publication. The central scheduler is unaffected by this choice --
+ *     it operates on registered documents via DocumentApp.openById(),
+ *     independent of whether the add-on's interactive menu is reachable
+ *     in that document.
  * 2.12.0 (2026-09-23)
  *   - Added: a per-run TDoc-table index (buildTdocTableIndex_()) built once
  *     from the same table scan continuousUpdate() already does for
