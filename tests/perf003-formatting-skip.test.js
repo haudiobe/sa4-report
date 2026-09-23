@@ -44,22 +44,26 @@ console.log('shouldReformatAfterUpdate_() -- pure structural-change decision');
   const { sandbox } = loadCode();
   const fn = sandbox.shouldReformatAfterUpdate_;
 
-  check('1. no-change run (0 new, 0 moved, 0 inserted) -> SKIP formatting', fn(0, 0, 0), false);
-  check('2. a newly inserted TDoc (newTdocsAdded=1) -> formatting REQUIRED', fn(1, 0, 0), true);
-  check('3. a structural revision-table movement (revisionsMoved=1) -> formatting REQUIRED', fn(0, 1, 0), true);
-  check('a newly inserted revision-linked table (insertRevisedDocTablesAfter_) -> formatting REQUIRED', fn(0, 0, 1), true);
-  check('multiple simultaneous structural changes -> still just REQUIRED (no double-counting concern)', fn(3, 2, 1), true);
-  check('undefined/missing arguments do not throw and default to "no change"', fn(undefined, undefined, undefined), false);
-  check('null arguments do not throw and default to "no change"', fn(null, null, null), false);
+  check('1. no-change run (0 new, 0 moved, 0 inserted, 0 abstract rows) -> SKIP formatting', fn(0, 0, 0, 0), false);
+  check('2. a newly inserted TDoc (newTdocsAdded=1) -> formatting REQUIRED', fn(1, 0, 0, 0), true);
+  check('3. a structural revision-table movement (revisionsMoved=1) -> formatting REQUIRED', fn(0, 1, 0, 0), true);
+  check('a newly inserted revision-linked table (insertRevisedDocTablesAfter_) -> formatting REQUIRED', fn(0, 0, 1, 0), true);
+  check('PERF-003B: an abstract row inserted into an EXISTING table (fetchAndAddAbstract_) -> formatting REQUIRED -- the exact PERF-002 measured case (0 new, 0 moved, 0 inserted, 1 abstract row)', fn(0, 0, 0, 1), true);
+  check('multiple simultaneous structural changes -> still just REQUIRED (no double-counting concern)', fn(3, 2, 1, 1), true);
+  check('undefined/missing arguments do not throw and default to "no change"', fn(undefined, undefined, undefined, undefined), false);
+  check('null arguments do not throw and default to "no change"', fn(null, null, null, null), false);
 }
 
 // ============ 2. source-structure: continuousUpdate() wires real inputs ===
 
-console.log('source-structure: continuousUpdate() feeds its REAL newTdocsAdded/rev.moved/counter into the decision');
+console.log('source-structure: continuousUpdateCore_() feeds its REAL newTdocsAdded/rev.moved/counter into the decision');
 
 {
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
-  const fnStart = source.indexOf('function continuousUpdate()');
+  // PERF-003B (Part 2): continuousUpdate() is now a thin lock-acquiring
+  // public wrapper (see tests/perf003b-lock.test.js) -- the actual logic
+  // that computes/consumes these signals lives in continuousUpdateCore_().
+  const fnStart = source.indexOf('function continuousUpdateCore_()');
   const nextFnMatch = source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m);
   const fnEnd = nextFnMatch ? fnStart + 1 + nextFnMatch.index : source.length;
   const body = source.slice(fnStart, fnEnd);
@@ -68,8 +72,25 @@ console.log('source-structure: continuousUpdate() feeds its REAL newTdocsAdded/r
     /shouldReformatAfterUpdate_\(\s*newTdocsAdded,\s*rev\.moved,/.test(body), true);
   check('continuousUpdate() reads the revision-linked-table-insertion counter as the third argument',
     /perfCounterValue_\('structural: new revision-linked tables inserted \(insertRevisedDocTablesAfter_\)'\)/.test(body), true);
+  check('PERF-003B: continuousUpdate() reads the abstract-row-insertion counter as the fourth argument (closes the gap the PERF-002 measured run exposed)',
+    /perfCounterValue_\('structural: abstract row inserted \(fetchAndAddAbstract_\)'\)/.test(body), true);
   check('the formatting call is inside an if() gated by the decision result (not called unconditionally any more here)',
     /if\s*\(structuralChangeThisRun\)\s*\{\s*perfTimed_\('formatting \(removeRowHeightAndSpacing\)'/.test(body), true);
+}
+
+// ===== 2b. source-structure: fetchAndAddAbstract_ counts its own row insert =
+
+console.log('source-structure: fetchAndAddAbstract_() counts the structural row it inserts into an EXISTING table');
+
+{
+  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  const fnStart = source.indexOf('function fetchAndAddAbstract_(');
+  const nextFnMatch = source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m);
+  const fnEnd = nextFnMatch ? fnStart + 1 + nextFnMatch.index : source.length;
+  const body = source.slice(fnStart, fnEnd);
+
+  check('fetchAndAddAbstract_ calls perfCount_ for the abstract-row-inserted label before table.insertTableRow(...)',
+    /perfCount_\('structural: abstract row inserted \(fetchAndAddAbstract_\)'\);\s*\n\s*const abstractRow = table\.insertTableRow/.test(body), true);
 }
 
 // ======= 3. source-structure: every OTHER call site remains unconditional =

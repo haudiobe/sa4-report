@@ -296,8 +296,40 @@ function perfLogSummary_() {
 /**
  * CONTINUOUS UPDATE FUNCTION
  * Downloads latest TDOCs, adds new ones, updates status
+ *
+ * PERF-003B (Part 2): this is the public entry point -- the one the time-
+ * driven trigger (ScriptApp.newTrigger('continuousUpdate'), see
+ * createContinuousTrigger()) and the "Continuous Update" menu item both
+ * invoke by name. It acquires a short, non-blocking, document-scoped lock
+ * BEFORE any work at all (a losing run does nothing, not partial work),
+ * then delegates to continuousUpdateCore_() for the actual logic, and
+ * always releases the lock in `finally`. This guards against the exact
+ * overlap risk flagged (but not fixed) in POST-MEETING-001 Task C: the
+ * trigger firing again while a previous run -- trigger- or menu-invoked --
+ * is still executing.
  */
 function continuousUpdate() {
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    Logger.log('continuousUpdate(): another incremental update is already in progress -- skipping this run.');
+    return;
+  }
+  try {
+    continuousUpdateCore_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * The actual continuousUpdate() logic. Never call this directly -- always
+ * go through continuousUpdate(), which holds the document lock for the
+ * duration of this call. (Kept as a separate function, rather than
+ * inlined, purely so the lock-acquisition wrapper above stays a small,
+ * easily-audited block instead of interleaving lock logic into this
+ * function's existing try/catch/finally.)
+ */
+function continuousUpdateCore_() {
   perfResetState_();
   const perfTotalStart = Date.now();
   const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_());
@@ -381,20 +413,27 @@ function continuousUpdate() {
     // Collect emails and revisions
     perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_());
 
-    // PERF-003 (Part B): the unconditional, full-document formatting pass
-    // is only actually needed when this run inserted or moved a TABLE --
-    // never merely because cell TEXT changed (status updates, e-mail
+    // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
+    // full-document formatting pass is only actually needed when this run
+    // inserted or moved a TABLE, or inserted a ROW into an existing table
+    // -- never merely because cell TEXT changed (status updates, e-mail
     // discussion, revision cell rendering all rewrite existing cells in
     // place, never add/remove rows or tables). See
     // removeRowHeightAndSpacing()'s own header comment for the full
     // characterization, and shouldReformatAfterUpdate_() for the decision
-    // itself. Every OTHER call site of removeRowHeightAndSpacing() (full
+    // itself (including why the 4th, abstract-row-insertion signal was
+    // added). Every OTHER call site of removeRowHeightAndSpacing() (full
     // report build, "Update All", manual formatting menu items) is
-    // untouched and still calls it unconditionally.
+    // untouched and still calls it unconditionally. All four counters are
+    // read AFTER both addAbstractsForTables_() and collectorUpdate_() (the
+    // only two call chains below this point that can still insert/move a
+    // table) have already run, so nothing structural that happens later
+    // in this same function is missed.
     const structuralChangeThisRun = shouldReformatAfterUpdate_(
       newTdocsAdded,
       rev.moved,
-      perfCounterValue_('structural: new revision-linked tables inserted (insertRevisedDocTablesAfter_)')
+      perfCounterValue_('structural: new revision-linked tables inserted (insertRevisedDocTablesAfter_)'),
+      perfCounterValue_('structural: abstract row inserted (fetchAndAddAbstract_)')
     );
 
     // Format
@@ -2254,12 +2293,26 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
   // regardless of the FETCH_ABSTRACTS_ON_UPDATE setting. It is only skipped
   // when SKIP_ABSTRACTS_DURING_TABLE_BUILD is explicitly set, which happens
   // solely inside addTdocTablesOnly()'s manual two-step "tables now,
-  // abstracts later" workflow. This is why a controlled continuousUpdate()
-  // run that inserted exactly one new TDoc made exactly one Reviewer API
-  // request even with FETCH_ABSTRACTS_ON_UPDATE left at its default (off):
-  // the request came from here, not from addAbstractsForTables_(). This is
-  // existing, intentional behavior (a newly-created table is meant to get
-  // its Abstract row immediately) and is left unchanged.
+  // abstracts later" workflow.
+  //
+  // PERF-003B (correction): the PERF-002 measured run logged "Added 0 new,
+  // updated 0 statuses", so insertNewTdoc_() (and therefore this call
+  // site) was never reached that run -- it cannot be the source of that
+  // run's 1 Reviewer API request. That request traced instead to
+  // continuousUpdate()'s `if (getFetchAbstractsSetting_())` branch calling
+  // addAbstractsForTables_() (see its own call site), which means
+  // FETCH_ABSTRACTS_ON_UPDATE's Document Property was actually 'true' for
+  // that document at measurement time -- "default OFF" only describes the
+  // value when the property was never set; once explicitly enabled via
+  // the trigger dialog's checkbox (createContinuousTrigger's
+  // fetchAbstracts argument / setFetchAbstractsSetting()), it stays on
+  // until explicitly turned off. addAbstractsForTables_() then found
+  // exactly 1 existing TDoc table with no Abstract cell yet and fetched
+  // it, matching the measured "Fetched abstracts for 1 table(s)" /
+  // "Reviewer API requests: 1". This call site's own behavior (fetching a
+  // just-created table's abstract immediately, independent of the
+  // trigger-level toggle) is still real and intentional, it just was not
+  // what fired in that specific measured run.
   const skipAbstracts = PropertiesService.getDocumentProperties().getProperty('SKIP_ABSTRACTS_DURING_TABLE_BUILD') === 'true';
   const tdocNumber = String(data[0][1] || '').trim();
   const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
@@ -2308,6 +2361,17 @@ function fetchAndAddAbstract_(table, tdocNumber) {
       
       if (abstractText) {
         const insertIndex = findAbstractInsertIndex_(table);
+        // PERF-003B (Part 3): this inserts a brand-new ROW into an
+        // EXISTING table -- a genuine structural change (new row/cells
+        // default to non-zero height/spacing, same reason
+        // removeRowHeightAndSpacing() exists at all -- see its header
+        // comment), reachable from continuousUpdate() via
+        // addAbstractsForTables_() even when newTdocsAdded/rev.moved/the
+        // revision-linked-table counter are all zero (exactly the
+        // PERF-002 measured run: 0 new TDocs, 1 abstract row inserted).
+        // shouldReformatAfterUpdate_()'s call site reads this counter as
+        // its 4th signal so that case still gets formatted.
+        perfCount_('structural: abstract row inserted (fetchAndAddAbstract_)');
         const abstractRow = table.insertTableRow(insertIndex);
         abstractRow.appendTableCell('Abstract');
         const abstractCell = abstractRow.appendTableCell(abstractText);
@@ -4831,16 +4895,27 @@ function ensureAgendaItemRow_(sheet, table) {
  * and still calls it unconditionally, exactly as before.
  */
 /**
- * PERF-003 (Part B): pure decision -- whether continuousUpdate()'s
- * unconditional, full-document formatting pass (removeRowHeightAndSpacing())
- * is actually needed this run. True whenever ANY table was inserted or
- * moved this run (new TDocs, a moved revision table, or a newly-inserted
- * revision-linked table); false when this run only rewrote EXISTING cell
- * TEXT (status updates, e-mail discussion, revision cell rendering), which
- * never adds/removes a row/cell/table and so never needs reformatting.
+ * PERF-003 (Part B) / PERF-003B (Part 3): pure decision -- whether
+ * continuousUpdate()'s unconditional, full-document formatting pass
+ * (removeRowHeightAndSpacing()) is actually needed this run. True whenever
+ * ANY table was inserted/moved, OR a row was inserted into an existing
+ * table, this run (new TDocs, a moved revision table, a newly-inserted
+ * revision-linked table, or an abstract row added to an existing table);
+ * false when this run only rewrote EXISTING cell TEXT (status updates,
+ * e-mail discussion, revision cell rendering), which never adds/removes a
+ * row/cell/table and so never needs reformatting.
+ *
+ * abstractRowsInserted was added in PERF-003B after the call-graph audit
+ * found that continuousUpdate() -> addAbstractsForTables_() ->
+ * fetchAndAddAbstract_() inserts a table ROW into an EXISTING table
+ * (table.insertTableRow(), see fetchAndAddAbstract_()) independently of
+ * the other three signals -- exactly the PERF-002 measured run (0 new
+ * TDocs, 0 moved revisions, 1 abstract row inserted), which the original
+ * three-signal version of this function would have wrongly classified as
+ * "no structural change" and skipped formatting for.
  */
-function shouldReformatAfterUpdate_(newTdocsAdded, revisionsMoved, revisionLinkedTablesInserted) {
-  return (newTdocsAdded || 0) > 0 || (revisionsMoved || 0) > 0 || (revisionLinkedTablesInserted || 0) > 0;
+function shouldReformatAfterUpdate_(newTdocsAdded, revisionsMoved, revisionLinkedTablesInserted, abstractRowsInserted) {
+  return (newTdocsAdded || 0) > 0 || (revisionsMoved || 0) > 0 || (revisionLinkedTablesInserted || 0) > 0 || (abstractRowsInserted || 0) > 0;
 }
 
 function removeRowHeightAndSpacing() {
@@ -5734,21 +5809,38 @@ function buildInitialReport() {
 
 /**
  * PHASE 3: Update Report (Incremental)
+ *
+ * PERF-003B (Part 2): shares the same document-scoped lock as
+ * continuousUpdate() (see its header comment) -- this is a manual menu
+ * item that mutates the same document body (collectorUpdate_() +
+ * removeRowHeightAndSpacing()), so it must not be allowed to run
+ * concurrently with a trigger- or menu-invoked continuousUpdate() either.
+ * Neither function calls the other, so there is no nested/double-lock
+ * path here -- each acquires the lock itself, once, at its own entry.
  */
 function updateReportIncremental() {
   const ui = DocumentApp.getUi();
-  
+
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    Logger.log('updateReportIncremental(): another incremental update is already in progress -- skipping this run.');
+    ui.alert('Busy', 'Another update is currently in progress. Please try again in a moment.', ui.ButtonSet.OK);
+    return;
+  }
+
   try {
     // Update email discussions and revisions
     collectorUpdate_();
-    
+
     // Re-format
     removeRowHeightAndSpacing();
-    
+
     ui.alert('Success!', 'Report updated successfully!', ui.ButtonSet.OK);
   } catch (e) {
     ui.alert('Error', 'Failed to update report: ' + e.message, ui.ButtonSet.OK);
     Logger.log('Update error: ' + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
