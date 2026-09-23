@@ -224,13 +224,17 @@ console.log('addAbstractsForTables_() -- real execution, fetchAndAddAbstract_() 
   const calledFor = [];
   sandbox.fetchAndAddAbstract_ = (table, tdocNumber) => { calledFor.push(tdocNumber); };
 
-  const filled = sandbox.addAbstractsForTables_(fakeBody);
+  // PERF-006B: addAbstractsForTables_() now returns a {candidatesProcessed,
+  // requestsMade, cacheSkips, rowsInserted} breakdown, not a bare count --
+  // see its own header comment (Code.js) for why "candidates processed"
+  // is not the same thing as "Reviewer requests actually made".
+  const result = sandbox.addAbstractsForTables_(fakeBody);
 
   check('addAbstractsForTables_() reaches fetchAndAddAbstract_() for S4aP260098', calledFor.indexOf('S4aP260098') !== -1, true);
   check('addAbstractsForTables_() reaches fetchAndAddAbstract_() for the main-meeting S4-260123 too', calledFor.indexOf('S4-260123') !== -1, true);
   check('addAbstractsForTables_() skips the invalid/unregistered id', calledFor.indexOf('not-a-tdoc') === -1, true);
   check('addAbstractsForTables_() skips a table that already has an Abstract row', calledFor.indexOf('S4aA260090') === -1, true);
-  check('addAbstractsForTables_() only counted the tables it actually filled', filled, 2);
+  check('addAbstractsForTables_() only counted the tables it actually processed (candidatesProcessed)', result.candidatesProcessed, 2);
 }
 
 // ========================================================== summary =======

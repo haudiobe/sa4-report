@@ -1,11 +1,139 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.6.0 (2026-08-28)
+ * Version: 2.12.0 (2026-09-23)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
  *
  * CHANGELOG
+ * 2.12.0 (2026-09-23)
+ *   - Added: a per-run TDoc-table index (buildTdocTableIndex_()) built once
+ *     from the same table scan continuousUpdate() already does for
+ *     existing-TDoc detection, and threaded through findTdocTable_(),
+ *     updateTdocStatus_(), insertNewTdoc_() and rearrangeRevisionTables_().
+ *     A no-change incremental update no longer re-scans the whole document
+ *     once per existing TDoc; measured in production: body.getTables()
+ *     calls dropped from 39 to 5, status-update time from 6,668ms to
+ *     1,769ms for a 34-existing-TDoc run.
+ *   - Added: shouldReformatAfterUpdate_() gates continuousUpdate()'s
+ *     document-wide formatting pass (removeRowHeightAndSpacing()) so a run
+ *     that only rewrote existing cell TEXT (status updates, e-mail
+ *     discussion, revision rendering) skips it entirely; a run that
+ *     inserted/moved a table, or inserted a row into an existing table
+ *     (e.g. a newly-fetched Abstract row), still gets it. Measured in
+ *     production: eliminated a 16,378ms unconditional cost on a no-change
+ *     run. Every other call site (full report build, "Update All", manual
+ *     formatting menu items) is untouched and still unconditional.
+ *   - Added: LockService.getDocumentLock() concurrency protection.
+ *     continuousUpdate() (both the "Continuous Update" menu item and the
+ *     time-driven trigger) and "Update Report (During Meeting)" each
+ *     acquire a short, non-blocking document lock before any work; a run
+ *     that loses the race does no work at all and logs/alerts that another
+ *     update is already in progress, instead of mutating the document
+ *     concurrently with another run.
+ *   - Added: a bounded 24-hour negative cache for the Reviewer API. A
+ *     definitive "no summary exists" (404) response is no longer retried
+ *     on every subsequent automatic run for the same TDoc; a later
+ *     successful summary clears the cached entry. Auth failures, other
+ *     4xx, 5xx, and empty-but-200 responses are never cached negative.
+ *   - Added: revision-folder anchors are now parsed once per run into a
+ *     canonical-TDoc-id bucket (buildRevisionAnchorIndex_()) instead of
+ *     being re-parsed once per (TDoc table, anchor) pair; a 34-table/
+ *     65-anchor workload goes from up to 2,210 parses down to 65. This is
+ *     a complexity/code-quality fix (production measured the old matching
+ *     loop at only ~9ms for that workload), not a runtime-bottleneck fix.
+ *   - Added: lightweight [PERF] timing/counting instrumentation across
+ *     continuousUpdate() and its call graph (perfTimed_/perfTimedAccum_/
+ *     perfCount_ + a per-run summary line), used to measure every
+ *     improvement above against real production runs.
+ *   - Fixed: after a Reviewer negative-cache skip, the automatic-update log
+ *     still read "Fetched abstracts for 1 table(s)" even though zero
+ *     Reviewer requests occurred. addAbstractsForTables_() now returns a
+ *     breakdown (candidate tables processed / Reviewer requests made /
+ *     negative-cache skips / abstract rows inserted) so the log accurately
+ *     reflects what actually happened. Diagnostics only.
+ *   - Investigated, not implemented: positive caching of ETSI A1 mailing-
+ *     list archive pages. The archive's actual moderation/indexing-delay
+ *     behavior cannot be established from this codebase or from date/URL
+ *     alone, so a closed-looking week page cannot be proven immutable;
+ *     the existing 24-hour empty-page-only A1 cache is unchanged.
+ * 2.11.0 (2026-09-22)
+ *   - Fixed: revision-cell rendering could corrupt/duplicate filenames when
+ *     an incremental update's text-mutation-then-hyperlink pattern ran
+ *     against a live Text reference. renderRevisionsCellContent_() now
+ *     builds the full cell text as one string, calls setText() once, then
+ *     computes every hyperlink range by pure string arithmetic against the
+ *     now-stable text. A corrupted cell from a prior run is automatically
+ *     repaired the next time revisions are collected -- no manual cleanup.
+ *   - Added: normalizeRevisionKey_() for REVIS_<tdoc> store-level dedup, so
+ *     two stored entries that differ only by an incidental encoding/casing
+ *     difference in how their URL was captured collapse into one rendered
+ *     line instead of duplicating it.
+ *   - Added: ad-hoc SA4 draft documents (e.g. "S4aP260071_QCOM.docx") are
+ *     now recognized as revisions via the central SA4 TDoc identifier
+ *     registry (parseDraftAnchor_()), not a main-meeting-only regex, and
+ *     multiple distinct drafts for the same TDoc are all surfaced
+ *     deterministically (no silent "latest file wins" behavior).
+ *   - Fixed: the revisions/drafts source now reads from
+ *     getMeetingContext_().sources.revisionsUrl (the resolved, possibly
+ *     ad-hoc, drafts location) instead of the main-meeting-only
+ *     cfg.REVISIONS_URL formula, so an ad-hoc meeting's revisions are found
+ *     at its real location instead of a fabricated main-meeting URL.
+ * 2.10.0 (2026-09-22)
+ *   - Added: Reviewer (Contribution Reviewer) API support for every
+ *     registered SA4 TDoc family, not just the main-meeting S4-xxxxxx
+ *     pattern -- migrated to the same central parseExactSA4DocumentId_()/
+ *     SA4_TDOC_FAMILIES registry every other TDoc-identity check uses.
+ *     Automatic Abstract retrieval runs both when a new TDoc table is
+ *     created and, when "Fetch abstracts during each update" is enabled,
+ *     as a batch sweep over existing tables missing an Abstract cell
+ *     (addAbstractsForTables_()).
+ * 2.9.0 (2026-09-22)
+ *   - Added: generic (not meeting-86178-specific) ad-hoc meeting support --
+ *     SA4 ad-hoc source URLs, meeting labels/titles, opening/registration
+ *     document structure, and a per-meeting mailing-list override, all
+ *     resolved through MeetingContext rather than hardcoded to the main
+ *     meeting.
+ *   - Added: canonical IPR section generation, derived consistently from
+ *     the resolved structureBranch for every report type (not just the
+ *     plenary/6G template-copy case).
+ *   - Added: ad-hoc drafts/revisions folder discovery from Meeting-ID
+ *     metadata, feeding the same revision workflow a main meeting uses.
+ * 2.8.0 (2026-09-22)
+ *   - Added: the production Meeting-ID configuration workflow -- Meeting ID
+ *     -> Resolve -> Discover Agenda/TDocs -> Review -> Save. "Resolve"
+ *     fetches anonymous, publicly-available 3GPP meeting metadata (dates,
+ *     venue, agenda/TDoc source locations) for the entered Meeting ID
+ *     without requiring any prior manual configuration; "Discover Agenda/
+ *     TDocs" is a separate, explicit step so a slow enrichment fetch never
+ *     blocks the core resolve. Explicit configuration overrides remain
+ *     fully possible at every step -- resolution only fills in what is not
+ *     already configured.
+ *   - Fixed: the Resolve/Discover Agenda RPCs never ran when invoked from
+ *     the configuration dialog. Apps Script's google.script.run cannot
+ *     invoke a function whose name ends in "_" (treated as private); the
+ *     dialog was calling the "_"-suffixed internals directly. Added public
+ *     wrapper functions (resolveMeetingForConfigDialog(),
+ *     discoverAgendaForConfigDialog()) that delegate to the real
+ *     implementations, and the dialog's client script now calls the public
+ *     names.
+ * 2.7.0 (2026-09-22)
+ *   - Added: MeetingContext architecture -- a single, normalized read of
+ *     "which meeting is this report for" (dates, agenda source, TDoc
+ *     source, revisions source, mailing list) that every consumer now
+ *     reads from instead of re-deriving main-meeting-only assumptions
+ *     independently. Main-meeting behavior is fully preserved: for a main
+ *     meeting, every resolved source is identical to the pre-existing
+ *     hardcoded formula.
+ *   - Added: central SA4 TDoc identifier-family registry
+ *     (SA4_TDOC_FAMILIES / parseSA4DocumentId_() / parseExactSA4DocumentId_())
+ *     recognizing all 6 verified families (S4-, S4aA, S4aP, S4aV, S4aI,
+ *     A4aR), replacing scattered main-meeting-only regexes across TDoc
+ *     table creation, status updates, abstracts, and revision matching.
+ *   - Added: a MeetingContext source resolver, ad-hoc meeting identity, an
+ *     agendaSelector model, and a pure agenda-projection model, so an
+ *     ad-hoc meeting's agenda/TDoc/source data can be derived the same way
+ *     a main meeting's is, without special-casing individual meetings.
  * 2.6.0 (2026-08-28)
  *   - Added: ONE-CLICK UPDATE. "▶️ Update Report" runs every enabled step in
  *     the correct order; each step can be switched off in "⚙️ Update Options".
@@ -404,8 +532,12 @@ function continuousUpdateCore_() {
     // Abstracts are optional on automatic updates (OFF by default).
     // Toggle via: REPORT OPERATIONS -> Manage Auto-Update Trigger.
     if (getFetchAbstractsSetting_()) {
-      const abstractsAdded = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body));
-      Logger.log(`Fetched abstracts for ${abstractsAdded} table(s)`);
+      // PERF-006B: addAbstractsForTables_() now returns a breakdown, not a
+      // bare count -- "candidate tables processed" is NOT the same as
+      // "Reviewer requests actually made" (a candidate can resolve via a
+      // negative-cache skip with zero fetches). See its own header comment.
+      const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body));
+      Logger.log(`Abstracts: ${abstractsResult.candidatesProcessed} candidate table(s) processed, ${abstractsResult.requestsMade} Reviewer request(s) made, ${abstractsResult.cacheSkips} negative-cache skip(s), ${abstractsResult.rowsInserted} abstract row(s) inserted`);
     } else {
       Logger.log('Abstract fetching is disabled (trigger configuration)');
     }
@@ -7895,9 +8027,34 @@ function collectRevisionsOnly() {
  * Fetch and insert abstracts for every TDOC table that does not have one yet.
  * No UI, so it is safe to call from triggers. Returns the number of tables filled.
  */
+/**
+ * PERF-006B (diagnostics only, no behavior change): "candidate tables
+ * processed" (this function's own loop-iteration count, unchanged from
+ * the pre-existing `count`) is NOT the same thing as "Reviewer requests
+ * actually made" -- a candidate can also resolve via a negative-cache
+ * skip (isReviewerNoSummaryCached_(), zero fetches) without ever calling
+ * the Reviewer API. Production validation of the PERF-006 negative cache
+ * showed this concretely: a run with 1 candidate table and a fresh
+ * negative-cache hit still logged the old "Fetched abstracts for 1
+ * table(s)" at the call site below -- wrong, since zero Reviewer API
+ * requests occurred that run. Returns a breakdown object instead of a
+ * bare count so each of this function's two callers can log accurately
+ * for what THEY care about, computed as a delta of the SAME global PERF
+ * counters fetchAndAddAbstract_() already increments (Reviewer API
+ * requests / Reviewer negative-cache hits / structural: abstract row
+ * inserted), snapshotted immediately before this function's own loop so
+ * an EARLIER-in-the-same-run fetchAndAddAbstract_() call from a different
+ * call site (insertNewTdoc_() -> createTDocTableFromData_(), for a
+ * brand-new TDoc table) is correctly excluded from this function's own
+ * delta.
+ */
 function addAbstractsForTables_(body) {
   body = body || getActiveDocumentBodyCounted_('addAbstractsForTables_');
-  let count = 0;
+  let candidatesProcessed = 0;
+
+  const requestsBefore = perfCounterValue_('Reviewer API requests');
+  const cacheSkipsBefore = perfCounterValue_('Reviewer negative-cache hits');
+  const rowsInsertedBefore = perfCounterValue_('structural: abstract row inserted (fetchAndAddAbstract_)');
 
   getTablesCounted_(body, 'addAbstractsForTables_').forEach(table => {
     if (!isTDocTable_(table)) return;
@@ -7913,16 +8070,24 @@ function addAbstractsForTables_(body) {
     if (!parsedTdoc.isValid) return;
 
     perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw));
-    count++;
+    candidatesProcessed++;
   });
 
-  return count;
+  // Callers log their own message from this breakdown (see
+  // continuousUpdateCore_() and addAbstractsOnly()) -- not logged here, to
+  // avoid a duplicate line every run.
+  return {
+    candidatesProcessed: candidatesProcessed,
+    requestsMade: perfCounterValue_('Reviewer API requests') - requestsBefore,
+    cacheSkips: perfCounterValue_('Reviewer negative-cache hits') - cacheSkipsBefore,
+    rowsInserted: perfCounterValue_('structural: abstract row inserted (fetchAndAddAbstract_)') - rowsInsertedBefore
+  };
 }
 
 function addAbstractsOnly() {
   // Manual step: always runs, independent of the trigger-level switch.
-  const count = addAbstractsForTables_();
-  DocumentApp.getUi().alert('Success', `Abstract step completed for ${count} TDOC table(s).`, DocumentApp.getUi().ButtonSet.OK);
+  const result = addAbstractsForTables_();
+  DocumentApp.getUi().alert('Success', `Abstract step completed: ${result.candidatesProcessed} candidate table(s) processed, ${result.rowsInserted} abstract(s) inserted.`, DocumentApp.getUi().ButtonSet.OK);
 }
 
 /********************************************************
