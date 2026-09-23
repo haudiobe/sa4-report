@@ -232,9 +232,31 @@ const DRAFTS_FOLDERS = {
   'New': 'Plenary'
 };
 
-function onOpen() {
+/**
+ * ADDON-005: standard Editor Add-on install hook -- Google's documented
+ * boilerplate is simply to delegate to onOpen(e), since a freshly-
+ * installed add-on's first "open" event needs the same menu onOpen()
+ * already builds. Does nothing else; no adoption, no registration, no
+ * trigger creation happens here -- those remain explicit user actions
+ * (Phase C below), never implicit side effects of installing/opening.
+ */
+function onInstall(e) {
+  onOpen(e);
+}
+
+/**
+ * ADDON-005: accepts the optional add-on event object Apps Script passes
+ * to onOpen(e) for an installed add-on (unused by the body below -- the
+ * menu itself is IDENTICAL whether this runs as a bound script's simple
+ * trigger (e undefined) or an add-on's (e populated), which is exactly
+ * why Phase B does not touch anything past this signature: preserving
+ * "e" as an accepted-but-unused parameter is what lets the SAME onOpen()
+ * serve both the legacy bound deployment and the central add-on project
+ * without a second, parallel menu-building function to keep in sync.
+ */
+function onOpen(e) {
   const ui = DocumentApp.getUi();
-  
+
   // Main menu
   const menu = ui.createMenu('⚠️Scripts⚠️');
   
@@ -291,17 +313,30 @@ function onOpen() {
   docMenu.addItem('🧹 Clean Up Wrong Email Discussions', 'cleanUpWrongEmailDiscussions');
   docMenu.addItem('🔧 Remove Duplicate Email Entries', 'removeDuplicateEmailEntries');
   
+  // ADDON-005: add-on-specific automatic-update controls -- deliberately
+  // SEPARATE from "⏰ Manage Auto-Update Trigger" above (the legacy
+  // 15/30/60-minute bound-script trigger UI, untouched). This submenu is
+  // additive only: every item it contains is new code calling new
+  // functions (Phase C/D/E below); nothing here replaces or reinterprets
+  // any existing menu item or its zero-context call.
+  const addonMenu = ui.createMenu('☁️ CENTRAL ADD-ON (hourly)');
+  addonMenu.addItem('▶️ Enable Automatic Updates (this doc)', 'enableAutomaticUpdatesForAddon');
+  addonMenu.addItem('⏹️ Disable Automatic Updates (this doc)', 'disableAutomaticUpdatesForAddon');
+  addonMenu.addItem('⏱️ Set Update Interval (this doc)', 'setAutomaticUpdateIntervalForAddon');
+  addonMenu.addItem('📊 Show Add-on Status (this doc)', 'showAddonSchedulerStatusForAddon');
+
   // Add all submenus to main menu
   menu.addSubMenu(setupMenu);
   menu.addSubMenu(reportMenu);
   menu.addSubMenu(docMenu);
   menu.addSubMenu(toolsMenu);
   menu.addSubMenu(formatMenu);
-  
+  menu.addSubMenu(addonMenu);
+
   // Legacy functions (for backward compatibility)
   menu.addSeparator();
   menu.addItem('⚠️ Legacy: Update All', 'updateAll');
-  
+
   menu.addToUi();
 }
 
@@ -865,6 +900,289 @@ function getCentralStateUsage_() {
       .map(function (id) { return perDocument[id]; })
       .sort(function (a, b) { return b.bytesApprox - a.bytesApprox; })
   };
+}
+
+// =========================================================
+// ADDON-005 -- CENTRAL SCHEDULER TRIGGER LIFECYCLE
+// =========================================================
+//
+// Exactly ONE hourly clock trigger for the whole central project, shared
+// by every adopted document (ADDON-004's runAddonScheduler_() already
+// loops the registry itself -- the trigger only needs to exist once, not
+// once per document). Never scans or touches any trigger whose handler
+// function isn't REPORT_SCHEDULER_TRIGGER_HANDLER_ -- deliberately not
+// the legacy deleteContinuousTrigger() pattern of iterating every project
+// trigger, which would be unsafe to reuse in a shared central project
+// that could, in principle, host other unrelated triggers later.
+//
+// ADDON-005 Phase D: verified against community reports (not primary
+// Google documentation, which does not explicitly confirm either way --
+// see the ADDON-005 report) that an underscore-suffixed function name is
+// NOT reliably documented as a valid installable-trigger handler, mirroring
+// the exact RESOLVER-HOTFIX problem this codebase already hit once for
+// google.script.run (a trailing "_" made a function silently uncallable
+// as an RPC target). Rather than assume either way, the ACTUAL trigger
+// handler is the public runAddonSchedulerTrigger() wrapper below, not
+// runAddonScheduler_() itself -- same defensive pattern already
+// established in this file, zero behavior risk either way.
+var REPORT_SCHEDULER_TRIGGER_UID_KEY_ = 'SA4_SCHEDULER_TRIGGER_UID';
+var REPORT_SCHEDULER_TRIGGER_HANDLER_ = 'runAddonSchedulerTrigger';
+
+/**
+ * The ACTUAL clock-trigger handler function name registered with
+ * ScriptApp.newTrigger(). Public/non-underscore by construction (see
+ * header comment above) -- a thin, otherwise-behavior-free delegation to
+ * the tested, documented runAddonScheduler_().
+ */
+function runAddonSchedulerTrigger() {
+  return runAddonScheduler_();
+}
+
+function findAddonSchedulerTriggers_() {
+  return ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === REPORT_SCHEDULER_TRIGGER_HANDLER_;
+  });
+}
+
+/**
+ * Read-only status inspection -- never creates, deletes, or modifies
+ * anything.
+ */
+function getAddonSchedulerTriggerStatus_() {
+  const triggers = findAddonSchedulerTriggers_();
+  return {
+    exists: triggers.length > 0,
+    count: triggers.length,
+    triggerUids: triggers.map(function (t) { return t.getUniqueId(); }),
+    storedUid: PropertiesService.getScriptProperties().getProperty(REPORT_SCHEDULER_TRIGGER_UID_KEY_)
+  };
+}
+
+/**
+ * Idempotent: creates the one hourly scheduler trigger if and only if
+ * none with this handler already exists. Self-heals the stored trigger
+ * UID (SA4_SCHEDULER_TRIGGER_UID) against whatever ACTUALLY exists in
+ * ScriptApp.getProjectTriggers() -- the stored UID is a convenience/
+ * diagnostic value, never the sole source of truth for "does a trigger
+ * exist" (that question always goes through findAddonSchedulerTriggers_(),
+ * a live platform read). Defensively de-duplicates if more than one
+ * matching trigger is somehow found (should never happen given this
+ * function is the only trigger-creation path, but "duplicate prevention"
+ * is a hard requirement, not just a create-time check).
+ */
+function ensureAddonSchedulerTrigger_() {
+  const existing = findAddonSchedulerTriggers_();
+  const scriptProps = PropertiesService.getScriptProperties();
+
+  if (existing.length > 1) {
+    for (let i = 1; i < existing.length; i++) ScriptApp.deleteTrigger(existing[i]);
+  }
+
+  if (existing.length > 0) {
+    const uid = existing[0].getUniqueId();
+    scriptProps.setProperty(REPORT_SCHEDULER_TRIGGER_UID_KEY_, uid);
+    return { created: false, triggerUid: uid, duplicatesRemoved: Math.max(0, existing.length - 1) };
+  }
+
+  const trigger = ScriptApp.newTrigger(REPORT_SCHEDULER_TRIGGER_HANDLER_)
+    .timeBased()
+    .everyHours(1)
+    .create();
+  const uid = trigger.getUniqueId();
+  scriptProps.setProperty(REPORT_SCHEDULER_TRIGGER_UID_KEY_, uid);
+  return { created: true, triggerUid: uid, duplicatesRemoved: 0 };
+}
+
+/**
+ * Safe deletion: removes every trigger matching ONLY this handler name,
+ * and the stored UID property. Never touches SA4_REGISTRY_ or SA4_STATE
+ * keys -- registered documents and their central state survive the
+ * scheduler trigger being deleted (they simply stop being serviced until
+ * ensureAddonSchedulerTrigger_() is called again).
+ */
+function deleteAddonSchedulerTrigger_() {
+  const existing = findAddonSchedulerTriggers_();
+  existing.forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  PropertiesService.getScriptProperties().deleteProperty(REPORT_SCHEDULER_TRIGGER_UID_KEY_);
+  return { deleted: existing.length };
+}
+
+// =========================================================
+// ADDON-005 -- INTERACTIVE/BACKGROUND LOCKING FOR ADOPTED DOCUMENTS
+// =========================================================
+//
+// Resolves the ADDON-004 open question: an interactive add-on action that
+// mutates an ADOPTED document's central state/registry could otherwise
+// race the background scheduler touching the SAME state. Decision (this
+// is a single-user tool -- Thomas is the only interactive actor, so
+// script-wide serialization has no real downside): the three NEW
+// interactive mutation entry points below (Phase C) acquire the SAME
+// LockService.getScriptLock() the scheduler (runAddonScheduler_()) uses,
+// with the same short, non-blocking tryLock() pattern the legacy
+// DocumentLock path already established -- not a new locking philosophy,
+// just the ScriptLock equivalent of it. Deliberately NOT applied to every
+// menu item: the pre-existing legacy report-building functions
+// (runFullReportBuild, buildSkeletonWithTdocTables, etc.) are unchanged
+// by ADDON-005 and are a separate, already-characterized, NOT-yet-fixed
+// residual gap (see the ADDON-005 report) -- retrofitting locks onto them
+// is out of scope here, the same way ADDON-004 deferred this exact
+// decision to ADDON-005 rather than over-engineering it early.
+function withAddonScriptLock_(fn) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    throw new Error('Another central add-on operation (interactive or scheduled) is already in progress -- try again shortly.');
+  }
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// =========================================================
+// ADDON-005 -- ADD-ON AUTOMATIC-UPDATE UI (separate from the legacy
+// 15/30/60-minute bound-script trigger UI, which is untouched)
+// =========================================================
+//
+// Every function below is menu-callable (public, zero-arg) and explicitly
+// constructs { documentId, mode: 'addon-interactive' } for the active
+// document -- this is the "make execution mode explicit" requirement:
+// these are new, add-on-specific entry points, not a reinterpretation of
+// any existing zero-context call (every pre-existing menu item is
+// untouched and still resolves to legacy Document Properties exactly as
+// before).
+function enableAutomaticUpdatesForAddon() {
+  const ui = DocumentApp.getUi();
+  const documentId = DocumentApp.getActiveDocument().getId();
+  const context = { documentId: documentId, mode: 'addon-interactive' };
+
+  withAddonScriptLock_(function () {
+    let registryEntry = getRegisteredReportDocument_(documentId);
+
+    if (!registryEntry) {
+      const adoption = adoptReportDocumentForAddon_(context);
+      if (!adoption.verified) {
+        ui.alert('Could Not Enable Automatic Updates',
+          'Adopting this document failed to verify: ' + adoption.mismatches.join(', ') + '.\n' +
+          'No automatic updates were enabled.',
+          ui.ButtonSet.OK);
+        return;
+      }
+      registryEntry = adoption.registryEntry;
+    }
+
+    registryEntry = registerReportDocument_(documentId, { enabled: true });
+    const triggerResult = ensureAddonSchedulerTrigger_();
+
+    ui.alert('Automatic Updates Enabled',
+      'This document will be updated automatically every ' + registryEntry.intervalHours + ' hour(s) ' +
+      'by the central scheduler.\n\n' +
+      'Central scheduler trigger: ' + (triggerResult.created ? 'created just now' : 'already running') + '.',
+      ui.ButtonSet.OK);
+  });
+}
+
+function disableAutomaticUpdatesForAddon() {
+  const ui = DocumentApp.getUi();
+  const documentId = DocumentApp.getActiveDocument().getId();
+
+  withAddonScriptLock_(function () {
+    const registryEntry = getRegisteredReportDocument_(documentId);
+    if (!registryEntry) {
+      ui.alert('Not Enabled', 'This document has no automatic-update registration to disable.', ui.ButtonSet.OK);
+      return;
+    }
+
+    // enabled = false only -- report state and the registry entry itself
+    // are deliberately preserved (see Phase C requirement: "do not purge
+    // central state automatically"). The scheduler's own due-calculation
+    // (isReportDocumentDue_()) already treats a disabled entry as never
+    // due, so this alone is sufficient to stop future runs.
+    registerReportDocument_(documentId, { enabled: false });
+    ui.alert('Automatic Updates Disabled',
+      'This document will no longer be updated automatically. Its saved state and settings were kept -- ' +
+      're-enabling later resumes from where it left off.',
+      ui.ButtonSet.OK);
+  });
+}
+
+/**
+ * Presents only the platform-supported interval choices (ADDON-001B: add-on
+ * time-driven triggers cannot run more frequently than once per hour) --
+ * deliberately excludes the legacy dialog's 15/30-minute options.
+ */
+function setAutomaticUpdateIntervalForAddon() {
+  const ui = DocumentApp.getUi();
+  const documentId = DocumentApp.getActiveDocument().getId();
+  const registryEntry = getRegisteredReportDocument_(documentId);
+
+  if (!registryEntry) {
+    ui.alert('Not Enabled', 'Enable automatic updates for this document first (☁️ CENTRAL ADD-ON → Enable Automatic Updates).', ui.ButtonSet.OK);
+    return;
+  }
+
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; }
+      label { display: block; margin-top: 10px; font-weight: bold; }
+      select { width: 100%; padding: 8px; margin-top: 5px; }
+      button { margin-top: 20px; padding: 10px 20px; border: none; cursor: pointer; color: white; background: #1a73e8; }
+    </style>
+    <h2>⏱️ Set Update Interval</h2>
+    <label>Update every:</label>
+    <select id="interval">
+      ${REPORT_REGISTRY_ALLOWED_INTERVAL_HOURS_.map(h =>
+        `<option value="${h}" ${h === registryEntry.intervalHours ? 'selected' : ''}>Every ${h} hour${h === 1 ? '' : 's'}</option>`
+      ).join('')}
+    </select>
+    <div>
+      <button onclick="save()">Save</button>
+    </div>
+    <script>
+      function save() {
+        const hours = parseInt(document.getElementById('interval').value, 10);
+        google.script.run
+          .withSuccessHandler(() => { alert('Saved.'); google.script.host.close(); })
+          .withFailureHandler((err) => alert('Error: ' + err))
+          .setAutomaticUpdateIntervalForAddonRpc(hours);
+      }
+    </script>
+  `).setWidth(360).setHeight(260);
+
+  ui.showModalDialog(html, 'Set Update Interval');
+}
+
+/**
+ * The actual public google.script.run RPC target for the dialog above --
+ * same RESOLVER-HOTFIX-informed naming discipline as the rest of this
+ * file: the dialog never calls an underscore-suffixed function directly.
+ */
+function setAutomaticUpdateIntervalForAddonRpc(hours) {
+  const documentId = DocumentApp.getActiveDocument().getId();
+  return withAddonScriptLock_(function () {
+    return registerReportDocument_(documentId, { intervalHours: hours });
+  });
+}
+
+function showAddonSchedulerStatusForAddon() {
+  const ui = DocumentApp.getUi();
+  const documentId = DocumentApp.getActiveDocument().getId();
+  const registryEntry = getRegisteredReportDocument_(documentId);
+  const triggerStatus = getAddonSchedulerTriggerStatus_();
+
+  const lines = [];
+  if (!registryEntry) {
+    lines.push('This document is not registered for automatic updates.');
+  } else {
+    lines.push('Enabled: ' + (registryEntry.enabled ? 'Yes' : 'No'));
+    lines.push('Interval: every ' + registryEntry.intervalHours + ' hour(s)');
+    lines.push('Last run: ' + (registryEntry.lastRunAt || 'never'));
+    lines.push('Registered: ' + registryEntry.registeredAt);
+  }
+  lines.push('');
+  lines.push('Central scheduler trigger: ' + (triggerStatus.exists ? 'running (' + triggerStatus.count + ')' : 'not running'));
+
+  ui.alert('Add-on Status', lines.join('\n'), ui.ButtonSet.OK);
 }
 
 /**
