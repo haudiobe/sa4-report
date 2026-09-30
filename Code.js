@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.14.0 (2026-09-30)
+ * Version: 2.14.1 (2026-09-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,17 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.14.1 (2026-09-30)
+ *   - Fixed (ADDON-008A1): "Apply Document Reallocations" threw
+ *     "BODY_SECTION can't be cast to TABLE." on every real table move
+ *     (Body.removeChild() returns the body, not the removed table) -- after
+ *     the table had already been removed. Latent since the initial commit;
+ *     first hit live on 86172 (S4aI260081, 3.7 -> 2.7). Entries are now
+ *     resolved and validated first (no change at all if any entry is
+ *     invalid), and a move inserts an updated copy before removing the
+ *     original. A destination with no heading in the report is an error
+ *     instead of a heading appended at the document end; a TDoc with no
+ *     table in the report is skipped and listed.
  * 2.14.0 (2026-09-30)
  *   - Added (ADDON-008A): ad-hoc agenda + TDoc-list discovery. Agenda
  *     structure precedence for ad-hoc meetings: saved AGENDA_TDOC >
@@ -3564,6 +3575,27 @@ function processWebDownloadedSheet_(sheet) {
  * Creates the heading if it does not exist.
  */
 function findInsertionPointForAgendaItem_(body, agendaItem, agendaTopic) {
+  const existing = findAgendaSectionEndIndex_(body, agendaItem);
+  if (existing !== -1) return existing;
+
+  // Heading not found: create it and return position after it
+  const agendaLevel = (agendaItem.match(/\./g) || []).length + 1;
+  const headingText = agendaItem + (agendaTopic ? ' ' + agendaTopic : '');
+  const newHeading = body.appendParagraph(headingText);
+  if (agendaLevel === 1) newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  else if (agendaLevel === 2) newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  else newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  
+  return body.getNumChildren();
+}
+
+/**
+ * ADDON-008A1: the read-only half of findInsertionPointForAgendaItem_() --
+ * the body index just before the next same-or-higher-level heading after
+ * this agenda item's heading (or the body end), or -1 when the report has
+ * no heading for it. Never modifies the document.
+ */
+function findAgendaSectionEndIndex_(body, agendaItem) {
   const numChildren = body.getNumChildren();
   const agendaLevel = (agendaItem.match(/\./g) || []).length + 1;
   
@@ -3601,15 +3633,8 @@ function findInsertionPointForAgendaItem_(body, agendaItem, agendaTopic) {
     // No next heading found: insert at end of document
     return numChildren;
   }
-  
-  // Heading not found: create it and return position after it
-  const headingText = agendaItem + (agendaTopic ? ' ' + agendaTopic : '');
-  const newHeading = body.appendParagraph(headingText);
-  if (agendaLevel === 1) newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  else if (agendaLevel === 2) newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  else newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING3);
-  
-  return body.getNumChildren();
+
+  return -1;
 }
 
 /**
@@ -10549,86 +10574,137 @@ function applyDocumentReallocations() {
   );
   
   if (response !== ui.Button.YES) return;
-  
+
   const body = DocumentApp.getActiveDocument().getBody();
-  const tables = body.getTables();
-  
-  let movedCount = 0;
-  let removedCount = 0;
-  let updatedCount = 0;
-  
-  // Process each reallocation
-  Object.keys(reallocations).forEach(tdoc => {
-    const realloc = reallocations[tdoc];
-    const newAgenda = realloc.new.toLowerCase();
-    
-    // Find the table for this TDoc
-    for (let i = 0; i < tables.length; i++) {
-      const table = tables[i];
-      if (!isTDocTable_(table)) continue;
-      
-      const tableTdoc = safeCellText_(table, 0, 1).trim();
-      if (tableTdoc !== tdoc) continue;
-      
-      // Check if document should be removed
-      if (newAgenda === 'removed' || newAgenda === 'withdrawn' || newAgenda === 'n/a') {
-        Logger.log(`Removing table for ${tdoc} (reallocated to ${newAgenda})`);
-        body.removeChild(table);
-        removedCount++;
-        break;
-      }
-      
-      // Update the Agenda Item field in the table
-      let agendaUpdated = false;
-      for (let r = 0; r < table.getNumRows(); r++) {
-        const row = table.getRow(r);
-        if (row.getNumCells() < 2) continue;
-        
-        const key = row.getCell(0).getText().trim().toLowerCase();
-        if (key === 'agenda item' || key === 'agenda item:') {
-          row.getCell(1).setText(realloc.new);
-          agendaUpdated = true;
-          break;
-        }
-      }
-      
-      if (agendaUpdated) {
-        updatedCount++;
-        Logger.log(`Updated agenda item for ${tdoc}: ${realloc.original} → ${realloc.new}`);
-      }
-      
-      // Move table to new location
-      const currentIndex = body.getChildIndex(table);
-      const targetIndex = findInsertionPointForAgendaItem_(body, realloc.new, '');
-      
-      if (targetIndex !== currentIndex && targetIndex !== currentIndex + 1) {
-        // Remove from current position
-        const tableElement = body.removeChild(table);
-        
-        // Insert at new position
-        if (targetIndex > currentIndex) {
-          body.insertTable(targetIndex - 1, tableElement.asTable());
-        } else {
-          body.insertTable(targetIndex, tableElement.asTable());
-        }
-        
-        movedCount++;
-        Logger.log(`Moved table for ${tdoc} from index ${currentIndex} to ${targetIndex}`);
-      }
-      
-      break;
-    }
-  });
-  
-  Logger.log(`Applied reallocations: ${movedCount} moved, ${removedCount} removed, ${updatedCount} updated`);
+  const result = applyDocumentReallocationsToBody_(body, reallocations);
+
+  Logger.log(`Applied reallocations: ${result.movedCount} moved, ${result.removedCount} removed, ${result.updatedCount} updated, ${result.notFound.length} not in report`);
   ui.alert(
     'Reallocations Applied',
     `✅ Processing complete:\n\n` +
-    `📋 Updated agenda items: ${updatedCount}\n` +
-    `🔄 Moved tables: ${movedCount}\n` +
-    `🗑️ Removed tables: ${removedCount}`,
+    `📋 Updated agenda items: ${result.updatedCount}\n` +
+    `🔄 Moved tables: ${result.movedCount}\n` +
+    `🗑️ Removed tables: ${result.removedCount}` +
+    (result.notFound.length ? `\n\nNot in this report (skipped): ${result.notFound.join(', ')}` : ''),
     ui.ButtonSet.OK
   );
+}
+
+const REALLOCATION_REMOVAL_TARGETS_ = ['removed', 'withdrawn', 'n/a'];
+
+/**
+ * ADDON-008A1: applies the reallocation map to a built report body.
+ *
+ * The old in-place loop moved a table with
+ * `body.insertTable(i, body.removeChild(table).asTable())` -- but
+ * Body.removeChild() returns the BODY, not the removed element, so every
+ * real move threw "BODY_SECTION can't be cast to TABLE." AFTER the table
+ * had already been removed (and its Agenda Item row already rewritten).
+ *
+ * Now two phases:
+ *   1. plan -- resolve every entry's source TDoc table and destination
+ *      agenda section, validating the element types, WITHOUT touching the
+ *      document; any unresolvable entry aborts the whole run with a
+ *      message naming the TDoc, old and new agenda item and the reason;
+ *   2. apply -- a move inserts an updated COPY at the destination first and
+ *      only then removes the original, so a failed insert leaves it intact.
+ * Unchanged semantics: one TDoc detail table per TDoc, moved to the end of
+ * its new agenda item's section and its "Agenda Item" row set to the new
+ * value; "removed"/"withdrawn"/"n/a" remove the table; a table already at
+ * its destination is only relabelled; agenda headings are never added or
+ * removed. A TDoc with no table in the report is skipped (it is placed by
+ * the next build/update, which already applies the reallocation map).
+ * A destination with no heading in the report is now an error rather than
+ * a heading silently appended at the end of the document.
+ */
+function applyDocumentReallocationsToBody_(body, reallocations) {
+  const TABLE = DocumentApp.ElementType.TABLE;
+  const tdocTables = {};
+  body.getTables().forEach(function (table) {
+    if (!isTDocTable_(table)) return;
+    const id = safeCellText_(table, 0, 1).trim();
+    if (!id) return;
+    (tdocTables[id] = tdocTables[id] || []).push(table);
+  });
+
+  // ---- phase 1: plan (read-only) ----
+  const plan = [];
+  const notFound = [];
+  const problems = [];
+  Object.keys(reallocations).forEach(function (tdoc) {
+    const realloc = reallocations[tdoc];
+    const target = String(realloc.new || '').trim();
+    const label = `${tdoc} (${realloc.original || 'unknown'} → ${target || 'blank'})`;
+    const tables = tdocTables[tdoc] || [];
+    if (tables.length === 0) { notFound.push(tdoc); return; }
+    if (tables.length > 1) { problems.push(`${label}: the report contains ${tables.length} tables for this TDoc.`); return; }
+    const table = tables[0];
+    const parent = table.getParent();
+    if (table.getType() !== TABLE || !parent || parent.getType() !== body.getType()) {
+      problems.push(`${label}: its table is not a top-level table of the report body.`);
+      return;
+    }
+    if (REALLOCATION_REMOVAL_TARGETS_.indexOf(target.toLowerCase()) !== -1) {
+      plan.push({ tdoc: tdoc, realloc: realloc, table: table, remove: true });
+      return;
+    }
+    if (!/^\d+(?:\.\d+)*$/.test(target)) {
+      problems.push(`${label}: "${target}" is not an agenda item number.`);
+      return;
+    }
+    if (findAgendaSectionEndIndex_(body, target) === -1) {
+      problems.push(`${label}: the report has no agenda item ${target} heading.`);
+      return;
+    }
+    plan.push({ tdoc: tdoc, realloc: realloc, table: table, remove: false, target: target });
+  });
+  if (problems.length > 0) {
+    throw new Error('No reallocations were applied -- the report was not changed.\n\n• ' + problems.join('\n• '));
+  }
+
+  // ---- phase 2: apply ----
+  let movedCount = 0;
+  let removedCount = 0;
+  let updatedCount = 0;
+  plan.forEach(function (step) {
+    if (step.remove) {
+      Logger.log(`Removing table for ${step.tdoc} (reallocated to ${step.realloc.new})`);
+      step.table.removeFromParent();
+      removedCount++;
+      return;
+    }
+    // Section boundaries are re-read per step: earlier moves shift indices.
+    const currentIndex = body.getChildIndex(step.table);
+    const targetIndex = findAgendaSectionEndIndex_(body, step.target);
+    const moving = targetIndex !== currentIndex && targetIndex !== currentIndex + 1;
+    const placed = moving ? step.table.copy() : step.table;
+    if (setTdocTableAgendaItem_(placed, step.realloc.new)) {
+      updatedCount++;
+      Logger.log(`Updated agenda item for ${step.tdoc}: ${step.realloc.original} → ${step.realloc.new}`);
+    }
+    if (moving) {
+      body.insertTable(targetIndex, placed);
+      step.table.removeFromParent();
+      movedCount++;
+      Logger.log(`Moved table for ${step.tdoc} from index ${currentIndex} to ${targetIndex}`);
+    }
+  });
+
+  return { movedCount: movedCount, removedCount: removedCount, updatedCount: updatedCount, notFound: notFound };
+}
+
+/** Sets a TDoc detail table's "Agenda Item" value; false when it has no such row. */
+function setTdocTableAgendaItem_(table, value) {
+  for (let r = 0; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    if (row.getNumCells() < 2) continue;
+    const key = row.getCell(0).getText().trim().toLowerCase();
+    if (key === 'agenda item' || key === 'agenda item:') {
+      row.getCell(1).setText(value);
+      return true;
+    }
+  }
+  return false;
 }
 
 // =========================================================
