@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.15.0 (2026-09-30)
+ * Version: 2.15.1 (2026-09-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,14 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.15.1 (2026-09-30)
+ *   - Fixed: "Manage Auto-Update Trigger" -> "Every hour (Slow meeting)"
+ *     failed with "The value you passed to everyMinutes was invalid": the
+ *     dialog's 60 went straight to everyMinutes(60). Each offered interval
+ *     now maps explicitly (CONTINUOUS_TRIGGER_INTERVALS_): 15/30 minutes ->
+ *     everyMinutes(15/30), every hour -> everyHours(1). An unsupported,
+ *     malformed or missing interval is refused before anything changes (the
+ *     running trigger was previously deleted before the failing call).
  * 2.15.0 (2026-09-30)
  *   - Added (ADDON-009): "📧 EMAIL EXPORT" -> "Prepare TDoc Discussion
  *     E-mails", the Legacy discussion e-mail exporter (LEGACY-UPGRADE-006,
@@ -1445,9 +1453,9 @@ function manageTriggers() {
     
     <label>Update Interval:</label>
     <select id="interval">
-      <option value="15">Every 15 minutes (Active meeting)</option>
-      <option value="30" selected>Every 30 minutes (Recommended)</option>
-      <option value="60">Every hour (Slow meeting)</option>
+      ${CONTINUOUS_TRIGGER_INTERVALS_.map(function (o) {
+        return '<option value="' + o.minutes + '"' + (o.selected ? ' selected' : '') + '>' + o.label + '</option>';
+      }).join('\n      ')}
     </select>
     
     <label>Abstracts:</label>
@@ -1534,22 +1542,58 @@ function setFetchAbstractsSetting(enabled) {
   Logger.log('FETCH_ABSTRACTS_ON_UPDATE = ' + value);
 }
 
+/**
+ * 2.15.1: the Continuous Update intervals the trigger dialog offers, each
+ * with the TriggerBuilder call that implements it. Apps Script's
+ * everyMinutes() accepts only 1, 5, 10, 15 or 30 -- an hour is
+ * everyHours(1). The dialog's options are rendered from this list.
+ */
+var CONTINUOUS_TRIGGER_INTERVALS_ = [
+  { minutes: 15, label: 'Every 15 minutes (Active meeting)', method: 'everyMinutes', value: 15, selected: false },
+  { minutes: 30, label: 'Every 30 minutes (Recommended)', method: 'everyMinutes', value: 30, selected: true },
+  { minutes: 60, label: 'Every hour (Slow meeting)', method: 'everyHours', value: 1, selected: false }
+];
+
+/**
+ * 2.15.1: the CONTINUOUS_TRIGGER_INTERVALS_ entry for a dialog interval (a
+ * whole number of minutes, as a number or a digit string). Anything else --
+ * missing, malformed, or not offered -- throws before ScriptApp is touched.
+ */
+function resolveContinuousTriggerInterval_(intervalMinutes) {
+  const raw = typeof intervalMinutes === 'string' ? intervalMinutes.trim() : intervalMinutes;
+  const minutes = (typeof raw === 'number' && Number.isInteger(raw)) ? raw
+    : (typeof raw === 'string' && /^\d+$/.test(raw)) ? parseInt(raw, 10)
+    : null;
+  const entry = minutes === null ? null : CONTINUOUS_TRIGGER_INTERVALS_.find(function (o) { return o.minutes === minutes; });
+  if (!entry) {
+    throw new Error('Unsupported update interval: ' + JSON.stringify(intervalMinutes === undefined ? null : intervalMinutes) +
+      ' (supported: ' + CONTINUOUS_TRIGGER_INTERVALS_.map(function (o) { return o.minutes; }).join(', ') + ' minutes).');
+  }
+  return entry;
+}
+
 function createContinuousTrigger(intervalMinutes, fetchAbstracts) {
+  // 2.15.1: validate first -- an unsupported interval changes nothing (the
+  // existing trigger and the abstracts switch are left as they are).
+  const interval = resolveContinuousTriggerInterval_(intervalMinutes);
+
   // Delete existing trigger first
   deleteContinuousTrigger();
-  
+
   // Persist the abstracts switch alongside the trigger
   if (fetchAbstracts !== undefined && fetchAbstracts !== null) {
     setFetchAbstractsSetting(fetchAbstracts);
   }
-  
+
   // Create new trigger
-  ScriptApp.newTrigger('continuousUpdate')
-    .timeBased()
-    .everyMinutes(intervalMinutes)
-    .create();
-  
-  Logger.log(`Trigger created: every ${intervalMinutes} minutes (abstracts: ${getFetchAbstractsSetting_()})`);
+  const clock = ScriptApp.newTrigger('continuousUpdate').timeBased();
+  if (interval.method === 'everyHours') {
+    clock.everyHours(interval.value).create();
+  } else {
+    clock.everyMinutes(interval.value).create();
+  }
+
+  Logger.log(`Trigger created: ${interval.method}(${interval.value}) (abstracts: ${getFetchAbstractsSetting_()})`);
 }
 
 function deleteContinuousTrigger() {
