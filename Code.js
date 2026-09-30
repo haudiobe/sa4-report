@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.15.1 (2026-09-30)
+ * Version: 2.15.2 (2026-09-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,17 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.15.2 (2026-09-30)
+ *   - Fixed: "Manage Auto-Update Trigger" offered 15/30-minute intervals
+ *     that CENTRAL cannot create -- add-on time-driven triggers run at most
+ *     once per hour (ADDON-001B), so "Every 30 minutes" failed live. The
+ *     dialog now offers only "Every hour (Slow meeting)" -> everyHours(1);
+ *     15/30 are refused before the running trigger is touched.
+ *   - Fixed: discussion e-mail export copied Google Docs links to places in
+ *     the report itself (tabs, headings: "?tab=t...", "#heading=h...")
+ *     verbatim, unusable outside the editor. They are now resolved against
+ *     the report's URL (https://docs.google.com/document/d/<id>/edit);
+ *     links with a scheme (https:, mailto:, ...) are unchanged.
  * 2.15.1 (2026-09-30)
  *   - Fixed: "Manage Auto-Update Trigger" -> "Every hour (Slow meeting)"
  *     failed with "The value you passed to everyMinutes was invalid": the
@@ -1544,14 +1555,16 @@ function setFetchAbstractsSetting(enabled) {
 
 /**
  * 2.15.1: the Continuous Update intervals the trigger dialog offers, each
- * with the TriggerBuilder call that implements it. Apps Script's
- * everyMinutes() accepts only 1, 5, 10, 15 or 30 -- an hour is
- * everyHours(1). The dialog's options are rendered from this list.
+ * with the TriggerBuilder call that implements it. The dialog's options are
+ * rendered from this list.
+ *
+ * 2.15.2: CENTRAL runs as an Editor add-on, and add-on time-driven triggers
+ * cannot run more often than once per hour (ADDON-001B; see
+ * REPORT_REGISTRY_ALLOWED_INTERVAL_HOURS_) -- everyMinutes(15/30), valid in
+ * a bound script, is refused live. Only the hourly interval is offered.
  */
 var CONTINUOUS_TRIGGER_INTERVALS_ = [
-  { minutes: 15, label: 'Every 15 minutes (Active meeting)', method: 'everyMinutes', value: 15, selected: false },
-  { minutes: 30, label: 'Every 30 minutes (Recommended)', method: 'everyMinutes', value: 30, selected: true },
-  { minutes: 60, label: 'Every hour (Slow meeting)', method: 'everyHours', value: 1, selected: false }
+  { minutes: 60, label: 'Every hour (Slow meeting)', everyHours: 1, selected: true }
 ];
 
 /**
@@ -1586,14 +1599,12 @@ function createContinuousTrigger(intervalMinutes, fetchAbstracts) {
   }
 
   // Create new trigger
-  const clock = ScriptApp.newTrigger('continuousUpdate').timeBased();
-  if (interval.method === 'everyHours') {
-    clock.everyHours(interval.value).create();
-  } else {
-    clock.everyMinutes(interval.value).create();
-  }
+  ScriptApp.newTrigger('continuousUpdate')
+    .timeBased()
+    .everyHours(interval.everyHours)
+    .create();
 
-  Logger.log(`Trigger created: ${interval.method}(${interval.value}) (abstracts: ${getFetchAbstractsSetting_()})`);
+  Logger.log(`Trigger created: everyHours(${interval.everyHours}) (abstracts: ${getFetchAbstractsSetting_()})`);
 }
 
 function deleteContinuousTrigger() {
@@ -13523,6 +13534,35 @@ function buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlin
 // ---- Google Docs (Table/Cell/Paragraph/ListItem/Text) -> HTML ----
 
 /**
+ * 2.15.2: the report document's own editor URL, the base for links to its
+ * tabs/headings/bookmarks. Built from the document ID (Document.getUrl()
+ * returns the "open?id=" form, which does not keep a tab/heading link).
+ * '' when there is no document ID.
+ */
+function buildEmailExportDocumentUrl_(documentId) {
+  const id = String(documentId || '').trim();
+  return /^[A-Za-z0-9_-]+$/.test(id) ? 'https://docs.google.com/document/d/' + id + '/edit' : '';
+}
+
+/**
+ * 2.15.2: the href a copied Google Docs link gets in the e-mail. Google Docs
+ * stores a link to a place in the same document (a tab, heading or
+ * bookmark) relative to the document -- "?tab=t.x", "#heading=h.x",
+ * "?tab=t.x#heading=h.x" -- which means nothing outside the editor. Such a
+ * link is resolved against `documentUrl` (which has no query or fragment of
+ * its own, so the query/fragment is simply appended). Anything with a
+ * scheme (https:, http:, mailto:, ...) is returned unchanged, and so is any
+ * other value (never guessed into a Google Docs URL), as is a relative link
+ * when no document URL is known.
+ */
+function resolveEmailExportLinkUrl_(link, documentUrl) {
+  const url = String(link === null || link === undefined ? '' : link);
+  const base = String(documentUrl || '');
+  if (!base || !/^[?#][^\s"<>]*$/.test(url)) return url;
+  return base + url;
+}
+
+/**
  * LEGACY-UPGRADE-006: converts one paragraph-or-list-item's TEXT into an
  * HTML fragment, preserving bold/italic/underline/hyperlinks as nested
  * inline tags, segmented at each real formatting-change offset
@@ -13531,7 +13571,7 @@ function buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlin
  * (rare here; every writer in this file inserts a new paragraph per line
  * instead, see this section's header comment) are preserved as <br>.
  */
-function richTextToHtml_(text) {
+function richTextToHtml_(text, documentUrl) {
   const full = text.getText();
   if (!full) return '';
   let indices = [0];
@@ -13553,6 +13593,8 @@ function richTextToHtml_(text) {
     try { italic = !!text.isItalic(start); } catch (e) { }
     try { underline = !!text.isUnderline(start); } catch (e) { }
     try { link = text.getLinkUrl(start); } catch (e) { }
+    // 2.15.2: a link into this document is made absolute.
+    if (link) link = resolveEmailExportLinkUrl_(link, documentUrl);
     if (link) piece = '<a href="' + escapeHtmlForEmailExport_(link) + '">' + piece + '</a>';
     if (underline && !link) piece = '<u>' + piece + '</u>'; // a link is already visually distinct
     if (italic) piece = '<i>' + piece + '</i>';
@@ -13603,7 +13645,7 @@ function isOrderedListGlyph_(glyph) {
  * top level. Missing nesting-level/list-ID support degrades gracefully to
  * flat level-0 behavior (the previous, pre-nesting output), never throws.
  */
-function docCellToHtml_(cell) {
+function docCellToHtml_(cell, documentUrl) {
   const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
   const LIST_ITEM = DocumentApp.ElementType.LIST_ITEM;
   const n = cell.getNumChildren();
@@ -13658,11 +13700,11 @@ function docCellToHtml_(cell) {
       const level = (typeof li.getNestingLevel === 'function') ? (li.getNestingLevel() || 0) : 0;
       const listId = (typeof li.getListId === 'function') ? li.getListId() : null;
       const tag = isOrderedListGlyph_(li.getGlyphType && li.getGlyphType()) ? 'ol' : 'ul';
-      placeListItem(level, tag, listId, richTextToHtml_(li.editAsText()));
+      placeListItem(level, tag, listId, richTextToHtml_(li.editAsText(), documentUrl));
     } else if (type === PARAGRAPH) {
       closeAllLists();
       const p = child.asParagraph ? child.asParagraph() : child;
-      const inner = richTextToHtml_(p.editAsText());
+      const inner = richTextToHtml_(p.editAsText(), documentUrl);
       html += '<p style="margin:0 0 4px 0;">' + (inner || '&nbsp;') + '</p>';
     }
     // Any other child type (e.g. a nested table -- never produced by this
@@ -13681,7 +13723,7 @@ function docCellToHtml_(cell) {
  * This is a literal copy of the existing table's content; nothing is
  * reordered, summarized, or regenerated.
  */
-function docTableToHtml_(table) {
+function docTableToHtml_(table, documentUrl) {
   const rows = table.getNumRows();
   let html = '<table style="border-collapse:collapse;width:100%;font-family:Arial,Helvetica,sans-serif;font-size:12px;" border="1" cellpadding="6" cellspacing="0">';
   for (let r = 0; r < rows; r++) {
@@ -13692,7 +13734,7 @@ function docTableToHtml_(table) {
       const cell = row.getCell(c);
       const isLabelCol = c === 0;
       const cellStyle = 'border:1px solid #999;padding:6px;vertical-align:top;text-align:left;' + (isLabelCol ? 'font-weight:bold;background:#f2f2f2;white-space:nowrap;' : '');
-      html += '<td style="' + cellStyle + '">' + docCellToHtml_(cell) + '</td>';
+      html += '<td style="' + cellStyle + '">' + docCellToHtml_(cell, documentUrl) + '</td>';
     }
     html += '</tr>';
   }
@@ -13927,10 +13969,13 @@ function buildEmlContent_(headers, htmlBody) {
  * ADDON-009: `listTag` (required, deriveEmailExportListTag_()) replaces
  * Legacy's constant FS_6G_MED in the subject, the default introduction and
  * the file name ("<listTag>_<tdoc>.eml").
+ *
+ * 2.15.2: `documentUrl` (buildEmailExportDocumentUrl_()) makes links into
+ * the report document absolute (resolveEmailExportLinkUrl_()).
  */
-function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag) {
+function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl) {
   const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(meta.tdoc, meta.title, meta.agendaItem, subjectDeadlineToken || deadlineText, listTag);
-  const tableHtml = docTableToHtml_(table);
+  const tableHtml = docTableToHtml_(table, documentUrl);
   const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
   const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
   const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
@@ -13951,10 +13996,10 @@ function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride
  * order given, under one shared subject/intro/discussion/closing.
  * ADDON-009: `listTag` as for buildEmailExportForTdocTable_().
  */
-function buildEmailExportForGroup_(tables, metas, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag) {
+function buildEmailExportForGroup_(tables, metas, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl) {
   const primary = metas[0];
   const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(primary.tdoc, primary.title, primary.agendaItem, subjectDeadlineToken || deadlineText, listTag);
-  const tableHtml = tables.map(function (t) { return docTableToHtml_(t); }).join('<br>');
+  const tableHtml = tables.map(function (t) { return docTableToHtml_(t, documentUrl); }).join('<br>');
   const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
   const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
   const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
@@ -14449,6 +14494,8 @@ function generateTdocDiscussionEmails(selections, globalText) {
     }
     const body = DocumentApp.getActiveDocument().getBody();
     const tables = body.getTables();
+    // 2.15.2: base for the report's own tab/heading links.
+    const documentUrl = buildEmailExportDocumentUrl_(getActiveDocumentIdSafely_());
     const introText = globalText && globalText.introText;
     const discussionText = globalText && globalText.discussionText;
 
@@ -14495,7 +14542,7 @@ function generateTdocDiscussionEmails(selections, globalText) {
       // LEGACY-UPGRADE-006H: To (recipientAddress, derived from the Mailing
       // List) and From (senderAddress, configured DISCUSSION_EMAIL_SENDER)
       // are DELIBERATELY DIFFERENT values.
-      const email = buildEmailExportForTdocTable_(table, meta, exportConfig.recipientAddress, null, introText, discussionText, deadlineText, exportConfig.revisionUploadUrl, exportConfig.senderAddress, subjectDeadlineToken, exportConfig.listTag); // no subjectOverride: always canonical
+      const email = buildEmailExportForTdocTable_(table, meta, exportConfig.recipientAddress, null, introText, discussionText, deadlineText, exportConfig.revisionUploadUrl, exportConfig.senderAddress, subjectDeadlineToken, exportConfig.listTag, documentUrl); // no subjectOverride: always canonical
       return { tdoc: meta.tdoc, fileName: email.fileName, eml: email.eml };
     });
 

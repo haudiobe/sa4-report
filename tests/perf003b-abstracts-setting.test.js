@@ -85,11 +85,12 @@ console.log('createContinuousTrigger(interval, fetchAbstracts) persists the chec
 {
   const { sandbox } = loadCode();
   sandbox.ScriptApp = {
-    newTrigger: () => ({ timeBased: () => ({ everyMinutes: () => ({ create: () => {} }) }) }),
+    newTrigger: () => ({ timeBased: () => ({ everyHours: () => ({ create: () => {} }) }) }),
     getProjectTriggers: () => []
   };
 
-  sandbox.createContinuousTrigger(15, true);
+  // 2.15.2: hourly is the only interval CENTRAL (an add-on) can create.
+  sandbox.createContinuousTrigger(60, true);
   check('creating the trigger with fetchAbstracts=true persists FETCH_ABSTRACTS_ON_UPDATE=true, independent of interval',
     sandbox.getFetchAbstractsSetting_(), true);
 }
