@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.14.3 (2026-09-30)
+ * Version: 2.15.0 (2026-09-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,21 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.15.0 (2026-09-30)
+ *   - Added (ADDON-009): "📧 EMAIL EXPORT" -> "Prepare TDoc Discussion
+ *     E-mails", the Legacy discussion e-mail exporter (LEGACY-UPGRADE-006,
+ *     Legacy 80ab081) ported unchanged: one Outlook-ready .eml per selected
+ *     eligible TDoc (Approved/Agreed/reserved never offered) plus a ZIP of
+ *     them in the Drive folder "SA4 Report Email Exports"; nothing is sent.
+ *     Subject "[<tag>,<agenda item>,YY-MM-DD-HHmmTZ][<TDoc>] Discussion:
+ *     <title>". From is the new "Discussion E-mail Sender" setting
+ *     (DISCUSSION_EMAIL_SENDER, never derived); To is the meeting's mailing
+ *     list as a list.etsi.org address (an ad-hoc meeting's saved Mailing
+ *     List, else the report-family list). The subject tag is that list's
+ *     name without the SA4 prefix (3GPP_TSG_SA4_FS_6G_MED -> FS_6G_MED,
+ *     3GPP_TSG_SA_WG4_MBS -> MBS; the general SA4 list uses the report
+ *     family's SWG name). Every selection is validated and built before any
+ *     file is written, so a refused request leaves nothing in Drive.
  * 2.14.3 (2026-09-30)
  *   - Fixed (ADDON-008A2): incoming e-mail was never associated with ad-hoc
  *     TDocs. checkRSSFeed_() now identifies report tables with the
@@ -470,12 +485,18 @@ function onOpen(e) {
   addonMenu.addItem('⏱️ Set Update Interval (this doc)', 'setAutomaticUpdateIntervalForAddon');
   addonMenu.addItem('📊 Show Add-on Status (this doc)', 'showAddonSchedulerStatusForAddon');
 
+  // ADDON-009: the Legacy "📧 EMAIL EXPORT" submenu, unchanged (read-only
+  // export; see prepareTdocDiscussionEmails()).
+  const emailExportMenu = ui.createMenu('📧 EMAIL EXPORT');
+  emailExportMenu.addItem('Prepare TDoc Discussion E-mails', 'prepareTdocDiscussionEmails');
+
   // Add all submenus to main menu
   menu.addSubMenu(setupMenu);
   menu.addSubMenu(reportMenu);
   menu.addSubMenu(docMenu);
   menu.addSubMenu(toolsMenu);
   menu.addSubMenu(formatMenu);
+  menu.addSubMenu(emailExportMenu);
   menu.addSubMenu(addonMenu);
 
   // Legacy functions (for backward compatibility)
@@ -7073,6 +7094,10 @@ function configureMeetingSettings() {
       <input type="text" id="mailingList" value="${esc(initialPreview.mailingList.value)}" placeholder="Mailing list name" oninput="onMailingListEdited()">
       <div class="hint"><span id="mailingListHint"></span> <a href="#" id="mailingListReset" style="display:none" onclick="resetMailingList(); return false;">Use the default</a></div>
 
+      <label>Discussion E-mail Sender:</label>
+      <input type="email" id="discussionEmailSender" value="${esc(props.getProperty('DISCUSSION_EMAIL_SENDER') || '')}" placeholder="e.g. reporter@example.com">
+      <div class="hint">The "From" address of generated discussion e-mails (Prepare TDoc Discussion E-mails); they are addressed To the Mailing List's reflector. Never derived from your Google account or from Mailing List -- leave blank and Discussion Export will refuse to generate until this is set.</div>
+
       <label>Revisions / Drafts URL: <span id="revisionsUrlBadge">${sourceLabel(initialPreview.revisionsUrl.source)}</span></label>
       <input type="text" id="revisionsUrl" value="${esc(initialPreview.revisionsUrl.value)}" placeholder="https://www.3gpp.org/ftp/.../inbox/drafts/" oninput="updateDependentUi()">
       <div class="hint">Suggested drafts/revisions folder. Review if needed.</div>
@@ -7515,6 +7540,7 @@ function configureMeetingSettings() {
           ftpBase: document.getElementById('ftpBase').value,
           mailingList: mailingListOverridden ? document.getElementById('mailingList').value.trim() : '',
           mailingListMode: mailingListOverridden && document.getElementById('mailingList').value.trim() ? 'override' : 'derived',
+          discussionEmailSender: document.getElementById('discussionEmailSender') ? document.getElementById('discussionEmailSender').value : '',
           revisionsUrl: document.getElementById('revisionsUrl').value,
           reportType: document.getElementById('reportType').value,
           agendaSourceDocId: document.getElementById('agendaSourceDocId').value,
@@ -7711,6 +7737,13 @@ function persistConfigurationSettings_(config) {
   // ARCH-012: same skip-if-blank protection for REVISIONS_URL.
   if (config.revisionsUrl && config.revisionsUrl.trim()) {
     docProps.setProperty('REVISIONS_URL', config.revisionsUrl.trim());
+  }
+  // ADDON-009 (ported from LEGACY-UPGRADE-006H): the discussion e-mail
+  // sender, an independent value (never the Mailing List). Same
+  // skip-if-blank protection -- a blank value never erases a saved sender.
+  // Read only by the interactive exporter, so it is not a central-state key.
+  if (config.discussionEmailSender && config.discussionEmailSender.trim()) {
+    docProps.setProperty('DISCUSSION_EMAIL_SENDER', config.discussionEmailSender.trim());
   }
 
   Logger.log('Configuration saved: ' + JSON.stringify(redactConfigForLog_(config)));
@@ -12779,4 +12812,1666 @@ function applyAdhocSourceDiscovery_(enriched, meetingId, existing) {
  */
 function discoverAgendaForConfigDialog(meetingIdInput, coreResolved) {
   return discoverAgendaForConfigDialog_(meetingIdInput, coreResolved);
+}
+
+// =========================================================
+// ADDON-009 -- DISCUSSION E-MAIL (.eml) EXPORTER
+// (ported from Legacy LEGACY-UPGRADE-006, accepted at Legacy 80ab081)
+// =========================================================
+//
+// ADDON-009: the Legacy exporter, ported as-is. The only CENTRAL
+// adaptations are:
+//   - the subject's list tag is no longer the constant 'FS_6G_MED' but is
+//     derived from the meeting's mailing list (deriveEmailExportListTag_(),
+//     which yields 'FS_6G_MED' for 3GPP_TSG_SA4_FS_6G_MED) and is threaded
+//     through the builders as a parameter (also used for the .eml/ZIP file
+//     names and the default introduction);
+//   - the recipient is derived from getMeetingContext_().sources.mailingList
+//     (an ad-hoc meeting's saved MAILING_LIST, else the report-family list;
+//     main meetings unchanged) instead of the raw MAILING_LIST property;
+//   - the TDoc identifier is the canonical parseExactSA4DocumentId_() form,
+//     re-checked at Generate time;
+//   - Generate validates and builds every selected e-mail in memory before
+//     it writes anything to Drive, so a refused request leaves no files.
+// Everything else below (status rules, deadline, subject, body, MIME, ZIP,
+// dialog) is the Legacy code; the LEGACY-UPGRADE-006x notes describe it.
+//
+// Isolated, READ-ONLY export feature. It never clears/rebuilds/mutates the
+// report document, never touches Document Properties, never creates a
+// trigger, never calls continuousUpdate()/any build function, and never
+// sends mail (Gmail/MailApp are never called) -- it only READS the
+// already-built TDoc tables and existing meeting configuration, and WRITES
+// new .eml files into a dedicated Drive folder. The Google Doc report
+// remains the sole source of truth: TDoc-table content is copied into the
+// generated e-mail's HTML, never regenerated, summarized, or reconstructed
+// from any other source.
+//
+// Existing TDoc tables (see createTDocTableFromData_()/insertNewTdoc_()/
+// appendTdocDetailTable_()) are always simple two-column label/value
+// tables: row 0 is always ['TDoc', <tdocNumber>] (isTDocTable_()'s own
+// check), followed by Title/Source/Contact/Agenda Item/Type-For/
+// (optional Abstract)/E-mail Discussion/Revisions/Minutes/Disposition/
+// Status -- there is no separate "Decision" row in this legacy codebase.
+// "E-mail Discussion"/"Minutes"/"Revisions" cells accumulate their content
+// as MULTIPLE LINES via Text.appendText() with embedded "\n" (see
+// checkRSSFeed_()/updateRevisions_()) -- Apps Script represents each such
+// line as its own paragraph inside the cell, so walking the cell's child
+// elements (getNumChildren()/getChild(i)) already gives one paragraph per
+// discussion entry, exactly preserving paragraph boundaries. Hyperlinks
+// (author mailto/thread links, revision links) and bold (status styling,
+// see styleStatusCell_()) are applied as per-character-offset TEXT
+// attributes via Text.setLinkUrl()/setBold() -- read back here with the
+// exact mirror-image per-offset query methods (Text.getLinkUrl(offset)/
+// isBold(offset)/isItalic(offset)/isUnderline(offset)), segmented at each
+// Text.getTextAttributeIndices() breakpoint. No merged/colspan cell is
+// ever created by any TDoc-table builder in this file (every row is
+// exactly two plain appendTableCell() calls) -- DocumentApp's own Table
+// API has no colspan/merge-span accessor at all, so this is a genuine,
+// but currently inapplicable, Apps Script platform limitation, documented
+// here rather than silently ignored.
+//
+// Kept in Code.js (as in Legacy): tests/helpers/load-code.js loads exactly
+// this one file into its sandbox.
+
+// ---- centralized wording (change here, not scattered in the builders) ----
+
+/**
+ * ADDON-009: the reflector/list tag used in the canonical subject's first
+ * bracket group (Legacy: the constant EMAIL_EXPORT_LIST_TAG_ = 'FS_6G_MED').
+ * Derived from the already-validated recipient address -- the meeting's
+ * own reflector -- by dropping the SA4 list prefix, upper-cased:
+ *
+ *   3gpp_tsg_sa4_fs_6g_med@list.etsi.org -> FS_6G_MED
+ *   3gpp_tsg_sa_wg4_mbs@list.etsi.org    -> MBS
+ *
+ * The general SA4 list (3GPP_TSG_SA_WG4, main 6G/Liaison/New reports) names
+ * no topic, so the report family's SWG name (getReportConfig_().DRAFTS_FOLDER,
+ * e.g. 6G -> FS_6G_MED) is used instead. Returns null when nothing usable
+ * remains; the tag may never contain a comma, bracket or whitespace.
+ */
+function deriveEmailExportListTag_(recipientAddress, reportSwgName) {
+  const local = String(recipientAddress || '').trim().split('@')[0].toUpperCase();
+  const topic = local.replace(/^3GPP_TSG_SA(?:4|_WG4)(?:_|$)/, '') ||
+    String(reportSwgName || '').trim().toUpperCase();
+  return /^[A-Z0-9_.+-]+$/.test(topic) ? topic : null;
+}
+
+// LEGACY-UPGRADE-006B (bulk text controls): the DEFAULT plain-text wording
+// for the export dialog's two editable, GLOBAL text areas (Introduction /
+// Discussion request). These are the single source of truth for the
+// dialog's prefilled defaults AND for what generateTdocDiscussionEmails()
+// falls back to when no override is supplied (e.g. an older/direct caller
+// that predates this stage) -- never duplicated as a second HTML copy.
+// Deliberately plain TEXT, not HTML: converted to safe HTML per email via
+// plainTextToSafeHtmlParagraphs_() at generation time, exactly like a
+// user's own edited wording is. A blank line (\n\n) is a paragraph break;
+// a single \n is a <br> within a paragraph.
+//
+// ADDON-009: the Legacy wording is kept; only its "FS_6G_MED" is the
+// meeting's list tag (buildEmailExportDefaultIntroText_()).
+const EMAIL_EXPORT_DEFAULT_INTRO_TEXT_TEMPLATE_ =
+  'Dear all,\n\n' +
+  'As discussed during the {LIST_TAG} AHG, this email starts a technical discussion on the contribution below. ' +
+  'The purpose is to collect comments, refine the proposal and, where appropriate, prepare a revision for the October meeting.\n\n' +
+  'This discussion is not an email agreement and does not constitute a formal SA4 decision.';
+
+function buildEmailExportDefaultIntroText_(listTag) {
+  return EMAIL_EXPORT_DEFAULT_INTRO_TEXT_TEMPLATE_.replace('{LIST_TAG}', String(listTag || '').trim());
+}
+
+const EMAIL_EXPORT_DISCUSSION_HEADING_HTML_ = 'Discussion';
+
+// LEGACY-UPGRADE-006B (Part F, deadline in body): the closing
+// "Formal decisions remain reserved..." sentence used to be the last line
+// of the (user-editable) default Discussion-request text. It is now a
+// FIXED, exporter-controlled sentence (EMAIL_EXPORT_FORMAL_DECISIONS_NOTE_HTML_
+// below), placed after the deadline sentence, so a user editing the global
+// Discussion-request text can never accidentally remove it (or the
+// deadline sentence next to it) -- per this stage's explicit architectural
+// requirement. The user-editable default text itself is unchanged apart
+// from no longer repeating that sentence.
+const EMAIL_EXPORT_DEFAULT_DISCUSSION_TEXT_ =
+  'Comments are invited on the contribution and on the issues captured in the meeting minutes above.\n\n' +
+  'Please provide comments, proposed changes and, where appropriate, proposed text for a revision on this thread.';
+
+const EMAIL_EXPORT_FORMAL_DECISIONS_NOTE_HTML_ = 'Formal decisions remain reserved for the normal SA4 meeting process.';
+
+const EMAIL_EXPORT_CLOSING_HTML_ = 'Best regards,<br>Thomas';
+
+const EMAIL_EXPORT_DRIVE_FOLDER_NAME_ = 'SA4 Report Email Exports';
+
+/**
+ * LEGACY-UPGRADE-006 (status-filter follow-up): a TDoc whose report Status
+ * is one of these is treated as already completed and is not offered for
+ * a new FS_6G_MED discussion. Centralized here deliberately -- no scattered
+ * string comparisons. Comparison is always case-insensitive and trimmed
+ * (see isEmailExportStatusExcluded_()). Deliberately narrow: only the two
+ * statuses actually specified are excluded; nothing else is inferred.
+ */
+const EMAIL_EXPORT_EXCLUDED_STATUSES_ = ['approved', 'agreed'];
+
+/**
+ * LEGACY-UPGRADE-006 (status-filter follow-up): true when `status` (the
+ * TDoc table's own, UNMODIFIED Status cell text) matches one of
+ * EMAIL_EXPORT_EXCLUDED_STATUSES_, case-insensitively and trimmed. A
+ * blank/missing status is never excluded (nothing to match).
+ */
+function isEmailExportStatusExcluded_(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return EMAIL_EXPORT_EXCLUDED_STATUSES_.indexOf(normalized) !== -1;
+}
+
+/**
+ * LEGACY-UPGRADE-006B (reserved-status hard exclusion): "reserved" is an
+ * EXISTING, code-defined status in this codebase, not invented for this
+ * stage -- normalizeStatus_() (used by applyTdocStatusUpdate_(), the
+ * status-update decision logic shared by the fast/fallback paths of
+ * updateTdocStatus_()) already recognizes it as one of exactly two
+ * "not yet finalized" states (the other being "available"): a "reserved"
+ * TDoc slot has been allocated/registered in the tracking sheet but has no
+ * real submitted content yet, which is why its Status cell is still
+ * eligible to be freely overwritten on every update. That same reason
+ * (no real content to discuss) is why a "reserved" TDoc must never be
+ * offered, nor accepted, for a discussion e-mail -- distinct from
+ * Approved/Agreed (which DO have content, but are already decided).
+ * Comparison is case-insensitive and trimmed, matching exactly (not a
+ * substring match like normalizeStatus_()'s own broader use) -- this
+ * function's only job is "is the Status cell literally reserved", not
+ * "does it contain the word reserved somewhere". A blank/missing status
+ * is never treated as reserved (nothing to match).
+ *
+ * A codebase-wide check for OTHER existing "unavailable"/placeholder
+ * status concepts (per this stage's own requirement) found exactly one:
+ * "available" (normalizeStatus_()'s other recognized value) -- which
+ * means the OPPOSITE of unavailable (a TDoc slot ready to receive
+ * content) and is correctly never excluded. No other status-like
+ * "not really there yet" concept exists anywhere else in this file.
+ */
+const EMAIL_EXPORT_RESERVED_STATUS_ = 'reserved';
+
+function isEmailExportReserved_(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized === EMAIL_EXPORT_RESERVED_STATUS_;
+}
+
+// ---- discussion deadline (LEGACY-UPGRADE-006B, Parts D-H) ----
+
+/**
+ * LEGACY-UPGRADE-006B: default DISCUSSION deadline for the current
+ * FS_6G_MED batch -- explicitly a request-for-comments deadline, NOT an
+ * Email Agreement deadline (a separate, future, stricter workflow; see
+ * this stage's own scope note above generateTdocDiscussionEmails()).
+ * Stored as three separate, unambiguous fields (never a single free-text
+ * string) so validation can check each independently. The human-visible
+ * format built from these (formatEmailExportDeadline_()) is always
+ * "YY-MM-DD HH:mm TZ" -- deliberately never a natural-language or
+ * locale-dependent rendering.
+ */
+const EMAIL_EXPORT_DEFAULT_DEADLINE_DATE_ = '2026-10-15'; // ISO YYYY-MM-DD
+const EMAIL_EXPORT_DEFAULT_DEADLINE_TIME_ = '15:00'; // 24-hour HH:mm
+const EMAIL_EXPORT_DEFAULT_DEADLINE_TZ_ = 'CEST';
+
+/**
+ * LEGACY-UPGRADE-006B: the explicit, closed set of time zone abbreviations
+ * this exporter accepts for a discussion deadline -- deliberately NOT
+ * inferred from browser locale or the Apps Script server's own time zone
+ * (Session.getScriptTimeZone()), since the deadline's time zone is part of
+ * the deadline itself, not an environment detail. Only CEST is needed for
+ * the current FS_6G_MED batch; extending this set is a deliberate later
+ * decision, not something to guess at now.
+ */
+const EMAIL_EXPORT_SUPPORTED_TIMEZONES_ = ['CEST'];
+
+function isSupportedEmailExportTimezone_(tz) {
+  return EMAIL_EXPORT_SUPPORTED_TIMEZONES_.indexOf(String(tz || '').trim()) !== -1;
+}
+
+/**
+ * LEGACY-UPGRADE-006B: true only for a real, existing calendar date in
+ * strict YYYY-MM-DD form (rejects e.g. "2026-02-30", "2026-13-01", or any
+ * non-numeric/mis-shaped input) -- never trusts a client-supplied date
+ * string without checking it actually exists on the calendar.
+ */
+function isValidEmailExportDeadlineDate_(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || '').trim());
+  if (!m) return false;
+  const y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+/**
+ * LEGACY-UPGRADE-006B: true only for a strict 24-hour HH:mm value
+ * ("15:00", "09:05") -- never "3pm", "15.00", or any locale-dependent form.
+ */
+function isValidEmailExportDeadlineTime_(timeStr) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(timeStr || '').trim());
+}
+
+/**
+ * LEGACY-UPGRADE-006B: the ONE validation gate a submitted
+ * {date, time, tz} deadline must pass before it is used anywhere (Subject
+ * or body) -- date must be a real calendar date, time must be strict
+ * 24-hour HH:mm, and tz must be one of the explicit supported set. Never
+ * silently substitutes a default for an invalid/missing field; the caller
+ * (generateTdocDiscussionEmails()) is expected to refuse to generate that
+ * TDoc's e-mail and surface `error` verbatim rather than guessing.
+ */
+function validateEmailExportDeadline_(deadline) {
+  const d = deadline || {};
+  const date = String(d.date || '').trim();
+  const time = String(d.time || '').trim();
+  const tz = String(d.tz || '').trim();
+  if (!isValidEmailExportDeadlineDate_(date)) {
+    return { valid: false, error: 'Invalid or missing deadline date (expected a real calendar date, YYYY-MM-DD): "' + date + '"' };
+  }
+  if (!isValidEmailExportDeadlineTime_(time)) {
+    return { valid: false, error: 'Invalid or missing deadline time (expected 24-hour HH:mm): "' + time + '"' };
+  }
+  if (!isSupportedEmailExportTimezone_(tz)) {
+    return { valid: false, error: 'Unsupported or missing deadline time zone: "' + tz + '" (supported: ' + EMAIL_EXPORT_SUPPORTED_TIMEZONES_.join(', ') + ')' };
+  }
+  return { valid: true, date: date, time: time, tz: tz };
+}
+
+/**
+ * LEGACY-UPGRADE-006B: the ONE place that renders an already-validated
+ * deadline into its human-visible "YY-MM-DD HH:mm TZ" form -- used for the
+ * body's "Please provide your comments by..."/"Please upload revisions
+ * by..." sentences (never the Subject any more -- see
+ * formatEmailExportDeadlineForSubjectToken_() below, LEGACY-UPGRADE-006F).
+ * Takes the object validateEmailExportDeadline_() returns on success;
+ * never called with an unvalidated value.
+ */
+function formatEmailExportDeadline_(validated) {
+  const yy = validated.date.slice(2, 4);
+  const mm = validated.date.slice(5, 7);
+  const dd = validated.date.slice(8, 10);
+  return yy + '-' + mm + '-' + dd + ' ' + validated.time + ' ' + validated.tz;
+}
+
+/**
+ * LEGACY-UPGRADE-006F: the ONE place that renders an already-validated
+ * deadline into its compact canonical-Subject token form
+ * "YY-MM-DD-HHmmTZ" (e.g. "26-10-15-1500CEST") -- no spaces, no colon,
+ * distinct from formatEmailExportDeadline_()'s human/body "YY-MM-DD HH:mm
+ * TZ" form. Both formatters read from the SAME validated {date, time, tz}
+ * object (validateEmailExportDeadline_()'s output) -- one authoritative
+ * deadline value, two representations, never two separate deadline
+ * semantics. Never called with an unvalidated value.
+ */
+function formatEmailExportDeadlineForSubjectToken_(validated) {
+  const yy = validated.date.slice(2, 4);
+  const mm = validated.date.slice(5, 7);
+  const dd = validated.date.slice(8, 10);
+  const hhmm = validated.time.replace(':', '');
+  return yy + '-' + mm + '-' + dd + '-' + hhmm + validated.tz;
+}
+
+// ---- revision-upload location (LEGACY-UPGRADE-006C) ----
+
+/**
+ * LEGACY-UPGRADE-006C: the discussion e-mail's revision-upload destination
+ * is NOT a new concept or a new piece of configuration -- it reuses
+ * getMeetingContext_().sources.revisionsUrl, the SAME authoritative,
+ * already-used-elsewhere source that scanRevisionsFolder_() (the report's
+ * own "where are submitted drafts?" scanner, PROD-017) and the
+ * "Test All Connections" diagnostic already read. That value is:
+ *
+ *   - for a MAIN meeting: derived by formula, `${INBOX_BASE}Drafts/${DRAFTS_FOLDER}`,
+ *     where DRAFTS_FOLDER comes from the report-family -> SWG-name map
+ *     (DRAFTS_FOLDERS, e.g. '6G' -> 'FS_6G_MED') -- differs by report
+ *     family, never by this exporter's own logic;
+ *   - for an AD-HOC meeting (this script's own kind -- FS_6G_MED is
+ *     MEETING_TYPE=adhoc): NO formula exists; it is READ RAW from the
+ *     REVISIONS_URL Document Property (set via the "Revisions / Drafts
+ *     URL" field in Configure Meeting Settings) and is genuinely absent
+ *     (undefined) if that property was never set -- resolveMeetingSources_()
+ *     never invents one. Each ad-hoc series has its own dedicated
+ *     Inbox/Drafts/ folder, so no further per-family subfolder applies.
+ *
+ * This function adds NO new resolution logic of its own -- it only
+ * re-reads the existing value fresh (never caches, never trusts a
+ * client-supplied URL) and trims it. Never fetches the URL (no
+ * UrlFetchApp call) -- resolving it is a pure Document Properties/config
+ * read, exactly like every other consumer of this value.
+ */
+function resolveEmailExportRevisionUploadUrl_() {
+  return String(getMeetingContext_().sources.revisionsUrl || '').trim();
+}
+
+/**
+ * LEGACY-UPGRADE-006C: true only for an absolute http(s) URL -- rejects
+ * "javascript:", "data:", "mailto:", a bare relative path, or anything
+ * else that is not a plain, clickable external link. This is what stands
+ * between "trusted meeting configuration" and "a real <a href>"; it is
+ * never the ONLY check (the URL is also never taken from client input in
+ * the first place -- see generateTdocDiscussionEmails()), but it defends
+ * against a misconfigured or malformed REVISIONS_URL property value
+ * producing something unsafe or non-clickable.
+ */
+function isSafeEmailExportUrl_(url) {
+  return /^https?:\/\/[^\s"<>]+$/i.test(String(url || '').trim());
+}
+
+// ---- discussion e-mail sender and recipient (LEGACY-UPGRADE-006H) ----
+//
+// LEGACY-UPGRADE-006H: these are TWO DELIBERATELY SEPARATE concepts,
+// resolved by two separate functions, on purpose -- 006F/006G's mistake
+// was collapsing them into one address:
+//
+//   - SENDER (From): who the e-mail is actually sent as in Outlook. An
+//     explicitly configured, independent value (DISCUSSION_EMAIL_SENDER,
+//     e.g. "reporter@example.com" -- a person's real mailbox). Resolved
+//     by resolveEmailExportSenderAddress_(). NEVER derived from Mailing
+//     List, Session identity, or client input.
+//   - RECIPIENT (To): the reflector this discussion is posted to. Derived
+//     from the already-configured Mailing List (e.g.
+//     "3GPP_TSG_SA4_FS_6G_MED" -> "3gpp_tsg_sa4_fs_6g_med@list.etsi.org").
+//     Resolved by deriveEmailExportRecipientFromMailingList_(). NEVER the
+//     same value as the sender, and never itself independently configured
+//     (Mailing List is already the single source of truth for it).
+//
+// Both share the SAME final validator (isValidEmailExportSenderAddress_(),
+// name kept generic on purpose -- it validates "is this a safe address to
+// put in a MIME header", not "is this specifically a sender").
+
+/**
+ * LEGACY-UPGRADE-006E, restored by LEGACY-UPGRADE-006H (006F/006G had
+ * incorrectly removed this and derived From from Mailing List instead):
+ * the discussion e-mail's From address. Ordinary, non-secret configuration
+ * -- read fresh, server-side, from the SAME Document Properties mechanism
+ * every other Configure Meeting Settings field already uses
+ * (DISCUSSION_EMAIL_SENDER, set via that dialog's own "E-mail
+ * Configuration" section). Never derived from
+ * Session.getActiveUser()/getEffectiveUser() or any other Google login
+ * identity, never derived from Mailing List, and never read from
+ * client-supplied request data (a `from`/`sender`/`discussionEmailSender`
+ * field on a selection or globalText payload is simply never looked at).
+ * Genuinely absent (empty string) if never configured -- never invented.
+ * A stale value already present on an existing document (e.g. from before
+ * 006F removed it) becomes active again automatically, with no migration
+ * needed, simply because this function reads the property again.
+ */
+function resolveEmailExportSenderAddress_() {
+  return String(PropertiesService.getDocumentProperties().getProperty('DISCUSSION_EMAIL_SENDER') || '').trim();
+}
+
+/**
+ * LEGACY-UPGRADE-006F/006G, corrected naming by LEGACY-UPGRADE-006H (was
+ * deriveEmailExportSenderFromMailingList_() -- renamed because its result
+ * is the discussion RECIPIENT/To address, never the sender/From, and the
+ * old name was directly responsible for the 006G regression that
+ * conflated the two). Derives the discussion recipient from the
+ * already-configured Mailing List, which is the single source of truth
+ * for the reflector this batch belongs to. Transformation: trim, reject
+ * CR/LF (defense against a malformed/tampered MAILING_LIST value
+ * injecting extra MIME headers into the raw "To: " line
+ * buildEmlContent_() writes), lowercase, then either:
+ *
+ *   - already a full "...@list.etsi.org" address (case-insensitive) --
+ *     used exactly as-is (lowercased), NEVER double-suffixed
+ *     ("...@list.etsi.org@list.etsi.org"), so an existing configuration
+ *     that already stores the full address keeps working unchanged; or
+ *   - a bare reflector identifier (letters/digits/underscore only, e.g.
+ *     "3GPP_TSG_SA4_FS_6G_MED") -- "@list.etsi.org" is appended.
+ *
+ * Anything else (blank, containing "@" but not a "...@list.etsi.org"
+ * address, containing whitespace/punctuation outside [A-Za-z0-9_], or
+ * containing CR/LF) is rejected as unsuitable for safe derivation --
+ * never guessed at, never silently accepted. Never read from
+ * client-supplied request data (a `to`/`recipient`/`mailingList` field on
+ * a selection or globalText payload is simply never looked at).
+ */
+function deriveEmailExportRecipientFromMailingList_(mailingList) {
+  const raw = String(mailingList || '').trim();
+  if (!raw) {
+    return { valid: false, recipient: null, error: 'Mailing List is not configured.' };
+  }
+  if (/[\r\n]/.test(raw)) {
+    return { valid: false, recipient: null, error: 'Mailing List contains invalid characters (CR/LF) and cannot be used to derive a discussion recipient.' };
+  }
+  const lower = raw.toLowerCase();
+  if (/^[a-z0-9_.+-]+@list\.etsi\.org$/.test(lower)) {
+    return { valid: true, recipient: lower, error: null };
+  }
+  if (lower.indexOf('@') !== -1) {
+    return { valid: false, recipient: null, error: 'Mailing List "' + raw + '" looks like an e-mail address but is not a recognized "...@list.etsi.org" reflector address; cannot safely derive a discussion recipient.' };
+  }
+  if (!/^[a-z0-9_]+$/.test(lower)) {
+    return { valid: false, recipient: null, error: 'Mailing List "' + raw + '" is not a recognized reflector identifier (expected letters/digits/underscore, e.g. "3GPP_TSG_SA4_FS_6G_MED"); cannot safely derive a discussion recipient.' };
+  }
+  return { valid: true, recipient: lower + '@list.etsi.org', error: null };
+}
+
+/**
+ * LEGACY-UPGRADE-006E (kept; used by LEGACY-UPGRADE-006H for BOTH the
+ * sender and the recipient): true only for a plausible, single,
+ * injection-safe e-mail address -- a simple local-part@domain syntax
+ * check, with an explicit rejection of any CR or LF. Used as a final,
+ * defense-in-depth sanity gate on the resolved sender
+ * (resolveEmailExportSenderAddress_()'s output) and separately on the
+ * derived recipient (deriveEmailExportRecipientFromMailingList_()'s
+ * output), immediately before each is used -- exactly like the existing
+ * double-check pattern isSafeEmailExportUrl_() already uses for the
+ * revision-upload URL. Generic on purpose: it validates "is this address
+ * safe for a MIME header", not which header it goes into.
+ */
+function isValidEmailExportSenderAddress_(address) {
+  const a = String(address || '').trim();
+  if (!a) return false;
+  if (/[\r\n]/.test(a)) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a);
+}
+
+/**
+ * LEGACY-UPGRADE-006C: the fixed, exporter-controlled "where to upload a
+ * revision" sentence -- conceptually distinct from, and placed AFTER, the
+ * copied TDoc table's own (unmodified) "Revisions" row, which only
+ * reflects revisions currently known/already submitted. `deadlineText` is
+ * the SAME already-validated/formatted string used for the Subject and
+ * the "Please provide your comments by..." sentence (formatEmailExportDeadline_()),
+ * so all three can never disagree. `revisionUrl` is expected to already
+ * be resolved server-side (resolveEmailExportRevisionUploadUrl_()) and
+ * validated (isSafeEmailExportUrl_()) by the caller; this function
+ * re-validates it anyway before rendering an href, as a last defensive
+ * layer, and renders nothing (returns '') if either input is missing/
+ * unsafe -- it never emits a misleading instruction with no real
+ * destination. The visible link text is a short, human-readable label
+ * ("Revision upload folder"), not the raw (often very long) FTP URL.
+ */
+function buildEmailExportRevisionUploadSentenceHtml_(deadlineText, revisionUrl) {
+  const dl = String(deadlineText || '').trim();
+  const url = String(revisionUrl || '').trim();
+  if (!dl || !url || !isSafeEmailExportUrl_(url)) return '';
+  return '<p>Please upload revisions by ' + escapeHtmlForEmailExport_(dl) + ' to: ' +
+    '<a href="' + escapeHtmlForEmailExport_(url) + '">Revision upload folder</a></p>';
+}
+
+/**
+ * LEGACY-UPGRADE-006: standard HTML escaping for text pulled out of the
+ * report document before it is placed into the generated e-mail's HTML.
+ * A separate, fuller escaper than configureMeetingSettings()'s own local
+ * esc() (which only escapes quotes, for an HTML *attribute* value) --
+ * this one also escapes "<"/">"/"&" for safe HTML *body* content.
+ */
+function escapeHtmlForEmailExport_(text) {
+  return String(text === null || text === undefined ? '' : text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * LEGACY-UPGRADE-006: filenames must never contain characters Windows/
+ * Drive forbid or that would make the file hard to use; collapses
+ * whitespace and strips anything outside a conservative safe set.
+ */
+function sanitizeEmailExportFilename_(name) {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'export';
+}
+
+/**
+ * LEGACY-UPGRADE-006 (canonical subject + agenda-item follow-up), extended
+ * by LEGACY-UPGRADE-006B (Part E, deadline) and tightened by
+ * LEGACY-UPGRADE-006F (compact, no-space bracket): the canonical FS_6G_MED
+ * discussion subject:
+ *
+ *   [FS_6G_MED,<agendaItem>,<deadlineText>][<tdoc>] Discussion: <title>
+ *
+ * e.g. "[FS_6G_MED,5.4,26-10-15-1500CEST][S4aP260069] Discussion: ...".
+ * `deadlineText` here is the ALREADY-VALIDATED, already-formatted COMPACT
+ * "YY-MM-DD-HHmmTZ" subject token (formatEmailExportDeadlineForSubjectToken_()
+ * -- deliberately NOT the same string as the body's "YY-MM-DD HH:mm TZ"
+ * form, formatEmailExportDeadline_(); both come from the same one
+ * validated deadline, just rendered two ways for two different places).
+ * This function never validates or formats a deadline itself, only places
+ * whatever string it is given.
+ *
+ * LEGACY-UPGRADE-006F: the first bracket's comma separators have NO
+ * surrounding spaces (",", never ", ") -- this applies ONLY to that first
+ * bracket; the human-readable part after "Discussion: " (the title) is
+ * completely unaffected and keeps its own natural spacing.
+ *
+ * The TDoc identifier (its OWN bracket group) is the authoritative,
+ * machine-readable association key -- ADDON-009: CENTRAL's collector
+ * (checkRSSFeed_(), ADDON-008A2: findSA4DocumentIdsInText_() on the
+ * reply-prefix-stripped subject) recovers it regardless of a reply/forward
+ * prefix and regardless of whether Agenda Item, deadline, or the title are
+ * edited in a reply. (Legacy's own extractTdocFromEmailExportSubject_() is
+ * therefore not ported -- one association path, not two.)
+ * Agenda Item, deadline, and title exist purely for human readability;
+ * none is required by any collector to stay unchanged. Agenda Item's
+ * existing textual representation (e.g. "5.10") is used exactly as given
+ * -- never renumbered or reinterpreted as a number (which would silently
+ * turn "5.10" into "5.1"). None of Agenda Item, deadline, or title is ever
+ * invented; each is simply omitted, in bracket order, when unavailable
+ * (deadlineText is optional here purely for this function's own general
+ * reusability/backward compatibility -- the live RPC always supplies one,
+ * since every discussion e-mail requires a deadline):
+ *
+ *   no deadline:                      [FS_6G_MED,<agendaItem>][<tdoc>] Discussion: <title>
+ *   no agendaItem:                    [FS_6G_MED,<deadlineText>][<tdoc>] Discussion: <title>
+ *   no agendaItem or deadline:        [FS_6G_MED][<tdoc>] Discussion: <title>
+ *   no title:                         [FS_6G_MED,<agendaItem>,<deadlineText>][<tdoc>] Discussion
+ *   no agendaItem, deadline, or title: [FS_6G_MED][<tdoc>] Discussion
+ *
+ * ADDON-009: `listTag` (deriveEmailExportListTag_()) replaces Legacy's
+ * constant FS_6G_MED; it is required -- never defaulted or invented.
+ */
+function buildEmailExportSubject_(tdocNumber, title, agendaItem, deadlineText, listTag) {
+  const tag = String(listTag || '').trim();
+  if (!tag) throw new Error('buildEmailExportSubject_: a list tag is required.');
+  const t = String(title || '').trim();
+  const a = String(agendaItem || '').trim();
+  const dl = String(deadlineText || '').trim();
+  const bracketParts = [tag];
+  if (a) bracketParts.push(a);
+  if (dl) bracketParts.push(dl);
+  const listTagBracket = '[' + bracketParts.join(',') + ']';
+  const base = `${listTagBracket}[${tdocNumber}] Discussion`;
+  return t ? `${base}: ${t}` : base;
+}
+
+/**
+ * LEGACY-UPGRADE-006B (bulk text controls): converts a plain-text value --
+ * as typed into the export dialog's Introduction/Discussion-request text
+ * areas -- into safe HTML paragraphs. EVERY character is escaped first via
+ * escapeHtmlForEmailExport_() (the same escaper already used everywhere
+ * else in this file; never a second, hand-rolled escaper), so arbitrary
+ * user text (including "<script>", "&", quotes, etc.) can never inject
+ * markup. Structure is then reintroduced on the ESCAPED text only: a blank
+ * line (one or more fully-blank lines) starts a new <p>; a single line
+ * break within a paragraph becomes <br>. Leading/trailing blank paragraphs
+ * are dropped. Blank/whitespace-only input returns '' (never an empty
+ * <p></p> pair).
+ */
+function plainTextToSafeHtmlParagraphs_(text) {
+  const raw = String(text === null || text === undefined ? '' : text).replace(/\r\n/g, '\n');
+  const paragraphs = raw.split(/\n{2,}/)
+    .map(function (p) { return p.trim(); })
+    .filter(function (p) { return p.length > 0; });
+  if (paragraphs.length === 0) return '';
+  return paragraphs.map(function (p) {
+    return '<p>' + escapeHtmlForEmailExport_(p).replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+}
+
+/**
+ * LEGACY-UPGRADE-006: assembles the full HTML body -- intro, the COMPLETE
+ * copied TDoc table (tableHtml, produced by docTableToHtml_() from the
+ * REAL report table, never regenerated here), then the Discussion section
+ * and closing. A minimal inline style keeps the table readable in Outlook
+ * (which strips most <style> blocks) without depending on external CSS.
+ *
+ * LEGACY-UPGRADE-006B (bulk text controls): `introHtml`/`discussionHtml`
+ * are OPTIONAL pre-converted HTML overrides (already run through
+ * plainTextToSafeHtmlParagraphs_() by the caller) for the Introduction and
+ * Discussion-request sections; when omitted (null/undefined/''), falls
+ * back to this file's own default wording (buildEmailExportDefaultIntroText_()/
+ * EMAIL_EXPORT_DEFAULT_DISCUSSION_TEXT_, converted the same way) so every
+ * existing caller that predates this stage keeps producing the exact same
+ * output as before.
+ *
+ * LEGACY-UPGRADE-006B (Part F, deadline in body): `deadlineText`, when
+ * supplied, is the SAME already-validated/formatted "YY-MM-DD HH:mm TZ"
+ * string passed to buildEmailExportSubject_() -- this is what guarantees
+ * Subject and body can never disagree about a TDoc's deadline (one value,
+ * two call sites, never re-derived). Renders as a fixed, exporter-
+ * controlled sentence ("Please provide your comments by <deadlineText>.")
+ * placed after the (now shorter) editable discussion text and before the
+ * ALSO fixed EMAIL_EXPORT_FORMAL_DECISIONS_NOTE_HTML_ sentence -- neither
+ * is part of `discussionHtml`, so editing the global Discussion-request
+ * text can never remove either. Omitted, the sentence is simply skipped
+ * (kept optional for this function's own general reusability/backward
+ * compatibility; the live RPC always supplies one).
+ *
+ * LEGACY-UPGRADE-006C (revision-upload instruction): `revisionUploadUrl`,
+ * when supplied alongside `deadlineText`, adds a second fixed sentence
+ * right after the deadline sentence (buildEmailExportRevisionUploadSentenceHtml_()) --
+ * also exporter-controlled, also never part of `discussionHtml`. Omitted,
+ * or not a safe http(s) URL, the sentence is simply skipped (kept optional
+ * here purely for reusability; generateTdocDiscussionEmails() always
+ * resolves and validates one before calling this, refusing to generate
+ * anything rather than silently omitting the instruction).
+ *
+ * ADDON-009: `listTag` only fills the default introduction's topic
+ * (buildEmailExportDefaultIntroText_()) when no `introHtml` is supplied.
+ */
+function buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag) {
+  const intro = (introHtml || plainTextToSafeHtmlParagraphs_(buildEmailExportDefaultIntroText_(listTag)));
+  const discussion = (discussionHtml || plainTextToSafeHtmlParagraphs_(EMAIL_EXPORT_DEFAULT_DISCUSSION_TEXT_));
+  const dl = String(deadlineText || '').trim();
+  const deadlineSentenceHtml = dl ? '<p>Please provide your comments by ' + escapeHtmlForEmailExport_(dl) + '.</p>' : '';
+  const revisionUploadSentenceHtml = buildEmailExportRevisionUploadSentenceHtml_(deadlineText, revisionUploadUrl);
+  return '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#000;">' +
+    intro +
+    (tableHtml || '') +
+    '<p><b>' + escapeHtmlForEmailExport_(EMAIL_EXPORT_DISCUSSION_HEADING_HTML_) + '</b></p>' +
+    discussion +
+    deadlineSentenceHtml +
+    revisionUploadSentenceHtml +
+    '<p>' + EMAIL_EXPORT_FORMAL_DECISIONS_NOTE_HTML_ + '</p>' +
+    '<p>' + EMAIL_EXPORT_CLOSING_HTML_ + '</p>' +
+    '</div>';
+}
+
+// ---- Google Docs (Table/Cell/Paragraph/ListItem/Text) -> HTML ----
+
+/**
+ * LEGACY-UPGRADE-006: converts one paragraph-or-list-item's TEXT into an
+ * HTML fragment, preserving bold/italic/underline/hyperlinks as nested
+ * inline tags, segmented at each real formatting-change offset
+ * (Text.getTextAttributeIndices()) -- never a naive whole-paragraph
+ * bold/italic guess. Line breaks WITHIN a single paragraph's own text
+ * (rare here; every writer in this file inserts a new paragraph per line
+ * instead, see this section's header comment) are preserved as <br>.
+ */
+function richTextToHtml_(text) {
+  const full = text.getText();
+  if (!full) return '';
+  let indices = [0];
+  try {
+    const real = text.getTextAttributeIndices();
+    if (Array.isArray(real) && real.length) indices = real;
+  } catch (e) { /* fall back to the single [0] segment */ }
+  if (indices[0] !== 0) indices = [0].concat(indices);
+
+  let html = '';
+  for (let i = 0; i < indices.length; i++) {
+    const start = indices[i];
+    const end = i + 1 < indices.length ? indices[i + 1] - 1 : full.length - 1;
+    if (start > end) continue;
+    const segment = full.slice(start, end + 1);
+    let piece = escapeHtmlForEmailExport_(segment).replace(/\n/g, '<br>');
+    let bold = false, italic = false, underline = false, link = null;
+    try { bold = !!text.isBold(start); } catch (e) { }
+    try { italic = !!text.isItalic(start); } catch (e) { }
+    try { underline = !!text.isUnderline(start); } catch (e) { }
+    try { link = text.getLinkUrl(start); } catch (e) { }
+    if (link) piece = '<a href="' + escapeHtmlForEmailExport_(link) + '">' + piece + '</a>';
+    if (underline && !link) piece = '<u>' + piece + '</u>'; // a link is already visually distinct
+    if (italic) piece = '<i>' + piece + '</i>';
+    if (bold) piece = '<b>' + piece + '</b>';
+    html += piece;
+  }
+  return html;
+}
+
+/**
+ * LEGACY-UPGRADE-006: converts one report TableCell's full content
+ * (every paragraph/list item it contains, in document order) into an HTML
+ * fragment. Consecutive list items are grouped into one <ul>/<ol>
+ * (BULLET-family glyphs -> <ul>, everything else -> <ol>); every other
+ * paragraph becomes its own <p>. An empty cell becomes an empty string
+ * (renders as a normal empty table cell, not a stray tag).
+ */
+/**
+ * LEGACY-UPGRADE-006 (Outlook-ready follow-up): true for a glyph type that
+ * reads as an ordered/numbered list ("NUMBER", "LATIN_UPPER"/"LATIN_LOWER",
+ * "ROMAN_UPPER"/"ROMAN_LOWER" -- Apps Script's real GlyphType values other
+ * than "BULLET"); everything else (including an unavailable glyph) is
+ * treated as unordered. Used per list-item, not per document, since real
+ * Google Docs list items each carry their own glyph.
+ */
+function isOrderedListGlyph_(glyph) {
+  return /NUMBER|LATIN|ROMAN/.test(String(glyph || ''));
+}
+
+/**
+ * LEGACY-UPGRADE-006 (Outlook-ready follow-up): converts one report
+ * TableCell's full content into HTML, preserving the Google Doc's real
+ * LIST NESTING rather than flattening every list item into one level.
+ *
+ * Uses ListItem.getNestingLevel() (0-based depth) and ListItem.getListId()
+ * -- both real DocumentApp.ListItem methods -- to reconstruct proper
+ * nested <ul>/<ol> structure: a stack of open list levels is maintained;
+ * an item deeper than the current stack opens new nested list(s); an item
+ * shallower closes back down to that level; a paragraph or a level-0 item
+ * belonging to a DIFFERENT listId than the currently open level-0 list
+ * closes everything first (paragraphs always interrupt a list in HTML;
+ * two lists back-to-back with no paragraph between them but different
+ * source lists are kept as two separate, independent <ul>/<ol> elements,
+ * never silently merged). Ordered-vs-unordered is decided per item from
+ * its own glyph type (isOrderedListGlyph_()), matching how Google Docs
+ * itself assigns glyphs. Inline formatting (bold/italic/underline/links,
+ * via richTextToHtml_()) works identically inside a nested item as at the
+ * top level. Missing nesting-level/list-ID support degrades gracefully to
+ * flat level-0 behavior (the previous, pre-nesting output), never throws.
+ */
+function docCellToHtml_(cell) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const LIST_ITEM = DocumentApp.ElementType.LIST_ITEM;
+  const n = cell.getNumChildren();
+  let html = '';
+  const stack = []; // one open frame per nesting level: { level, tag, listId }; stack[top] has an open, not-yet-closed <li>
+
+  function closeFrame() {
+    const frame = stack.pop();
+    html += '</li></' + frame.tag + '>';
+  }
+  function closeDeeperThan(level) {
+    while (stack.length > 0 && stack[stack.length - 1].level > level) closeFrame();
+  }
+  function closeAllLists() {
+    while (stack.length > 0) closeFrame();
+  }
+
+  // Places one list item at `level`. Closes anything deeper first. If a
+  // frame is already open at exactly this level, either continues it
+  // (same tag/listId: close the previous <li>, open a new one in the SAME
+  // wrapper) or -- a real, different list resuming at this level, with no
+  // intervening paragraph -- closes that wrapper with its OWN original
+  // tag (never the new item's tag, which would produce a mismatched
+  // closing tag) and opens a genuinely new one. If no frame is open at
+  // this level yet (first item, or a level was skipped -- Google Docs
+  // nesting always increases one level at a time in practice, so a
+  // larger jump is simply opened as a single new level rather than
+  // guessing at intermediate ones), opens it fresh.
+  function placeListItem(level, tag, listId, itemHtml) {
+    closeDeeperThan(level);
+    const top = stack.length ? stack[stack.length - 1] : null;
+    if (top && top.level === level) {
+      if (top.tag !== tag || (listId !== null && top.listId !== null && listId !== top.listId)) {
+        closeFrame();
+        html += '<' + tag + '><li>' + itemHtml;
+        stack.push({ level: level, tag: tag, listId: listId });
+      } else {
+        html += '</li><li>' + itemHtml;
+        top.listId = listId;
+      }
+    } else {
+      html += '<' + tag + '><li>' + itemHtml;
+      stack.push({ level: level, tag: tag, listId: listId });
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    const child = cell.getChild(i);
+    const type = child.getType();
+    if (type === LIST_ITEM) {
+      const li = child.asListItem ? child.asListItem() : child;
+      const level = (typeof li.getNestingLevel === 'function') ? (li.getNestingLevel() || 0) : 0;
+      const listId = (typeof li.getListId === 'function') ? li.getListId() : null;
+      const tag = isOrderedListGlyph_(li.getGlyphType && li.getGlyphType()) ? 'ol' : 'ul';
+      placeListItem(level, tag, listId, richTextToHtml_(li.editAsText()));
+    } else if (type === PARAGRAPH) {
+      closeAllLists();
+      const p = child.asParagraph ? child.asParagraph() : child;
+      const inner = richTextToHtml_(p.editAsText());
+      html += '<p style="margin:0 0 4px 0;">' + (inner || '&nbsp;') + '</p>';
+    }
+    // Any other child type (e.g. a nested table -- never produced by this
+    // codebase's TDoc-table builders) is intentionally skipped rather than
+    // guessed at.
+  }
+  closeAllLists();
+  return html;
+}
+
+/**
+ * LEGACY-UPGRADE-006: converts the COMPLETE report TDoc table into one
+ * self-contained HTML <table> -- every row, every cell, in document
+ * order. Basic inline borders/padding only (Outlook strips most CSS
+ * classes/embedded <style> blocks, so every style that matters is inline).
+ * This is a literal copy of the existing table's content; nothing is
+ * reordered, summarized, or regenerated.
+ */
+function docTableToHtml_(table) {
+  const rows = table.getNumRows();
+  let html = '<table style="border-collapse:collapse;width:100%;font-family:Arial,Helvetica,sans-serif;font-size:12px;" border="1" cellpadding="6" cellspacing="0">';
+  for (let r = 0; r < rows; r++) {
+    const row = table.getRow(r);
+    const cells = row.getNumCells();
+    html += '<tr>';
+    for (let c = 0; c < cells; c++) {
+      const cell = row.getCell(c);
+      const isLabelCol = c === 0;
+      const cellStyle = 'border:1px solid #999;padding:6px;vertical-align:top;text-align:left;' + (isLabelCol ? 'font-weight:bold;background:#f2f2f2;white-space:nowrap;' : '');
+      html += '<td style="' + cellStyle + '">' + docCellToHtml_(cell) + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+  return html;
+}
+
+// ---- TDoc-table detection (read-only) ----
+
+/**
+ * LEGACY-UPGRADE-006: scans the CURRENT document body (read-only -- no
+ * write of any kind) for TDoc tables (isTDocTable_(), the SAME check the
+ * build/update paths already use) and returns one summary entry per table
+ * for the dialog list. Table order in the returned array matches document
+ * order; `tableIndex` is that table's position among getTables() results,
+ * used later to re-locate the exact same table for export without ever
+ * relying on TDoc-number uniqueness (defensive, though TDoc numbers are
+ * expected unique in practice).
+ */
+/**
+ * LEGACY-UPGRADE-006 (detection-fix follow-up): isTDocTable_() only checks
+ * that row 0 / column 0 reads "TDoc" -- true for a genuine TDoc detail
+ * table, but ALSO true for two other tables this same file creates with
+ * "TDoc" as their own header label: the "Registered Documents" summary
+ * table (createSummaryTable_(): header row ['TDoc', 'Title', 'Source',
+ * 'Agenda Item']) and the "Document Reallocations" table
+ * (isReallocationTable_()'s own check: header row ['TDoc',
+ * 'Original Agenda', 'New Agenda', 'Reason']). Both pass isTDocTable_()'s
+ * check, and their row-0/column-1 header text ("Title"/"Original Agenda")
+ * was being read as if it were a TDoc number -- the exact live bug
+ * observed. isTDocTable_() itself is deliberately left untouched (it is
+ * used by the actual build/update paths -- this task does not touch
+ * report generation); this is an ADDITIONAL, export-only validation layer
+ * on top of it, reusing the SAME canonical whole-string SA4 identifier
+ * check every other consumer in this file uses (parseExactSA4DocumentId_()/
+ * SA4_TDOC_FAMILIES) -- never a second, hand-rolled regex, and never
+ * limited to one series: every family that registry recognizes (S4-,
+ * S4aA, S4aP, S4aV, S4aI, A4aR) is accepted here exactly as it already is
+ * everywhere else in this codebase.
+ */
+function isPlausibleTdocIdentifier_(value) {
+  return parseExactSA4DocumentId_(value).isValid;
+}
+
+function detectTdocTablesInDocument_(body) {
+  const tables = body.getTables();
+  const found = [];
+  const countByTdoc = {};
+  tables.forEach(function (t, idx) {
+    if (!isTDocTable_(t)) return;
+    // LEGACY-UPGRADE-006 (detection-fix follow-up): reject anything that
+    // is not an actual SA4 TDoc identifier (see isPlausibleTdocIdentifier_()
+    // above) -- this is what excludes the summary/reallocation tables'
+    // own header rows, blank values, and arbitrary prose.
+    // ADDON-009: the identifier is used in its canonical spelling.
+    const parsedTdoc = parseExactSA4DocumentId_(safeCellText_(t, 0, 1));
+    if (!parsedTdoc.isValid) return;
+    const tdoc = parsedTdoc.raw;
+    countByTdoc[tdoc] = (countByTdoc[tdoc] || 0) + 1;
+    // LEGACY-UPGRADE-006 (status-filter follow-up): `status` is the
+    // table's own UNMODIFIED Status cell -- read only, never written back.
+    // `excluded` is derived purely for the dialog's selectable-list
+    // filtering; the original status value is always preserved alongside
+    // it for display/data purposes.
+    //
+    // LEGACY-UPGRADE-006B (reserved-status hard exclusion): `excluded` now
+    // covers BOTH hard-exclusion reasons (Approved/Agreed and reserved) --
+    // in both cases the TDoc must never be selectable or exportable, so
+    // one boolean still correctly answers "can this be offered at all".
+    // `hardExclusionReason` distinguishes WHICH rule fired, purely so the
+    // dialog can report separate counts ("excluded by status
+    // (Approved/Agreed)" vs. "reserved/unavailable") without guessing --
+    // never a third catch-all reason, since no other hard-exclusion rule
+    // exists in this codebase (see isEmailExportReserved_()'s own header
+    // comment for the codebase-wide check that confirmed this).
+    const status = findCellText_(t, 'Status').trim();
+    const approvedOrAgreed = isEmailExportStatusExcluded_(status);
+    const reserved = !approvedOrAgreed && isEmailExportReserved_(status);
+    found.push({
+      tableIndex: idx,
+      tdoc: tdoc,
+      title: findCellText_(t, 'Title').trim(),
+      source: findCellText_(t, 'Source').trim(),
+      agendaItem: findCellText_(t, 'Agenda Item').trim(),
+      status: status,
+      excluded: approvedOrAgreed || reserved,
+      hardExclusionReason: reserved ? 'reserved' : (approvedOrAgreed ? 'approved-agreed' : null)
+    });
+  });
+  // LEGACY-UPGRADE-006 (detection-fix follow-up): a genuinely valid TDoc
+  // number appearing on MORE THAN ONE physical table is flagged, never
+  // silently deduplicated or merged -- the tables may hold materially
+  // different content (e.g. one left stale by an update that only found/
+  // touched the other), and only a human can safely judge which is
+  // current. Every occurrence remains its own separate, independently
+  // selectable row.
+  found.forEach(function (f) {
+    f.duplicateCount = countByTdoc[f.tdoc];
+  });
+  return found;
+}
+
+// ---- quoted-printable + MIME (.eml) ----
+
+/**
+ * LEGACY-UPGRADE-006: quoted-printable encodes a UTF-8 string per RFC
+ * 2045 -- every byte outside printable US-ASCII (and outside "=") is
+ * escaped as "=XX", long lines are soft-wrapped at 76 characters with a
+ * trailing "=" continuation, and CRLF is used throughout (required for
+ * MIME/email; Apps Script string content is otherwise "\n"-only).
+ */
+function quotedPrintableEncode_(str) {
+  const bytes = Utilities.newBlob(String(str || '')).getBytes();
+  let out = '';
+  let lineLen = 0;
+  function put(chunk) {
+    if (lineLen + chunk.length > 75) { out += '=\r\n'; lineLen = 0; }
+    out += chunk;
+    lineLen += chunk.length;
+  }
+  for (let i = 0; i < bytes.length; i++) {
+    let b = bytes[i];
+    if (b < 0) b += 256; // Apps Script bytes are signed
+    const ch = String.fromCharCode(b);
+    if (ch === '\r') continue; // normalize: CRLF is emitted explicitly below
+    if (ch === '\n') { out += '\r\n'; lineLen = 0; continue; }
+    if ((b >= 33 && b <= 126 && b !== 61) || b === 32 || b === 9) {
+      put(ch);
+    } else {
+      put('=' + ('0' + b.toString(16).toUpperCase()).slice(-2));
+    }
+  }
+  return out;
+}
+
+/**
+ * LEGACY-UPGRADE-006: RFC 2047 encoded-word for a header value that may
+ * contain non-ASCII characters (a title with an accented name, an en/em
+ * dash, ...) -- "=?UTF-8?B?<base64>?=". Plain ASCII values are returned
+ * unchanged (no unnecessary encoding).
+ */
+function encodeMimeHeaderValue_(value) {
+  const v = String(value || '');
+  if (/^[\x20-\x7E]*$/.test(v)) return v;
+  const b64 = Utilities.base64Encode(Utilities.newBlob(v).getBytes());
+  return '=?UTF-8?B?' + b64 + '?=';
+}
+
+/**
+ * LEGACY-UPGRADE-006: builds a complete, standards-compatible .eml
+ * (RFC 5322 message / MIME) text body: Subject/To/From (From/Date omitted
+ * entirely when not available or not configured -- never a fabricated
+ * address), Content-Type text/html; charset=UTF-8, quoted-printable
+ * transfer encoding, CRLF line endings throughout.
+ */
+function buildEmlContent_(headers, htmlBody) {
+  const h = headers || {};
+  const lines = [];
+  lines.push('MIME-Version: 1.0');
+  // LEGACY-UPGRADE-006 (Outlook-ready follow-up): tells desktop Outlook to
+  // open this .eml as an unsent/editable message (body editable, a real
+  // Send button) rather than as a received message with only Reply/
+  // Reply All/Forward. This never sends anything by itself -- the user
+  // still edits and presses Send manually.
+  lines.push('X-Unsent: 1');
+  if (h.from) lines.push('From: ' + h.from);
+  if (h.to) lines.push('To: ' + h.to);
+  lines.push('Subject: ' + encodeMimeHeaderValue_(h.subject || ''));
+  if (h.date) lines.push('Date: ' + h.date);
+  lines.push('Content-Type: text/html; charset=UTF-8');
+  lines.push('Content-Transfer-Encoding: quoted-printable');
+  lines.push('');
+  lines.push(quotedPrintableEncode_(htmlBody || ''));
+  return lines.join('\r\n');
+}
+
+// ---- orchestration (still read-only against the Doc) ----
+
+/**
+ * LEGACY-UPGRADE-006: builds one export {fileName, eml} for a single
+ * already-located TDoc table. `subjectOverride` is an optional parameter
+ * kept for this function's own general reusability/testability -- the
+ * live dialog's RPC (generateTdocDiscussionEmails()) never supplies one,
+ * since the canonical Subject is part of the machine-readable TDoc-
+ * association contract and is not user-editable (see that function's own
+ * header comment). `mailingList` is the already-resolved (Document
+ * Property) value, never invented here.
+ *
+ * LEGACY-UPGRADE-006B (bulk text controls): `introText`/`discussionText`
+ * are OPTIONAL plain-text overrides for the Introduction/Discussion-
+ * request sections (converted to safe HTML here via
+ * plainTextToSafeHtmlParagraphs_() -- the caller never pre-converts them);
+ * omitted, buildEmailExportHtmlBody_() falls back to this file's own
+ * default wording, so every pre-existing call site is unaffected.
+ *
+ * LEGACY-UPGRADE-006B (Part E/F, deadline): `deadlineText`, when supplied,
+ * is the SAME already-validated/formatted string placed into both the
+ * canonical Subject (buildEmailExportSubject_()) and the body's deadline
+ * sentence (buildEmailExportHtmlBody_()) -- one value, both call sites,
+ * so the two can never disagree. Optional purely for this function's own
+ * reusability/backward compatibility.
+ *
+ * LEGACY-UPGRADE-006C: `revisionUploadUrl`, when supplied, is passed
+ * straight through to buildEmailExportHtmlBody_() for the revision-upload
+ * sentence -- resolved/validated server-side by the caller, never taken
+ * from client input.
+ *
+ * LEGACY-UPGRADE-006H: `senderAddress`, when supplied, is the From header
+ * value -- resolved/validated server-side by the caller
+ * (resolveEmailExportSenderAddress_()/isValidEmailExportSenderAddress_())
+ * from the explicitly configured DISCUSSION_EMAIL_SENDER, NEVER from
+ * Mailing List, NEVER from Session.getActiveUser()/getEffectiveUser() (the
+ * Google login identity running this script), and never from
+ * client-supplied request data. `mailingList` above (this function's own
+ * pre-existing parameter) carries the SEPARATE derived recipient/To
+ * address -- the two are deliberately different values; see
+ * generateTdocDiscussionEmails()'s own header comment for why. If
+ * `senderAddress` is omitted, no From header is emitted (matching this
+ * file's existing "no fabricated header" convention for a missing value)
+ * -- kept optional purely for this function's own reusability/backward
+ * compatibility.
+ *
+ * LEGACY-UPGRADE-006F (compact subject deadline token): `subjectDeadlineToken`,
+ * when supplied, is the compact "YY-MM-DD-HHmmTZ" form
+ * (formatEmailExportDeadlineForSubjectToken_()) used ONLY in the Subject;
+ * `deadlineText` (the human "YY-MM-DD HH:mm TZ" form) continues to drive
+ * the body's deadline sentences, unchanged. Omitted, falls back to
+ * `deadlineText` itself (this function's own general reusability/backward
+ * compatibility) -- the live RPC always supplies both, derived from the
+ * SAME validated deadline.
+ *
+ * ADDON-009: `listTag` (required, deriveEmailExportListTag_()) replaces
+ * Legacy's constant FS_6G_MED in the subject, the default introduction and
+ * the file name ("<listTag>_<tdoc>.eml").
+ */
+function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag) {
+  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(meta.tdoc, meta.title, meta.agendaItem, subjectDeadlineToken || deadlineText, listTag);
+  const tableHtml = docTableToHtml_(table);
+  const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
+  const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
+  const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
+  const from = String(senderAddress || '').trim();
+  const eml = buildEmlContent_({ to: mailingList || '', from: from, subject: subject }, htmlBody);
+  const fileName = sanitizeEmailExportFilename_(listTag + '_' + meta.tdoc) + '.eml';
+  return { fileName: fileName, eml: eml, subject: subject };
+}
+
+/**
+ * LEGACY-UPGRADE-006: this stage's internal data model is a LIST OF
+ * GROUPS, where a group is one or more TDoc numbers that should share a
+ * single generated e-mail -- deliberately future-proofed for "multiple
+ * TDocs -> one combined discussion thread" (per this stage's own scope,
+ * the UI only ever sends single-TDoc groups today; a later stage can add
+ * a grouping UI without changing this function's contract). A group with
+ * more than one TDoc concatenates each table's HTML in sequence, in the
+ * order given, under one shared subject/intro/discussion/closing.
+ * ADDON-009: `listTag` as for buildEmailExportForTdocTable_().
+ */
+function buildEmailExportForGroup_(tables, metas, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag) {
+  const primary = metas[0];
+  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(primary.tdoc, primary.title, primary.agendaItem, subjectDeadlineToken || deadlineText, listTag);
+  const tableHtml = tables.map(function (t) { return docTableToHtml_(t); }).join('<br>');
+  const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
+  const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
+  const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
+  const from = String(senderAddress || '').trim();
+  const eml = buildEmlContent_({ to: mailingList || '', from: from, subject: subject }, htmlBody);
+  const fileNameBase = metas.length === 1 ? metas[0].tdoc : metas.map(function (m) { return m.tdoc; }).join('_');
+  const fileName = sanitizeEmailExportFilename_(listTag + '_' + fileNameBase) + '.eml';
+  return { fileName: fileName, eml: eml, subject: subject };
+}
+
+/**
+ * LEGACY-UPGRADE-006: finds (or creates, exactly once) the shared export
+ * folder by name. Never overwrites or otherwise touches any unrelated
+ * file; if the folder already exists, reuses it as-is.
+ */
+function ensureEmailExportDriveFolder_() {
+  const existing = DriveApp.getFoldersByName(EMAIL_EXPORT_DRIVE_FOLDER_NAME_);
+  if (existing.hasNext()) return existing.next();
+  return DriveApp.createFolder(EMAIL_EXPORT_DRIVE_FOLDER_NAME_);
+}
+
+/**
+ * LEGACY-UPGRADE-006D: deterministic, filesystem-safe ZIP filename for one
+ * export batch -- "FS_6G_MED_Discussion_Emails_YYYY-MM-DD_HHmm.zip", built
+ * from the EXPORT-GENERATION timestamp (`now`), never the discussion
+ * deadline (a completely different value with a completely different
+ * format). Uses the script's own time zone (Session.getScriptTimeZone()),
+ * never the caller's browser locale, so the name is never locale-
+ * dependent. Reuses sanitizeEmailExportFilename_() -- the SAME helper
+ * every individual .eml filename already goes through -- rather than a
+ * second, parallel sanitizer.
+ * ADDON-009: "<listTag>_Discussion_Emails_YYYY-MM-DD_HHmm.zip".
+ */
+function buildEmailExportZipFileName_(now, listTag) {
+  const tz = Session.getScriptTimeZone();
+  const stamp = Utilities.formatDate(now, tz, 'yyyy-MM-dd_HHmm');
+  return sanitizeEmailExportFilename_(listTag + '_Discussion_Emails_' + stamp) + '.zip';
+}
+
+/**
+ * LEGACY-UPGRADE-006: menu entry point -- "📧 EMAIL EXPORT" -> "Prepare
+ * TDoc Discussion E-mails". Read-only: scans the current document for
+ * TDoc tables and shows them in a selection dialog. Nothing is written
+ * (to the Doc, Drive, or Document Properties) until the dialog's own
+ * "Generate" action runs generateTdocDiscussionEmails() below.
+ */
+function prepareTdocDiscussionEmails() {
+  const ui = DocumentApp.getUi();
+  const body = DocumentApp.getActiveDocument().getBody();
+  const allDetected = detectTdocTablesInDocument_(body);
+  // ADDON-009: the dialog needs the list tag for its default introduction.
+  // A configuration problem is shown up front; Generate re-checks it and
+  // refuses (resolveEmailExportConfiguration_()) before writing anything.
+  let exportConfig = null;
+  let configError = null;
+  try {
+    exportConfig = resolveEmailExportConfiguration_();
+  } catch (e) {
+    configError = e.message;
+  }
+  const defaultIntroText = buildEmailExportDefaultIntroText_(exportConfig ? exportConfig.listTag : '');
+  // LEGACY-UPGRADE-006 (status-filter follow-up), extended by
+  // LEGACY-UPGRADE-006B (reserved-status hard exclusion): a TDoc that is
+  // already Approved/Agreed, OR reserved (no real content yet), is not
+  // offered for a new discussion -- simply omitted from the selectable
+  // list. Nothing about the source table/Status is ever changed;
+  // `allDetected` (including hard-excluded entries, with their real
+  // status) is only used for the summary counts below.
+  const tdocs = allDetected.filter(function (t) { return !t.excluded; });
+  const approvedAgreedCount = allDetected.filter(function (t) { return t.hardExclusionReason === 'approved-agreed'; }).length;
+  const reservedCount = allDetected.filter(function (t) { return t.hardExclusionReason === 'reserved'; }).length;
+
+  function esc(v) { return String(v === null || v === undefined ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  // LEGACY-UPGRADE-006B (status filter): the filter's own checkbox set is
+  // built from the ACTUALLY-DETECTED distinct status strings among the
+  // remaining (non-hard-excluded) TDocs -- never a hardcoded universal
+  // status list. A blank status is grouped under its own "(no status)"
+  // label rather than being hidden or merged into another value. This is
+  // a pure client-side VISIBILITY filter on top of the already-eligible
+  // list -- it can only narrow which of these rows are shown/selectable;
+  // it can never bring back an Approved/Agreed or reserved TDoc (those are
+  // never even present in `tdocs` to begin with).
+  const distinctStatuses = [];
+  tdocs.forEach(function (t) {
+    const label = t.status || '(no status)';
+    if (distinctStatuses.indexOf(label) === -1) distinctStatuses.push(label);
+  });
+  const statusFilterHtml = distinctStatuses.length <= 1 ? '' :
+    '<div class="hint" style="margin-top:10px;">Show status: ' +
+    distinctStatuses.map(function (s) {
+      return '<label style="margin-right:10px;font-weight:normal;">' +
+        '<input type="checkbox" class="statusPick" value="' + esc(s) + '" checked onchange="applyStatusFilter()"> ' + esc(s) + '</label>';
+    }).join('') +
+    '</div>';
+
+  // LEGACY-UPGRADE-006 correctness fix: data-idx must be the TDoc table's
+  // REAL position among body.getTables() (t.tableIndex) -- the earlier
+  // implementation used this loop's own index into the (already-filtered)
+  // `tdocs` array, which only happened to match when every table in the
+  // document was itself a TDoc table (never true once a summary/config
+  // table is also present).
+  // LEGACY-UPGRADE-006 (detection-fix follow-up): a TDoc number seen on
+  // more than one physical table is never silently merged -- each
+  // occurrence stays its own row, flagged so the user can judge which one
+  // (if either) is current before selecting it.
+  // LEGACY-UPGRADE-006 (canonical/read-only subject follow-up): the
+  // Subject is no longer an editable per-row field -- it is part of the
+  // machine-readable contract that lets a reflector reply be associated
+  // back with the right TDoc (ADDON-008A2 collector), so
+  // the user must not be able to accidentally change/remove the TDoc
+  // identifier, the Agenda Item prefix, or the canonical structure. The
+  // canonical Subject itself is generated server-side (see
+  // generateTdocDiscussionEmails() below), never taken from this UI.
+  // LEGACY-UPGRADE-006B (status column): a Status column is added purely
+  // for display/filtering -- the row's `data-status` attribute drives the
+  // client-side filter above; the Status value itself is never editable
+  // here and is always re-read fresh, server-side, at Generate time.
+  //
+  // LEGACY-UPGRADE-006B (Part G, per-row deadline): every eligible row also
+  // gets its OWN date/time/time-zone inputs, prefilled with this file's own
+  // default batch deadline (EMAIL_EXPORT_DEFAULT_DEADLINE_*_) so a row
+  // already has a valid deadline even if the user never touches the batch
+  // controls. A hard-excluded (Approved/Agreed/reserved) TDoc has no row at
+  // all here, so it structurally can never receive or export a deadline.
+  const timezoneOptionsHtml = EMAIL_EXPORT_SUPPORTED_TIMEZONES_.map(function (tz) {
+    return '<option value="' + esc(tz) + '"' + (tz === EMAIL_EXPORT_DEFAULT_DEADLINE_TZ_ ? ' selected' : '') + '>' + esc(tz) + '</option>';
+  }).join('');
+  const rowsHtml = tdocs.length === 0
+    ? ''
+    : tdocs.map(function (t) {
+      const dupNote = t.duplicateCount > 1 ? ' <span style="color:#a94442;">⚠ ' + t.duplicateCount + ' tables detected for this TDoc</span>' : '';
+      const statusLabel = t.status || '(no status)';
+      return '<tr class="tdocRow" data-status="' + esc(statusLabel) + '">' +
+        '<td><input type="checkbox" class="tdocPick" data-idx="' + t.tableIndex + '"></td>' +
+        '<td>' + esc(t.tdoc) + dupNote + '</td>' +
+        '<td>' + esc(t.title) + '</td>' +
+        '<td>' + esc(t.source) + '</td>' +
+        '<td>' + esc(t.agendaItem) + '</td>' +
+        '<td>' + esc(t.status) + '</td>' +
+        '<td style="white-space:nowrap;">' +
+          '<input type="date" class="deadlineDate" data-idx="' + t.tableIndex + '" value="' + esc(EMAIL_EXPORT_DEFAULT_DEADLINE_DATE_) + '" style="width:112px;"> ' +
+          '<input type="time" class="deadlineTime" data-idx="' + t.tableIndex + '" value="' + esc(EMAIL_EXPORT_DEFAULT_DEADLINE_TIME_) + '" style="width:78px;"> ' +
+          '<select class="deadlineTz" data-idx="' + t.tableIndex + '">' + timezoneOptionsHtml + '</select>' +
+        '</td>' +
+        '</tr>';
+    }).join('');
+
+  let summaryHtml;
+  if (allDetected.length === 0) {
+    summaryHtml = '<p>No TDoc tables were found in this document.</p>';
+  } else if (tdocs.length === 0) {
+    // LEGACY-UPGRADE-006 (status-filter follow-up) wording preserved
+    // verbatim for the pure Approved/Agreed case; LEGACY-UPGRADE-006B
+    // (reserved-status hard exclusion) extends it only when a reserved
+    // TDoc is ALSO present, never changing the original phrase's meaning.
+    summaryHtml = reservedCount > 0 && approvedAgreedCount === 0
+      ? '<p>All ' + allDetected.length + ' detected TDoc(s) are reserved/unavailable — nothing is currently available for a new discussion.</p>'
+      : reservedCount > 0
+        ? '<p>All ' + allDetected.length + ' detected TDoc(s) are already Approved/Agreed or reserved — nothing is currently available for a new discussion.</p>'
+        : '<p>All ' + allDetected.length + ' detected TDoc(s) are already Approved/Agreed — nothing is currently available for a new discussion.</p>';
+  } else {
+    summaryHtml = '<p>' + tdocs.length + ' TDoc' + (tdocs.length === 1 ? '' : 's') + ' available for discussion' +
+      (approvedAgreedCount > 0 ? '<br>' + approvedAgreedCount + ' TDoc' + (approvedAgreedCount === 1 ? '' : 's') + ' excluded by status (Approved/Agreed)' : '') +
+      (reservedCount > 0 ? '<br>' + reservedCount + ' TDoc' + (reservedCount === 1 ? '' : 's') + ' reserved/unavailable' : '') +
+      '</p>';
+  }
+
+  const tableHtml = tdocs.length === 0 ? '' :
+    '<table>' +
+    '<tr><th></th><th>TDoc</th><th>Title</th><th>Source</th><th>Agenda Item</th><th>Status</th><th>Deadline (date / time / TZ)</th></tr>' +
+    rowsHtml +
+    '</table>';
+
+  // LEGACY-UPGRADE-006B (Part G, batch deadline controls): a single
+  // date/time/time-zone set the user can apply, in bulk, to either the
+  // currently-selected rows or every currently-visible (not filtered out)
+  // eligible row -- never to a hard-excluded TDoc, since those have no row
+  // to apply to in the first place. Initialized to the same
+  // EMAIL_EXPORT_DEFAULT_DEADLINE_*_ constants as every individual row.
+  const batchDeadlineHtml = tdocs.length === 0 ? '' :
+    '<div class="hint" style="margin-top:10px;">' +
+    '<b>Batch deadline:</b> ' +
+    'Date <input type="date" id="batchDate" value="' + esc(EMAIL_EXPORT_DEFAULT_DEADLINE_DATE_) + '"> ' +
+    'Time <input type="time" id="batchTime" value="' + esc(EMAIL_EXPORT_DEFAULT_DEADLINE_TIME_) + '"> ' +
+    'TZ <select id="batchTz">' + timezoneOptionsHtml + '</select> ' +
+    '<button type="button" onclick="applyDeadlineToSelected()">Apply to selected</button> ' +
+    '<button type="button" onclick="applyDeadlineToVisible()">Apply to all visible/eligible</button>' +
+    '</div>';
+
+  // LEGACY-UPGRADE-006B (bulk text controls): these two text areas are
+  // GLOBAL -- one Introduction and one Discussion-request value apply to
+  // EVERY e-mail generated by this one dialog operation, never per-row.
+  // Prefilled with this file's own default wording (single source of
+  // truth: buildEmailExportDefaultIntroText_()/EMAIL_EXPORT_DEFAULT_DISCUSSION_TEXT_)
+  // so the dialog always reverts to the same defaults on reopen -- nothing
+  // here is read from or written to Document Properties or any other
+  // storage. Plain text only: the server converts it to safe HTML
+  // (plainTextToSafeHtmlParagraphs_(), escaping every character) at
+  // Generate time, so arbitrary typed text (including "<"/"&"/quotes)
+  // can never inject markup into the generated e-mail. The canonical,
+  // machine-readable Subject is a completely separate mechanism and is
+  // NOT affected by, and has no input field alongside, this text.
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 16px; font-size: 13px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+      th, td { border: 1px solid #ccc; padding: 6px; text-align: left; font-size: 12px; }
+      th { background: #f5f5f5; }
+      tr.tdocRow.hiddenByFilter { display: none; }
+      button { margin-top: 16px; padding: 8px 16px; background: #4285f4; color: white; border: none; cursor: pointer; }
+      button:disabled { background: #999; }
+      #status { margin-top: 10px; font-size: 12px; }
+      #results a { display: block; margin-top: 4px; }
+      .hint { font-size: 11px; color: #666; margin-top: 6px; }
+      #summary { font-size: 13px; margin-top: 4px; }
+      textarea { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 12px; margin-top: 4px; }
+      label.fieldLabel { display: block; margin-top: 12px; font-weight: bold; }
+    </style>
+    <h2>📧 Prepare TDoc Discussion E-mails</h2>
+    <div class="hint">Read-only: this only creates new .eml files in Drive ("${EMAIL_EXPORT_DRIVE_FOLDER_NAME_}"). It never modifies this report, never sends any e-mail.</div>
+    ${exportConfig
+      ? '<div class="hint">From: <b>' + esc(exportConfig.senderAddress) + '</b> &nbsp; To: <b>' + esc(exportConfig.recipientAddress) + '</b></div>'
+      : '<p style="color:#a94442;">❌ ' + esc(configError) + '</p>'}
+    <label class="fieldLabel" for="introText">Introduction (applies to all selected e-mails)</label>
+    <textarea id="introText" rows="5">${esc(defaultIntroText)}</textarea>
+    <label class="fieldLabel" for="discussionText">Discussion request (applies to all selected e-mails)</label>
+    <textarea id="discussionText" rows="5">${esc(EMAIL_EXPORT_DEFAULT_DISCUSSION_TEXT_)}</textarea>
+    <div id="summary">${summaryHtml}</div>
+    ${statusFilterHtml}
+    ${batchDeadlineHtml}
+    ${tableHtml}
+    <button id="genBtn" onclick="generate()" ${tdocs.length === 0 ? 'disabled' : ''}>Generate selected (one e-mail per TDoc)</button>
+    <div id="status"></div>
+    <div id="results"></div>
+    <script>
+      function applyStatusFilter() {
+        const checked = Array.prototype.slice.call(document.querySelectorAll('.statusPick:checked')).map(function (b) { return b.value; });
+        Array.prototype.slice.call(document.querySelectorAll('.tdocRow')).forEach(function (row) {
+          const visible = checked.indexOf(row.getAttribute('data-status')) !== -1;
+          row.classList.toggle('hiddenByFilter', !visible);
+          if (!visible) {
+            const box = row.querySelector('.tdocPick');
+            if (box) box.checked = false;
+          }
+        });
+      }
+      // LEGACY-UPGRADE-006B (Part G, batch deadline): copies the batch
+      // date/time/TZ controls into each given row's OWN per-row inputs --
+      // this is purely a convenience that pre-fills the per-row fields the
+      // server will actually read at Generate time; it never bypasses
+      // server-side validation (validateEmailExportDeadline_()).
+      function applyDeadlineToRows(rows) {
+        const d = document.getElementById('batchDate').value;
+        const t = document.getElementById('batchTime').value;
+        const tz = document.getElementById('batchTz').value;
+        rows.forEach(function (row) {
+          const dateInput = row.querySelector('.deadlineDate');
+          const timeInput = row.querySelector('.deadlineTime');
+          const tzSelect = row.querySelector('.deadlineTz');
+          if (dateInput) dateInput.value = d;
+          if (timeInput) timeInput.value = t;
+          if (tzSelect) tzSelect.value = tz;
+        });
+      }
+      function applyDeadlineToSelected() {
+        const rows = Array.prototype.slice.call(document.querySelectorAll('.tdocRow:not(.hiddenByFilter)')).filter(function (row) {
+          const box = row.querySelector('.tdocPick');
+          return box && box.checked;
+        });
+        applyDeadlineToRows(rows);
+      }
+      function applyDeadlineToVisible() {
+        applyDeadlineToRows(Array.prototype.slice.call(document.querySelectorAll('.tdocRow:not(.hiddenByFilter)')));
+      }
+      function generate() {
+        // LEGACY-UPGRADE-006B (status filter): only a CURRENTLY VISIBLE
+        // (not filtered out) AND checked row is collected -- a row hidden
+        // by the status filter is also force-unchecked above, so this
+        // check is defense-in-depth, not the only guard.
+        const boxes = Array.prototype.slice.call(document.querySelectorAll('.tdocRow:not(.hiddenByFilter) .tdocPick:checked'));
+        if (boxes.length === 0) { document.getElementById('status').textContent = 'Select at least one TDoc.'; return; }
+        // LEGACY-UPGRADE-006 (canonical/read-only subject follow-up): no
+        // subject is collected here -- the canonical Subject is always
+        // generated server-side from the selected TDoc's own table data.
+        // LEGACY-UPGRADE-006B (Part G/H, deadline): each selection carries
+        // its OWN row's current date/time/TZ inputs -- the server re-
+        // validates every one of these regardless (validateEmailExportDeadline_()).
+        const selections = boxes.map(function (b) {
+          const row = b.closest('tr');
+          return {
+            tableIndex: parseInt(b.getAttribute('data-idx'), 10),
+            deadline: {
+              date: row.querySelector('.deadlineDate').value,
+              time: row.querySelector('.deadlineTime').value,
+              tz: row.querySelector('.deadlineTz').value
+            }
+          };
+        });
+        // LEGACY-UPGRADE-006B (bulk text controls): the SAME two global
+        // values are sent alongside every selection in this one call.
+        const globalText = {
+          introText: document.getElementById('introText').value,
+          discussionText: document.getElementById('discussionText').value
+        };
+        document.getElementById('genBtn').disabled = true;
+        document.getElementById('status').textContent = 'Generating\\u2026';
+        google.script.run
+          .withSuccessHandler(function (result) {
+            document.getElementById('genBtn').disabled = false;
+            document.getElementById('status').textContent = result.ok ? ('\\u2705 ' + result.files.length + ' discussion e-mail(s) generated.') : ('\\u274C ' + result.error);
+            const resultsBox = document.getElementById('results');
+            resultsBox.innerHTML = '';
+            // LEGACY-UPGRADE-006D (ZIP archive): shown first, above the
+            // individual-file links, so it is the most visible result.
+            if (result.ok && result.zip) {
+              const zipP = document.createElement('p');
+              zipP.innerHTML = 'ZIP archive: <b>' + result.zip.fileName + '</b>';
+              resultsBox.appendChild(zipP);
+              const zipA = document.createElement('a');
+              zipA.href = result.zip.url; zipA.target = '_blank'; zipA.textContent = 'Open ZIP in Drive';
+              resultsBox.appendChild(zipA);
+              const indivP = document.createElement('p');
+              indivP.className = 'hint';
+              indivP.textContent = 'Individual .eml files are also available in the same Drive folder:';
+              resultsBox.appendChild(indivP);
+            } else if (result.ok && result.zipError) {
+              const warn = document.createElement('p');
+              warn.style.color = '#a94442';
+              warn.textContent = '\\u26A0 ' + result.zipError;
+              resultsBox.appendChild(warn);
+            }
+            (result.files || []).forEach(function (f) {
+              const a = document.createElement('a');
+              a.href = f.url; a.target = '_blank'; a.textContent = f.fileName;
+              resultsBox.appendChild(a);
+            });
+          })
+          .withFailureHandler(function (error) {
+            document.getElementById('genBtn').disabled = false;
+            document.getElementById('status').textContent = '\\u274C ' + error;
+          })
+          .generateTdocDiscussionEmails(selections, globalText);
+      }
+    </script>
+  `).setWidth(820).setHeight(720);
+
+  ui.showModalDialog(html, 'Prepare TDoc Discussion E-mails');
+}
+
+/**
+ * ADDON-009: the export's configuration, resolved fresh and validated as a
+ * whole -- Legacy's generateTdocDiscussionEmails() preflight, moved into one
+ * function so the dialog can show it and Generate re-checks it. Throws the
+ * Legacy error message for the first problem found:
+ *
+ *   - senderAddress (From): DISCUSSION_EMAIL_SENDER, never derived;
+ *   - recipientAddress (To): the meeting-context mailing list
+ *     (getMeetingContext_().sources.mailingList -- an ad-hoc meeting's saved
+ *     MAILING_LIST, else the report-family list; main meetings unchanged),
+ *     through deriveEmailExportRecipientFromMailingList_(). An invalid saved
+ *     list is refused, never swapped for another list;
+ *   - listTag: deriveEmailExportListTag_() of that recipient;
+ *   - revisionUploadUrl: getMeetingContext_().sources.revisionsUrl.
+ */
+function resolveEmailExportConfiguration_() {
+  const senderAddress = resolveEmailExportSenderAddress_();
+  if (!isValidEmailExportSenderAddress_(senderAddress)) {
+    throw new Error('Discussion E-mail Sender is not configured or is invalid. Open Configure Meeting Settings (E-mail Configuration) and set the Discussion E-mail Sender before generating discussion e-mails.');
+  }
+  const mailingList = String(getMeetingContext_().sources.mailingList || '').trim();
+  const recipientDerivation = deriveEmailExportRecipientFromMailingList_(mailingList);
+  if (!recipientDerivation.valid || !isValidEmailExportSenderAddress_(recipientDerivation.recipient)) {
+    throw new Error((recipientDerivation.error || 'Could not derive a discussion recipient from the configured Mailing List.') + ' Open Configure Meeting Settings and set the Mailing List before generating discussion e-mails.');
+  }
+  const recipientAddress = recipientDerivation.recipient;
+  const listTag = deriveEmailExportListTag_(recipientAddress, getReportConfig_().DRAFTS_FOLDER);
+  if (!listTag) {
+    throw new Error('Could not derive the discussion subject tag from the Mailing List "' + mailingList + '".');
+  }
+  const revisionUploadUrl = resolveEmailExportRevisionUploadUrl_();
+  if (!isSafeEmailExportUrl_(revisionUploadUrl)) {
+    throw new Error('Revision upload location is not configured or is invalid (checked getMeetingContext_().sources.revisionsUrl / REVISIONS_URL) -- cannot generate discussion e-mails without a real upload destination.');
+  }
+  return { senderAddress: senderAddress, recipientAddress: recipientAddress, listTag: listTag, revisionUploadUrl: revisionUploadUrl };
+}
+
+/**
+ * LEGACY-UPGRADE-006: the dialog's "Generate" RPC. `selections` is
+ * [{ tableIndex }, ...] -- one group per selected TDoc for this stage
+ * (see buildEmailExportForGroup_()'s own header comment for the
+ * forward-compatible group data model). Re-scans the document fresh
+ * (never trusts stale client-side data for the actual table content, only
+ * for which index was picked) so the exported content is always the
+ * document's current state. Read-only against the Doc; READS the
+ * configured mailing list from Document Properties, WRITES only new files
+ * into the dedicated Drive export folder.
+ *
+ * LEGACY-UPGRADE-006 (canonical/read-only subject follow-up): the Subject
+ * is part of the machine-readable contract that associates a reflector
+ * reply back with the right TDoc (the ADDON-008A2 collector),
+ * so it is ALWAYS generated here, server-side, from the freshly-read
+ * tdoc/title/agendaItem -- an `sel.subject` field is never read even if a
+ * caller supplies one (removing the UI input alone would not be enough;
+ * this is the actual enforcement point). This is deliberately NOT the
+ * same as buildEmailExportForTdocTable_()/buildEmailExportForGroup_()'s
+ * own optional subjectOverride parameter (kept there for those functions'
+ * general reusability/testability) -- this RPC simply never passes one.
+ *
+ * LEGACY-UPGRADE-006B (bulk text controls): `globalText`, if supplied, is
+ * `{ introText, discussionText }` -- plain text from the dialog's two
+ * GLOBAL text areas, applied identically to EVERY e-mail generated in this
+ * one call (never per-TDoc). Omitted/blank fields fall back to this file's
+ * own default wording exactly as before this stage. Never persisted
+ * anywhere (not Document Properties, not any other storage) -- it lives
+ * only for the duration of this single RPC call.
+ *
+ * LEGACY-UPGRADE-006B (reserved-status hard exclusion): the server-side
+ * re-check below now also rejects a "reserved" TDoc (isEmailExportReserved_()),
+ * with the exact same defense-in-depth reasoning as the pre-existing
+ * Approved/Agreed re-check -- the dialog never offers one as selectable,
+ * but a tampered/direct RPC call must still be refused.
+ *
+ * LEGACY-UPGRADE-006B (Part H, deadline validation): each selection may
+ * carry its own `deadline: {date, time, tz}` -- intentionally client-
+ * supplied (the user sets/overrides it in the dialog), but NEVER trusted
+ * blindly: validateEmailExportDeadline_() re-checks it here regardless of
+ * what the dialog already validated client-side. A selection with no
+ * deadline, or one that fails validation (bad calendar date, non-24h time,
+ * unsupported time zone), is refused with a clear, actionable error naming
+ * the TDoc and the problem -- no email is generated for it, and (matching
+ * this RPC's existing defense-in-depth behavior for an excluded TDoc in a
+ * mixed batch) no email is generated for any OTHER TDoc in the same call
+ * either, rather than silently partially succeeding.
+ *
+ * LEGACY-UPGRADE-006C (revision-upload instruction): the revision-upload
+ * URL is resolved ONCE here, fresh, from trusted meeting configuration
+ * (resolveEmailExportRevisionUploadUrl_() -- getMeetingContext_().sources.revisionsUrl,
+ * the SAME source scanRevisionsFolder_()/"Test All Connections" already
+ * use) -- it is the SAME destination for every TDoc in this call, never
+ * per-selection, and is NEVER read from `selections` or `globalText` (no
+ * client-supplied revision URL is ever accepted). If it cannot be resolved
+ * to a safe http(s) URL, the WHOLE request is refused up front, before any
+ * table is even inspected -- this Discussion workflow always expects a
+ * real revision-upload destination to exist, so a missing one blocks
+ * generation with an actionable error rather than producing an e-mail with
+ * a misleading or absent upload instruction.
+ *
+ * LEGACY-UPGRADE-006D (ZIP archive): after every selected TDoc's .eml has
+ * been individually created exactly as before, this ALSO bundles the SAME
+ * in-memory blobs from THIS run (never a Drive-folder rescan, so an older
+ * .eml or a previous run's ZIP can never be included) into one ZIP archive
+ * via the native Utilities.zip() -- no external dependency. The ZIP is
+ * purely additive convenience output: every individual .eml is still
+ * created in the same Drive folder exactly as before this stage. If any
+ * validation/generation step above throws, nothing (no .eml, no ZIP) is
+ * created, unchanged from before. If ZIP creation itself fails AFTER the
+ * individual .eml files already succeeded, those files are NOT rolled
+ * back or deleted -- the response still reports `ok: true` and the
+ * created `files`, with `zip: null` and a `zipError` explaining that the
+ * individual files exist but the archive could not be created.
+ *
+ * LEGACY-UPGRADE-006H (corrects 006F/006G's mistaken merge of sender and
+ * recipient into one address): TWO INDEPENDENT values are resolved here,
+ * fresh, before any table is even inspected --
+ *
+ *   - `senderAddress` (From): resolveEmailExportSenderAddress_() reads the
+ *     explicitly configured DISCUSSION_EMAIL_SENDER Document Property,
+ *     then a final isValidEmailExportSenderAddress_() sanity gate. NEVER
+ *     derived from Mailing List, NEVER from
+ *     Session.getActiveUser()/getEffectiveUser(), NEVER from
+ *     `selections`/`globalText` (a client-supplied
+ *     `from`/`sender`/`discussionEmailSender` field is simply never read).
+ *   - `recipientAddress` (To): deriveEmailExportRecipientFromMailingList_()
+ *     derives the reflector address from the meeting-context mailing
+ *     list (ADDON-009; Legacy: the MAILING_LIST Document Property),
+ *     then the SAME isValidEmailExportSenderAddress_() sanity gate. NEVER the same value as the sender, NEVER itself
+ *     independently configured, and NEVER from client-supplied request
+ *     data (a `to`/`recipient`/`mailingList` field is simply never read).
+ *
+ * If EITHER is missing or invalid, the WHOLE request is refused up front
+ * with a clear, actionable error naming which one (Discussion E-mail
+ * Sender vs. Mailing List) and pointing at Configure Meeting Settings --
+ * this blocks ONLY Discussion Email Export, never report build/Continuous
+ * Update/general meeting readiness, which never call this function or
+ * read either property this way.
+ */
+function generateTdocDiscussionEmails(selections, globalText) {
+  try {
+    const exportConfig = resolveEmailExportConfiguration_();
+    if (!Array.isArray(selections) || selections.length === 0) {
+      throw new Error('Select at least one TDoc.');
+    }
+    const body = DocumentApp.getActiveDocument().getBody();
+    const tables = body.getTables();
+    const introText = globalText && globalText.introText;
+    const discussionText = globalText && globalText.discussionText;
+
+    // ADDON-009: every selection is validated and its e-mail built in
+    // memory first; nothing is written to Drive unless all of them succeed
+    // (Legacy created each file inside this loop, so a later refusal left
+    // the earlier files behind).
+    const built = selections.map(function (sel) {
+      const table = tables[sel.tableIndex];
+      if (!table || !isTDocTable_(table)) {
+        throw new Error('Selected table is no longer a valid TDoc table (index ' + sel.tableIndex + ').');
+      }
+      const tdocCell = safeCellText_(table, 0, 1).trim();
+      const parsedTdoc = parseExactSA4DocumentId_(tdocCell);
+      if (!parsedTdoc.isValid) {
+        throw new Error('Selected table (index ' + sel.tableIndex + ') does not hold a recognized SA4 TDoc number: "' + tdocCell + '".');
+      }
+      const meta = {
+        tdoc: parsedTdoc.raw,
+        title: findCellText_(table, 'Title').trim(),
+        // LEGACY-UPGRADE-006 (canonical subject + agenda-item follow-up):
+        // read fresh from the CURRENT table, exactly like tdoc/title/status
+        // above -- never taken from stale client-side data.
+        agendaItem: findCellText_(table, 'Agenda Item').trim()
+      };
+      // LEGACY-UPGRADE-006 (status-filter follow-up): defensive server-side
+      // re-check -- the dialog never offers an excluded TDoc as selectable,
+      // but this re-verifies against the table's CURRENT status regardless
+      // of what the client actually sent, so an excluded TDoc can never
+      // enter an export (single or grouped) through this RPC either.
+      const currentStatus = findCellText_(table, 'Status').trim();
+      if (isEmailExportReserved_(currentStatus)) {
+        throw new Error(meta.tdoc + ' is reserved (no content submitted yet) and is excluded from discussion e-mail export.');
+      }
+      if (isEmailExportStatusExcluded_(currentStatus)) {
+        throw new Error(meta.tdoc + ' is already ' + currentStatus + ' and is excluded from discussion e-mail export.');
+      }
+      const deadlineValidation = validateEmailExportDeadline_(sel.deadline);
+      if (!deadlineValidation.valid) {
+        throw new Error(meta.tdoc + ': ' + deadlineValidation.error);
+      }
+      const deadlineText = formatEmailExportDeadline_(deadlineValidation);
+      const subjectDeadlineToken = formatEmailExportDeadlineForSubjectToken_(deadlineValidation);
+      // LEGACY-UPGRADE-006H: To (recipientAddress, derived from the Mailing
+      // List) and From (senderAddress, configured DISCUSSION_EMAIL_SENDER)
+      // are DELIBERATELY DIFFERENT values.
+      const email = buildEmailExportForTdocTable_(table, meta, exportConfig.recipientAddress, null, introText, discussionText, deadlineText, exportConfig.revisionUploadUrl, exportConfig.senderAddress, subjectDeadlineToken, exportConfig.listTag); // no subjectOverride: always canonical
+      return { tdoc: meta.tdoc, fileName: email.fileName, eml: email.eml };
+    });
+
+    const folder = ensureEmailExportDriveFolder_();
+    const blobsForZip = [];
+    const files = built.map(function (email) {
+      // LEGACY-UPGRADE-006D: the SAME blob is used for the individual file
+      // AND, below, as this run's own ZIP member -- never regenerated or
+      // re-derived, so the ZIP's content is byte-identical to the
+      // individual .eml.
+      const blob = Utilities.newBlob(email.eml, 'message/rfc822', email.fileName);
+      const file = folder.createFile(blob);
+      blobsForZip.push(blob);
+      return { tdoc: email.tdoc, fileName: email.fileName, url: file.getUrl() };
+    });
+
+    let zip = null;
+    let zipError = null;
+    if (blobsForZip.length > 0) {
+      try {
+        const zipFileName = buildEmailExportZipFileName_(new Date(), exportConfig.listTag);
+        const zipBlob = Utilities.zip(blobsForZip, zipFileName);
+        const zipFile = folder.createFile(zipBlob);
+        zip = { fileName: zipFileName, url: zipFile.getUrl() };
+      } catch (zipEx) {
+        zipError = 'Individual .eml files were created successfully, but the ZIP archive could not be created: ' + zipEx.message;
+      }
+    }
+
+    return { ok: true, files: files, error: null, zip: zip, zipError: zipError };
+  } catch (e) {
+    return { ok: false, files: [], error: e.message, zip: null, zipError: null };
+  }
 }
