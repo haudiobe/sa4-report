@@ -31,7 +31,15 @@ function makeFakeDocumentBody(sandbox) {
   function makeTable(rowsData) {
     const rows = [];
     function makeCell(text) {
-      const c = { _t: String(text), getText: () => c._t, setText: (v) => { c._t = String(v); return c; }, editAsText: () => ({ setLinkUrl() {} }) };
+      const c = { _t: String(text), getText: () => c._t, setText: (v) => { c._t = String(v); return c; } };
+      // ADDON-008A2: a minimal Text element over the cell's text (the e-mail
+      // collector appends and styles text in place); styling is a no-op.
+      const te = {
+        getText: () => c._t,
+        appendText: (v) => { c._t += String(v); return te; },
+        setLinkUrl: () => te, setFontSize: () => te, setForegroundColor: () => te, setBold: () => te
+      };
+      c.editAsText = () => te;
       return c;
     }
     function makeRow(cellTexts) {
@@ -47,6 +55,7 @@ function makeFakeDocumentBody(sandbox) {
       getNumRows: () => rows.length, getRow: (i) => rows[i],
       getCell: (r, c) => rows[r].getCell(c),
       appendTableRow: () => { const r = makeRow([]); rows.push(r); return r; },
+      insertTableRow: (i) => { const r = makeRow([]); rows.splice(i, 0, r); return r; },
       removeRow: (i) => { rows.splice(i, 1); },
       getParent: () => (children.indexOf(t) !== -1 ? body : null),
       removeFromParent: () => { const i = children.indexOf(t); if (i !== -1) children.splice(i, 1); return t; },

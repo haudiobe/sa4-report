@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.14.2 (2026-09-30)
+ * Version: 2.14.3 (2026-09-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,20 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.14.3 (2026-09-30)
+ *   - Fixed (ADDON-008A2): incoming e-mail was never associated with ad-hoc
+ *     TDocs. checkRSSFeed_() now identifies report tables with the
+ *     registered SA4 families (parseExactSA4DocumentId_) instead of the
+ *     legacy '^S4-\d{6}$' TDOC_ID_REGEX default, and associates a message
+ *     with every recognized full identifier anywhere in its subject
+ *     (findSA4DocumentIdsInText_, canonical, revision suffix -> base), so
+ *     e.g. '[ AMD_ARCH_Ph2-MED] S4aI260082 26501-CR0124-B "..."' now
+ *     matches S4aI260082. Only a subject without any full identifier falls
+ *     back to the legacy short-number parse, and only for main-meeting S4-
+ *     tables (a bare "082" no longer reaches S4aI260082/S4aA260082).
+ *   - Fixed (ADDON-008A2): the collector reads the configured list -- an
+ *     ad-hoc meeting's saved MAILING_LIST override (validated as a list
+ *     name), else the report-family list; main meetings unchanged.
  * 2.14.2 (2026-09-30)
  *   - Fixed (ADDON-008A1b): saved Document Reallocations were lost by a
  *     full rebuild -- the build cleared the document before reading the
@@ -2857,7 +2871,41 @@ function getCollectorConfig_(context) {
   if (!cfg.TDOC_ID_REGEX) cfg.TDOC_ID_REGEX = '^S4-\\d{6}$';
   if (!cfg.EMAIL_START_DATE) cfg.EMAIL_START_DATE = '2026-08-21';
 
+  // ADDON-008A2: read the list the report is configured for -- the same
+  // precedence getMeetingContext_() already applies (an ad-hoc meeting's
+  // saved MAILING_LIST override, else the report-family list; main meetings
+  // keep the family list) -- instead of always the family list. A Collector
+  // Configuration table's own LIST_NAME/RSS_URL_V2 still wins, as before.
+  if (!collectorTableConfig.LIST_NAME && !collectorTableConfig.RSS_URL_V2) {
+    const listName = resolveCollectorListName_(context, reportConfig.LIST_NAME);
+    if (listName !== cfg.LIST_NAME) {
+      cfg.LIST_NAME = listName;
+      cfg.RSS_URL_V2 = `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=2.0&LIMIT=2000`;
+      cfg.RSS_URL_V1 = `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=1.0&LIMIT=2000`;
+    }
+  }
+
   return cfg;
+}
+
+/** ADDON-008A2: an ETSI list name as used in list.etsi.org URLs (e.g. 3GPP_TSG_SA_WG4_MBS). */
+function isValidEtsiListName_(name) {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/.test(String(name === null || name === undefined ? '' : name));
+}
+
+/**
+ * ADDON-008A2: the mailing list the collector reads. A configured value that
+ * is not a plain list name (spaces, an e-mail address, a URL...) is not
+ * used: the family list is read instead and the rejection is logged.
+ */
+function resolveCollectorListName_(context, familyListName) {
+  const configured = String(getMeetingContext_(context).sources.mailingList || '').trim();
+  if (!configured || configured === familyListName) return familyListName;
+  if (!isValidEtsiListName_(configured)) {
+    Logger.log('Ignoring configured mailing list "' + configured + '" (not a valid list name); reading ' + familyListName);
+    return familyListName;
+  }
+  return configured;
 }
 
 function ensureCollectorConfigTable_() {
@@ -4186,29 +4234,49 @@ function checkRSSFeed_(cfg, context) {
   // Deadlines extended verbally / by e-mail, keyed by TDOC.
   const extensions = getDeadlineExtensionMap_(context);
 
+  // ADDON-008A2: what each message is about, worked out once per message.
+  // A subject naming any recognized full SA4 identifier is associated with
+  // exactly those documents, whatever its layout (no bracket format or
+  // agenda item required). Only a subject with no full identifier falls back
+  // to the legacy short-number parse -- and only for main-meeting S4- tables,
+  // since a bare "082" cannot tell S4aI260082 from S4aA260082.
+  const msgKeys = msgs.map(m => {
+    if (!m || !m.title) return null;
+    const ids = findSA4DocumentIdsInText_(stripReplyPrefixes_(m.title));
+    return { ids: ids, legacy: ids.length ? null : parseEmailSubject_(m.title) };
+  });
+
   const mailProcessingStart = Date.now();
   tables.forEach(t => {
     if (!isTDocTable_(t)) return;
 
+    // ADDON-008A2: the registered SA4 families (all ad-hoc series too), not
+    // the legacy cfg.TDOC_ID_REGEX default '^S4-\d{6}$' that skipped every
+    // ad-hoc TDoc table -- the same migration PROD-017 made for revisions.
     const tdocRaw = String(safeCellText_(t, 0, 1) || '').trim();
-    const tdoc = extractTdocId_(tdocRaw, cfg.TDOC_ID_REGEX);
+    const tdocParsed = parseExactSA4DocumentId_(tdocRaw);
+    if (!tdocParsed.isValid) return;
+    const tdoc = tdocParsed.raw;
     const short = computeShortNumber_(tdoc);
-    if (!tdoc || !short) return;
+    const shortNumberMatchAllowed = tdocParsed.familyKey === 'main';
 
     const storeKey = 'DISCUSS_' + tdoc;
     const store = loadJsonObject_(props.getProperty(storeKey));
 
     let added = 0;
 
-    msgs.forEach(m => {
-      if (!m || !m.title) return;
-      
-      // Parse email subject to extract TDoc number and deadline
-      const parsed = parseEmailSubject_(m.title);
-      if (!parsed || !parsed.tdocShort) return;
-      
+    msgs.forEach((m, msgIndex) => {
+      const keys = msgKeys[msgIndex];
+      if (!keys) return;
+
       // Check if this email is for our TDoc
-      if (parsed.tdocShort !== short && parsed.tdocFull !== tdoc) return;
+      if (keys.ids.length > 0) {
+        if (keys.ids.indexOf(tdoc) === -1) return;
+      } else {
+        const parsed = keys.legacy;
+        if (!shortNumberMatchAllowed || !parsed || !parsed.tdocShort) return;
+        if (parsed.tdocShort !== short && parsed.tdocFull !== tdoc) return;
+      }
       
       // Use author+formatted date as the primary deduplication key to prevent duplicates
       // from RSS and A1 archives with different messageIds and different raw date formats
@@ -4893,6 +4961,34 @@ function parseSA4DocumentId_(value) {
  */
 function parseExactSA4DocumentId_(value) {
   return matchSA4DocumentId_(value, true);
+}
+
+/**
+ * ADDON-008A2: EVERY recognized SA4 document identifier in free text (e.g.
+ * an e-mail subject), canonical spelling, deduplicated, in order of first
+ * appearance. Same SA4_TDOC_FAMILIES bodies and canonicalization as
+ * matchSA4DocumentId_(), scanned globally with boundaries on both sides:
+ * the identifier may not continue a word ("XS4aI260082") or run into
+ * further letters/digits -- except a revision suffix, which maps to the
+ * base document exactly as parseSA4DocumentId_() does ("S4aI260082r1" ->
+ * S4aI260082). Nothing is guessed: an unregistered prefix or a look-alike
+ * letter ("S4al260064") is not an identifier.
+ */
+function findSA4DocumentIdsInText_(text) {
+  const src = String(text === null || text === undefined ? '' : text);
+  const hits = [];
+  SA4_TDOC_FAMILIES.forEach(function (fam) {
+    const re = new RegExp('(?:^|[^A-Za-z0-9])' + fam.body + '(?=$|[^A-Za-z0-9]|r\\d)', 'gi');
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      hits.push({ index: m.index, id: fam.prefix + m[1] });
+      re.lastIndex = m.index + m[0].length;
+    }
+  });
+  hits.sort(function (a, b) { return a.index - b.index; });
+  const ids = [];
+  hits.forEach(function (h) { if (ids.indexOf(h.id) === -1) ids.push(h.id); });
+  return ids;
 }
 
 /**
