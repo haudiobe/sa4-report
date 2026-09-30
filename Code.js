@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.14.1 (2026-09-30)
+ * Version: 2.14.2 (2026-09-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,20 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.14.2 (2026-09-30)
+ *   - Fixed (ADDON-008A1b): saved Document Reallocations were lost by a
+ *     full rebuild -- the build cleared the document before reading the
+ *     reallocation table and never recreated it. The build now reads them
+ *     first and treats them as report overrides: each TDoc's effective
+ *     allocation (reallocation, else source) decides the agenda.csv
+ *     sections and where the TDoc is placed; removed/withdrawn/n/a TDocs are
+ *     not placed and never cause a section. Agenda parsing, the TDoc
+ *     download and the reallocation check now run before the document is
+ *     cleared, so an unusable destination refuses the build with the
+ *     report unchanged. The table is restored after the rebuild. One shared
+ *     interpretation (interpretReallocationTarget_) serves the build, the
+ *     TDoc grouping and Apply Document Reallocations; Apply leaves a table
+ *     that is already under its destination heading in place.
  * 2.14.1 (2026-09-30)
  *   - Fixed (ADDON-008A1): "Apply Document Reallocations" threw
  *     "BODY_SECTION can't be cast to TABLE." on every real table move
@@ -9029,17 +9043,23 @@ function buildSkeletonWithTdocTables() {
     return;
   }
 
+  // ADDON-008A1b: the saved Document Reallocations live in this document,
+  // so they are read now, before the document is cleared. They are REPORT
+  // overrides: every agenda/TDoc decision below uses the effective
+  // allocation (reallocation, else source), and the table is restored at
+  // the end of the build.
+  const savedReallocations = getReallocationMap_();
+
   // ADDON-008A: an ad-hoc agenda.csv source is fetched and re-validated
   // here, before the document is cleared, so a failed fallback never leaves
   // an emptied report behind. null = not the agenda source (unchanged path).
-  const preparedAgendaItems = prepareAdhocCsvAgendaForBuild_(cfg);
+  // ADDON-008A1b: its sections follow the effective allocations.
+  const preparedAgendaItems = prepareAdhocCsvAgendaForBuild_(cfg, savedReallocations);
 
-  // Step 1: Clear document, set title
-  const body = DocumentApp.getActiveDocument().getBody().clear();
+  // Step 1: Parse agenda and download TDOCs -- ADDON-008A1b: BEFORE the
+  // document is cleared, so the build can still refuse without having
+  // changed anything.
   const templateDocId = extractGoogleDocId_(cfg.AGENDA_SOURCE_DOC_ID);
-  setDocumentTitleFromTemplate_(templateDocId);
-
-  // Step 2: Parse agenda and download TDOCs
   const agendaItems = parseAgendaForReport_(cfg, templateDocId, preparedAgendaItems);
   if (!agendaItems || agendaItems.length === 0) {
     Logger.log('Warning: No agenda items found for prefix: ' + getConfiguredAgendaPrefix_());
@@ -9073,7 +9093,20 @@ function buildSkeletonWithTdocTables() {
     }
     return;
   }
-  const tdocGroups = downloadAndGroupTdocs_(cfg);
+  // ADDON-008A1b: every saved destination must be usable before anything is
+  // cleared. Ad-hoc: it must be an item of this report's agenda (the
+  // agenda.csv path already checked it against the whole CSV). Main: any
+  // agenda number -- a main-meeting TDoc may move to another SWG's report.
+  const reallocationProblems = findReallocationBuildProblems_(savedReallocations, null,
+    isAdhocForParentFilter && !preparedAgendaItems ? filteredAgendaItems.map(item => item.number) : null);
+  if (reallocationProblems.length > 0) refuseBuildForReallocations_(reallocationProblems);
+
+  const tdocGroups = downloadAndGroupTdocs_(cfg, undefined, savedReallocations);
+
+  // Step 2: Clear document, set title
+  const body = DocumentApp.getActiveDocument().getBody().clear();
+  setDocumentTitleFromTemplate_(templateDocId);
+
   const allTdocs = [];
   Object.keys(tdocGroups).forEach(key => {
     tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
@@ -9155,7 +9188,9 @@ function buildSkeletonWithTdocTables() {
     // 11.0.3 Document Reallocations
     body.appendParagraph(`${agendaPrefixNum}.0.3 Document Reallocations`)
       .setHeading(DocumentApp.ParagraphHeading.HEADING3);
-    const reallocations = getReallocationMap_();
+    // ADDON-008A1b: the snapshot read before clearing (re-reading the
+    // cleared body here always found nothing).
+    const reallocations = savedReallocations;
     if (Object.keys(reallocations).length > 0) {
       // Create reallocation table
       const reallocationTable = body.appendTable();
@@ -9432,10 +9467,27 @@ function buildSkeletonWithTdocTables() {
     }
   }
   
+  // ADDON-008A1b: put the saved Document Reallocations back (the 6G branch
+  // already wrote them into its own X.0.3 table above), through the same
+  // table helpers the Add Document Reallocation dialog uses.
+  let reallocationRestoreNote = '';
+  if (!is6G && Object.keys(savedReallocations).length > 0) {
+    try {
+      Object.keys(savedReallocations).forEach(tdoc => {
+        const r = savedReallocations[tdoc];
+        saveReallocation(tdoc, r.original, r.new, r.reason);
+      });
+    } catch (e) {
+      Logger.log('Could not restore the Document Reallocations table: ' + e.message);
+      reallocationRestoreNote = '\n\n⚠️ The Document Reallocations table could not be restored (' + e.message + '). Re-enter: ' +
+        Object.keys(savedReallocations).map(t => `${t} → ${savedReallocations[t].new}`).join(', ');
+    }
+  }
+
   removeRowHeightAndSpacing();
   Logger.log(`Done: Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.`);
   try {
-    DocumentApp.getUi().alert('Done', `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.`, DocumentApp.getUi().ButtonSet.OK);
+    DocumentApp.getUi().alert('Done', `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.` + reallocationRestoreNote, DocumentApp.getUi().ButtonSet.OK);
   } catch (e) {
     // UI not available in this context
   }
@@ -9445,7 +9497,7 @@ function buildSkeletonWithTdocTables() {
  * Download TDOC list and group by agenda item.
  * Returns: { '9.1': { tdocs: [...] }, '9.2': { tdocs: [...] }, ... }
  */
-function downloadAndGroupTdocs_(cfg, context) {
+function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {
   const meetingUrl = cfg.TDOC_LIST_URL;
   if (!meetingUrl) return {};
 
@@ -9507,7 +9559,10 @@ function downloadAndGroupTdocs_(cfg, context) {
     // agendaItem.startsWith(agendaPrefix) check -- see
     // tests/tdoc-agenda-filter.test.js.
     const agendaSelector = getMeetingContext_(context).report.agendaSelector;
-    const reallocations = perfTimed_('  TDoc-list: getReallocationMap_ (own body.getTables() scan)', () => getReallocationMap_(context));
+    // ADDON-008A1b: a build passes the reallocations it read BEFORE clearing
+    // the document (reading them here would find the cleared body).
+    const reallocations = reallocationsSnapshot ||
+      perfTimed_('  TDoc-list: getReallocationMap_ (own body.getTables() scan)', () => getReallocationMap_(context));
     const groups = {};
 
     for (let i = 1; i < data.length; i++) {
@@ -9518,7 +9573,13 @@ function downloadAndGroupTdocs_(cfg, context) {
       let agendaItem = String(row[agendaCol] || '').trim();
 
       if (reallocations[tdoc]) {
-        agendaItem = reallocations[tdoc].new;
+        // ADDON-008A1b: shared interpretation -- a removed/withdrawn/n/a TDoc
+        // is not placed anywhere in the report (a main meeting's prefix
+        // selector already excluded these words; an ad-hoc 'all' selector
+        // used to file them under a literal "withdrawn" item).
+        const target = interpretReallocationTarget_(reallocations[tdoc].new);
+        if (target.kind === 'remove') continue;
+        agendaItem = target.kind === 'move' ? target.agendaItem : reallocations[tdoc].new;
       }
 
       if (!agendaSelectorMatches_(agendaSelector, agendaItem)) continue;
@@ -10593,6 +10654,79 @@ function applyDocumentReallocations() {
 const REALLOCATION_REMOVAL_TARGETS_ = ['removed', 'withdrawn', 'n/a'];
 
 /**
+ * ADDON-008A1b: the ONE interpretation of a saved reallocation's "New
+ * Agenda" value, shared by Apply Document Reallocations, the TDoc grouping
+ * (build and continuous update) and the build's agenda projection:
+ *   'remove' -- removed / withdrawn / n/a: not placed in the report;
+ *   'move'   -- an agenda item number: the TDoc's report allocation;
+ *   'invalid'-- anything else.
+ */
+function interpretReallocationTarget_(value) {
+  const v = String(value === null || value === undefined ? '' : value).trim();
+  if (REALLOCATION_REMOVAL_TARGETS_.indexOf(v.toLowerCase()) !== -1) return { kind: 'remove', agendaItem: null, value: v };
+  if (/^\d+(?:\.\d+)*$/.test(v)) return { kind: 'move', agendaItem: v, value: v };
+  return { kind: 'invalid', agendaItem: null, value: v };
+}
+
+/**
+ * ADDON-008A1b: effective REPORT allocation of every TDoc in a TDoc list
+ * (sheet values): the saved reallocation when there is one, otherwise the
+ * source "Agenda item". Source data is never changed. `effective` is null
+ * for a removed TDoc.
+ */
+function computeEffectiveTdocAllocations_(tdocListValues, reallocations) {
+  const rows = Array.isArray(tdocListValues) ? tdocListValues : [];
+  const header = (rows[0] || []).map(function (h) { return String(h === null || h === undefined ? '' : h).trim(); });
+  const tdocCol = header.indexOf('TDoc');
+  const itemCol = header.indexOf('Agenda item');
+  const out = [];
+  if (tdocCol === -1 || itemCol === -1) return out;
+  for (let i = 1; i < rows.length; i++) {
+    const tdoc = String((rows[i] || [])[tdocCol] || '').trim();
+    if (!tdoc) continue;
+    const source = String(rows[i][itemCol] === null || rows[i][itemCol] === undefined ? '' : rows[i][itemCol]).trim();
+    const realloc = reallocations ? reallocations[tdoc] : null;
+    const target = realloc ? interpretReallocationTarget_(realloc.new) : null;
+    out.push({
+      tdoc: tdoc,
+      source: source,
+      reallocated: !!target,
+      removed: !!target && target.kind === 'remove',
+      effective: !target ? source : (target.kind === 'move' ? target.agendaItem : (target.kind === 'remove' ? null : target.value))
+    });
+  }
+  return out;
+}
+
+/**
+ * ADDON-008A1b: why saved reallocations cannot be honoured by a build, one
+ * message per entry (TDoc, source allocation, requested destination,
+ * reason). `agendaNumbers`, when given, are the agenda items a destination
+ * must exist in (ad-hoc builds); main-meeting builds pass null, since a
+ * main-meeting TDoc may legitimately move to another SWG's report.
+ */
+function findReallocationBuildProblems_(reallocations, sourceByTdoc, agendaNumbers) {
+  const problems = [];
+  Object.keys(reallocations || {}).forEach(function (tdoc) {
+    const realloc = reallocations[tdoc];
+    const target = interpretReallocationTarget_(realloc.new);
+    const source = (sourceByTdoc && sourceByTdoc[tdoc]) || realloc.original || 'unknown';
+    const label = `${tdoc} (${source} → ${target.value || 'blank'})`;
+    if (target.kind === 'invalid') {
+      problems.push(`${label}: "${target.value}" is not an agenda item number or removed/withdrawn/n/a.`);
+    } else if (target.kind === 'move' && agendaNumbers && agendaNumbers.indexOf(target.agendaItem) === -1) {
+      problems.push(`${label}: this meeting's agenda has no item ${target.agendaItem}.`);
+    }
+  });
+  return problems;
+}
+
+function refuseBuildForReallocations_(problems) {
+  throw new Error('Cannot build report -- the report was not changed.\n\nSaved document reallocations cannot be applied:\n• ' +
+    problems.join('\n• ') + '\n\nCorrect the Document Reallocations table, then build again.');
+}
+
+/**
  * ADDON-008A1: applies the reallocation map to a built report body.
  *
  * The old in-place loop moved a table with
@@ -10644,11 +10778,12 @@ function applyDocumentReallocationsToBody_(body, reallocations) {
       problems.push(`${label}: its table is not a top-level table of the report body.`);
       return;
     }
-    if (REALLOCATION_REMOVAL_TARGETS_.indexOf(target.toLowerCase()) !== -1) {
+    const interpreted = interpretReallocationTarget_(target);
+    if (interpreted.kind === 'remove') {
       plan.push({ tdoc: tdoc, realloc: realloc, table: table, remove: true });
       return;
     }
-    if (!/^\d+(?:\.\d+)*$/.test(target)) {
+    if (interpreted.kind !== 'move') {
       problems.push(`${label}: "${target}" is not an agenda item number.`);
       return;
     }
@@ -10674,9 +10809,12 @@ function applyDocumentReallocationsToBody_(body, reallocations) {
       return;
     }
     // Section boundaries are re-read per step: earlier moves shift indices.
+    // ADDON-008A1b: a table already under its destination heading (e.g.
+    // placed there by a rebuild that applied this reallocation) stays put.
     const currentIndex = body.getChildIndex(step.table);
     const targetIndex = findAgendaSectionEndIndex_(body, step.target);
-    const moving = targetIndex !== currentIndex && targetIndex !== currentIndex + 1;
+    const moving = !isUnderAgendaHeading_(body, currentIndex, step.target) &&
+      targetIndex !== currentIndex && targetIndex !== currentIndex + 1;
     const placed = moving ? step.table.copy() : step.table;
     if (setTdocTableAgendaItem_(placed, step.realloc.new)) {
       updatedCount++;
@@ -10691,6 +10829,19 @@ function applyDocumentReallocationsToBody_(body, reallocations) {
   });
 
   return { movedCount: movedCount, removedCount: removedCount, updatedCount: updatedCount, notFound: notFound };
+}
+
+/** True when the nearest heading above body child `index` is this agenda item's heading. */
+function isUnderAgendaHeading_(body, index, agendaItem) {
+  for (let i = index - 1; i >= 0; i--) {
+    const child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+    const para = child.asParagraph();
+    if (para.getHeading() === DocumentApp.ParagraphHeading.NORMAL) continue;
+    const text = para.getText().trim();
+    return text === agendaItem || text.indexOf(agendaItem + ' ') === 0;
+  }
+  return false;
 }
 
 /** Sets a TDoc detail table's "Agenda Item" value; false when it has no such row. */
@@ -11799,8 +11950,15 @@ function readTdocListWorkbook_(url) {
   }
 }
 
-/** Fetch + parse + validate one agenda.csv against the meeting's TDoc list values. */
-function evaluateAdhocAgendaCsvSource_(csvUrl, tdocListValues) {
+/**
+ * Fetch + parse + validate one agenda.csv against the meeting's TDoc list
+ * values. ADDON-008A1b: with `reallocations` (a build), the projected
+ * sections follow each TDoc's EFFECTIVE report allocation -- a moved TDoc
+ * counts at its destination, a removed one not at all -- and every saved
+ * destination must exist in the CSV agenda (`reallocationProblems`). The
+ * CSV itself is still validated against the unchanged source pairs.
+ */
+function evaluateAdhocAgendaCsvSource_(csvUrl, tdocListValues, reallocations) {
   function fail(reason) { return { ok: false, url: csvUrl, reason: reason, items: [] }; }
   let fetched;
   try {
@@ -11813,13 +11971,40 @@ function evaluateAdhocAgendaCsvSource_(csvUrl, tdocListValues) {
   }
   const parsed = parseAgendaCsv_(fetched.text);
   if (!parsed.ok) return fail(parsed.reason);
-  const validation = validateAgendaCsvForMeeting_(parsed.items, extractTdocListAgendaPairs_(tdocListValues));
+  const pairsResult = extractTdocListAgendaPairs_(tdocListValues);
+  const validation = validateAgendaCsvForMeeting_(parsed.items, pairsResult);
   if (!validation.ok) return fail(validation.reason);
-  const items = selectAdhocCsvAgendaItems_(parsed.items, validation.sections);
+  let sections = validation.sections;
+  if (reallocations && Object.keys(reallocations).length > 0) {
+    const allocations = computeEffectiveTdocAllocations_(tdocListValues, reallocations);
+    const sourceByTdoc = {};
+    allocations.forEach(function (a) { sourceByTdoc[a.tdoc] = a.source; });
+    const problems = findReallocationBuildProblems_(reallocations, sourceByTdoc, parsed.items.map(function (it) { return it.number; }));
+    if (problems.length > 0) {
+      const failed = fail('Saved document reallocations cannot be applied.');
+      failed.reallocationProblems = problems;
+      return failed;
+    }
+    // Same evidence as the unreallocated case (items the source list
+    // describes), with each reallocated TDoc counted at its destination.
+    const described = {};
+    pairsResult.pairs.forEach(function (p) { described[p.number] = true; });
+    const roots = {};
+    allocations.forEach(function (a) {
+      if (a.removed || !a.effective) return;
+      if (a.reallocated || described[a.effective]) roots[a.effective.split('.')[0]] = true;
+    });
+    sections = [];
+    parsed.items.forEach(function (it) {
+      const root = it.number.split('.')[0];
+      if (roots[root] && sections.indexOf(root) === -1) sections.push(root);
+    });
+  }
+  const items = selectAdhocCsvAgendaItems_(parsed.items, sections);
   return {
     ok: true, url: csvUrl, reason: null, items: items,
     totalCount: parsed.items.length, selectedCount: items.length,
-    sections: validation.sections, matchedCount: validation.matchedCount
+    sections: sections, matchedCount: validation.matchedCount
   };
 }
 
@@ -11877,7 +12062,7 @@ function discoverAdhocMeetingSources_(meetingId, ftpBase, checkAgendaCsv) {
  * is not the agenda source (main meeting, an agenda TDoc is configured, or
  * no CSV was accepted) so the existing path runs unchanged.
  */
-function prepareAdhocCsvAgendaForBuild_(cfg) {
+function prepareAdhocCsvAgendaForBuild_(cfg, reallocations) {
   const identity = getMeetingIdentityConfig_();
   if (identity.MEETING_TYPE !== 'adhoc' || identity.AGENDA_TDOC || !identity.AGENDA_CSV_URL) return null;
 
@@ -11889,7 +12074,8 @@ function prepareAdhocCsvAgendaForBuild_(cfg) {
   }
   const workbook = readTdocListWorkbook_(cfg.TDOC_LIST_URL);
   if (!workbook.ok) refuse(workbook.reason);
-  const evaluated = evaluateAdhocAgendaCsvSource_(identity.AGENDA_CSV_URL, workbook.values);
+  const evaluated = evaluateAdhocAgendaCsvSource_(identity.AGENDA_CSV_URL, workbook.values, reallocations);
+  if (evaluated.reallocationProblems) refuseBuildForReallocations_(evaluated.reallocationProblems);
   if (!evaluated.ok) refuse(evaluated.reason);
   if (evaluated.items.length === 0) refuse('agenda.csv has no agenda items for this meeting.');
   Logger.log('Agenda structure from validated agenda.csv: ' + evaluated.selectedCount + ' of ' + evaluated.totalCount +

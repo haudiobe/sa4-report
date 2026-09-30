@@ -260,9 +260,14 @@ function bodyRecorder(calls) {
   check('a missing TDoc list alone names exactly that', thrown && thrown.message.split('\n').filter((l) => l.startsWith('•')), ["• Paste the meeting's TDoc list URL."]);
 }
 
+// ADDON-008A1b: the build's first document access is now reading the saved
+// Document Reallocations (before anything is cleared), so reaching the
+// document means reaching either that read or clear().
+const reachDocument = () => { throw new Error('REACHED_BODY_CLEAR'); };
+
 {
   const { sandbox } = loadCode({ documentProperties: ADHOC_COMPLETE_PROPS });
-  sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => ({ clear: () => { throw new Error('REACHED_BODY_CLEAR'); } }), getId: () => 'D' });
+  sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => ({ clear: reachDocument, getTables: reachDocument }), getId: () => 'D' });
   let thrown = null;
   try { sandbox.buildSkeletonWithTdocTables(); } catch (e) { thrown = e; }
   check('complete ad-hoc build proceeds past the guard (reaches the document)', thrown && thrown.message, 'REACHED_BODY_CLEAR');
@@ -270,13 +275,13 @@ function bodyRecorder(calls) {
 
 {
   const { sandbox } = loadCode({ documentProperties: { MEETING_TYPE: 'main', MEETING_FOLDER: 'TSGS4_137_Xian', MEETING_NUMBER: '137' } });
-  sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => ({ clear: () => { throw new Error('REACHED_BODY_CLEAR'); } }), getId: () => 'D' });
+  sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => ({ clear: reachDocument, getTables: reachDocument }), getId: () => 'D' });
   let thrown = null;
   try { sandbox.buildSkeletonWithTdocTables(); } catch (e) { thrown = e; }
   check('main build is unchanged (no readiness guard, reaches the document)', thrown && thrown.message, 'REACHED_BODY_CLEAR');
 
   const legacy = loadCode();
-  legacy.sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => ({ clear: () => { throw new Error('REACHED_BODY_CLEAR'); } }), getId: () => 'D' });
+  legacy.sandbox.DocumentApp.getActiveDocument = () => ({ getBody: () => ({ clear: reachDocument, getTables: reachDocument }), getId: () => 'D' });
   let t2 = null;
   try { legacy.sandbox.buildSkeletonWithTdocTables(); } catch (e) { t2 = e; }
   check('a legacy document with no configuration at all still relies on its fallbacks', t2 && t2.message, 'REACHED_BODY_CLEAR');
