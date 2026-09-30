@@ -471,6 +471,57 @@ console.log('P. zero eligible TDocs');
   check('Generate with nothing selected: refused, Drive never touched', [result.ok, result.error, env.drive.calls], [false, 'Select at least one TDoc.', []]);
 }
 
+// ================================= meeting-neutral defaults (cleanup) ====
+
+console.log('meeting-neutral defaults: introduction and deadline');
+{
+  const { sandbox: s } = loadCode();
+  const intro = s.buildEmailExportDefaultIntroText_('MBS');
+  check('default introduction, exact',
+    intro,
+    'Dear all,\n\n' +
+    'As discussed during the MBS AHG, this email starts a technical discussion on the contribution below. ' +
+    'The purpose is to collect comments, refine the proposal and, where appropriate, prepare a revision for the upcoming meeting.\n\n' +
+    'This discussion is not an email agreement and does not constitute a formal SA4 decision.');
+  check('no hard-coded "October meeting" (or any month) in the default introduction',
+    /October|January|February|March|April|May|June|July|August|September|November|December/.test(intro + s.buildEmailExportDefaultIntroText_('FS_6G_MED')), false);
+  check('the default body (no introduction supplied) is meeting-neutral too',
+    /October meeting/.test(s.buildEmailExportHtmlBody_('<table></table>', null, null, '26-10-15 15:00 CEST', null, 'MBS')), false);
+}
+
+{
+  // A new, unrelated future meeting -- even with a meeting date saved --
+  // gets no prefilled deadline, least of all Legacy's 2026-10-15 15:00.
+  const future = {
+    MEETING_TYPE: 'adhoc', REPORT_SUFFIX: 'Video', MEETING_ID: '99999', MEETING_NAME: 'SA4-e (AH) Video SWG 2027', MEETING_DATE: 'March 3, 2027',
+    REVISIONS_URL: 'https://www.3gpp.org/ftp/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Video/Inbox/Drafts/', DISCUSSION_EMAIL_SENDER: SENDER
+  };
+  const tables = [tdocTable('S4aV270001', 'A', '2.1'), tdocTable('S4aV270002', 'B', '2.2')];
+  const html = dialogHtml(future, tables);
+  check('the old 2026-10-15 / 15:00 default appears nowhere in the dialog', /2026-10-15|value="15:00"/.test(html), false);
+  check('batch and per-row date/time inputs start empty',
+    [/id="batchDate" value=""/.test(html), /id="batchTime" value=""/.test(html),
+      (html.match(/class="deadlineDate"[^>]*value=""/g) || []).length, (html.match(/class="deadlineTime"[^>]*value=""/g) || []).length],
+    [true, true, 2, 2]);
+  check('the batch deadline is marked required', /Batch deadline \(required\):/.test(html), true);
+  check('CEST stays the (only) selectable time zone', /<option value="CEST" selected>CEST<\/option>/.test(html), true);
+
+  // What the dialog sends when the user enters nothing: refused, no output.
+  const env = setup(future, tables);
+  const untouched = env.run([{ tableIndex: 0, deadline: { date: '', time: '', tz: 'CEST' } }, { tableIndex: 1, deadline: { date: '', time: '', tz: 'CEST' } }]);
+  check('Generate with the untouched (empty) deadline: refused, Drive never touched',
+    [untouched.ok, /^S4aV270001: Invalid or missing deadline date/.test(untouched.error), env.drive.calls], [false, true, []]);
+  const noDeadline = setup(future, tables);
+  const r = noDeadline.run([{ tableIndex: 0 }]);
+  check('Generate without any deadline: refused, Drive never touched', [r.ok, noDeadline.drive.calls], [false, []]);
+  const timeOnly = setup(future, tables);
+  const r2 = timeOnly.run([{ tableIndex: 0, deadline: { date: '2027-03-01', time: '', tz: 'CEST' } }]);
+  check('a date without a time is refused (no default time filled in)', [r2.ok, /deadline time/.test(r2.error), timeOnly.drive.calls], [false, true, []]);
+  const entered = setup(future, tables);
+  entered.run([{ tableIndex: 0, deadline: { date: '2027-03-01', time: '12:00', tz: 'CEST' } }]);
+  check('an entered deadline is used as entered', header(entered.emls()[0].text, 'Subject'), '[VIDEO,2.1,27-03-01-1200CEST][S4aV270001] Discussion: A');
+}
+
 // ================================================= menu and dialog ====
 
 console.log('menu and dialog');

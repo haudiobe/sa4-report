@@ -23,6 +23,9 @@
  *     3GPP_TSG_SA_WG4_MBS -> MBS; the general SA4 list uses the report
  *     family's SWG name). Every selection is validated and built before any
  *     file is written, so a refused request leaves nothing in Drive.
+ *     Meeting-neutral defaults: the introduction says "the upcoming
+ *     meeting", and the discussion deadline has no prefilled date/time
+ *     (Legacy's 2026-10-15 15:00) -- the user enters it.
  * 2.14.3 (2026-09-30)
  *   - Fixed (ADDON-008A2): incoming e-mail was never associated with ad-hoc
  *     TDocs. checkRSSFeed_() now identifies report tables with the
@@ -12907,12 +12910,13 @@ function deriveEmailExportListTag_(recipientAddress, reportSwgName) {
 // user's own edited wording is. A blank line (\n\n) is a paragraph break;
 // a single \n is a <br> within a paragraph.
 //
-// ADDON-009: the Legacy wording is kept; only its "FS_6G_MED" is the
-// meeting's list tag (buildEmailExportDefaultIntroText_()).
+// ADDON-009: the Legacy wording, made meeting-neutral: its "FS_6G_MED" is
+// the meeting's list tag (buildEmailExportDefaultIntroText_()) and "the
+// October meeting" is "the upcoming meeting".
 const EMAIL_EXPORT_DEFAULT_INTRO_TEXT_TEMPLATE_ =
   'Dear all,\n\n' +
   'As discussed during the {LIST_TAG} AHG, this email starts a technical discussion on the contribution below. ' +
-  'The purpose is to collect comments, refine the proposal and, where appropriate, prepare a revision for the October meeting.\n\n' +
+  'The purpose is to collect comments, refine the proposal and, where appropriate, prepare a revision for the upcoming meeting.\n\n' +
   'This discussion is not an email agreement and does not constitute a formal SA4 decision.';
 
 function buildEmailExportDefaultIntroText_(listTag) {
@@ -13008,9 +13012,17 @@ function isEmailExportReserved_(status) {
  * format built from these (formatEmailExportDeadline_()) is always
  * "YY-MM-DD HH:mm TZ" -- deliberately never a natural-language or
  * locale-dependent rendering.
+ *
+ * ADDON-009: no default date or time. Legacy prefilled its FS_6G_MED batch
+ * deadline (2026-10-15 15:00); CENTRAL has no stored meeting end date
+ * (MEETING_DATE is an optional display string, the Portal dates are only
+ * shown during Resolve) and no approved rule for deriving a discussion
+ * deadline from one, so the user enters it and Generate refuses a missing
+ * one (validateEmailExportDeadline_()). The time zone keeps the only
+ * supported value.
  */
-const EMAIL_EXPORT_DEFAULT_DEADLINE_DATE_ = '2026-10-15'; // ISO YYYY-MM-DD
-const EMAIL_EXPORT_DEFAULT_DEADLINE_TIME_ = '15:00'; // 24-hour HH:mm
+const EMAIL_EXPORT_DEFAULT_DEADLINE_DATE_ = ''; // ISO YYYY-MM-DD, entered by the user
+const EMAIL_EXPORT_DEFAULT_DEADLINE_TIME_ = ''; // 24-hour HH:mm, entered by the user
 const EMAIL_EXPORT_DEFAULT_DEADLINE_TZ_ = 'CEST';
 
 /**
@@ -14020,9 +14032,8 @@ function prepareTdocDiscussionEmails() {
   //
   // LEGACY-UPGRADE-006B (Part G, per-row deadline): every eligible row also
   // gets its OWN date/time/time-zone inputs, prefilled with this file's own
-  // default batch deadline (EMAIL_EXPORT_DEFAULT_DEADLINE_*_) so a row
-  // already has a valid deadline even if the user never touches the batch
-  // controls. A hard-excluded (Approved/Agreed/reserved) TDoc has no row at
+  // default batch deadline (EMAIL_EXPORT_DEFAULT_DEADLINE_*_; ADDON-009:
+  // empty date/time, so every row needs an entered deadline). A hard-excluded (Approved/Agreed/reserved) TDoc has no row at
   // all here, so it structurally can never receive or export a deadline.
   const timezoneOptionsHtml = EMAIL_EXPORT_SUPPORTED_TIMEZONES_.map(function (tz) {
     return '<option value="' + esc(tz) + '"' + (tz === EMAIL_EXPORT_DEFAULT_DEADLINE_TZ_ ? ' selected' : '') + '>' + esc(tz) + '</option>';
@@ -14081,7 +14092,7 @@ function prepareTdocDiscussionEmails() {
   // EMAIL_EXPORT_DEFAULT_DEADLINE_*_ constants as every individual row.
   const batchDeadlineHtml = tdocs.length === 0 ? '' :
     '<div class="hint" style="margin-top:10px;">' +
-    '<b>Batch deadline:</b> ' +
+    '<b>Batch deadline (required):</b> ' +
     'Date <input type="date" id="batchDate" value="' + esc(EMAIL_EXPORT_DEFAULT_DEADLINE_DATE_) + '"> ' +
     'Time <input type="time" id="batchTime" value="' + esc(EMAIL_EXPORT_DEFAULT_DEADLINE_TIME_) + '"> ' +
     'TZ <select id="batchTz">' + timezoneOptionsHtml + '</select> ' +

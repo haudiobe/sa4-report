@@ -1523,13 +1523,15 @@ console.log('prepareTdocDiscussionEmails() dialog -- batch deadline controls, pe
   sandbox.HtmlService = { createHtmlOutput: (h) => { captured = h; const o = { setWidth: () => o, setHeight: () => o }; return o; } };
   sandbox.prepareTdocDiscussionEmails();
 
-  check('a batch deadline date input exists, defaulting to 2026-10-15', /id="batchDate"[^>]*value="2026-10-15"/.test(captured), true);
-  check('a batch deadline time input exists, defaulting to 15:00', /id="batchTime"[^>]*value="15:00"/.test(captured), true);
+  // ADDON-009: no prefilled date/time (Legacy: 2026-10-15 15:00) -- the
+  // deadline is entered by the user.
+  check('a batch deadline date input exists, empty (no fixed default)', /id="batchDate" value=""/.test(captured), true);
+  check('a batch deadline time input exists, empty (no fixed default)', /id="batchTime" value=""/.test(captured), true);
   check('a batch deadline time zone selector exists with CEST available and selected', /id="batchTz"[\s\S]*?<option value="CEST" selected>CEST<\/option>/.test(captured), true);
   check('an "Apply to selected" action exists', /Apply to selected/.test(captured), true);
   check('an "Apply to all visible\/eligible" action exists', /Apply to all visible\/eligible/.test(captured), true);
-  check('each eligible row exposes its own effective deadline (date/time/TZ inputs), defaulting to the same batch default',
-    (captured.match(/class="deadlineDate"[^>]*value="2026-10-15"/g) || []).length, 2);
+  check('each eligible row exposes its own deadline inputs (date/time/TZ), date and time empty like the batch control',
+    [(captured.match(/class="deadlineDate"[^>]*value=""/g) || []).length, (captured.match(/class="deadlineTime"[^>]*value=""/g) || []).length, (captured.match(/class="deadlineTz"/g) || []).length], [2, 2, 2]);
   check('the complete canonical Subject is never exposed/editable anywhere in the dialog', /class="tdocSubject"|id="subject"/.test(captured), false);
 }
 
