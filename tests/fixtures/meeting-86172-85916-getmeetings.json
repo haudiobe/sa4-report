@@ -1,0 +1,39 @@
+{
+ "getMeetings86172": [
+  {
+   "Id": 86172,
+   "Title": "3GPPSA4-e (AH) MBS SWG post 137-e",
+   "ShortTitle": "3GPPSA4-e (AH) MBS SWG post 137-e",
+   "Type": "AH",
+   "TB": "3GPP SA 4",
+   "TBId": 387,
+   "StartDate": "2026-10-01 15:30:00",
+   "EndDate": "2026-11-05 19:30:00",
+   "StartTimeZone": "(GMT+02.00)  Brussels, Copenhagen, Madrid, Paris",
+   "EndTimeZone": "(GMT+01:00) Brussels, Copenhagen, Madrid, Paris",
+   "Location": "Online",
+   "MtgDocURL": "https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_MBS/Docs/",
+   "DocURL": "https://ftp.3gpp.org/TSG_SA/WG4_CODEC/",
+   "DocCount": 10
+  }
+ ],
+ "getMeetings85916": [
+  {
+   "Id": 85916,
+   "Title": "3GPPSA4-(AH) Audio SWG on ULBC-MED",
+   "ShortTitle": "3GPPSA4-(AH) Audio SWG on ULBC-MED",
+   "Type": "AH",
+   "TB": "3GPP SA 4",
+   "TBId": 387,
+   "StartDate": "2026-09-28 09:00:00",
+   "EndDate": "2026-09-30 16:00:00",
+   "StartTimeZone": "(GMT+08:00) Beijing, Chongqing, Hong Kong, Urumqi",
+   "EndTimeZone": "(GMT+08:00) Beijing, Chongqing, Hong Kong, Urumqi",
+   "Location": "Shanghai",
+   "MtgDocURL": "https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/",
+   "DocURL": "https://ftp.3gpp.org/TSG_SA/WG4_CODEC/",
+   "DocCount": 95
+  }
+ ],
+ "_source": "POST https://portal.3gpp.org/webservices/Rest/Meetings.svc/GetMeetings, captured 2026-09-30 (subset of fields)"
+}

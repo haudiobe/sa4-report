@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.13.0 (2026-09-23)
+ * Version: 2.14.0 (2026-09-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,22 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.14.0 (2026-09-30)
+ *   - Added (ADDON-008A): ad-hoc agenda + TDoc-list discovery. Agenda
+ *     structure precedence for ad-hoc meetings: saved AGENDA_TDOC >
+ *     discovered unambiguous agenda TDoc > the series agenda.csv
+ *     (<series>/Agenda/agenda.csv, new AGENDA_CSV_URL property), accepted
+ *     only when every agenda item/description pair of the meeting's own
+ *     TDoc list matches it; the report uses the CSV sections those TDocs
+ *     fall under, through the existing itemList projection and skeleton
+ *     path. The build re-validates the CSV before the document is cleared.
+ *     "Discover Agenda / TDocs" also proposes the meeting-ID Portal
+ *     document list (GenerateDocumentList.aspx) as the TDoc List URL after
+ *     checking it is a workbook with the importer's columns; a saved URL
+ *     still wins. The ad-hoc agenda readiness rule accepts an agenda TDoc
+ *     or this meeting's own agenda.csv. Main meetings are unchanged.
+ *     Real cases: 86172 (MBS, CSV fallback), 85916 (Audio, agenda TDoc
+ *     S4aA260090 wins over a 0-byte CSV).
  * 2.13.0 (2026-09-23)
  *   - Added (ADDON-002..004): a document execution-context abstraction
  *     (getReportDocument_/getReportBody_/getReportDocumentId_) and a
@@ -2108,7 +2124,7 @@ function deleteCentralReportState_(documentId) {
 var ADDON003_ADOPTION_FIXED_KEYS_ = [
   'MEETING_FOLDER', 'MEETING_NUMBER', 'MEETING_ID',
   'FTP_BASE', 'TDOC_LIST_URL',
-  'REPORT_SUFFIX', 'AGENDA_ITEM_PREFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC', 'MEETING_DATE',
+  'REPORT_SUFFIX', 'AGENDA_ITEM_PREFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC', 'AGENDA_CSV_URL', 'MEETING_DATE',
   'SHOW_PREVIEW_SNIPPET',
   'MEETING_TYPE', 'MEETING_NAME', 'REVISIONS_URL', 'MAILING_LIST',
   'FETCH_ABSTRACTS_ON_UPDATE',
@@ -2496,6 +2512,8 @@ function getMeetingIdentityConfig_(context) {
     FTP_BASE: String(props.getProperty('FTP_BASE') || '').trim(),
     TDOC_LIST_URL: String(props.getProperty('TDOC_LIST_URL') || '').trim(),
     AGENDA_TDOC: String(props.getProperty('AGENDA_TDOC') || '').trim(),
+    // ADDON-008A: ad-hoc agenda.csv structure source (separate from AGENDA_TDOC).
+    AGENDA_CSV_URL: String(props.getProperty('AGENDA_CSV_URL') || '').trim(),
     AGENDA_SOURCE_DOC_ID: String(props.getProperty('AGENDA_SOURCE_DOC_ID') || '').trim(),
     REVISIONS_URL: String(props.getProperty('REVISIONS_URL') || '').trim(),
     // SA4-PROD-007A: generic ad-hoc mailing-list override, same raw-read/
@@ -6814,6 +6832,7 @@ function configureMeetingSettings() {
     MEETING_DATE: props.getProperty('MEETING_DATE'),
     FTP_BASE: props.getProperty('FTP_BASE'),
     AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
+    AGENDA_CSV_URL: props.getProperty('AGENDA_CSV_URL'),
     MAILING_LIST: props.getProperty('MAILING_LIST'),
     TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL'),
     REVISIONS_URL: props.getProperty('REVISIONS_URL')
@@ -6908,6 +6927,8 @@ function configureMeetingSettings() {
       <div class="hint">Finds the agenda document and TDocs in the meeting's document list. This can take a moment.</div>
       <div id="discoverStatus"></div>
       <div id="agendaCandidates"></div>
+      <div class="hint" id="agendaSourceStatus">${esc(initialPreview.agendaSourceStatus)}</div>
+      <input type="hidden" id="agendaCsvUrl" value="${esc(initialPreview.agendaCsvUrl.value)}">
 
       <label>TDoc List URL:</label>
       <input type="text" id="tdocUrl" value="${esc(currentTdocUrl)}" placeholder="https://.../TDoc_List....xlsx" oninput="updateDependentUi()">
@@ -7015,6 +7036,9 @@ function configureMeetingSettings() {
       let familyInference = null;
       let mailingListOverridden = !!document.getElementById('mailingList').value;
       let mailingListTouched = false;
+      // ADDON-008A: the TDoc list URL Discover filled in (if any) and its status.
+      let tdocListDiscovered = null;
+      let tdocListStatusText = '';
 
       function familyLabel(family) {
         const entry = readFamilyInfo()[family];
@@ -7098,7 +7122,7 @@ function configureMeetingSettings() {
         return {
           meetingType: val('meetingType'), meetingId: val('meetingId'), meetingName: val('meetingName'),
           ftpBase: val('ftpBase'), reportFamily: val('reportType'), agendaTdoc: val('agendaTdoc'),
-          tdocListUrl: val('tdocUrl'), mailingList: val('mailingList'),
+          agendaCsvUrl: val('agendaCsvUrl'), tdocListUrl: val('tdocUrl'), mailingList: val('mailingList'),
           meetingFolder: val('meetingFolder'), meetingNumber: val('meetingNumber')
         };
       }
@@ -7148,9 +7172,20 @@ function configureMeetingSettings() {
         }
         document.getElementById('agendaStructure').textContent = structure;
 
-        document.getElementById('tdocUrlHint').textContent = type === 'adhoc'
-          ? 'The TDoc list could not be determined automatically for this meeting. Paste the meeting\\'s TDoc list URL.'
-          : 'Main meetings: leave empty to find the TDoc list automatically. Ad-hoc meetings: paste the TDoc list URL.';
+        // ADDON-008A: name the discovered meeting-specific list as such.
+        const tdocUrlValue = String(document.getElementById('tdocUrl').value || '').trim();
+        let tdocHint;
+        if (type !== 'adhoc') {
+          tdocHint = 'Main meetings: leave empty to find the TDoc list automatically. Ad-hoc meetings: paste the TDoc list URL.';
+        } else if (tdocListDiscovered && tdocUrlValue === tdocListDiscovered) {
+          tdocHint = 'Meeting-specific Portal document list (found automatically).';
+        } else if (tdocUrlValue) {
+          tdocHint = 'TDoc list URL for this meeting.';
+        } else {
+          tdocHint = (tdocListStatusText ? tdocListStatusText + ' ' : 'The TDoc list could not be determined automatically for this meeting. ') +
+            'Paste the meeting\\'s TDoc list URL.';
+        }
+        document.getElementById('tdocUrlHint').textContent = tdocHint;
 
         document.getElementById('familyStatus').textContent = familyStatusText();
 
@@ -7202,6 +7237,19 @@ function configureMeetingSettings() {
         } else {
           dateHint.textContent = '';
         }
+
+        // ADDON-008A: a discovered meeting-specific TDoc list only fills an
+        // empty field -- a typed or saved URL is never replaced.
+        const tdocInput = document.getElementById('tdocUrl');
+        if (preview.tdocListUrl && preview.tdocListUrl.source === 'resolved' && tdocInput && !String(tdocInput.value || '').trim()) {
+          tdocInput.value = preview.tdocListUrl.value;
+          tdocListDiscovered = preview.tdocListUrl.value;
+        }
+        tdocListStatusText = preview.tdocListStatus || '';
+        const csvInput = document.getElementById('agendaCsvUrl');
+        if (csvInput && preview.agendaCsvUrl) csvInput.value = preview.agendaCsvUrl.value;
+        const agendaSourceEl = document.getElementById('agendaSourceStatus');
+        if (agendaSourceEl) agendaSourceEl.textContent = preview.agendaSourceStatus || '';
 
         const candBox = document.getElementById('agendaCandidates');
         if (preview.agendaCandidates && preview.agendaCandidates.length > 0) {
@@ -7336,6 +7384,7 @@ function configureMeetingSettings() {
           reportType: document.getElementById('reportType').value,
           agendaSourceDocId: document.getElementById('agendaSourceDocId').value,
           agendaTdoc: document.getElementById('agendaTdoc').value,
+          agendaCsvUrl: document.getElementById('agendaCsvUrl') ? document.getElementById('agendaCsvUrl').value : '',
           tdocUrl: document.getElementById('tdocUrl').value,
           showPreview: document.getElementById('showPreview').checked,
           apiTokenAction: apiTokenAction,
@@ -7395,7 +7444,7 @@ const DEFAULT_MEETING_REPORT_TEMPLATE_DOC_ID_ = '1qP--dusvUhNwwBtMEH4xVdxaP1c6L1
 // all of them are also adoption keys (ADDON003_ADOPTION_FIXED_KEYS_).
 var CONFIG_DIALOG_MANAGED_KEYS_ = [
   'MEETING_FOLDER', 'MEETING_NUMBER', 'MEETING_ID',
-  'REPORT_SUFFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC', 'TDOC_LIST_URL',
+  'REPORT_SUFFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC', 'AGENDA_CSV_URL', 'TDOC_LIST_URL',
   'SHOW_PREVIEW_SNIPPET',
   'MEETING_TYPE', 'MEETING_NAME', 'MEETING_DATE', 'FTP_BASE', 'MAILING_LIST', 'REVISIONS_URL'
 ];
@@ -7501,6 +7550,18 @@ function persistConfigurationSettings_(config) {
   }
   if (config.ftpBase && config.ftpBase.trim()) {
     docProps.setProperty('FTP_BASE', config.ftpBase.trim());
+  }
+  // ADDON-008A: the agenda.csv source is accepted only as the exact
+  // candidate of this ad-hoc meeting's own series folder -- never an
+  // arbitrary client-supplied URL. Skip-if-blank, like AGENDA_TDOC; the
+  // build re-validates the CSV content before using it.
+  const agendaCsvUrl = String(config.agendaCsvUrl || '').trim();
+  if (agendaCsvUrl) {
+    if (effectiveType === 'adhoc' && isAdhocAgendaCsvUrlFor_(agendaCsvUrl, docProps.getProperty('FTP_BASE'))) {
+      docProps.setProperty('AGENDA_CSV_URL', agendaCsvUrl);
+    } else {
+      Logger.log('Ignored an agenda.csv URL that does not belong to this ad-hoc meeting: ' + agendaCsvUrl);
+    }
   }
   // ADDON-007B2: an explicit dialog mode separates a user override from the
   // family-derived default. 'derived' removes the property so normal
@@ -8524,9 +8585,13 @@ function parseAgendaDocument() {
 /**
  * Main agenda parsing orchestrator called by the build workflow.
  */
-function parseAgendaForReport_(cfg, templateDocId) {
+function parseAgendaForReport_(cfg, templateDocId, preparedAgendaItems) {
   let agendaItems;
-  if (cfg.AGENDA_TDOC) {
+  if (preparedAgendaItems) {
+    // ADDON-008A: already validated and projected by
+    // prepareAdhocCsvAgendaForBuild_() (ad-hoc agenda.csv source only).
+    agendaItems = preparedAgendaItems;
+  } else if (cfg.AGENDA_TDOC) {
     Logger.log('Parsing agenda from TDOC ZIP: ' + cfg.AGENDA_TDOC);
     const agendaStructure = downloadMeetingAgenda_(cfg.AGENDA_TDOC, cfg.FTP_BASE);
     // SA4-IMPL-007: canonical ZIP-path filtering migrated from the old
@@ -8939,13 +9004,18 @@ function buildSkeletonWithTdocTables() {
     return;
   }
 
+  // ADDON-008A: an ad-hoc agenda.csv source is fetched and re-validated
+  // here, before the document is cleared, so a failed fallback never leaves
+  // an emptied report behind. null = not the agenda source (unchanged path).
+  const preparedAgendaItems = prepareAdhocCsvAgendaForBuild_(cfg);
+
   // Step 1: Clear document, set title
   const body = DocumentApp.getActiveDocument().getBody().clear();
   const templateDocId = extractGoogleDocId_(cfg.AGENDA_SOURCE_DOC_ID);
   setDocumentTitleFromTemplate_(templateDocId);
 
   // Step 2: Parse agenda and download TDOCs
-  const agendaItems = parseAgendaForReport_(cfg, templateDocId);
+  const agendaItems = parseAgendaForReport_(cfg, templateDocId, preparedAgendaItems);
   if (!agendaItems || agendaItems.length === 0) {
     Logger.log('Warning: No agenda items found for prefix: ' + getConfiguredAgendaPrefix_());
     try {
@@ -11357,6 +11427,401 @@ function resolveMeetingById_(meetingId) {
 }
 
 // =========================================================
+// ADDON-008A -- AD-HOC AGENDA.CSV FALLBACK + MEETING-SPECIFIC TDOC LIST
+// =========================================================
+//
+// Three concepts, three separate properties:
+//   - AGENDA_TDOC     the agenda TDoc reference -- unchanged, and still the
+//                     preferred agenda STRUCTURE source.
+//   - AGENDA_CSV_URL  the ad-hoc series' public agenda.csv
+//                     (<series>/Agenda/agenda.csv, the Portal's "Agenda"
+//                     link). Series-wide, so it is only used as the
+//                     structure source for an ad-hoc meeting with no agenda
+//                     TDoc, and only after it matches THIS meeting's own
+//                     TDoc list (every agenda item/description pair).
+//   - TDOC_LIST_URL   the contribution list -- unchanged; for ad-hoc
+//                     meetings the Portal's meeting-ID document list is now
+//                     discovered, an explicit value still wins.
+//
+// Ad-hoc agenda-structure precedence (main meetings are never affected):
+//   1. saved AGENDA_TDOC, 2. discovered unambiguous agenda TDoc,
+//   3. validated agenda.csv, 4. the existing readiness error.
+//
+// Verified live (2026-09-30): 86172 (MBS, no agenda TDoc) has a 53-row
+// headerless "number","title" CSV whose rows match its TDoc list exactly
+// (2.5/2.7/3.7, sort order = CSV row); 85916 (Audio) has agenda TDoc
+// S4aA260090 and a 0-byte CSV.
+//
+// Remote content is untrusted: candidate URLs are rebuilt server-side from
+// the resolved meeting (never taken from the client), CSV/XLSX content is
+// parsed defensively, and the build re-validates the CSV itself before the
+// document is touched.
+
+const ADHOC_AGENDA_CSV_MAX_BYTES_ = 262144;
+const ADHOC_AGENDA_CSV_MAX_ROWS_ = 1000;
+const ADHOC_AGENDA_TITLE_MAX_LENGTH_ = 500;
+const ADHOC_SERIES_DOCS_RE_ = /^https:\/\/(?:www\.3gpp\.org\/ftp|ftp\.3gpp\.org)\/tsg_sa\/wg4_codec\/3gpp_sa4_ahoc_mtgs\/([A-Za-z0-9_.-]+)\/docs\/$/i;
+const ADHOC_NO_AGENDA_TDOC_WARNING_ = 'No TDoc with type "agenda" was found.';
+
+/**
+ * <series>/Docs/ -> <series>/Agenda/agenda.csv, same host. Only for the
+ * ad-hoc series layout (…/3GPP_SA4_AHOC_MTGs/<series>/Docs/ on the 3GPP
+ * FTP); any other folder (a main meeting, an unknown host) has no candidate.
+ */
+function deriveAdhocAgendaCsvCandidate_(ftpBase) {
+  const s = String(ftpBase === null || ftpBase === undefined ? '' : ftpBase).trim();
+  const m = s.match(ADHOC_SERIES_DOCS_RE_);
+  if (!m || /^\.+$/.test(m[1])) {
+    return { url: null, error: 'The meeting document folder is not an ad-hoc series folder (…/3GPP_SA4_AHOC_MTGs/<series>/Docs/).' };
+  }
+  return { url: s.slice(0, s.length - 'Docs/'.length) + 'Agenda/agenda.csv', error: null };
+}
+
+/** True only for the exact agenda.csv candidate of this FTP_BASE. */
+function isAdhocAgendaCsvUrlFor_(url, ftpBase) {
+  const candidate = deriveAdhocAgendaCsvCandidate_(ftpBase);
+  return !!candidate.url && String(url === null || url === undefined ? '' : url).trim() === candidate.url;
+}
+
+/** The Portal's meeting-ID document list (anonymous XLSX download). */
+function buildAdhocTdocListCandidateUrl_(meetingId) {
+  const idResult = parseMeetingIdInput_(meetingId);
+  if (!idResult.isValid) return null;
+  return 'https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId=' + idResult.id;
+}
+
+function normalizeAgendaTitleForMatch_(title) {
+  return String(title === null || title === undefined ? '' : title)
+    .replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Splits CSV text into rows of cells (RFC 4180 quoting, "" escapes, CRLF/LF,
+ * leading BOM). Returns null for unbalanced quotes.
+ */
+function splitCsvRows_(text) {
+  const src = String(text).replace(/^﻿/, '');
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && src[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else {
+      field += ch;
+    }
+  }
+  if (inQuotes) return null;
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+/**
+ * Parses the headerless two-column ("number","title") agenda.csv into the
+ * SAME item shape the agenda-table parser produces ({number, title, level,
+ * heading, text}), in file order. Strict: any malformed row, duplicate
+ * number, or a file with no numbered rows makes the whole CSV unusable.
+ */
+function parseAgendaCsv_(text) {
+  function fail(reason) { return { ok: false, items: [], reason: reason }; }
+  const src = String(text === null || text === undefined ? '' : text);
+  if (src.trim() === '') return fail('agenda.csv is empty.');
+  if (src.length > ADHOC_AGENDA_CSV_MAX_BYTES_) return fail('agenda.csv is unexpectedly large.');
+
+  const rows = splitCsvRows_(src);
+  if (!rows) return fail('agenda.csv is malformed (unbalanced quotes).');
+  const meaningful = rows.filter(function (r) { return r.some(function (c) { return String(c).trim() !== ''; }); });
+  if (meaningful.length === 0) return fail('agenda.csv has no agenda rows.');
+  if (meaningful.length > ADHOC_AGENDA_CSV_MAX_ROWS_) return fail('agenda.csv has unexpectedly many rows.');
+
+  const items = [];
+  const seen = {};
+  for (let i = 0; i < meaningful.length; i++) {
+    const cells = meaningful[i];
+    const extra = cells.slice(2).some(function (c) { return String(c).trim() !== ''; });
+    const number = String(cells[0] || '').trim();
+    const title = String(cells[1] || '').replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (cells.length < 2 || extra || !/^\d{1,3}(?:\.\d{1,3}){0,4}$/.test(number) || !title || title.length > ADHOC_AGENDA_TITLE_MAX_LENGTH_) {
+      return fail('agenda.csv row ' + (i + 1) + ' is not a "number","title" agenda entry.');
+    }
+    if (seen[number]) return fail('agenda.csv lists agenda item ' + number + ' more than once.');
+    seen[number] = true;
+    items.push({
+      number: number,
+      title: title,
+      level: (number.match(/\./g) || []).length + 1,
+      heading: DocumentApp.ParagraphHeading.NORMAL,
+      text: ''
+    });
+  }
+  return { ok: true, items: items, reason: null };
+}
+
+/**
+ * The existing importer needs "TDoc" and "Agenda item"; a plausible list has
+ * at least one recognizable SA4 TDoc row.
+ */
+function validateTdocListWorkbookValues_(values) {
+  const rows = Array.isArray(values) ? values : [];
+  const header = (rows[0] || []).map(function (h) { return String(h === null || h === undefined ? '' : h).trim(); });
+  const tdocCol = header.indexOf('TDoc');
+  if (tdocCol === -1 || header.indexOf('Agenda item') === -1) {
+    return { ok: false, tdocCount: 0, reason: 'The document list has no "TDoc"/"Agenda item" columns.' };
+  }
+  let tdocCount = 0;
+  let sa4Count = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const id = String((rows[i] || [])[tdocCol] || '').trim();
+    if (!id) continue;
+    tdocCount++;
+    if (parseExactSA4DocumentId_(id).isValid) sa4Count++;
+  }
+  if (sa4Count === 0) {
+    return { ok: false, tdocCount: tdocCount, reason: 'The document list contains no recognizable SA4 TDocs yet.' };
+  }
+  return { ok: true, tdocCount: tdocCount, reason: null };
+}
+
+/**
+ * The meeting's own agenda item -> description pairs, from its TDoc list.
+ * A list that describes the same item two different ways is unusable as
+ * validation evidence.
+ */
+function extractTdocListAgendaPairs_(values) {
+  const rows = Array.isArray(values) ? values : [];
+  const header = (rows[0] || []).map(function (h) { return String(h === null || h === undefined ? '' : h).trim(); });
+  const tdocCol = header.indexOf('TDoc');
+  const itemCol = header.indexOf('Agenda item');
+  const descCol = header.indexOf('Agenda item description');
+  if (tdocCol === -1 || itemCol === -1 || descCol === -1) {
+    return { ok: false, pairs: [], reason: 'The TDoc list has no "Agenda item description" column to check agenda.csv against.' };
+  }
+  const byNumber = {};
+  const pairs = [];
+  const conflicts = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    if (!String(row[tdocCol] || '').trim()) continue;
+    const number = String(row[itemCol] === null || row[itemCol] === undefined ? '' : row[itemCol]).trim();
+    const title = String(row[descCol] === null || row[descCol] === undefined ? '' : row[descCol]).trim();
+    if (!number || !title) continue;
+    if (!Object.prototype.hasOwnProperty.call(byNumber, number)) {
+      byNumber[number] = title;
+      pairs.push({ number: number, title: title });
+    } else if (normalizeAgendaTitleForMatch_(byNumber[number]) !== normalizeAgendaTitleForMatch_(title) && conflicts.indexOf(number) === -1) {
+      conflicts.push(number);
+    }
+  }
+  if (conflicts.length > 0) {
+    return { ok: false, pairs: [], reason: 'The TDoc list describes agenda item(s) ' + conflicts.join(', ') + ' in different ways.' };
+  }
+  return { ok: true, pairs: pairs, reason: null };
+}
+
+/**
+ * agenda.csv is series-wide: accept it only when every agenda item this
+ * meeting's TDocs use appears in it with the same title. No pairs to check
+ * means no evidence, so the CSV is not accepted automatically. `sections`
+ * are the top-level agenda sections those TDocs fall under, in CSV order.
+ */
+function validateAgendaCsvForMeeting_(csvItems, pairsResult) {
+  if (!pairsResult || !pairsResult.ok) {
+    return { ok: false, sections: [], reason: pairsResult ? pairsResult.reason : 'No TDoc list to check agenda.csv against.' };
+  }
+  if (pairsResult.pairs.length === 0) {
+    return { ok: false, sections: [], reason: 'The meeting\'s TDocs have no agenda items yet, so agenda.csv cannot be checked against this meeting.' };
+  }
+  const titleByNumber = {};
+  (csvItems || []).forEach(function (it) { titleByNumber[it.number] = it.title; });
+  const missing = [];
+  const conflicting = [];
+  pairsResult.pairs.forEach(function (p) {
+    if (!Object.prototype.hasOwnProperty.call(titleByNumber, p.number)) missing.push(p.number);
+    else if (normalizeAgendaTitleForMatch_(titleByNumber[p.number]) !== normalizeAgendaTitleForMatch_(p.title)) conflicting.push(p.number);
+  });
+  if (missing.length > 0) {
+    return { ok: false, sections: [], reason: 'agenda.csv does not contain agenda item(s) ' + missing.join(', ') + ' used by this meeting\'s TDocs.' };
+  }
+  if (conflicting.length > 0) {
+    return { ok: false, sections: [], reason: 'agenda.csv titles differ from this meeting\'s TDoc list for agenda item(s) ' + conflicting.join(', ') + '.' };
+  }
+  const roots = {};
+  pairsResult.pairs.forEach(function (p) { roots[p.number.split('.')[0]] = true; });
+  const sections = [];
+  (csvItems || []).forEach(function (it) {
+    const root = it.number.split('.')[0];
+    if (roots[root] && sections.indexOf(root) === -1) sections.push(root);
+  });
+  return { ok: true, sections: sections, matchedCount: pairsResult.pairs.length, reason: null };
+}
+
+/**
+ * The report agenda from a validated CSV: every CSV item in the top-level
+ * sections this meeting's TDocs use (a combined SA4 agenda otherwise pulls
+ * in every subgroup), selected through the existing itemList projection.
+ */
+function selectAdhocCsvAgendaItems_(csvItems, sections) {
+  const numbers = (csvItems || [])
+    .filter(function (it) { return sections.indexOf(it.number.split('.')[0]) !== -1; })
+    .map(function (it) { return it.number; });
+  if (numbers.length === 0) return [];
+  return projectAgendaItems_(csvItems, { mode: 'itemList', value: numbers });
+}
+
+function isXlsxSignature_(bytes) {
+  return !!bytes && bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
+function fetchAdhocAgendaCsv_(url) {
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  return { statusCode: response.getResponseCode(), text: response.getContentText() };
+}
+
+/**
+ * Downloads a TDoc list and reads its first sheet, the same xlsx -> Sheet
+ * conversion downloadAndGroupTdocs_() uses. Anything that is not an XLSX
+ * (e.g. an HTML error page) is rejected before conversion.
+ */
+function readTdocListWorkbook_(url) {
+  let response;
+  try {
+    response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  } catch (e) {
+    return { ok: false, values: null, reason: 'The document list could not be fetched: ' + e.message };
+  }
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    return { ok: false, values: null, reason: 'The document list returned HTTP ' + code + '.' };
+  }
+  const blob = response.getBlob();
+  if (!isXlsxSignature_(blob.getBytes())) {
+    return { ok: false, values: null, reason: 'The document list is not an Excel workbook.' };
+  }
+  let tempFile = null;
+  try {
+    blob.setName('TDoc_List_Discovery_Temp.xlsx');
+    tempFile = DriveApp.createFile(blob);
+    const values = SpreadsheetApp.open(tempFile).getSheets()[0].getDataRange().getValues();
+    return { ok: true, values: values, reason: null };
+  } catch (e) {
+    return { ok: false, values: null, reason: 'The document list could not be read as a workbook: ' + e.message };
+  } finally {
+    if (tempFile) { try { tempFile.setTrashed(true); } catch (e) { } }
+  }
+}
+
+/** Fetch + parse + validate one agenda.csv against the meeting's TDoc list values. */
+function evaluateAdhocAgendaCsvSource_(csvUrl, tdocListValues) {
+  function fail(reason) { return { ok: false, url: csvUrl, reason: reason, items: [] }; }
+  let fetched;
+  try {
+    fetched = fetchAdhocAgendaCsv_(csvUrl);
+  } catch (e) {
+    return fail('agenda.csv could not be fetched: ' + e.message);
+  }
+  if (!fetched || fetched.statusCode < 200 || fetched.statusCode >= 300) {
+    return fail('agenda.csv returned HTTP ' + (fetched ? fetched.statusCode : 'unknown') + '.');
+  }
+  const parsed = parseAgendaCsv_(fetched.text);
+  if (!parsed.ok) return fail(parsed.reason);
+  const validation = validateAgendaCsvForMeeting_(parsed.items, extractTdocListAgendaPairs_(tdocListValues));
+  if (!validation.ok) return fail(validation.reason);
+  const items = selectAdhocCsvAgendaItems_(parsed.items, validation.sections);
+  return {
+    ok: true, url: csvUrl, reason: null, items: items,
+    totalCount: parsed.items.length, selectedCount: items.length,
+    sections: validation.sections, matchedCount: validation.matchedCount
+  };
+}
+
+/**
+ * Discover Agenda / TDocs, ad-hoc part: the meeting-ID document list, and --
+ * only when no agenda TDoc is available -- the validated agenda.csv
+ * fallback. Never throws; every failure is a reason string. The client only
+ * ever receives a summary (no remote titles).
+ */
+function discoverAdhocMeetingSources_(meetingId, ftpBase, checkAgendaCsv) {
+  const tdocList = { url: buildAdhocTdocListCandidateUrl_(meetingId), ok: false, tdocCount: 0, reason: null };
+  let tdocListValues = null;
+  if (!tdocList.url) {
+    tdocList.reason = 'No valid meeting ID.';
+  } else {
+    const workbook = readTdocListWorkbook_(tdocList.url);
+    if (!workbook.ok) {
+      tdocList.reason = workbook.reason;
+    } else {
+      const validation = validateTdocListWorkbookValues_(workbook.values);
+      tdocList.ok = validation.ok;
+      tdocList.tdocCount = validation.tdocCount;
+      tdocList.reason = validation.reason;
+      if (validation.ok) tdocListValues = workbook.values;
+    }
+  }
+  if (!tdocList.ok) tdocList.url = null;
+
+  const agendaCsv = { checked: !!checkAgendaCsv, url: null, ok: false, reason: null, sections: [], selectedCount: 0, totalCount: 0 };
+  if (checkAgendaCsv) {
+    const candidate = deriveAdhocAgendaCsvCandidate_(ftpBase);
+    if (!candidate.url) {
+      agendaCsv.reason = candidate.error;
+    } else if (!tdocListValues) {
+      agendaCsv.reason = 'agenda.csv could not be checked because the meeting\'s document list is unavailable.';
+    } else {
+      const evaluated = evaluateAdhocAgendaCsvSource_(candidate.url, tdocListValues);
+      agendaCsv.ok = evaluated.ok;
+      agendaCsv.reason = evaluated.reason;
+      if (evaluated.ok) {
+        agendaCsv.url = candidate.url;
+        agendaCsv.sections = evaluated.sections;
+        agendaCsv.selectedCount = evaluated.selectedCount;
+        agendaCsv.totalCount = evaluated.totalCount;
+      }
+    }
+  }
+  return { tdocList: tdocList, agendaCsv: agendaCsv };
+}
+
+/**
+ * Build-time agenda for an ad-hoc meeting whose agenda comes from
+ * agenda.csv: re-fetched and re-validated against the configured TDoc list
+ * right here, BEFORE the document is cleared. Returns null whenever the CSV
+ * is not the agenda source (main meeting, an agenda TDoc is configured, or
+ * no CSV was accepted) so the existing path runs unchanged.
+ */
+function prepareAdhocCsvAgendaForBuild_(cfg) {
+  const identity = getMeetingIdentityConfig_();
+  if (identity.MEETING_TYPE !== 'adhoc' || identity.AGENDA_TDOC || !identity.AGENDA_CSV_URL) return null;
+
+  function refuse(reason) {
+    throw new Error('Cannot build report yet.\n\n• ' + reason + '\n\nOpen Configure Meeting and run "Discover Agenda / TDocs" again.');
+  }
+  if (!isAdhocAgendaCsvUrlFor_(identity.AGENDA_CSV_URL, identity.FTP_BASE)) {
+    refuse('The saved agenda.csv does not belong to this meeting\'s document folder.');
+  }
+  const workbook = readTdocListWorkbook_(cfg.TDOC_LIST_URL);
+  if (!workbook.ok) refuse(workbook.reason);
+  const evaluated = evaluateAdhocAgendaCsvSource_(identity.AGENDA_CSV_URL, workbook.values);
+  if (!evaluated.ok) refuse(evaluated.reason);
+  if (evaluated.items.length === 0) refuse('agenda.csv has no agenda items for this meeting.');
+  Logger.log('Agenda structure from validated agenda.csv: ' + evaluated.selectedCount + ' of ' + evaluated.totalCount +
+    ' items (sections ' + evaluated.sections.join(', ') + ')');
+  return evaluated.items;
+}
+
+// =========================================================
 // PROD-014 -- DIAGNOSTIC: TIME EACH RESOLVER NETWORK CALL INDEPENDENTLY
 // =========================================================
 //
@@ -11619,6 +12084,30 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     unresolved: resolved ? resolved.unresolved : [],
     location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null
   };
+  // ADDON-008A: ad-hoc TDoc list and agenda-structure provenance. A saved
+  // TDoc list URL always wins over the discovered one.
+  const adhocSources = resolved && resolved.adhocSources ? resolved.adhocSources : null;
+  if (props.TDOC_LIST_URL && String(props.TDOC_LIST_URL).trim()) {
+    preview.tdocListUrl = { value: String(props.TDOC_LIST_URL).trim(), source: 'existing' };
+  } else if (adhocSources && adhocSources.tdocList.ok) {
+    preview.tdocListUrl = { value: adhocSources.tdocList.url, source: 'resolved' };
+  } else {
+    preview.tdocListUrl = { value: '', source: 'unresolved' };
+  }
+  if (adhocSources && adhocSources.agendaCsv.ok) {
+    preview.agendaCsvUrl = { value: adhocSources.agendaCsv.url, source: 'resolved' };
+  } else if (props.AGENDA_CSV_URL && String(props.AGENDA_CSV_URL).trim() && !(adhocSources && adhocSources.agendaCsv.checked)) {
+    preview.agendaCsvUrl = { value: String(props.AGENDA_CSV_URL).trim(), source: 'existing' };
+  } else {
+    preview.agendaCsvUrl = { value: '', source: 'unresolved' };
+  }
+  preview.tdocListStatus = adhocSources
+    ? (adhocSources.tdocList.ok
+      ? 'Meeting-specific Portal document list (' + adhocSources.tdocList.tdocCount + ' TDocs).'
+      : 'Meeting-specific Portal document list not usable: ' + adhocSources.tdocList.reason)
+    : '';
+  preview.agendaSourceStatus = describeAdhocAgendaSource_(preview.agendaTdoc.value, adhocSources, preview.agendaCsvUrl);
+
   preview.familyInference = inferReportFamily_({
     meetingType: preview.meetingType.value,
     meetingName: preview.meetingName.value,
@@ -11627,6 +12116,19 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
   });
   preview.summary = buildMeetingSummary_(preview);
   return preview;
+}
+
+/** ADDON-008A: one plain sentence on where the ad-hoc agenda structure comes from. */
+function describeAdhocAgendaSource_(agendaTdoc, adhocSources, agendaCsvField) {
+  if (agendaTdoc && String(agendaTdoc).trim()) return 'Agenda TDoc: ' + String(agendaTdoc).trim();
+  const csv = adhocSources ? adhocSources.agendaCsv : null;
+  if (csv && csv.ok) {
+    return 'Agenda structure: validated agenda.csv fallback (no agenda TDoc yet) — ' + csv.selectedCount +
+      ' of ' + csv.totalCount + ' items, section(s) ' + csv.sections.join(', ') + '.';
+  }
+  if (agendaCsvField && agendaCsvField.source === 'existing') return 'Agenda structure: saved agenda.csv fallback.';
+  if (csv && csv.checked) return 'No agenda TDoc found, and the agenda.csv fallback is not usable: ' + csv.reason;
+  return '';
 }
 
 /**
@@ -11657,7 +12159,9 @@ const MEETING_READINESS_RULES_ = [
     message: 'Select a report family.' },
   { code: 'MEETING_NAME_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['meetingName'], buildFor: [],
     message: 'The meeting name is missing. Resolve the meeting or enter it under Advanced.' },
-  { code: 'AGENDA_TDOC_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['agendaTdoc'], buildFor: ['adhoc'],
+  // ADDON-008A: an agenda STRUCTURE source is required -- an agenda TDoc or
+  // a validated agenda.csv (code and message kept for 007B3 compatibility).
+  { code: 'AGENDA_TDOC_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['agendaTdoc', 'agendaCsvUrl'], buildFor: ['adhoc'],
     message: 'Discover or select the agenda document.' },
   { code: 'TDOC_LIST_REQUIRED', appliesTo: ['adhoc'], severity: 'blocking', anyOf: ['tdocListUrl'], buildFor: ['adhoc'],
     message: 'Paste the meeting\'s TDoc list URL.' },
@@ -11678,7 +12182,8 @@ const MEETING_READINESS_RULES_ = [
  * copy of a server rule.
  *
  * fields: { meetingType, meetingId, meetingName, ftpBase, reportFamily,
- * agendaTdoc, tdocListUrl, mailingList, meetingFolder, meetingNumber }.
+ * agendaTdoc, agendaCsvUrl, tdocListUrl, mailingList, meetingFolder,
+ * meetingNumber }.
  * A blank meetingType means a legacy main document only when it has a
  * folder or number; otherwise the meeting is simply not resolved yet.
  * options.forBuild: only rules enforced at the build boundary for this type.
@@ -11720,6 +12225,9 @@ function getBuildReadiness_(context) {
     ftpBase: identity.FTP_BASE,
     reportFamily: props.getProperty('REPORT_SUFFIX'),
     agendaTdoc: identity.AGENDA_TDOC,
+    // ADDON-008A: only the agenda.csv of this meeting's own series folder
+    // counts; its content is re-validated by the build itself.
+    agendaCsvUrl: isAdhocAgendaCsvUrlFor_(identity.AGENDA_CSV_URL, identity.FTP_BASE) ? identity.AGENDA_CSV_URL : '',
     tdocListUrl: identity.TDOC_LIST_URL
   }, MEETING_READINESS_RULES_, { forBuild: true });
 }
@@ -11784,6 +12292,7 @@ function resolveMeetingForConfigDialog_(meetingIdInput) {
     MEETING_DATE: props.getProperty('MEETING_DATE'),
     FTP_BASE: props.getProperty('FTP_BASE'),
     AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
+    AGENDA_CSV_URL: props.getProperty('AGENDA_CSV_URL'),
     MAILING_LIST: props.getProperty('MAILING_LIST'),
     TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL'),
     REVISIONS_URL: props.getProperty('REVISIONS_URL')
@@ -11852,6 +12361,7 @@ function discoverAgendaForConfigDialog_(meetingIdInput, coreResolved) {
     MEETING_DATE: props.getProperty('MEETING_DATE'),
     FTP_BASE: props.getProperty('FTP_BASE'),
     AGENDA_TDOC: props.getProperty('AGENDA_TDOC'),
+    AGENDA_CSV_URL: props.getProperty('AGENDA_CSV_URL'),
     MAILING_LIST: props.getProperty('MAILING_LIST'),
     TDOC_LIST_URL: props.getProperty('TDOC_LIST_URL'),
     REVISIONS_URL: props.getProperty('REVISIONS_URL')
@@ -11874,12 +12384,32 @@ function discoverAgendaForConfigDialog_(meetingIdInput, coreResolved) {
   }
 
   const enriched = enrichMeetingFromTdocList_(idResult.id, coreResolved);
+  applyAdhocSourceDiscovery_(enriched, idResult.id, existing);
   return {
     ok: true,
     error: null,
     resolved: enriched,
     preview: computeResolvedMeetingPreview_(existing, enriched)
   };
+}
+
+/**
+ * ADDON-008A: ad-hoc only -- adds the meeting-ID document list and, when no
+ * agenda TDoc is available (none saved, none discovered, no candidates),
+ * the validated agenda.csv fallback to an enriched resolve result. When the
+ * fallback validates, "no agenda TDoc" is no longer reported as a problem.
+ */
+function applyAdhocSourceDiscovery_(enriched, meetingId, existing) {
+  if (!enriched || !enriched.meeting || enriched.meeting.type !== 'adhoc') return;
+  const docs = enriched.documents || {};
+  const hasAgendaTdoc = !!docs.agendaTdoc || (docs.agendaCandidates || []).length > 0 ||
+    !!String((existing && existing.AGENDA_TDOC) || '').trim();
+  const ftpBase = enriched.sources ? enriched.sources.ftpBase : null;
+  const adhocSources = discoverAdhocMeetingSources_(meetingId, ftpBase, !hasAgendaTdoc);
+  enriched.adhocSources = adhocSources;
+  if (adhocSources.agendaCsv.ok) {
+    enriched.warnings = (enriched.warnings || []).filter(function (w) { return w !== ADHOC_NO_AGENDA_TDOC_WARNING_; });
+  }
 }
 
 /**
