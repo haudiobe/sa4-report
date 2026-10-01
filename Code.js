@@ -773,6 +773,13 @@ function continuousUpdateCore_(context) {
 
       if (!existingTdocs.has(tdocNumber)) {
         perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg, tdocTableIndex, context));
+        // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-002, d1021cf):
+        // `existingTdocs` was only populated from the document scan taken
+        // BEFORE this loop, so a TDoc number appearing twice within this
+        // same run's downloaded groups (e.g. under two agenda items) was
+        // inserted twice. Recording it at insertion makes the repeat an
+        // in-place update instead.
+        existingTdocs.add(tdocNumber);
         newTdocsAdded++;
       } else {
         if (perfTimedAccum_('status updates (updateTdocStatus_, accumulated)', () => updateTdocStatus_(body, tdocNumber, tdocData, tdocTableIndex))) {
@@ -3666,6 +3673,22 @@ function processWebDownloadedSheet_(sheet) {
   registeredHeading.setHeading(DocumentApp.ParagraphHeading.HEADING2);
   createSummaryTable_(body, allTdocs, tdocCol, titleCol, sourceCol, agendaCol);
   
+  // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-002, d1021cf): this import
+  // (the "📝 Legacy: Build Initial Report" menu item) never clears the
+  // document and never checked whether a table for a TDoc already existed,
+  // so every further run duplicated every TDoc table it processed. Existing
+  // tables are scanned ONCE (the isTDocTable_()/safeCellText_() technique
+  // continuousUpdateCore_() uses) and a TDoc already present is skipped.
+  // Duplicate tables already in a document are left untouched -- this only
+  // prevents new ones. Updated as tables are inserted, so a source list
+  // repeating a TDoc number cannot duplicate it either.
+  const existingTdocNumbers = {};
+  body.getTables().forEach(function (t) {
+    if (!isTDocTable_(t)) return;
+    const existingTdoc = safeCellText_(t, 0, 1).trim();
+    if (existingTdoc) existingTdocNumbers[existingTdoc] = true;
+  });
+
   // Insert TDOC tables under the matching agenda heading in the document.
   // If the skeleton was already created, tables go under the existing heading.
   sortedAgendaItems.forEach(agendaItem => {
@@ -3682,6 +3705,11 @@ function processWebDownloadedSheet_(sheet) {
     // Revisions are emitted directly below the document they revise.
     orderTdocsByRevision_(group.tdocs).forEach(tdocData => {
       const row = tdocData.row;
+      const tdocNumber = String(row[tdocCol] || '').trim();
+      if (existingTdocNumbers[tdocNumber]) {
+        Logger.log(`Skipping ${tdocNumber}: a table for this TDoc already exists in the document (BUGFIX-LEGACY-002 idempotency guard).`);
+        return;
+      }
       const revisedTo = getRevisedTo_(tdocData);
       const typeFor = (typeCol >= 0 && forCol >= 0 && row[typeCol] && row[forCol])
         ? `${row[typeCol]} for ${row[forCol]}`
@@ -3702,6 +3730,7 @@ function processWebDownloadedSheet_(sheet) {
       ];
       
       insertTDocTableAtIndex_(body, currentIdx, tempData, tdocData.richTextRow, tdocCol);
+      existingTdocNumbers[tdocNumber] = true;
       currentIdx++;
     });
   });
