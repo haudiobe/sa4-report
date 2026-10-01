@@ -2955,43 +2955,90 @@ function getCollectorConfig_(context) {
   if (!cfg.TIMEZONE) cfg.TIMEZONE = Session.getScriptTimeZone();
   if (!cfg.SHOW_PREVIEW_SNIPPET) cfg.SHOW_PREVIEW_SNIPPET = 'false';
   if (!cfg.TDOC_ID_REGEX) cfg.TDOC_ID_REGEX = '^S4-\\d{6}$';
-  if (!cfg.EMAIL_START_DATE) cfg.EMAIL_START_DATE = '2026-08-21';
+  if (!cfg.EMAIL_START_DATE) cfg.EMAIL_START_DATE = resolveCollectorStartDate_(context);
 
   // ADDON-008A2: read the list the report is configured for -- the same
   // precedence getMeetingContext_() already applies (an ad-hoc meeting's
   // saved MAILING_LIST override, else the report-family list; main meetings
-  // keep the family list) -- instead of always the family list. A Collector
-  // Configuration table's own LIST_NAME/RSS_URL_V2 still wins, as before.
-  if (!collectorTableConfig.LIST_NAME && !collectorTableConfig.RSS_URL_V2) {
-    const listName = resolveCollectorListName_(context, reportConfig.LIST_NAME);
-    if (listName !== cfg.LIST_NAME) {
-      cfg.LIST_NAME = listName;
-      cfg.RSS_URL_V2 = `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=2.0&LIMIT=2000`;
-      cfg.RSS_URL_V1 = `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=1.0&LIMIT=2000`;
+  // keep the family list) -- instead of always the family list.
+  //
+  // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003, 123369b): a Collector
+  // Configuration table's own LIST_NAME/RSS_URL_V2 still wins -- unless it
+  // merely repeats the derived family default (the snapshot "Create
+  // Configuration Tables" writes), which is not an intentional override and
+  // used to mask the meeting's MAILING_LIST.
+  const tableList = String(collectorTableConfig.LIST_NAME || '').trim();
+  const tableRss = String(collectorTableConfig.RSS_URL_V2 || '').trim();
+  const explicitList = tableList && tableList !== reportConfig.LIST_NAME;
+  const explicitRss = tableRss && tableRss !== reportConfig.RSS_URL_V2;
+  if (explicitList || explicitRss) {
+    // The A1 archive and RSS read the same list: derive whichever one the
+    // table does not set from the one it does.
+    if (explicitList && !explicitRss) {
+      cfg.RSS_URL_V2 = buildCollectorRssUrl_(tableList, '2.0');
+      cfg.RSS_URL_V1 = buildCollectorRssUrl_(tableList, '1.0');
+    } else if (explicitRss && !explicitList) {
+      const rssList = normalizeEtsiListName_((tableRss.match(/[?&]L=([^&]+)/i) || [])[1]);
+      if (rssList) cfg.LIST_NAME = rssList;
     }
+  } else {
+    const listName = resolveCollectorListName_(context, reportConfig.LIST_NAME);
+    cfg.LIST_NAME = listName;
+    cfg.RSS_URL_V2 = buildCollectorRssUrl_(listName, '2.0');
+    cfg.RSS_URL_V1 = buildCollectorRssUrl_(listName, '1.0');
   }
 
   return cfg;
 }
 
-/** ADDON-008A2: an ETSI list name as used in list.etsi.org URLs (e.g. 3GPP_TSG_SA_WG4_MBS). */
-function isValidEtsiListName_(name) {
-  return /^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/.test(String(name === null || name === undefined ? '' : name));
+function buildCollectorRssUrl_(listName, version) {
+  return `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=${version}&LIMIT=2000`;
 }
 
 /**
- * ADDON-008A2: the mailing list the collector reads. A configured value that
- * is not a plain list name (spaces, an e-mail address, a URL...) is not
- * used: the family list is read instead and the rejection is logged.
+ * TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003): an ETSI list identifier
+ * as used in list.etsi.org URLs, from either stored form:
+ * "3GPP_TSG_SA4_FS_6G_MED" or "3gpp_tsg_sa4_fs_6g_med@list.etsi.org" (the
+ * form deriveEmailExportRecipientFromMailingList_() also accepts). Returns
+ * '' for anything else (CR/LF, spaces, other domains, URLs...).
+ */
+function normalizeEtsiListName_(value) {
+  const raw = String(value === null || value === undefined ? '' : value).trim();
+  if (!raw || /[\r\n]/.test(raw)) return '';
+  const name = raw.replace(/@list\.etsi\.org$/i, '');
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/.test(name) ? name : '';
+}
+
+/**
+ * ADDON-008A2: the mailing list the collector reads: the meeting's
+ * configured MAILING_LIST (ad-hoc only, via getMeetingContext_()), else the
+ * report-family list. A configured value that is not a valid list
+ * identifier is not used: the family list is read instead and the rejection
+ * is logged.
  */
 function resolveCollectorListName_(context, familyListName) {
   const configured = String(getMeetingContext_(context).sources.mailingList || '').trim();
   if (!configured || configured === familyListName) return familyListName;
-  if (!isValidEtsiListName_(configured)) {
-    Logger.log('Ignoring configured mailing list "' + configured + '" (not a valid list name); reading ' + familyListName);
+  const name = normalizeEtsiListName_(configured);
+  if (!name) {
+    Logger.log('Ignoring configured mailing list "' + configured.replace(/[\r\n]/g, ' ') + '" (not a valid ETSI list name); reading ' + familyListName);
     return familyListName;
   }
-  return configured;
+  return name;
+}
+
+/**
+ * TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003): the collection start
+ * date when no Collector Configuration table sets one -- a stored
+ * EMAIL_START_DATE (YYYY-MM-DD) when valid, else the historical default.
+ * Read through the report state store, so a background run reads the
+ * adopted document's central state like every other setting.
+ */
+function resolveCollectorStartDate_(context) {
+  const saved = String(getReportStateStore_(context).getProperty('EMAIL_START_DATE') || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(saved) && !isNaN(new Date(saved).getTime())) return saved;
+  if (saved) Logger.log('Ignoring EMAIL_START_DATE "' + saved.replace(/[\r\n]/g, ' ') + '" (expected YYYY-MM-DD); using 2026-08-21');
+  return '2026-08-21';
 }
 
 function ensureCollectorConfigTable_() {
@@ -6303,6 +6350,10 @@ function isLateResponse_(msg, deadlineMillis, author, firstAuthor) {
 function loadJsonObject_(s) { try { const o = JSON.parse(s || '{}'); return (o && typeof o === 'object') ? o : {}; } catch (e) { return {}; } }
 
 function buildArchiveIndexUrlsByDaysBack_(list, daysBack, cfg) {
+  // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003): the archive of the
+  // list the collector resolved (the same one RSS reads); the SA4 default
+  // only when none is given.
+  const listName = String(list || '').trim() || LIST_NAME_LOCK;
   const urls = [];
   const now = new Date();
   const start = new Date(now.getTime() - daysBack * 24 * 3600 * 1000);
@@ -6312,7 +6363,7 @@ function buildArchiveIndexUrlsByDaysBack_(list, daysBack, cfg) {
   while (cur.getTime() <= endMonth.getTime()) {
     const yy = String(cur.getFullYear()).slice(-2);
     const mm = String(cur.getMonth() + 1).padStart(2, '0');
-    weeks.forEach(w => urls.push(`https://list.etsi.org/scripts/wa.exe?A1=ind${yy}${mm}${w}&L=${encodeURIComponent(LIST_NAME_LOCK)}`));
+    weeks.forEach(w => urls.push(`https://list.etsi.org/scripts/wa.exe?A1=ind${yy}${mm}${w}&L=${encodeURIComponent(listName)}`));
     cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
   }
   return urls;

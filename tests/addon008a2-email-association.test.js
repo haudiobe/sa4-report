@@ -180,7 +180,13 @@ console.log('collector list: configured MAILING_LIST (ad-hoc), else the family l
     ['3GPP_TSG_SA_WG4_MBS', 'https://list.etsi.org/scripts/wa.exe?RSS&L=3GPP_TSG_SA_WG4_MBS&v=2.0&LIMIT=2000']);
   check('absent -> family list (unchanged)', listFor(ADHOC_MBS).LIST_NAME, '3GPP_TSG_SA_WG4_MBS');
   check('absent, Audio -> Audio list', listFor(Object.assign({}, ADHOC_MBS, { REPORT_SUFFIX: 'Audio' })).LIST_NAME, '3GPP_TSG_SA_WG4_AUDIO');
-  ['3GPP TSG SA WG4 MBS', '3GPP_TSG_SA_WG4_MBS@LIST.ETSI.ORG', 'https://list.etsi.org/x', 'A&L=OTHER'].forEach(bad => {
+  // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003): the reflector-address
+  // form "<list>@list.etsi.org" -- which the exporter already accepts as a
+  // Mailing List -- is normalized to the list name instead of being
+  // rejected. Any other address stays invalid.
+  const address = listFor(Object.assign({}, ADHOC_MBS, { REPORT_SUFFIX: 'Video', MAILING_LIST: '3GPP_TSG_SA_WG4_MBS@LIST.ETSI.ORG' }));
+  check('"<list>@list.etsi.org" is read as that list', [address.LIST_NAME, address.RSS_URL_V2.indexOf('L=3GPP_TSG_SA_WG4_MBS&') !== -1], ['3GPP_TSG_SA_WG4_MBS', true]);
+  ['3GPP TSG SA WG4 MBS', '3GPP_TSG_SA_WG4_MBS@example.org', 'https://list.etsi.org/x', 'A&L=OTHER'].forEach(bad => {
     const c = listFor(Object.assign({}, ADHOC_MBS, { REPORT_SUFFIX: 'Video', MAILING_LIST: bad }));
     check(`invalid "${bad}" is not used; family list read instead`, [c.LIST_NAME, c.RSS_URL_V2.indexOf('L=3GPP_TSG_SA_WG4_VIDEO&') !== -1], ['3GPP_TSG_SA_WG4_VIDEO', true]);
   });
