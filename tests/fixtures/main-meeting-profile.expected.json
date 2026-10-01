@@ -9,7 +9,7 @@
   "reportTypeProfiles": {
     "6G": {
       "agendaPrefix": "11.",
-      "mailingList": "3GPP_TSG_SA_WG4",
+      "mailingList": "3GPP_TSG_SA4_FS_6G_MED",
       "draftsFolder": "FS_6G_MED",
       "revisionsUrlPattern": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/FS_6G_MED",
       "structureBranch": "plenary-6g",
@@ -117,15 +117,15 @@
     "REVISIONS_URL": "https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/FS_6G_MED",
     "REPORT_SUFFIX": "6G",
     "DRAFTS_FOLDER": "FS_6G_MED",
-    "LIST_NAME": "3GPP_TSG_SA_WG4",
+    "LIST_NAME": "3GPP_TSG_SA4_FS_6G_MED",
     "AGENDA_ITEM_PREFIX": "11.",
     "AGENDA_SOURCE_DOC_ID": "1qP--dusvUhNwwBtMEH4xVdxaP1c6L1hZ49geICoYV2s",
     "AGENDA_TDOC": "",
     "SHOW_PREVIEW_SNIPPET": true,
     "REVIEWER_API_TOKEN": "",
     "REVIEWER_API_BASE": "https://reviewer.bouazizi.dev/api/v1",
-    "RSS_URL_V2": "https://list.etsi.org/scripts/wa.exe?RSS&L=3GPP_TSG_SA_WG4&v=2.0&LIMIT=2000",
-    "RSS_URL_V1": "https://list.etsi.org/scripts/wa.exe?RSS&L=3GPP_TSG_SA_WG4&v=1.0&LIMIT=2000"
+    "RSS_URL_V2": "https://list.etsi.org/scripts/wa.exe?RSS&L=3GPP_TSG_SA4_FS_6G_MED&v=2.0&LIMIT=2000",
+    "RSS_URL_V1": "https://list.etsi.org/scripts/wa.exe?RSS&L=3GPP_TSG_SA4_FS_6G_MED&v=1.0&LIMIT=2000"
   },
 
   "titleExamples": [

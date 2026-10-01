@@ -247,7 +247,7 @@ console.log('2. the token is re-read after Configure Meeting changes it');
 // =====================================================================
 
 const TEMPLATE_ID = 'TEMPLATEdoc0000000000000000000000000000000';
-const RELEASE = { releaseId: 'T-2026.10.1', flavor: 'template', codeVersion: '2.17.1', gitCommit: 'abcdef0000000000000000000000000000000000', templateDocumentId: TEMPLATE_ID };
+const RELEASE = { releaseId: 'T-2026.10.2', flavor: 'template', codeVersion: '2.17.2', gitCommit: 'abcdef0000000000000000000000000000000000', templateDocumentId: TEMPLATE_ID };
 // The 6G ad-hoc of the live test, as the Portal describes it (captured 86172 record, re-labelled).
 const MEETING_86178 = (() => { const m = plain(GM.getMeetings86172); m[0].Id = 86178; m[0].Title = '3GPPSA4-e (AH) on FS_6G_MED';
   m[0].MtgDocURL = 'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/Docs/'; return m; })();
@@ -317,41 +317,8 @@ function configureDialogList(rep) {
   return (html.match(/id="mailingList" value="([^"]*)"/) || [])[1];
 }
 
-console.log('3. creator: the derived mailing list is shown and can be replaced');
-{
-  const c = openCreator(MEETING_86178);
-  check('the field is in the dialog, hidden until a meeting is looked up', /id="mailingRow" style="display:none"[\s\S]*id="mailingList"/.test(c.html), true);
-  c.lookUp('86178');
-  check('after lookup: the list derived from the 6G family, editable', [c.el('family').value, c.el('mailingList').value, c.el('mailingList').disabled, c.el('mailingRow').style.display],
-    ['6G', '3GPP_TSG_SA_WG4', false, '']);
-  check('the hint says where it comes from', c.el('mailingHint').textContent, 'Derived from the report family. Replace it if this meeting uses another list.');
-  check('nothing to answer: Create is enabled', c.el('createBtn').disabled, false);
-
-  const copyId = c.create();
-  const rep = c.openReport(copyId);
-  check('unchanged derived list: no override is stored; the report derives the same list',
-    [rep.docProps._store.MAILING_LIST, rep.s.getMeetingContext_().sources.mailingList, collectorList(rep)], [undefined, '3GPP_TSG_SA_WG4', '3GPP_TSG_SA_WG4']);
-}
-
-console.log('3. creator: 86178 created with the override 3GPP_TSG_SA4_FS_6G_MED');
-{
-  const c = openCreator(MEETING_86178);
-  c.lookUp('86178');
-  c.typeList('3GPP_TSG_SA4_FS_6G_MED');
-  check('the proposal accepts the override and explains it',
-    [c.el('createBtn').disabled, c.el('mailingList').value, c.el('mailingHint').textContent],
-    [false, '3GPP_TSG_SA4_FS_6G_MED', 'Your list will be used instead of the family default 3GPP_TSG_SA_WG4.']);
-  const copyId = c.create();
-  const payload = JSON.parse(c.drive.files[copyId].description.split('SA4-BOOTSTRAP-V1:')[1]);
-  check('carried in the setup information as an override', [payload.config.mailingList, payload.config.mailingListMode], ['3GPP_TSG_SA4_FS_6G_MED', 'override']);
-  const rep = c.openReport(copyId);
-  check('stored in the report\'s normal MAILING_LIST property -- no second key',
-    [rep.docProps._store.MAILING_LIST, rep.docProps.getKeys().filter((k) => /MAILING/.test(k))], ['3GPP_TSG_SA4_FS_6G_MED', ['MAILING_LIST']]);
-  check('the collector reads that list', collectorList(rep), '3GPP_TSG_SA4_FS_6G_MED');
-  check('Configure Meeting shows the same value', configureDialogList(rep), '3GPP_TSG_SA4_FS_6G_MED');
-  check('the e-mail collection start date decision is unaffected', rep.docProps._store.EMAIL_START_DATE, '2026-10-01');
-
-  // ... and it reaches the generated discussion e-mail (section 4).
+/** One discussion e-mail generated in a report created by the creator; returns its text. */
+function exportFromReport(rep, copyId) {
   installExportStubs(rep.s);
   rep.docProps.setProperty('DISCUSSION_EMAIL_SENDER', 'reporter@example.com');
   rep.docProps.setProperty('REVISIONS_URL', 'https://www.3gpp.org/ftp/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/Inbox/Drafts/');
@@ -360,21 +327,91 @@ console.log('3. creator: 86178 created with the override 3GPP_TSG_SA4_FS_6G_MED'
   rep.s.DocumentApp.getActiveDocument = () => ({ getId: () => copyId, getBody: () => ({ getTables: () => exportTables }) });
   rep.s.DriveApp = { getFoldersByName: () => ({ hasNext: () => false }), createFolder: () => ({ createFile: (b) => { files.push(b); return { getUrl: () => 'u' }; } }) };
   const result = rep.s.generateTdocDiscussionEmails([{ tableIndex: 0, deadline: { date: '2026-10-15', time: '15:00', tz: 'CEST' } }], null);
-  const eml = blobText(files.find((b) => /\.eml$/.test(b.getName())));
-  check('the creator\'s override flows through to Reply-To', [result.ok, emlHeader(eml, 'Reply-To'), emlHeader(eml, 'From')],
-    [true, '3GPP_TSG_SA4_FS_6G_MED@list.etsi.org', 'reporter@example.com']);
+  return { ok: result.ok, eml: blobText(files.find((f) => /\.eml$/.test(f.getName()))) };
+}
+const LIST_6G = '3GPP_TSG_SA4_FS_6G_MED';
+
+console.log('3. the family -> mailing list table (Code.js 2.17.2: 6G has its own list)');
+{
+  const listOf = (family, type) => loadCode({ documentProperties: { REPORT_SUFFIX: family, MEETING_TYPE: type } }).sandbox.getMeetingContext_().sources.mailingList;
+  check('6G derives exactly 3GPP_TSG_SA4_FS_6G_MED, ad-hoc and main', [listOf('6G', 'adhoc'), listOf('6G', 'main')], [LIST_6G, LIST_6G]);
+  check('Audio / Video / MBS / RTC are unchanged', ['Audio', 'Video', 'MBS', 'RTC'].map((f) => listOf(f, 'adhoc')),
+    ['3GPP_TSG_SA_WG4_AUDIO', '3GPP_TSG_SA_WG4_VIDEO', '3GPP_TSG_SA_WG4_MBS', '3GPP_TSG_SA_WG4_RTC']);
+  check('the main-meeting families Liaison / New still use the general SA4 list', ['Liaison', 'New'].map((f) => listOf(f, 'main')), ['3GPP_TSG_SA_WG4', '3GPP_TSG_SA_WG4']);
+  const { sandbox: s } = loadCode();
+  check('Configure Meeting offers the same default (one table, no second mapping)', plain(s.buildReportFamilyInfo_())['6G'].mailingList, LIST_6G);
+  const table = CODE.slice(CODE.indexOf('const MAILING_LISTS = {'), CODE.indexOf('};', CODE.indexOf('const MAILING_LISTS = {')));
+  check('the mapping is by family, with no meeting id in it', [/'6G': '3GPP_TSG_SA4_FS_6G_MED'/.test(table), /\d{5}/.test(table)], [true, false]);
+  check('no code path is keyed on meeting 86178 (its only mention in code is the pre-existing default of a manual timing diagnostic)',
+    (CODE_ONLY.match(/86178/g) || []).length, 1);
+}
+
+console.log('3. creator: the derived mailing list is shown and can be replaced');
+{
+  const c = openCreator(MEETING_86178);
+  check('the field is in the dialog, hidden until a meeting is looked up', /id="mailingRow" style="display:none"[\s\S]*id="mailingList"/.test(c.html), true);
+  c.lookUp('86178');
+  check('86178: lookup shows the 6G family list, editable', [c.el('family').value, c.el('mailingList').value, c.el('mailingList').disabled, c.el('mailingRow').style.display],
+    ['6G', LIST_6G, false, '']);
+  check('the hint says where it comes from', c.el('mailingHint').textContent, 'Derived from the report family. Replace it if this meeting uses another list.');
+  check('nothing to answer: Create is enabled', c.el('createBtn').disabled, false);
+
+  const copyId = c.create();
+  const payload = JSON.parse(c.drive.files[copyId].description.split('SA4-BOOTSTRAP-V1:')[1]);
+  const rep = c.openReport(copyId);
+  check('left unchanged: no override is carried or stored; the report derives the same list',
+    [payload.config.mailingList, payload.config.mailingListMode, rep.docProps._store.MAILING_LIST, rep.s.getMeetingContext_().sources.mailingList],
+    ['', 'derived', undefined, LIST_6G]);
+  const cfg = rep.s.getCollectorConfig_();
+  check('collector RSS reads that list', [cfg.LIST_NAME, cfg.RSS_URL_V2], [LIST_6G, 'https://list.etsi.org/scripts/wa.exe?RSS&L=' + LIST_6G + '&v=2.0&LIMIT=2000']);
+  const a1 = rep.s.buildArchiveIndexUrlsByDaysBack_(cfg.LIST_NAME, 14, cfg);
+  check('collector A1 archive reads that list', [a1.length > 0, a1.every((u) => new RegExp('&L=' + LIST_6G + '$').test(u))], [true, true]);
+  check('Configure Meeting shows it as the derived default (no saved override)',
+    [configureDialogList(rep), plain(rep.s.buildReportFamilyInfo_())['6G'].mailingList], ['', LIST_6G]);
+  const x = exportFromReport(rep, copyId);
+  check('generated e-mail: To and Reply-To are the 6G list',
+    [x.ok, emlHeader(x.eml, 'To'), emlHeader(x.eml, 'Reply-To')], [true, '3gpp_tsg_sa4_fs_6g_med@list.etsi.org', LIST_6G + '@list.etsi.org']);
+
+  // The same family default for any 6G meeting -- nothing is keyed on the meeting id.
+  const other = plain(MEETING_86178); other[0].Id = 90001; other[0].Title = '3GPPSA4-e (AH2) on FS_6G_MED';
+  const c2 = openCreator(other);
+  c2.lookUp('90001');
+  check('another 6G meeting (different id) gets the same derived list', [c2.el('family').value, c2.el('mailingList').value], ['6G', LIST_6G]);
+}
+
+console.log('3. creator: an explicit override still wins');
+const OVERRIDE = '3GPP_TSG_SA4_SOME_OTHER_WI';
+{
+  const c = openCreator(MEETING_86178);
+  c.lookUp('86178');
+  c.typeList(OVERRIDE);
+  check('the proposal accepts the override and explains it',
+    [c.el('createBtn').disabled, c.el('mailingList').value, c.el('mailingHint').textContent],
+    [false, OVERRIDE, 'Your list will be used instead of the family default ' + LIST_6G + '.']);
+  const copyId = c.create();
+  const payload = JSON.parse(c.drive.files[copyId].description.split('SA4-BOOTSTRAP-V1:')[1]);
+  check('carried in the setup information as an override', [payload.config.mailingList, payload.config.mailingListMode], [OVERRIDE, 'override']);
+  const rep = c.openReport(copyId);
+  check('stored in the report\'s normal MAILING_LIST property -- no second key',
+    [rep.docProps._store.MAILING_LIST, rep.docProps.getKeys().filter((k) => /MAILING/.test(k))], [OVERRIDE, ['MAILING_LIST']]);
+  check('the collector reads that list', collectorList(rep), OVERRIDE);
+  check('Configure Meeting shows the same value', configureDialogList(rep), OVERRIDE);
+  check('the e-mail collection start date decision is unaffected', rep.docProps._store.EMAIL_START_DATE, '2026-10-01');
+  const x = exportFromReport(rep, copyId);
+  check('the creator\'s override flows through to Reply-To', [x.ok, emlHeader(x.eml, 'Reply-To'), emlHeader(x.eml, 'From')],
+    [true, OVERRIDE + '@list.etsi.org', 'reporter@example.com']);
 }
 
 console.log('3. creator: accepted forms, and what is refused');
 {
   const c = openCreator(MEETING_86178);
   c.lookUp('86178');
-  c.typeList('3gpp_tsg_sa4_fs_6g_med@LIST.ETSI.ORG');
+  c.typeList('3gpp_tsg_sa_wg4@LIST.ETSI.ORG');
   check('the reflector-address form is accepted', c.el('createBtn').disabled, false);
   const rep = c.openReport(c.create());
   check('... and stored as the plain list name, exactly as the collector normalizes it',
-    [rep.docProps._store.MAILING_LIST, rep.s.normalizeEtsiListName_('3gpp_tsg_sa4_fs_6g_med@LIST.ETSI.ORG'), collectorList(rep)],
-    ['3gpp_tsg_sa4_fs_6g_med', '3gpp_tsg_sa4_fs_6g_med', '3gpp_tsg_sa4_fs_6g_med']);
+    [rep.docProps._store.MAILING_LIST, rep.s.normalizeEtsiListName_('3gpp_tsg_sa_wg4@LIST.ETSI.ORG'), collectorList(rep)],
+    ['3gpp_tsg_sa_wg4', '3gpp_tsg_sa_wg4', '3gpp_tsg_sa_wg4']);
 }
 {
   const c = openCreator(MEETING_86178);
@@ -387,15 +424,15 @@ console.log('3. creator: accepted forms, and what is refused');
   const refused = plain(c.master.s.createNewReportFromTemplate('86178', resolved, { mailingList: 'not a list!' }));
   check('the server refuses too, before anything is copied', [refused.ok, c.drive.calls], [false, []]);
 
-  c.typeList('3gpp_tsg_sa_wg4');
+  c.typeList('3gpp_tsg_sa4_fs_6g_med');
   check('typing the derived list again (any case) is no override', [c.el('createBtn').disabled, c.el('mailingHint').textContent],
     [false, 'Derived from the report family. Replace it if this meeting uses another list.']);
   c.typeList('');
-  check('an emptied field goes back to the derived list', c.el('mailingList').value, '3GPP_TSG_SA_WG4');
-  c.typeList('3GPP_TSG_SA4_FS_6G_MED');
+  check('an emptied field goes back to the derived list', c.el('mailingList').value, LIST_6G);
+  c.typeList(OVERRIDE);
   c.el('family').value = 'Audio';
   c.globals.familyChanged();
-  check('a typed list survives a family change', c.el('mailingList').value, '3GPP_TSG_SA4_FS_6G_MED');
+  check('a typed list survives a family change', c.el('mailingList').value, OVERRIDE);
 }
 {
   const c = openCreator(MAIN_137);
@@ -459,9 +496,10 @@ console.log('4. Reply-To is the effective mailing list; From is unchanged');
   ['Audio ad-hoc (family list)', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: 'Audio' }, 'S4aA260090', '3.1', '3GPP_TSG_SA_WG4_AUDIO@list.etsi.org', '3gpp_tsg_sa_wg4_audio@list.etsi.org'],
   ['Video ad-hoc (family list)', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: 'Video' }, 'S4aV260012', '3.1', '3GPP_TSG_SA_WG4_VIDEO@list.etsi.org', '3gpp_tsg_sa_wg4_video@list.etsi.org'],
   ['RTC ad-hoc (family list)', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: 'RTC' }, 'A4aR260005', '3.1', '3GPP_TSG_SA_WG4_RTC@list.etsi.org', '3gpp_tsg_sa_wg4_rtc@list.etsi.org'],
-  ['6G ad-hoc without override (general list)', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G' }, 'S4aP260091', '5.6.1', '3GPP_TSG_SA_WG4@list.etsi.org', '3gpp_tsg_sa_wg4@list.etsi.org'],
-  ['6G ad-hoc, Mailing List as a plain name', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G', MAILING_LIST: '3GPP_TSG_SA4_FS_6G_MED' }, 'S4aP260091', '5.6.1', '3GPP_TSG_SA4_FS_6G_MED@list.etsi.org', '3gpp_tsg_sa4_fs_6g_med@list.etsi.org'],
-  ['6G ad-hoc, Mailing List as an address', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G', MAILING_LIST: '3GPP_TSG_SA4_FS_6G_MED@list.etsi.org' }, 'S4aP260091', '5.6.1', '3GPP_TSG_SA4_FS_6G_MED@list.etsi.org', '3gpp_tsg_sa4_fs_6g_med@list.etsi.org'],
+  ['6G ad-hoc (family list, 2.17.2: the 6G list)', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G' }, 'S4aP260091', '5.6.1', '3GPP_TSG_SA4_FS_6G_MED@list.etsi.org', '3gpp_tsg_sa4_fs_6g_med@list.etsi.org'],
+  ['6G main meeting (always the family list)', { MEETING_TYPE: 'main', REPORT_SUFFIX: '6G', MAILING_LIST: 'IGNORED_FOR_MAIN' }, 'S4-260500', '9.1', '3GPP_TSG_SA4_FS_6G_MED@list.etsi.org', '3gpp_tsg_sa4_fs_6g_med@list.etsi.org'],
+  ['6G ad-hoc, another Mailing List as a plain name (override wins)', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G', MAILING_LIST: '3GPP_TSG_SA_WG4' }, 'S4aP260091', '5.6.1', '3GPP_TSG_SA_WG4@list.etsi.org', '3gpp_tsg_sa_wg4@list.etsi.org'],
+  ['6G ad-hoc, another Mailing List as an address (override wins)', { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G', MAILING_LIST: '3GPP_TSG_SA_WG4@list.etsi.org' }, 'S4aP260091', '5.6.1', '3GPP_TSG_SA_WG4@list.etsi.org', '3gpp_tsg_sa_wg4@list.etsi.org'],
   ['main meeting, Audio (always the family list)', { MEETING_TYPE: 'main', REPORT_SUFFIX: 'Audio', MAILING_LIST: 'IGNORED_FOR_MAIN' }, 'S4-261234', '7.3', '3GPP_TSG_SA_WG4_AUDIO@list.etsi.org', '3gpp_tsg_sa_wg4_audio@list.etsi.org']
 ].forEach(([name, props, id, agenda, replyTo, to]) => {
   const x = exportOne(props, id, 'Title', agenda);

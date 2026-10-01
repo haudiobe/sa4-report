@@ -259,7 +259,11 @@ console.log('full-ID scanner (ported from CENTRAL ADDON-008A2, same cases)');
 
 console.log('10 main-meeting fallback unchanged');
 {
-  const MAIN_LIST = '3GPP_TSG_SA_WG4';
+  // INTENTIONAL DIFFERENCE (decision 2026-10-01, Code.js 2.17.2): the 6G report
+  // family derives its own list, 3GPP_TSG_SA4_FS_6G_MED. Legacy derives the
+  // general list 3GPP_TSG_SA_WG4 for 6G and relies on a saved Mailing List.
+  // MAIN is a main 6G report, so it reads the 6G family list.
+  const MAIN_LIST = LIST_6G;
   const run = (subj, ids) => matched(collect(ids, [subj], { props: MAIN, onList: MAIN_LIST }), ids);
   check('short number -> S4-261483 only', run('[FS_6G_MED, 1483, 25 Aug 2026 1400 CEST] Some title', ['S4-261483', 'S4-261484']), [1, 0]);
   check('Re: short number', run('Re: [FS_6G_MED, 1483, 25 Aug 2026 1400 CEST] Some title', ['S4-261483']), [1]);
@@ -268,7 +272,7 @@ console.log('10 main-meeting fallback unchanged');
   check('three-digit short number (S4-260099 -> 099)', run('[FS_6G_MED, 099, 25 Aug 2026 1400 CEST] t', ['S4-260099']), [1]);
   check('exporter format with S4- now round-trips too', run('Re: [FS_6G_MED,5.6.1,26-10-15-1500CEST][S4-261483] Discussion: t', ['S4-261483', 'S4-261484']), [1, 0]);
   const r = collect(['S4-261483'], [], { props: MAIN, onList: MAIN_LIST });
-  check('main list unchanged (RSS + A1)', listsOf(r._fetched), [MAIN_LIST]);
+  check('[template] a main 6G report reads its family list, the 6G list (RSS + A1)', listsOf(r._fetched), [MAIN_LIST]);
   const bad = collect(['S4-261483', 'not-a-tdoc'], ['[FS_6G_MED, 1483, 25 Aug 2026 1400 CEST] t'], { props: MAIN, onList: MAIN_LIST });
   check('a malformed table id is still skipped', bad['not-a-tdoc'].processed, false);
 }
@@ -299,10 +303,11 @@ console.log('13-17 mailing-list resolution');
   ['3GPP TSG SA4 FS 6G MED', 'fs6g@example.com', 'https://list.etsi.org/x', 'A&L=OTHER', '3GPP_TSG_SA4_FS_6G_MED\r\nBcc: x', '@list.etsi.org'].forEach((bad) => {
     const e = env(props6G({ MAILING_LIST: bad }), []);
     const c = e.s.getCollectorConfig_();
-    check(`15 malformed ${JSON.stringify(bad)} -> family list, logged`, [c.LIST_NAME, c.RSS_URL_V2 === rssFor('3GPP_TSG_SA_WG4'), e.logs.some((l) => l.indexOf('Ignoring configured mailing list') === 0 && !/[\r\n]/.test(l))], ['3GPP_TSG_SA_WG4', true, true]);
+    // [template] the family list a malformed value falls back to is the 6G list (see the note in section 10).
+    check(`15 malformed ${JSON.stringify(bad)} -> family list, logged`, [c.LIST_NAME, c.RSS_URL_V2 === rssFor(LIST_6G), e.logs.some((l) => l.indexOf('Ignoring configured mailing list') === 0 && !/[\r\n]/.test(l))], [LIST_6G, true, true]);
   });
   const unset = Object.assign({}, PROPS_6G); delete unset.MAILING_LIST;
-  check('16 unset (ad-hoc 6G) -> family list', pair(cfgOf(unset)), ['3GPP_TSG_SA_WG4', rssFor('3GPP_TSG_SA_WG4')]);
+  check('[template] 16 unset (ad-hoc 6G) -> family list, now the 6G list', pair(cfgOf(unset)), [LIST_6G, rssFor(LIST_6G)]);
   check('16 unset (ad-hoc MBS) -> MBS family list', cfgOf(Object.assign({}, unset, { REPORT_SUFFIX: 'MBS' })).LIST_NAME, '3GPP_TSG_SA_WG4_MBS');
   check('16 main meeting keeps the family list even with MAILING_LIST set', cfgOf({ REPORT_SUFFIX: 'Audio', MAILING_LIST: LIST_6G }).LIST_NAME, '3GPP_TSG_SA_WG4_AUDIO');
 
@@ -311,13 +316,23 @@ console.log('13-17 mailing-list resolution');
   check('17 both set in the table: both kept as given', pair(cfgOf(PROPS_6G, [['LIST_NAME', 'L_ONE'], ['RSS_URL_V2', 'https://example.invalid/rss']])), ['L_ONE', 'https://example.invalid/rss']);
   // The snapshot "Create Configuration Tables" writes (populateConfigTable_):
   // derived defaults, not an override -- the meeting's MAILING_LIST wins.
-  const snapshot = [['DEBUG', 'true'], ['LIST_NAME', '3GPP_TSG_SA_WG4'], ['RSS_URL_V2', rssFor('3GPP_TSG_SA_WG4')],
-    ['RSS_URL_V1', rssFor('3GPP_TSG_SA_WG4').replace('v=2.0', 'v=1.0')], ['TDOC_ID_REGEX', '^S4-\\d{6}$']];
-  check('17 generated snapshot table (family defaults) does not mask MAILING_LIST', pair(cfgOf(PROPS_6G, snapshot)), [LIST_6G, rssFor(LIST_6G)]);
+  // [template] The snapshot holds the family defaults, and the 6G family default
+  // is now the 6G list. To keep the point of this check (a snapshot must not
+  // mask the meeting's own Mailing List) the meeting's list is a different one.
+  const OTHER_LIST = '3GPP_TSG_SA4_SOME_OTHER_WI';
+  const snapshot = [['DEBUG', 'true'], ['LIST_NAME', LIST_6G], ['RSS_URL_V2', rssFor(LIST_6G)],
+    ['RSS_URL_V1', rssFor(LIST_6G).replace('v=2.0', 'v=1.0')], ['TDOC_ID_REGEX', '^S4-\\d{6}$']];
+  check('17 generated snapshot table (family defaults) does not mask MAILING_LIST', pair(cfgOf(props6G({ MAILING_LIST: OTHER_LIST }), snapshot)), [OTHER_LIST, rssFor(OTHER_LIST)]);
+  // A snapshot written BEFORE 2.17.2 holds the old 6G default (the general
+  // list). It now differs from the family default, so it counts as what it
+  // looks like: an explicit table override. Stated here so it is not a surprise.
+  const oldSnapshot = [['LIST_NAME', '3GPP_TSG_SA_WG4'], ['RSS_URL_V2', rssFor('3GPP_TSG_SA_WG4')]];
+  check('[template] 17 a pre-2.17.2 snapshot (general list) in a 6G document acts as an explicit table override',
+    pair(cfgOf(PROPS_6G, oldSnapshot)), ['3GPP_TSG_SA_WG4', rssFor('3GPP_TSG_SA_WG4')]);
   const snap = collect(['S4aP260091'], ['Re: ' + SUBJ], { table: snapshot });
   check('17 ... and its TDOC_ID_REGEX row no longer gates S4aP tables', matched(snap, ['S4aP260091']), [1]);
-  const sameAsFamily = cfgOf(Object.assign({}, unset), [['LIST_NAME', '3GPP_TSG_SA_WG4']]);
-  check('17 snapshot with no MAILING_LIST -> family list (unchanged)', sameAsFamily.LIST_NAME, '3GPP_TSG_SA_WG4');
+  const sameAsFamily = cfgOf(Object.assign({}, unset), [['LIST_NAME', LIST_6G]]);
+  check('17 snapshot with no MAILING_LIST -> family list (unchanged)', sameAsFamily.LIST_NAME, LIST_6G);
 }
 
 // ============================================================ dates (18)

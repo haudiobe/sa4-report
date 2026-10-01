@@ -237,12 +237,12 @@ console.log('F. main-meeting S4- compatibility (Mailing List semantics unchanged
 }
 
 {
-  // The general SA4 list names no topic: the report family's SWG name is used.
+  // 2.17.2: the 6G family has its own list, so a main 6G report writes to it.
   const env = setup({ MEETING_TYPE: 'main', REPORT_SUFFIX: '6G', DISCUSSION_EMAIL_SENDER: SENDER }, [tdocTable('S4-260500', 'T', '9.1')]);
   env.run([sel(0)]);
   const eml = env.emls()[0];
-  check('main 6G: To the general SA4 reflector', header(eml.text, 'To'), '3gpp_tsg_sa_wg4@list.etsi.org');
-  check('main 6G: the tag (now only in the file name) falls back to the SWG name FS_6G_MED; the subject carries no tag',
+  check('main 6G: To the 6G family reflector', header(eml.text, 'To'), '3gpp_tsg_sa4_fs_6g_med@list.etsi.org');
+  check('main 6G: the tag (now only in the file name) is FS_6G_MED, from the 6G list; the subject carries no tag',
     [eml.name, header(eml.text, 'Subject')], ['FS_6G_MED_S4-260500.eml', '[9.1][26-10-15-1500CEST][S4-260500] Discussion: T']);
 }
 

@@ -464,7 +464,7 @@ console.log('getMeetingContext_() -- incomplete ad-hoc configuration is represen
   check('incomplete ad-hoc: sources.revisionsUrl is undefined (REVISIONS_URL missing)',
     ctx.sources.revisionsUrl, undefined);
   check('incomplete ad-hoc: sources.mailingList is STILL populated (provisional REPORT_SUFFIX-based reuse, independent of the missing fields)',
-    ctx.sources.mailingList, '3GPP_TSG_SA_WG4'); // REPORT_SUFFIX defaults to '6G' when unset
+    ctx.sources.mailingList, '3GPP_TSG_SA4_FS_6G_MED'); // REPORT_SUFFIX defaults to '6G' when unset; 2.17.2: the 6G family list
   check('incomplete ad-hoc: sources.draftsFolder is still null',
     ctx.sources.draftsFolder, null);
   check('incomplete ad-hoc: getMeetingContext_() does not throw', typeof ctx, 'object');
@@ -531,7 +531,7 @@ console.log('getMeetingContext_() -- MAILING_LIST override reaches sources.maili
   const { sandbox } = loadCode({ documentProperties: { MEETING_TYPE: 'adhoc', REPORT_SUFFIX: '6G' } });
   const ctx = sandbox.getMeetingContext_();
   check('ad-hoc sources.mailingList falls back to cfg.LIST_NAME when no MAILING_LIST override is set',
-    ctx.sources.mailingList, '3GPP_TSG_SA_WG4');
+    ctx.sources.mailingList, '3GPP_TSG_SA4_FS_6G_MED'); // 2.17.2: the 6G family list
 }
 
 {

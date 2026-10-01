@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.17.1 (2026-10-01)
+ * Version: 2.17.2 (2026-10-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,16 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.17.2 (2026-10-01)
+ *   - Fixed: the 6G report family derived the general list 3GPP_TSG_SA_WG4
+ *     as its mailing list. Its list is 3GPP_TSG_SA4_FS_6G_MED
+ *     (MAILING_LISTS, the one family -> list table). Found live: "Create
+ *     New SA4 Report" pre-filled the general list for a 6G meeting. Every
+ *     consumer derives from that table, so Configure Meeting, the RSS and
+ *     A1 collectors and the discussion e-mail To / Reply-To now use the 6G
+ *     list for a 6G report without a Mailing List override, ad-hoc or
+ *     main. A saved Mailing List override still wins. The other families
+ *     are unchanged.
  * 2.17.1 (2026-10-01)
  *   - Fixed (TEMPLATE-002C): "Run Full Report Build" ran the single-step
  *     menu functions, each of which ends with its own blocking pop-up
@@ -489,7 +499,7 @@ const MAILING_LISTS = {
   'Video': '3GPP_TSG_SA_WG4_VIDEO',
   'MBS': '3GPP_TSG_SA_WG4_MBS',
   'RTC': '3GPP_TSG_SA_WG4_RTC',
-  '6G': '3GPP_TSG_SA_WG4',
+  '6G': '3GPP_TSG_SA4_FS_6G_MED',
   'Liaison': '3GPP_TSG_SA_WG4',
   'New': '3GPP_TSG_SA_WG4'
 };
@@ -13456,7 +13466,7 @@ function discoverAgendaForConfigDialog(meetingIdInput, coreResolved) {
  *   3gpp_tsg_sa4_fs_6g_med@list.etsi.org -> FS_6G_MED
  *   3gpp_tsg_sa_wg4_mbs@list.etsi.org    -> MBS
  *
- * The general SA4 list (3GPP_TSG_SA_WG4, main 6G/Liaison/New reports) names
+ * The general SA4 list (3GPP_TSG_SA_WG4, main Liaison/New reports) names
  * no topic, so the report family's SWG name (getReportConfig_().DRAFTS_FOLDER,
  * e.g. 6G -> FS_6G_MED) is used instead. Returns null when nothing usable
  * remains; the tag may never contain a comma, bracket or whitespace.

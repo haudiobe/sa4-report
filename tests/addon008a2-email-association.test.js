@@ -165,7 +165,7 @@ console.log('main meetings: legacy subjects keep working');
   check('legacy full S4- identifier', fullMain.result['S4-261483'].matched, 1);
   const hyphenless = collect(['S4-261483'], ['[FS_6G_MED; S4261483; 25 Aug 2026 1400 CEST] Some title'], MAIN);
   check('legacy hyphenless S4 form still accepted by the fallback', hyphenless.result['S4-261483'].matched, 1);
-  check('main list unchanged', shortNum.fetchedList, '3GPP_TSG_SA_WG4');
+  check('a main 6G report reads its family list (2.17.2: the 6G list)', shortNum.fetchedList, '3GPP_TSG_SA4_FS_6G_MED');
   const unknown = collect(['S4-261483', 'not-a-tdoc'], [], MAIN);
   check('a malformed table id is still skipped', unknown.result['not-a-tdoc'].processed, false);
 }
