@@ -438,7 +438,7 @@ console.log('regression: BUGFIX-LEGACY-001 / LEGACY-UPGRADE-002 / LEGACY-UPGRADE
 
 console.log('structural: no meeting-specific constants; exactly the expected functions changed');
 
-if (!LEGACY_GIT_HISTORY) skipLegacyHistory('LEGACY-UPGRADE-004 stage scope (3 checks)'); else {
+if (!LEGACY_GIT_HISTORY) skipLegacyHistory('LEGACY-UPGRADE-004 stage scope (2 checks)'); else {
   const fs = require('fs');
   const { execFileSync } = require('child_process');
   const path = require('path');
@@ -461,7 +461,14 @@ if (!LEGACY_GIT_HISTORY) skipLegacyHistory('LEGACY-UPGRADE-004 stage scope (3 ch
   const addedByThisStage = [...names(post004Source)].filter((n) => !before.has(n));
   check('LEGACY-UPGRADE-004 itself added exactly its own new functions', addedByThisStage.sort(),
     ['deriveAdminAnchorsFromBuiltDocument_', 'getAdministrativeAgendaAnchors_', 'isBeforeAdminBoundary_', 'isRealItemNumber_'].sort());
+}
 
+// TEMPLATE-002A harness adaptation: this check needs no git history, so it
+// runs here on its own.
+{
+  const fs = require('fs');
+  const { CODE_JS_PATH } = require('./helpers/legacy-load-code.js');
+  const src = fs.readFileSync(CODE_JS_PATH, 'utf8');
   const anchorBlockStart = src.indexOf('function getAdministrativeAgendaAnchors_(');
   const anchorBlockEnd = src.indexOf('function appendTdocDetailTable_(') > anchorBlockStart ? src.indexOf('function appendTdocDetailTable_(') : src.length;
   const anchorBlock = src.slice(anchorBlockStart, anchorBlockEnd) + src.slice(src.indexOf('function deriveAdminAnchorsFromBuiltDocument_('), src.indexOf('function ensureReallocationTable_('));

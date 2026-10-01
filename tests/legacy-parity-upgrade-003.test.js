@@ -419,7 +419,11 @@ console.log('regression: BUGFIX-LEGACY-001 unchanged');
 
 console.log('structural: no report/build/content mutation logic touched');
 
-if (!LEGACY_GIT_HISTORY) skipLegacyHistory('LEGACY-UPGRADE-003 stage scope (6 checks)'); else {
+// Three of these six checks compare against Legacy commits. The other three
+// assert the shape of Legacy's source (a guard without a context parameter,
+// Legacy's comment text, "no central registry"), which this repository
+// deliberately does not have; the guard's behaviour is checked above.
+if (!LEGACY_GIT_HISTORY) skipLegacyHistory('LEGACY-UPGRADE-003 stage scope (6 checks: 3 history, 3 Legacy source shape)'); else {
   const { execFileSync } = require('child_process');
   const POST_002_COMMIT = '9739085';
   // LEGACY-UPGRADE-003's own commit (not the live/current file) -- this
