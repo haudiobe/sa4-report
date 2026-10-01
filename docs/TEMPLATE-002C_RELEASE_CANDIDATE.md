@@ -1,10 +1,14 @@
 # TEMPLATE-002C: Full Build orchestration, creator mailing list, discussion e-mail headers
 
 2026-10-01. Branch `template-002c/full-build` (worktree `sa4-report-template-002c`), based on
-the TEMPLATE-002B release candidate `d8cb075`. Local implementation and automated tests only.
-Nothing was pushed or deployed; the deployed release T-2026.10.0 and its tag are unchanged.
+the TEMPLATE-002B release candidate `d8cb075`.
 
-**Status: ready for deployment as the next template release (proposed T-2026.10.1). Not deployed.**
+**Status: COMPLETE / LIVE. Template release T-2026.10.3 (`Code.js` 2.17.3, commit `39dbfa1`) is
+deployed to the master template and accepted after the final live run. See §11.**
+
+Sections 1 to 8 describe the stage as first built (T-2026.10.1). Sections 9 and 10 are the two
+patches that followed live testing (T-2026.10.2, T-2026.10.3). Where they differ, the later
+section is what is live; §11 is the closeout record.
 
 ---
 
@@ -55,6 +59,10 @@ reported once, in the final dialog, together with what did not run.
 | After abstracts | "Abstract step completed…" (blocking) | none |
 | At the end | "Full report build completed." | One summary: each phase with its result and duration, and the total |
 | On failure | One error dialog, but only after the pop-ups before it had been clicked | One error dialog: the failed phase, its message, and the phases not run |
+
+**Superseded for the last two rows by 2.17.3 (§10):** there is no dialog at the end. A
+completed build ends silently, and a failed phase throws an error instead of opening a dialog.
+The final dialogs are listed in §11.3.
 
 The single-step menu items (*Build Skeleton + TDOC Tables*, *Collect E-mail Discussion*,
 *Collect Revisions*, *Add Abstracts*) keep their own completion pop-ups, with the same texts.
@@ -248,6 +256,9 @@ in the master template, a **new** report is created for the final smoke test.
 Still to be seen live for the first time: a complete Full Build in a copy, the creator dialog
 with the new field, and the first trigger execution in a copy.
 
+**Outcome:** the creator dialog was seen live with T-2026.10.1 (§9), and a complete Full Build
+in a copy was accepted live with T-2026.10.3 (§11).
+
 ---
 
 ## 9. Patch after the T-2026.10.1 creator smoke test: 6G family mailing list (Code.js 2.17.2)
@@ -341,6 +352,7 @@ UI calls of the same kind as the one that failed), so none was added.
 **Not proven.** Whether the end of the script (where Google writes pending changes) can raise
 the same error without the pop-up. In the live run the changes were saved, so the write itself
 worked; one build with this release confirms it.
+**Confirmed live with T-2026.10.3:** the execution ended "Completed" (§11.2).
 
 **Release.** `Code.js` 2.17.3, proposed template release **T-2026.10.3**.
 `template-release/T-2026.10.2` stays on `77a23f3`.
@@ -352,3 +364,91 @@ did live; the five phases, their order, the total line, one formatting pass and 
 handling are asserted as before; a failure in each of the five phases makes the menu function
 throw, with the failed phase and the phases not run in the message, also when the UI cannot
 show anything.
+
+---
+
+## 11. Closeout: T-2026.10.3 accepted live
+
+### 11.1 Accepted release
+
+| | |
+|---|---|
+| Template release | **T-2026.10.3** |
+| `Code.js` | 2.17.3 |
+| Release commit | `39dbfa1` (tag `template-release/T-2026.10.3`, local) |
+| Deployed | 2026-10-01, to the master template "SA4 Report Template"; a fresh pull showed all seven files byte-identical to the release bundle |
+| Status | **Accepted.** This is the final live acceptance of TEMPLATE-002C. |
+
+Release history of this stage. The tags are local and are not moved.
+
+| Release | `Code.js` | Commit | Live result |
+|---|---|---|---|
+| T-2026.10.0 | 2.17.0 | `d8cb075` | TEMPLATE-002B. Full Build ended "Exceeded maximum execution time" (blocking pop-ups between the phases). |
+| T-2026.10.1 | 2.17.1 | `6b65ebd` | Full Build without pop-ups between the phases. The creator pre-filled the general SA4 list for a 6G meeting. |
+| T-2026.10.2 | 2.17.2 | `77a23f3` | 6G family list correct. The build completed, but the final "Success" pop-up hung and the execution ended Failed with "Service Documents failed". |
+| **T-2026.10.3** | **2.17.3** | **`39dbfa1`** | **Accepted.** |
+
+### 11.2 Final live acceptance run
+
+A new report was created from the T-2026.10.3 template and Full Build was run once.
+
+| | |
+|---|---|
+| Function | `runFullReportBuild` |
+| Type | Menu |
+| Status | **Completed** |
+| Apps Script execution duration | 56.165 s |
+
+| Phase | Result | Duration |
+|---|---|---|
+| skeleton | done: 14 agenda items, 34 TDocs | 17,281 ms |
+| e-mail | done | 16,345 ms |
+| revisions | done | 1,493 ms |
+| abstracts | skipped | 1 ms |
+| formatting | done | 10,216 ms |
+| **`[FULLBUILD]` total** | | **45,340 ms** |
+
+- **Mailing list.** The collector used the 6G family list `3GPP_TSG_SA4_FS_6G_MED` (§9). RSS
+  and A1 archive collection both succeeded.
+- **Abstracts.** The skip is expected: no Reviewer API token is configured in the report. A
+  report has no token until one is entered in that report (§2.3).
+- **End of the build.** No "Success" pop-up, as designed. No post-build hang and no "Service
+  Documents failed" error. The execution ended Completed.
+
+**The T-2026.10.2 failure and its resolution.** With T-2026.10.2 the five phases finished in
+64.6 s and the report was saved, but the final `ui.alert('Success', …)` never appeared: the
+call hung for about 96 s and then threw "Service Documents failed while accessing document
+with id …", so the execution ran 170.6 s and ended Failed (§10). `Code.js` 2.17.3 removed that
+final blocking alert: `runFullReportBuild()` makes no UI call after the build has changed the
+document. The acceptance run confirms the fix and also settles the point §10 left open: the
+end-of-script save works without the pop-up. The execution lasted 56.165 s for 45,340 ms of
+build work.
+
+### 11.3 Final user experience of Run Full Report Build
+
+1. **One confirmation** before the build ("Continue?").
+2. **No intermediate dialogs.** The five phases run without stopping.
+3. **No completion dialog.**
+4. **When Docs' "Running script" notice disappears, the build has completed.** The phase
+   results and durations are in the `[FULLBUILD]` log lines (Extensions → Apps Script →
+   Executions).
+5. **Genuine phase failures still fail.** The first phase that fails stops the build, and
+   `runFullReportBuild()` throws an error naming the failed phase, its message and the phases
+   not run. Docs shows that error and the execution is recorded as **Failed**.
+
+The single-step menu items keep their own completion pop-ups (§2.2).
+
+### 11.4 Acceptance testing
+
+**No further manual acceptance testing is required for TEMPLATE-002C.** The stage is closed
+with T-2026.10.3 as the live template release.
+
+Not part of this stage and still open: the first Continuous Update trigger execution in a
+copy has not been recorded live, and the list tag still names the exported `.eml` / ZIP files
+and the default introduction (§4.3).
+
+### 11.5 Automated tests at closeout
+
+Complete suite at the closeout commit: **77 test files, 4,030 checks, 0 failures.** The Legacy
+parity suites are 9 of those files with 409 checks, 0 failures. The closeout changed this
+document only: no production code, no test and no version number.
