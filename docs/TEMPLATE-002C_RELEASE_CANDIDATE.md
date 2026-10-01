@@ -237,13 +237,13 @@ in the master template, a **new** report is created for the final smoke test.
 
 | # | Action | Expected |
 |---|---|---|
-| 1 | Template → Template Release Info | T-2026.10.2 (Code.js 2.17.2) |
+| 1 | Template → Template Release Info | T-2026.10.3 (Code.js 2.17.3) |
 | 2 | Create New SA4 Report → 86178 → Look up | Mailing list field shows `3GPP_TSG_SA4_FS_6G_MED` (with T-2026.10.2; T-2026.10.1 showed the general list, see §9) |
 | 3 | Leave it as it is → Create Report → open it | New report |
-| 4 | Run Full Report Build → confirm once | No pop-up until one summary with all five phases; well under 6 minutes |
+| 4 | Run Full Report Build → confirm once | No pop-up at all after the confirmation (2.17.3, §10); the "Running script" notice ends; the report is built |
 | 5 | Configure Meeting | Mailing List `3GPP_TSG_SA4_FS_6G_MED`; start date = meeting start date |
 | 6 | Set the Discussion E-mail Sender, then Prepare TDoc Discussion E-mails for one TDoc; open the `.eml` | `Reply-To: 3GPP_TSG_SA4_FS_6G_MED@list.etsi.org`; subject `[<agenda item>][<deadline>][<TDoc>] Discussion: …` |
-| 7 | Extensions → Apps Script → Executions | `[FULLBUILD]` lines with the phase durations |
+| 7 | Extensions → Apps Script → Executions | `runFullReportBuild` is **Completed**; `[FULLBUILD]` lines with the phase durations |
 
 Still to be seen live for the first time: a complete Full Build in a copy, the creator dialog
 with the new field, and the first trigger execution in a copy.
@@ -297,3 +297,58 @@ the changed checks are marked as intentional differences). The TEMPLATE-002C sui
 family-table checks, the collector RSS / A1 checks, the To / Reply-To checks for an unchanged
 default, a second 6G meeting with a different ID, and keeps the override checks with another
 list.
+
+---
+
+## 10. Patch after the T-2026.10.2 smoke test: no UI call after the build (Code.js 2.17.3)
+
+**Live evidence (report for 86178, T-2026.10.2).** `runFullReportBuild` started 11:40:53, ran
+170.6 s and ended FAILED. All five phases had finished at 11:42:08 (64.6 s). The final
+"Success" pop-up never appeared. At 11:43:44 Apps Script reported "Service Documents failed
+while accessing document with id …". After a reload the report was complete: content, e-mail
+discussions and formatting were all there (abstracts absent as intended, no token).
+
+**Cause.** After `[FULLBUILD] total` the code did one thing: `ui.alert('Success', summary)`.
+That call hung for about 96 seconds and then threw. The build's changes were saved; only the
+notification failed, and it turned a completed build into a failed execution. Why Google's
+`ui.alert` fails after a build that has rewritten the whole document is not something the code
+can show; the fix does not depend on the reason.
+
+**Fix.** `runFullReportBuild()` makes no UI call after the build has changed the document.
+
+| Outcome | Before (2.17.1 / 2.17.2) | After (2.17.3) |
+|---|---|---|
+| Build completed | `ui.alert('Success', summary)` | the function ends; the result is in the `[FULLBUILD]` log lines; the execution is "Completed" |
+| A phase failed | `ui.alert('Error', summary)` | the function throws an error carrying the summary (failed phase, its message, phases not run); Docs shows it and the execution is "Failed" |
+| Before the build | "Continue?" | unchanged (it runs before any change to the document, and worked live) |
+
+Only `runFullReportBuild()` changed. No phase, no collector, exporter, formatter, token, trigger
+or creator code is touched.
+
+**What the user sees.** After confirming, Docs shows its "Running script" notice; when it goes
+away the report is built. There is no completion pop-up any more. The project has no
+non-blocking notification in use (no toast exists for Docs; sidebars and modeless dialogs are
+UI calls of the same kind as the one that failed), so none was added.
+
+**Why not the alternatives.**
+
+- *Keep the pop-up but catch its failure:* the call did not fail quickly, it hung for about
+  96 seconds first. Catching it would still leave every build waiting that long.
+- *`saveAndClose()` between phases:* unproven for a bound script that keeps editing its own
+  document, and it would change how the successful build writes. There is no evidence it is needed.
+- *One execution per phase:* a redesign of a build that works.
+
+**Not proven.** Whether the end of the script (where Google writes pending changes) can raise
+the same error without the pop-up. In the live run the changes were saved, so the write itself
+worked; one build with this release confirms it.
+
+**Release.** `Code.js` 2.17.3, proposed template release **T-2026.10.3**.
+`template-release/T-2026.10.2` stays on `77a23f3`.
+
+**Tests.** Complete suite 77 files, 4,030 checks, 0 failures. The Full Build checks of the
+TEMPLATE-002C suite were rewritten for this behaviour and extended: a completed build makes no
+UI call after the confirmation and ends normally, also when the UI is made to fail the way it
+did live; the five phases, their order, the total line, one formatting pass and the token
+handling are asserted as before; a failure in each of the five phases makes the menu function
+throw, with the failed phase and the phases not run in the message, also when the UI cannot
+show anything.
