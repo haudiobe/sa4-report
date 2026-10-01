@@ -188,7 +188,10 @@ const COLLIDE = ['S4aP260091', 'S4aI260091', 'S4aA260091', 'S4-260091'];
 
 console.log('exporter -> collector round trip (S4aP260091)');
 const SUBJ = exportedSubject('S4aP260091', '5.6.1');
-check('exporter subject is the accepted Legacy format', SUBJ, '[FS_6G_MED,5.6.1,26-10-15-1500CEST][S4aP260091] Discussion: ' + TITLE);
+// INTENTIONAL DIFFERENCE (decision 2026-10-01, TEMPLATE-002C): the subject has
+// no list tag. Legacy: [FS_6G_MED,<agenda item>,<deadline>][<TDoc>]; here:
+// [<agenda item>][<deadline>][<TDoc>]. The round trip below uses this form.
+check('[template] exporter subject: agenda item and deadline bracketed, no tag', SUBJ, '[5.6.1][26-10-15-1500CEST][S4aP260091] Discussion: ' + TITLE);
 [['1 unprefixed', ''], ['2 Re:', 'Re: '], ['3 RE:', 'RE: '], ['4 Fwd:', 'Fwd: '], ['5 Re: Re:', 'Re: Re: '], ['5b RE: Fwd: Re:', 'RE: Fwd: Re: ']].forEach(([name, prefix]) => {
   const r = collect(COLLIDE, [prefix + SUBJ]);
   check(`${name} -> S4aP260091 exactly once, no collision table`, matched(r, COLLIDE), [1, 0, 0, 0]);

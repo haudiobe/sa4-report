@@ -172,7 +172,10 @@ function collectInjected(tdocIds, subjects, props, collectorTableRows) {
 console.log('1. exporter: the real Legacy subject');
 const EXP = exportedSubject('S4aP260091', '5.6.1');
 check('export succeeds', EXP.ok, true);
-check('exact Legacy subject', EXP.subject, '[FS_6G_MED,5.6.1,26-10-15-1500CEST][S4aP260091] Discussion: ' + TITLE);
+// INTENTIONAL DIFFERENCE (decision 2026-10-01, TEMPLATE-002C): the subject has
+// no list tag. Legacy: [FS_6G_MED,<agenda item>,<deadline>][<TDoc>]; here:
+// [<agenda item>][<deadline>][<TDoc>]. The round trip below uses this form.
+check('[template] exact subject: agenda item and deadline bracketed, no tag', EXP.subject, '[5.6.1][26-10-15-1500CEST][S4aP260091] Discussion: ' + TITLE);
 check('recipient', EXP.to, '3gpp_tsg_sa4_fs_6g_med@list.etsi.org');
 const SUBJ = EXP.subject;
 
@@ -285,16 +288,15 @@ console.log('8. matrix (exporter-format subject per ID; gate forced open to expo
   const { sandbox: s } = loadCode();
   const IDS = ['S4aP260091', 'S4aP260069', 'S4aI260082', 'S4aA260090', 'S4-261483'];
   const OPEN = [['TDOC_ID_REGEX', '(?:S4-|S4a[APVI]|A4aR)\\d{6}']];
-  // INTENTIONAL DIFFERENCE (decision 2026-10-01, CENTRAL ADDON-009): the
-  // subject tag is never hard-coded. The builder takes the tag derived from
-  // the meeting's mailing list (3GPP_TSG_SA4_FS_6G_MED -> FS_6G_MED) and
-  // refuses to build a subject without one.
-  check('[template] the subject tag is a parameter derived from the mailing list, never a built-in FS_6G_MED',
-    [s.deriveEmailExportListTag_('3gpp_tsg_sa4_fs_6g_med@list.etsi.org', 'FS_6G_MED'),
-      (() => { try { s.buildEmailExportSubject_('S4aP260091', 't', '5.6.1', '26-10-15-1500CEST'); return 'built'; } catch (e) { return e.message; } })()],
-    ['FS_6G_MED', 'buildEmailExportSubject_: a list tag is required.']);
+  // INTENTIONAL DIFFERENCE (decision 2026-10-01, TEMPLATE-002C; supersedes the
+  // ADDON-009 "derived tag"): the subject carries no list tag at all, neither
+  // a built-in FS_6G_MED nor a derived one. The derived tag still names the
+  // exported files.
+  check('[template] the subject has no list tag; the tag is still derived from the mailing list for file names',
+    [s.deriveEmailExportListTag_('3gpp_tsg_sa4_fs_6g_med@list.etsi.org', 'FS_6G_MED'), s.buildEmailExportSubject_('S4aP260091', 't', '5.6.1', '26-10-15-1500CEST')],
+    ['FS_6G_MED', '[5.6.1][26-10-15-1500CEST][S4aP260091] Discussion: t']);
   const rows = IDS.map((id) => {
-    const subj = 'Re: ' + s.buildEmailExportSubject_(id, 't', '5.6.1', '26-10-15-1500CEST', 'FS_6G_MED');
+    const subj = 'Re: ' + s.buildEmailExportSubject_(id, 't', '5.6.1', '26-10-15-1500CEST');
     const gate = !!s.extractTdocId_(id, '^S4-\\d{6}$');
     const parsed = s.parseEmailSubject_(subj);
     const realGate = collectInjected([id], [subj])[id].matched;

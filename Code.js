@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.17.0 (2026-10-01)
+ * Version: 2.17.1 (2026-10-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,43 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.17.1 (2026-10-01)
+ *   - Fixed (TEMPLATE-002C): "Run Full Report Build" ran the single-step
+ *     menu functions, each of which ends with its own blocking pop-up
+ *     ("Done", "E-mail discussion collection completed", ...). The build
+ *     therefore stopped four times inside its one 6-minute execution and
+ *     waited for a click; live on the first template report (86178) it
+ *     ended with "Exceeded maximum execution time" although the work
+ *     itself took about a minute. Full Build now runs non-interactive
+ *     phases (runFullReportBuildCore_()): one confirmation before, no
+ *     pop-up between phases, one summary at the end. A failed phase stops
+ *     the build and is reported once. The single-step menu items keep
+ *     their own completion pop-ups.
+ *   - Fixed: Full Build formatted the whole document twice (inside the
+ *     skeleton step and again at the end). It now formats once, after the
+ *     enrichment phases; the single-step "Build Skeleton + TDOC Tables"
+ *     still formats.
+ *   - Fixed: the optional Reviewer API token is read once per execution.
+ *     Without a token Full Build skips the abstracts phase (no table scan,
+ *     no request) and says so once, instead of one property read and one
+ *     "No REVIEWER_API_TOKEN found" line per TDoc table, twice. With a
+ *     token the abstracts are fetched in their own phase.
+ *   - Added: [FULLBUILD] log lines -- "<phase>: start" and "<phase>:
+ *     done|skipped|failed in N ms", plus one total line -- so a timeout
+ *     shows which phase was running.
+ *   - Changed (decision 2026-10-01): generated discussion e-mails carry
+ *     "Reply-To: <list>@list.etsi.org" -- the effective mailing list (an
+ *     ad-hoc meeting's Mailing List, else the report-family list; a main
+ *     meeting always the family list), normalized like the collector does.
+ *     Replies used to go to the sender. From and To are unchanged. A list
+ *     that cannot be normalized refuses the export.
+ *   - Changed (decision 2026-10-01): the discussion subject no longer
+ *     starts with the list/family tag. Old: "[<tag>,<agenda item>,
+ *     <deadline>][<TDoc>] Discussion: <title>"; new: "[<agenda item>]
+ *     [<deadline>][<TDoc>] Discussion: <title>" (written without spaces
+ *     between the brackets). The tag still names the exported files and
+ *     the default introduction. Replies to e-mails sent in the old form
+ *     are still associated (the collector looks for the TDoc identifier).
  * 2.17.0 (2026-10-01)
  *   - Added (TEMPLATE-002B): this file is also the runtime of the "SA4
  *     Report Template" Google Doc and of the reports copied from it. A
@@ -2593,7 +2630,7 @@ function getReportConfig_(context) {
   // ========================================
   // 7. API INTEGRATION (Optional)
   // ========================================
-  const REVIEWER_API_TOKEN = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN') || '';
+  const REVIEWER_API_TOKEN = getReviewerApiTokenForRun_(); // TEMPLATE-002C: one read per execution
   const REVIEWER_API_BASE = 'https://reviewer.bouazizi.dev/api/v1';
   
   return {
@@ -4213,7 +4250,8 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
   // just-created table's abstract immediately, independent of the
   // trigger-level toggle) is still real and intentional, it just was not
   // what fired in that specific measured run.
-  const skipAbstracts = PropertiesService.getDocumentProperties().getProperty('SKIP_ABSTRACTS_DURING_TABLE_BUILD') === 'true';
+  const skipAbstracts = SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ ||
+    PropertiesService.getDocumentProperties().getProperty('SKIP_ABSTRACTS_DURING_TABLE_BUILD') === 'true';
   const tdocNumber = String(data[0][1] || '').trim();
   const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
   if (!skipAbstracts && parsedTdoc.isValid) {
@@ -4233,9 +4271,13 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
  */
 function fetchAndAddAbstract_(table, tdocNumber, context) {
   try {
-    const apiToken = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');
+    // TEMPLATE-002C: read once per execution; a missing token is logged once.
+    const apiToken = getReviewerApiTokenForRun_();
     if (!apiToken) {
-      Logger.log('No REVIEWER_API_TOKEN found in script properties');
+      if (!REVIEWER_TOKEN_RUN_STATE_.missingLogged) {
+        Logger.log('No REVIEWER_API_TOKEN found in script properties');
+        REVIEWER_TOKEN_RUN_STATE_.missingLogged = true;
+      }
       return;
     }
 
@@ -8082,6 +8124,7 @@ function persistConfigurationSettings_(config) {
   } else if (tokenAction === 'replace' && config.apiToken && config.apiToken.trim()) {
     scriptProps.setProperty('REVIEWER_API_TOKEN', config.apiToken.trim());
   }
+  resetReviewerTokenRunState_(); // TEMPLATE-002C: the token may just have changed
 
   // ARCH-010: resolver-driven fields, skip-if-blank -- a blank submitted
   // value means "nothing new to say", never "erase what was configured".
@@ -9524,17 +9567,127 @@ function runFullReportBuild() {
   );
   if (response !== ui.Button.YES) return;
 
-  try {
-    buildSkeletonWithTdocTables();
-    collectEmailDiscussionOnly();
-    collectRevisionsOnly();
-    addAbstractsOnly();
-    removeRowHeightAndSpacing();
-    ui.alert('Success', 'Full report build completed.', ui.ButtonSet.OK);
-  } catch (e) {
-    ui.alert('Error', 'Full report build failed: ' + e.message, ui.ButtonSet.OK);
-    Logger.log('Full report build failed: ' + e.message);
+  // TEMPLATE-002C: the phases run without any pop-up in between -- a pop-up
+  // suspends the script until it is clicked, inside this execution's time
+  // limit. One summary is shown when everything has run (or one phase failed).
+  const result = runFullReportBuildCore_();
+  if (!result.ok) Logger.log('Full report build failed: ' + result.failedPhase + ': ' + result.error);
+  ui.alert(result.ok ? 'Success' : 'Error', formatFullBuildSummary_(result), ui.ButtonSet.OK);
+}
+
+/**
+ * TEMPLATE-002C: the Full Build itself -- no UI at all. Phases run in
+ * order; the first one that fails stops the build (later phases are not
+ * started) and is reported once in the result. Each phase logs
+ * "[FULLBUILD] <phase>: start" and "[FULLBUILD] <phase>: <status> in N ms",
+ * so the last line before a timeout names the phase that was running.
+ *
+ * Formatting runs ONCE, at the end: removeRowHeightAndSpacing() formats
+ * every table of the document from scratch, and the enrichment phases add
+ * content (e-mail lines, revision tables, abstract rows) that needs it, so
+ * a pass before them is repeated work.
+ *
+ * Abstracts need the optional Reviewer API token. Without one the phase is
+ * skipped as a whole. With one, the tables are built without abstracts and
+ * the abstracts phase fetches them, so their cost shows under its own name.
+ */
+function runFullReportBuildCore_() {
+  const totalStart = Date.now();
+  const phases = [];
+  let failed = null;
+
+  function phase(name, fn) {
+    if (failed) return;
+    const start = Date.now();
+    const entry = { name: name, status: 'done', detail: '', ms: 0 };
+    Logger.log('[FULLBUILD] ' + name + ': start');
+    try {
+      const outcome = fn() || {};
+      if (outcome.skipped) entry.status = 'skipped';
+      entry.detail = outcome.detail || '';
+    } catch (e) {
+      entry.status = 'failed';
+      entry.detail = e.message;
+      failed = entry;
+    }
+    entry.ms = Date.now() - start;
+    phases.push(entry);
+    Logger.log('[FULLBUILD] ' + name + ': ' + entry.status + ' in ' + entry.ms + ' ms' + (entry.detail ? ' -- ' + entry.detail : ''));
   }
+
+  resetReviewerTokenRunState_();
+
+  phase('skeleton', function () {
+    SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = true;
+    try {
+      const built = buildSkeletonWithTdocTables({ nonInteractive: true, skipFormatting: true });
+      if (!built.ok) throw new Error(built.message);
+      return { detail: built.agendaItems + ' agenda items, ' + built.tdocs + ' TDocs' + (built.note || '') };
+    } finally {
+      SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = false;
+    }
+  });
+  phase('e-mail', function () { collectEmailDiscussionCore_(); });
+  phase('revisions', function () { collectRevisionsCore_(); });
+  phase('abstracts', function () {
+    if (!getReviewerApiTokenForRun_()) return { skipped: true, detail: 'no Reviewer API token configured' };
+    const added = addAbstractsForTables_();
+    return { detail: added.candidatesProcessed + ' candidate table(s), ' + added.rowsInserted + ' abstract(s) inserted' };
+  });
+  phase('formatting', function () {
+    removeRowHeightAndSpacing();
+  });
+
+  const totalMs = Date.now() - totalStart;
+  Logger.log('[FULLBUILD] total: ' + totalMs + ' ms -- ' + phases.map(function (p) { return p.name + ' ' + p.status + ' ' + p.ms + ' ms'; }).join(', '));
+  return {
+    ok: !failed,
+    failedPhase: failed ? failed.name : null,
+    error: failed ? failed.detail : null,
+    phases: phases,
+    totalMs: totalMs
+  };
+}
+
+/** The one dialog text of a Full Build (pure). */
+function formatFullBuildSummary_(result) {
+  const LABELS = { 'skeleton': 'Skeleton + TDoc tables', 'e-mail': 'E-mail discussion', 'revisions': 'Revisions', 'abstracts': 'Abstracts', 'formatting': 'Formatting' };
+  const seconds = function (ms) { return Math.round(ms / 1000) + ' s'; };
+  const lines = [result.ok ? 'Full report build completed.' : 'Full report build failed: ' + result.error, ''];
+  result.phases.forEach(function (p) {
+    lines.push((p.status === 'failed' ? '✗ ' : p.status === 'skipped' ? '– ' : '✓ ') + LABELS[p.name] + ': ' +
+      (p.status === 'failed' ? 'FAILED' : p.status === 'skipped' ? 'skipped' : 'done') +
+      (p.detail && p.status !== 'failed' ? ' (' + p.detail + ')' : '') + ', ' + seconds(p.ms));
+  });
+  if (!result.ok) {
+    const notRun = Object.keys(LABELS).filter(function (name) { return !result.phases.some(function (p) { return p.name === name; }); });
+    if (notRun.length) lines.push('Not run: ' + notRun.map(function (name) { return LABELS[name]; }).join(', ') + '.');
+  }
+  lines.push('');
+  lines.push('Total: ' + seconds(result.totalMs));
+  return lines.join('\n');
+}
+
+// TEMPLATE-002C: the optional Reviewer API token, read once per execution
+// (Apps Script starts every execution with fresh globals). A missing token
+// is logged once, not once per TDoc table.
+var REVIEWER_TOKEN_RUN_STATE_ = { read: false, token: '', missingLogged: false };
+// Set by Full Build while it builds the tables: abstracts get their own phase.
+var SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = false;
+
+function getReviewerApiTokenForRun_() {
+  if (!REVIEWER_TOKEN_RUN_STATE_.read) {
+    REVIEWER_TOKEN_RUN_STATE_.token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN') || '';
+    REVIEWER_TOKEN_RUN_STATE_.read = true;
+  }
+  return REVIEWER_TOKEN_RUN_STATE_.token;
+}
+
+/** Forget the cached token: at the start of an operation, and when Configure Meeting changes it. */
+function resetReviewerTokenRunState_() {
+  REVIEWER_TOKEN_RUN_STATE_.read = false;
+  REVIEWER_TOKEN_RUN_STATE_.token = '';
+  REVIEWER_TOKEN_RUN_STATE_.missingLogged = false;
 }
 
 /**
@@ -9548,7 +9701,13 @@ function runFullReportBuild() {
  * 5. For each agenda item: insert heading + agenda text + TDOC tables
  * 6. Append "Registered Documents" summary table at the end
  */
-function buildSkeletonWithTdocTables() {
+function buildSkeletonWithTdocTables(options) {
+  // TEMPLATE-002C: the menu calls this without arguments (unchanged: its
+  // own pop-ups, formatting at the end). Run Full Report Build passes
+  // { nonInteractive: true, skipFormatting: true }: no pop-up may suspend
+  // the build, and it formats once, after its enrichment phases. The
+  // outcome is also returned: { ok, message } (+ agendaItems, tdocs, note).
+  const quiet = !!(options && options.nonInteractive);
   // ADDON-007B3: an ad-hoc meeting with missing sources fails here, before
   // the document is cleared, instead of building an empty/wrong report.
   assertMeetingReadyToBuild_();
@@ -9557,11 +9716,11 @@ function buildSkeletonWithTdocTables() {
   if (!cfg.TDOC_LIST_URL) {
     Logger.log('Error: TDOC List URL not configured');
     try {
-      DocumentApp.getUi().alert('Error', 'TDOC List URL not configured. Please run "Configure Meeting" first.', DocumentApp.getUi().ButtonSet.OK);
+      if (!quiet) DocumentApp.getUi().alert('Error', 'TDOC List URL not configured. Please run "Configure Meeting" first.', DocumentApp.getUi().ButtonSet.OK);
     } catch (e) {
       // UI not available in this context
     }
-    return;
+    return { ok: false, message: 'TDOC List URL not configured. Please run "Configure Meeting" first.' };
   }
 
   // ADDON-008A1b: the saved Document Reallocations live in this document,
@@ -9585,11 +9744,11 @@ function buildSkeletonWithTdocTables() {
   if (!agendaItems || agendaItems.length === 0) {
     Logger.log('Warning: No agenda items found for prefix: ' + getConfiguredAgendaPrefix_());
     try {
-      DocumentApp.getUi().alert('Warning', 'No agenda items found for prefix: ' + getConfiguredAgendaPrefix_(), DocumentApp.getUi().ButtonSet.OK);
+      if (!quiet) DocumentApp.getUi().alert('Warning', 'No agenda items found for prefix: ' + getConfiguredAgendaPrefix_(), DocumentApp.getUi().ButtonSet.OK);
     } catch (e) {
       // UI not available in this context
     }
-    return;
+    return { ok: false, message: 'No agenda items found for prefix: ' + getConfiguredAgendaPrefix_() };
   }
   
   // Filter out the parent item (e.g., "9 Video SWG") - we only want sub-items (9.1, 9.2, etc.)
@@ -9608,11 +9767,11 @@ function buildSkeletonWithTdocTables() {
   if (filteredAgendaItems.length === 0) {
     Logger.log('Warning: No sub-agenda items found for prefix: ' + agendaPrefix);
     try {
-      DocumentApp.getUi().alert('Warning', 'No sub-agenda items found for prefix: ' + agendaPrefix, DocumentApp.getUi().ButtonSet.OK);
+      if (!quiet) DocumentApp.getUi().alert('Warning', 'No sub-agenda items found for prefix: ' + agendaPrefix, DocumentApp.getUi().ButtonSet.OK);
     } catch (e) {
       // UI not available in this context
     }
-    return;
+    return { ok: false, message: 'No sub-agenda items found for prefix: ' + agendaPrefix };
   }
   // ADDON-008A1b: every saved destination must be usable before anything is
   // cleared. Ad-hoc: it must be an item of this report's agenda (the
@@ -10005,13 +10164,21 @@ function buildSkeletonWithTdocTables() {
     }
   }
 
-  removeRowHeightAndSpacing();
+  // TEMPLATE-002C: Full Build formats once, after its enrichment phases.
+  if (!(options && options.skipFormatting)) removeRowHeightAndSpacing();
   Logger.log(`Done: Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.`);
   try {
-    DocumentApp.getUi().alert('Done', `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.` + reallocationRestoreNote, DocumentApp.getUi().ButtonSet.OK);
+    if (!quiet) DocumentApp.getUi().alert('Done', `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.` + reallocationRestoreNote, DocumentApp.getUi().ButtonSet.OK);
   } catch (e) {
     // UI not available in this context
   }
+  return {
+    ok: true,
+    message: `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.` + reallocationRestoreNote,
+    agendaItems: filteredAgendaItems.length,
+    tdocs: allTdocs.length,
+    note: reallocationRestoreNote
+  };
 }
 
 /**
@@ -10663,15 +10830,25 @@ function addTdocTablesOnly() {
   }
 }
 
-function collectEmailDiscussionOnly() {
+// TEMPLATE-002C: each single step is a non-interactive core (also a Full
+// Build phase) and a menu wrapper that keeps its completion pop-up.
+function collectEmailDiscussionCore_() {
   const cfg = getCollectorConfig_();
   checkRSSFeed_(cfg);
+}
+
+function collectEmailDiscussionOnly() {
+  collectEmailDiscussionCore_();
   DocumentApp.getUi().alert('Success', 'E-mail discussion collection completed.', DocumentApp.getUi().ButtonSet.OK);
 }
 
-function collectRevisionsOnly() {
+function collectRevisionsCore_() {
   const cfg = getCollectorConfig_();
   updateRevisions_(cfg);
+}
+
+function collectRevisionsOnly() {
+  collectRevisionsCore_();
   DocumentApp.getUi().alert('Success', 'Revision collection completed.', DocumentApp.getUi().ButtonSet.OK);
 }
 
@@ -13768,20 +13945,37 @@ function sanitizeEmailExportFilename_(name) {
  *   no title:                         [FS_6G_MED,<agendaItem>,<deadlineText>][<tdoc>] Discussion
  *   no agendaItem, deadline, or title: [FS_6G_MED][<tdoc>] Discussion
  *
- * ADDON-009: `listTag` (deriveEmailExportListTag_()) replaces Legacy's
- * constant FS_6G_MED; it is required -- never defaulted or invented.
+ * ADDON-009: `listTag` (deriveEmailExportListTag_()) replaced Legacy's
+ * constant FS_6G_MED as the first field.
+ *
+ * TEMPLATE-002C (decision 2026-10-01): that first field is gone. It was a
+ * report-family / list label ("MBS", "FS_6G_MED"), not the work item, and
+ * it is redundant next to the agenda item. Nothing replaces it -- no work
+ * item code either. Each remaining part has its own bracket, in the old
+ * order:
+ *
+ *   old   [<tag>,<agendaItem>,<deadlineText>][<tdoc>] Discussion: <title>
+ *   new   [<agendaItem>][<deadlineText>][<tdoc>] Discussion: <title>
+ *
+ * e.g. "[2.5][26-10-15-1500CEST][S4aI260082] Discussion: ...". The
+ * deadline token, the TDoc bracket and "Discussion: <title>" are exactly
+ * as before; an unavailable agenda item or deadline is still simply
+ * omitted:
+ *
+ *   no deadline:                       [<agendaItem>][<tdoc>] Discussion: <title>
+ *   no agendaItem:                     [<deadlineText>][<tdoc>] Discussion: <title>
+ *   no agendaItem or deadline:         [<tdoc>] Discussion: <title>
+ *   no title:                          [<agendaItem>][<deadlineText>][<tdoc>] Discussion
+ *
+ * The collector is unaffected: it finds the TDoc identifier anywhere in
+ * the subject (findSA4DocumentIdsInText_()).
  */
-function buildEmailExportSubject_(tdocNumber, title, agendaItem, deadlineText, listTag) {
-  const tag = String(listTag || '').trim();
-  if (!tag) throw new Error('buildEmailExportSubject_: a list tag is required.');
+function buildEmailExportSubject_(tdocNumber, title, agendaItem, deadlineText) {
   const t = String(title || '').trim();
   const a = String(agendaItem || '').trim();
   const dl = String(deadlineText || '').trim();
-  const bracketParts = [tag];
-  if (a) bracketParts.push(a);
-  if (dl) bracketParts.push(dl);
-  const listTagBracket = '[' + bracketParts.join(',') + ']';
-  const base = `${listTagBracket}[${tdocNumber}] Discussion`;
+  const prefix = (a ? '[' + a + ']' : '') + (dl ? '[' + dl + ']' : '');
+  const base = `${prefix}[${tdocNumber}] Discussion`;
   return t ? `${base}: ${t}` : base;
 }
 
@@ -14239,6 +14433,10 @@ function buildEmlContent_(headers, htmlBody) {
   lines.push('X-Unsent: 1');
   if (h.from) lines.push('From: ' + h.from);
   if (h.to) lines.push('To: ' + h.to);
+  // TEMPLATE-002C: replies go to the meeting's mailing list, not to the
+  // sender. Written only when the caller supplies it -- never derived from
+  // From here.
+  if (h.replyTo) lines.push('Reply-To: ' + h.replyTo);
   lines.push('Subject: ' + encodeMimeHeaderValue_(h.subject || ''));
   if (h.date) lines.push('Date: ' + h.date);
   lines.push('Content-Type: text/html; charset=UTF-8');
@@ -14310,14 +14508,14 @@ function buildEmlContent_(headers, htmlBody) {
  * 2.15.2: `documentUrl` (buildEmailExportDocumentUrl_()) makes links into
  * the report document absolute (resolveEmailExportLinkUrl_()).
  */
-function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl) {
-  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(meta.tdoc, meta.title, meta.agendaItem, subjectDeadlineToken || deadlineText, listTag);
+function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl, replyToAddress) {
+  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(meta.tdoc, meta.title, meta.agendaItem, subjectDeadlineToken || deadlineText);
   const tableHtml = docTableToHtml_(table, documentUrl);
   const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
   const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
   const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
   const from = String(senderAddress || '').trim();
-  const eml = buildEmlContent_({ to: mailingList || '', from: from, subject: subject }, htmlBody);
+  const eml = buildEmlContent_({ to: mailingList || '', from: from, replyTo: String(replyToAddress || '').trim(), subject: subject }, htmlBody);
   const fileName = sanitizeEmailExportFilename_(listTag + '_' + meta.tdoc) + '.eml';
   return { fileName: fileName, eml: eml, subject: subject };
 }
@@ -14333,15 +14531,15 @@ function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride
  * order given, under one shared subject/intro/discussion/closing.
  * ADDON-009: `listTag` as for buildEmailExportForTdocTable_().
  */
-function buildEmailExportForGroup_(tables, metas, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl) {
+function buildEmailExportForGroup_(tables, metas, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl, replyToAddress) {
   const primary = metas[0];
-  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(primary.tdoc, primary.title, primary.agendaItem, subjectDeadlineToken || deadlineText, listTag);
+  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(primary.tdoc, primary.title, primary.agendaItem, subjectDeadlineToken || deadlineText);
   const tableHtml = tables.map(function (t) { return docTableToHtml_(t, documentUrl); }).join('<br>');
   const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
   const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
   const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
   const from = String(senderAddress || '').trim();
-  const eml = buildEmlContent_({ to: mailingList || '', from: from, subject: subject }, htmlBody);
+  const eml = buildEmlContent_({ to: mailingList || '', from: from, replyTo: String(replyToAddress || '').trim(), subject: subject }, htmlBody);
   const fileNameBase = metas.length === 1 ? metas[0].tdoc : metas.map(function (m) { return m.tdoc; }).join('_');
   const fileName = sanitizeEmailExportFilename_(listTag + '_' + fileNameBase) + '.eml';
   return { fileName: fileName, eml: eml, subject: subject };
@@ -14712,15 +14910,38 @@ function resolveEmailExportConfiguration_() {
     throw new Error((recipientDerivation.error || 'Could not derive a discussion recipient from the configured Mailing List.') + ' Open Configure Meeting Settings and set the Mailing List before generating discussion e-mails.');
   }
   const recipientAddress = recipientDerivation.recipient;
+  // TEMPLATE-002C: Reply-To is the effective mailing list itself -- the same
+  // getMeetingContext_() value the recipient comes from (an ad-hoc meeting's
+  // Mailing List, else the report-family list; a main meeting always the
+  // family list), normalized with the collector's rule. It is never the
+  // sender, and a list that cannot be normalized refuses the export instead
+  // of producing a misleading header.
+  const replyToAddress = deriveEmailExportReplyToFromMailingList_(mailingList);
+  if (!replyToAddress) {
+    throw new Error('Could not derive the Reply-To address from the Mailing List "' + mailingList.replace(/[\r\n]/g, ' ') +
+      '". Open Configure Meeting Settings and set the Mailing List to the ETSI list name (or its ...@list.etsi.org address) before generating discussion e-mails.');
+  }
+  // The list tag names the files and the default introduction; it is no
+  // longer part of the subject (TEMPLATE-002C).
   const listTag = deriveEmailExportListTag_(recipientAddress, getReportConfig_().DRAFTS_FOLDER);
   if (!listTag) {
-    throw new Error('Could not derive the discussion subject tag from the Mailing List "' + mailingList + '".');
+    throw new Error('Could not derive the discussion list tag from the Mailing List "' + mailingList + '".');
   }
   const revisionUploadUrl = resolveEmailExportRevisionUploadUrl_();
   if (!isSafeEmailExportUrl_(revisionUploadUrl)) {
     throw new Error('Revision upload location is not configured or is invalid (checked getMeetingContext_().sources.revisionsUrl / REVISIONS_URL) -- cannot generate discussion e-mails without a real upload destination.');
   }
-  return { senderAddress: senderAddress, recipientAddress: recipientAddress, listTag: listTag, revisionUploadUrl: revisionUploadUrl };
+  return { senderAddress: senderAddress, recipientAddress: recipientAddress, replyToAddress: replyToAddress, listTag: listTag, revisionUploadUrl: revisionUploadUrl };
+}
+
+/**
+ * TEMPLATE-002C: "<list>@list.etsi.org" for an effective mailing list given
+ * as "<list>" or "<list>@list.etsi.org" (normalizeEtsiListName_(), the
+ * collector's rule; the list name keeps its spelling). '' for anything else.
+ */
+function deriveEmailExportReplyToFromMailingList_(mailingList) {
+  const name = normalizeEtsiListName_(mailingList);
+  return name ? name + '@list.etsi.org' : '';
 }
 
 /**
@@ -14879,7 +15100,7 @@ function generateTdocDiscussionEmails(selections, globalText) {
       // LEGACY-UPGRADE-006H: To (recipientAddress, derived from the Mailing
       // List) and From (senderAddress, configured DISCUSSION_EMAIL_SENDER)
       // are DELIBERATELY DIFFERENT values.
-      const email = buildEmailExportForTdocTable_(table, meta, exportConfig.recipientAddress, null, introText, discussionText, deadlineText, exportConfig.revisionUploadUrl, exportConfig.senderAddress, subjectDeadlineToken, exportConfig.listTag, documentUrl); // no subjectOverride: always canonical
+      const email = buildEmailExportForTdocTable_(table, meta, exportConfig.recipientAddress, null, introText, discussionText, deadlineText, exportConfig.revisionUploadUrl, exportConfig.senderAddress, subjectDeadlineToken, exportConfig.listTag, documentUrl, exportConfig.replyToAddress); // no subjectOverride: always canonical
       return { tdoc: meta.tdoc, fileName: email.fileName, eml: email.eml };
     });
 

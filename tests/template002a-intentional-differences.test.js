@@ -48,17 +48,19 @@ console.log('1. outgoing discussion e-mail introduction is meeting-neutral (deci
 }
 
 // ---------------------------------------------------------------- 2
-console.log('2. subject tag is derived from the meeting\'s mailing list, never hard-coded (decision 2026-10-01)');
+// TEMPLATE-002C (decision 2026-10-01, later the same day): the tag left the
+// subject altogether. It is still derived, never hard-coded, and now names
+// only the exported files and the default introduction.
+console.log('2. list tag is derived from the meeting\'s mailing list, never hard-coded; the subject carries none');
 {
   const { sandbox: s } = loadCode();
   check('MBS list -> MBS', s.deriveEmailExportListTag_('3gpp_tsg_sa_wg4_mbs@list.etsi.org', 'MBS'), 'MBS');
   check('Audio list -> AUDIO', s.deriveEmailExportListTag_('3gpp_tsg_sa_wg4_audio@list.etsi.org', 'Audio'), 'AUDIO');
   check('the 6G list still yields Legacy\'s FS_6G_MED', s.deriveEmailExportListTag_('3gpp_tsg_sa4_fs_6g_med@list.etsi.org', 'FS_6G_MED'), 'FS_6G_MED');
-  check('the subject carries the tag it is given',
-    s.buildEmailExportSubject_('S4aI260082', 'Title', '2.5', '26-10-15-1500CEST', 'MBS'), '[MBS,2.5,26-10-15-1500CEST][S4aI260082] Discussion: Title');
-  let refused = null;
-  try { s.buildEmailExportSubject_('S4aI260082', 'Title', '2.5', '26-10-15-1500CEST'); } catch (e) { refused = e.message; }
-  check('without a tag no subject is built (no built-in default)', refused, 'buildEmailExportSubject_: a list tag is required.');
+  check('the subject carries no tag: agenda item and deadline in their own brackets',
+    s.buildEmailExportSubject_('S4aI260082', 'Title', '2.5', '26-10-15-1500CEST'), '[2.5][26-10-15-1500CEST][S4aI260082] Discussion: Title');
+  check('a tag passed by an old caller changes nothing (no built-in or passed-in tag reaches the subject)',
+    s.buildEmailExportSubject_('S4aI260082', 'Title', '2.5', '26-10-15-1500CEST', 'MBS'), '[2.5][26-10-15-1500CEST][S4aI260082] Discussion: Title');
   check('Legacy\'s constant EMAIL_EXPORT_LIST_TAG_ does not exist', /EMAIL_EXPORT_LIST_TAG_/.test(CODE_ONLY), false);
   check('no quoted FS_6G_MED tag literal is passed to the exporter', /\[FS_6G_MED|'FS_6G_MED,|"FS_6G_MED,/.test(CODE_ONLY), false);
 }

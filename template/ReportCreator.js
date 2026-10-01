@@ -205,6 +205,28 @@ function buildReportBootstrapPayload_(preview, choices, release, nowIso) {
       : 'Choose the report family (' + (inference.confidence === 'conflict' ? 'the evidence conflicts' : 'nothing identifies it') + ').');
   }
 
+  // Mailing list (TEMPLATE-002C): the list derived from the report family,
+  // unless the user names another one. An override is kept as the plain list
+  // name -- the same forms the collector accepts ("<list>" or
+  // "<list>@list.etsi.org", normalizeEtsiListName_()). Naming the derived
+  // list again is no override. Nothing here knows any particular meeting.
+  const familyList = family ? (MAILING_LISTS[family] || LIST_NAME_LOCK) : '';
+  const requestedList = trimmed_(c.mailingList);
+  let listOverride = '';
+  if (requestedList) {
+    const normalizedList = normalizeEtsiListName_(requestedList);
+    if (!normalizedList) {
+      errors.push('Mailing list "' + requestedList.replace(/[\r\n]/g, ' ') + '" is not a valid ETSI list name. ' +
+        'Use the list name (for example 3GPP_TSG_SA_WG4_MBS) or its ...@list.etsi.org address.');
+    } else if (normalizedList.toLowerCase() !== familyList.toLowerCase()) {
+      if (meetingType === 'main') {
+        errors.push('A main-meeting report always reads its report family\'s list (' + familyList + '); it cannot be overridden.');
+      } else {
+        listOverride = normalizedList;
+      }
+    }
+  }
+
   const config = {
     meetingId: meetingId,
     meetingType: meetingType,
@@ -218,8 +240,8 @@ function buildReportBootstrapPayload_(preview, choices, release, nowIso) {
     agendaCsvUrl: v('agendaCsvUrl'),
     tdocUrl: trimmed_(c.tdocListUrl) || v('tdocListUrl'),
     revisionsUrl: p.revisionsUrl && p.revisionsUrl.source !== 'candidate' ? v('revisionsUrl') : '',
-    mailingList: trimmed_(c.mailingList),
-    mailingListMode: trimmed_(c.mailingList) ? 'override' : 'derived',
+    mailingList: listOverride,
+    mailingListMode: listOverride ? 'override' : 'derived',
     // Decision 2026-10-01: a new report collects e-mail from the meeting
     // start date; the user can move it in Configure Meeting.
     emailStartDate: meetingStartDateIso_(p.startDateRaw) || meetingStartDateIso_(v('meetingDate'))
@@ -243,7 +265,7 @@ function buildReportBootstrapPayload_(preview, choices, release, nowIso) {
     agendaTdoc: config.agendaTdoc,
     agendaCsvUrl: config.agendaCsvUrl,
     tdocListUrl: config.tdocUrl,
-    mailingList: config.mailingList || (family ? (MAILING_LISTS[family] || LIST_NAME_LOCK) : ''),
+    mailingList: config.mailingList || familyList,
     meetingFolder: config.meetingFolder,
     meetingNumber: config.meetingNumber
   }, MEETING_READINESS_RULES_, {});
@@ -267,6 +289,7 @@ function buildReportBootstrapPayload_(preview, choices, release, nowIso) {
     notes: notes,
     pending: pending,
     title: errors.length === 0 ? proposeReportTitle_(config) : null,
+    mailingList: { effective: listOverride || familyList, derived: familyList, overridden: !!listOverride },
     payload: payload
   };
 }
@@ -350,6 +373,8 @@ function validateBootstrapPayload_(payload, documentId) {
   if (cfg.meetingType !== 'adhoc' && cfg.meetingType !== 'main') errors.push('The meeting type is missing.');
   if (!Object.prototype.hasOwnProperty.call(REPORT_FAMILY_LABELS_, cfg.reportType)) errors.push('The report family is missing.');
   if (cfg.mailingListMode !== 'derived' && cfg.mailingListMode !== 'override') errors.push('Invalid mailing-list mode.');
+  if (cfg.mailingList && normalizeEtsiListName_(cfg.mailingList) !== cfg.mailingList) errors.push('The mailing list is not a valid ETSI list name.');
+  if ((cfg.mailingListMode === 'override') !== !!cfg.mailingList) errors.push('The mailing-list override is inconsistent.');
   if (cfg.emailStartDate && !isValidCollectorStartDate_(cfg.emailStartDate)) errors.push('The e-mail collection start date is not a date.');
   return errors.concat(validateBootstrapUrls_(cfg));
 }
@@ -600,7 +625,6 @@ function describeNewReportProposal_(resolved, choices, release, nowIso) {
   const lines = [
     ['Meeting', preview.summary || ''],
     ['Report family', family ? REPORT_FAMILY_LABELS_[family] : 'please choose'],
-    ['Mailing list', cfg.mailingList || (family ? (MAILING_LISTS[family] || LIST_NAME_LOCK) + ' (from the family)' : '')],
     ['Document folder', cfg.ftpBase || 'not found'],
     ['TDoc list', preview.tdocListStatus || cfg.tdocUrl || (cfg.meetingType === 'main' ? 'derived from the meeting folder' : 'not found yet')],
     ['Agenda', preview.agendaSourceStatus || cfg.agendaTdoc || (cfg.meetingType === 'main' ? 'from the meeting agenda' : 'not found yet')],
@@ -608,7 +632,10 @@ function describeNewReportProposal_(resolved, choices, release, nowIso) {
   ];
   return {
     ok: built.ok, errors: built.errors, notes: built.notes, pending: built.pending, title: built.title,
-    family: family || '', lines: lines, resolved: slimResolvedMeeting_(resolved)
+    family: family || '', lines: lines, resolved: slimResolvedMeeting_(resolved),
+    // The list this report will read, where it comes from, and whether the
+    // creator may change it (a main-meeting report always reads its family list).
+    mailingList: built.mailingList, mailingListEditable: cfg.meetingType === 'adhoc'
   };
 }
 
@@ -689,6 +716,11 @@ function showCreateReportDialog() {
       <label>Report family</label>
       <select id="family" onchange="familyChanged()">${familyOptions}</select>
     </div>
+    <div id="mailingRow" style="display:none">
+      <label>Mailing list</label>
+      <input type="text" id="mailingList" style="width: 100%" oninput="mailingTouched = true" onchange="mailingChanged()">
+      <div class="release" id="mailingHint"></div>
+    </div>
     <div id="title"></div>
     <div style="margin-top: 16px">
       <button id="createBtn" onclick="createReport()" disabled>Create Report</button>
@@ -697,14 +729,18 @@ function showCreateReportDialog() {
     <div id="result"></div>
     <script>
       var resolvedMeeting = null;
+      var mailingTouched = false;
       function el(id) { return document.getElementById(id); }
       function esc(v) {
         return String(v === null || v === undefined ? '' : v)
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       }
       function choices() {
-        var family = el('family').value;
-        return family ? { reportFamily: family } : {};
+        var c = {};
+        if (el('family').value) c.reportFamily = el('family').value;
+        // Only a list the user typed is sent; otherwise the report follows its family.
+        if (mailingTouched && el('mailingList').value.trim()) c.mailingList = el('mailingList').value.trim();
+        return c;
       }
       function showProposal(r) {
         el('lookupBtn').disabled = false;
@@ -722,6 +758,16 @@ function showCreateReportDialog() {
         el('status').innerHTML = status;
         el('familyRow').style.display = resolvedMeeting ? '' : 'none';
         if (r.family && !el('family').value) el('family').value = r.family;
+        el('mailingRow').style.display = resolvedMeeting ? '' : 'none';
+        if (r.mailingList) {
+          if (!mailingTouched) el('mailingList').value = r.mailingList.effective;
+          el('mailingList').disabled = !r.mailingListEditable;
+          el('mailingHint').textContent = !r.mailingListEditable
+            ? 'A main-meeting report always reads the list of its report family.'
+            : (r.mailingList.overridden
+              ? 'Your list will be used instead of the family default ' + r.mailingList.derived + '.'
+              : 'Derived from the report family. Replace it if this meeting uses another list.');
+        }
         el('title').textContent = r.title ? 'New report: ' + r.title : '';
         el('createBtn').disabled = !r.ok;
       }
@@ -731,6 +777,8 @@ function showCreateReportDialog() {
       }
       function lookUp() {
         resolvedMeeting = null;
+        mailingTouched = false;
+        el('mailingList').value = '';
         el('family').value = '';
         el('createBtn').disabled = true;
         el('lookupBtn').disabled = true;
@@ -743,6 +791,11 @@ function showCreateReportDialog() {
         if (!resolvedMeeting) return;
         google.script.run.withSuccessHandler(showProposal).withFailureHandler(showFailure)
           .previewNewReportFromResolved(el('meetingId').value, resolvedMeeting, choices());
+      }
+      function mailingChanged() {
+        // An emptied field goes back to the list derived from the family.
+        if (!el('mailingList').value.trim()) mailingTouched = false;
+        familyChanged();
       }
       function createReport() {
         el('createBtn').disabled = true;

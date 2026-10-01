@@ -288,7 +288,9 @@ let scenario;
   master.s.showCreateReportDialog();
   const dialog = master.ui.dialogs[0];
   check('dialog shown with the release it runs', [dialog.title, /Template release T-2026\.10\.0/.test(dialog.html)], ['Create New SA4 Report', true]);
-  check('only a meeting ID is asked for up front', (dialog.html.match(/<input /g) || []).length, 1);
+  // TEMPLATE-002C added the optional Mailing list field; it stays hidden until a meeting is looked up.
+  check('only a meeting ID is asked for up front',
+    [(dialog.html.match(/<input /g) || []).length, /id="mailingRow" style="display:none"/.test(dialog.html), /id="familyRow" style="display:none"/.test(dialog.html)], [2, true, true]);
 
   const d = runDialogScript(dialog.html, {
     previewNewReportFromTemplate: serverCall(master.s.previewNewReportFromTemplate),
@@ -612,7 +614,8 @@ console.log('6. release bundle: one Code.js, no probe code, version recorded');
   check('bundle plans cleanly', [plan.ok, plan.errors], [true, []]);
   check('exactly one Code.js, byte-identical to the repository file',
     [plan.files.filter((f) => /Code/.test(f.name)).map((f) => f.name), plan.files.find((f) => f.name === 'Code.js').content.equals(fs.readFileSync(CODE_JS_PATH))], [['Code.js'], true]);
-  check('Release.js records the Code.js version', [plan.meta.codeVersion, /"codeVersion": "2\.17\.0"/.test(plan.files.find((f) => f.name === 'Release.js').content)], ['2.17.0', true]);
+  const codeVersion = (fs.readFileSync(CODE_JS_PATH, 'utf8').match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1];
+  check('Release.js records the Code.js version', [/^2\.\d+\.\d+$/.test(codeVersion), plan.meta.codeVersion, String(plan.files.find((f) => f.name === 'Release.js').content).indexOf('"codeVersion": "' + codeVersion + '"') !== -1], [true, codeVersion, true]);
   check('TEMPLATE-001 probe code is not shipped',
     [plan.files.some((f) => /probe|Template001/i.test(f.name + f.source)), plan.files.some((f) => /template001|TEMPLATE001_/.test(String(f.content)))], [false, false]);
 

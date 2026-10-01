@@ -53,9 +53,10 @@ const FS_6G_MED = {
 };
 
 const MBS_TITLE = '26501-CR0124-B "Implementing stage-2 conclusions on slicing"';
-const MBS_SUBJECT = '[MBS,2.5,26-10-15-1500CEST][S4aI260082] Discussion: ' + MBS_TITLE;
+// TEMPLATE-002C: the subject has no list tag any more; agenda item and deadline each have their own bracket.
+const MBS_SUBJECT = '[2.5][26-10-15-1500CEST][S4aI260082] Discussion: ' + MBS_TITLE;
 const FS6G_TITLE = '[FS_6G_MED] pCR on Editorial Updates to TR 26.870';
-const FS6G_SUBJECT = '[FS_6G_MED,5.4,26-10-15-1500CEST][S4aP260069] Discussion: ' + FS6G_TITLE;
+const FS6G_SUBJECT = '[5.4][26-10-15-1500CEST][S4aP260069] Discussion: ' + FS6G_TITLE;
 
 // A report TDoc table with plain-text cells (label/value rows).
 function table(rows) {
@@ -151,7 +152,7 @@ console.log('D/I. Legacy example: S4aP260069, agenda item 5.4, FS_6G_MED');
 {
   const env = setup(FS_6G_MED, [tdocTable('S4aP260068', 'T', '5.10')]);
   env.run([sel(0)]);
-  check('agenda item "5.10" is kept textually (never 5.1)', header(env.emls()[0].text, 'Subject'), '[FS_6G_MED,5.10,26-10-15-1500CEST][S4aP260068] Discussion: T');
+  check('agenda item "5.10" is kept textually (never 5.1)', header(env.emls()[0].text, 'Subject'), '[5.10][26-10-15-1500CEST][S4aP260068] Discussion: T');
 }
 
 // ====================================== N. round trip via ADDON-008A2 ====
@@ -215,7 +216,7 @@ console.log('E. representative S4aA / S4aV / A4aR ad-hoc IDs');
   env.run([sel(0)]);
   const eml = env.emls()[0];
   check(`${family}: subject, To and file name`, [header(eml.text, 'Subject'), header(eml.text, 'To'), eml.name],
-    [`[${tag},3.1,26-10-15-1500CEST][${id}] Discussion: Title ${id}`, to, `${tag}_${id}.eml`]);
+    [`[3.1][26-10-15-1500CEST][${id}] Discussion: Title ${id}`, to, `${tag}_${id}.eml`]);
   check(`${family}: round trip -> ${id}`, env.s.findSA4DocumentIdsInText_(env.s.stripReplyPrefixes_('Re: ' + header(eml.text, 'Subject'))), [id]);
 });
 
@@ -227,7 +228,7 @@ console.log('F. main-meeting S4- compatibility (Mailing List semantics unchanged
   env.run([sel(0)]);
   const eml = env.emls()[0];
   check('main Audio: family list, not the saved MAILING_LIST', header(eml.text, 'To'), '3gpp_tsg_sa_wg4_audio@list.etsi.org');
-  check('main Audio: subject', header(eml.text, 'Subject'), '[AUDIO,7.3,26-10-15-1500CEST][S4-261234] Discussion: Main title');
+  check('main Audio: subject', header(eml.text, 'Subject'), '[7.3][26-10-15-1500CEST][S4-261234] Discussion: Main title');
   check('main Audio: file name', eml.name, 'AUDIO_S4-261234.eml');
   check('main Audio: revision folder is the main-meeting formula',
     eml.text.replace(/=\r\n/g, '').indexOf('href=3D"https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_136_Montreal/Inbox/Drafts/Audio"') !== -1, true);
@@ -241,7 +242,8 @@ console.log('F. main-meeting S4- compatibility (Mailing List semantics unchanged
   env.run([sel(0)]);
   const eml = env.emls()[0];
   check('main 6G: To the general SA4 reflector', header(eml.text, 'To'), '3gpp_tsg_sa_wg4@list.etsi.org');
-  check('main 6G: tag falls back to the SWG name FS_6G_MED', header(eml.text, 'Subject'), '[FS_6G_MED,9.1,26-10-15-1500CEST][S4-260500] Discussion: T');
+  check('main 6G: the tag (now only in the file name) falls back to the SWG name FS_6G_MED; the subject carries no tag',
+    [eml.name, header(eml.text, 'Subject')], ['FS_6G_MED_S4-260500.eml', '[9.1][26-10-15-1500CEST][S4-260500] Discussion: T']);
 }
 
 {
@@ -251,9 +253,10 @@ console.log('F. main-meeting S4- compatibility (Mailing List semantics unchanged
   check('tag: general list -> SWG name', s.deriveEmailExportListTag_('3gpp_tsg_sa_wg4@list.etsi.org', 'Plenary'), 'PLENARY');
   check('tag: list outside the SA4 naming is used as-is', s.deriveEmailExportListTag_('fs_6g_med@list.etsi.org', 'FS_6G_MED'), 'FS_6G_MED');
   check('tag: nothing usable -> null (never invented)', s.deriveEmailExportListTag_('3gpp_tsg_sa_wg4@list.etsi.org', ''), null);
-  let threw = false;
-  try { s.buildEmailExportSubject_('S4aI260082', 'T', '2.5', '26-10-15-1500CEST'); } catch (e) { threw = true; }
-  check('the subject builder refuses to run without a tag', threw, true);
+  // TEMPLATE-002C: the subject no longer has a tag, so the builder neither needs nor uses one.
+  check('the subject builder takes no tag, and ignores one if an old caller still passes it',
+    [s.buildEmailExportSubject_('S4aI260082', 'T', '2.5', '26-10-15-1500CEST'), s.buildEmailExportSubject_('S4aI260082', 'T', '2.5', '26-10-15-1500CEST', 'MBS')],
+    ['[2.5][26-10-15-1500CEST][S4aI260082] Discussion: T', '[2.5][26-10-15-1500CEST][S4aI260082] Discussion: T']);
 }
 
 // ============================================ A/B. From/To, lists ====
@@ -284,9 +287,9 @@ console.log('B. ad-hoc Mailing List resolution');
   const env = setup(withList, [tdocTable('S4aI260082', MBS_TITLE, '2.5')]);
   env.run([sel(0)]);
   const eml = env.emls()[0];
-  check('a saved ad-hoc Mailing List overrides the family list (To, tag, file name)',
-    [header(eml.text, 'To'), header(eml.text, 'Subject').slice(0, 10), eml.name],
-    ['3gpp_tsg_sa4_amd_arch@list.etsi.org', '[AMD_ARCH,', 'AMD_ARCH_S4aI260082.eml']);
+  check('a saved ad-hoc Mailing List overrides the family list (To, Reply-To, file name); the subject does not name it',
+    [header(eml.text, 'To'), header(eml.text, 'Reply-To'), eml.name, /AMD_ARCH/.test(header(eml.text, 'Subject')), header(eml.text, 'Subject').slice(0, 5)],
+    ['3gpp_tsg_sa4_amd_arch@list.etsi.org', '3GPP_TSG_SA4_AMD_ARCH@list.etsi.org', 'AMD_ARCH_S4aI260082.eml', false, '[2.5]']);
 }
 
 {
@@ -416,7 +419,7 @@ console.log('H. deadline formatting');
   env.run([sel(0, { date: '2026-10-05', time: '09:30', tz: 'CEST' })]);
   const body = env.emls()[0].text.replace(/=\r\n/g, '');
   check('one deadline, both forms: subject token and body sentences',
-    [header(env.emls()[0].text, 'Subject').indexOf('[MBS,2.5,26-10-05-0930CEST]') === 0,
+    [header(env.emls()[0].text, 'Subject').indexOf('[2.5][26-10-05-0930CEST]') === 0,
       body.indexOf('Please provide your comments by 26-10-05 09:30 CEST.') !== -1,
       body.indexOf('Please upload revisions by 26-10-05 09:30 CEST to:') !== -1], [true, true, true]);
 }
@@ -430,7 +433,7 @@ console.log('J. .eml structure');
   const text = env.emls()[0].text;
   const head = text.split('\r\n\r\n')[0];
   check('header lines, in order', head.split('\r\n').map((l) => l.split(':')[0]),
-    ['MIME-Version', 'X-Unsent', 'From', 'To', 'Subject', 'Content-Type', 'Content-Transfer-Encoding']);
+    ['MIME-Version', 'X-Unsent', 'From', 'To', 'Reply-To', 'Subject', 'Content-Type', 'Content-Transfer-Encoding']); // TEMPLATE-002C: Reply-To added
   check('HTML, UTF-8, quoted-printable', [header(text, 'Content-Type'), header(text, 'Content-Transfer-Encoding')], ['text/html; charset=UTF-8', 'quoted-printable']);
   check('no Cc/Bcc/Date header', /^(Cc|Bcc|Date):/m.test(head), false);
   check('CRLF only (no bare LF)', /[^\r]\n/.test(text), false);
@@ -519,7 +522,7 @@ console.log('meeting-neutral defaults: introduction and deadline');
   check('a date without a time is refused (no default time filled in)', [r2.ok, /deadline time/.test(r2.error), timeOnly.drive.calls], [false, true, []]);
   const entered = setup(future, tables);
   entered.run([{ tableIndex: 0, deadline: { date: '2027-03-01', time: '12:00', tz: 'CEST' } }]);
-  check('an entered deadline is used as entered', header(entered.emls()[0].text, 'Subject'), '[VIDEO,2.1,27-03-01-1200CEST][S4aV270001] Discussion: A');
+  check('an entered deadline is used as entered', header(entered.emls()[0].text, 'Subject'), '[2.1][27-03-01-1200CEST][S4aV270001] Discussion: A');
 }
 
 // ================================================= menu and dialog ====

@@ -123,9 +123,13 @@ console.log('Generate on the live S4aP260091 table (E-mail Discussion -> "Offlin
 {
   const out = generate(liveTable(), 'TEST_DOCUMENT_ID');
   check('export succeeds, Legacy file name', [out.result.ok, out.eml.getName()], [true, 'FS_6G_MED_S4aP260091.eml']);
-  check('Legacy headers unchanged', out.head.split('\r\n'), [
+  // INTENTIONAL DIFFERENCE (decision 2026-10-01, TEMPLATE-002C): Reply-To names
+  // the meeting's mailing list (Legacy has no Reply-To, so replies went to the
+  // sender), and the subject has no list tag. From, To and the rest are Legacy's.
+  check('[template] headers: Legacy\'s, plus Reply-To = the mailing list, subject without the tag', out.head.split('\r\n'), [
     'MIME-Version: 1.0', 'X-Unsent: 1', 'From: reporter@example.com', 'To: 3gpp_tsg_sa4_fs_6g_med@list.etsi.org',
-    'Subject: [FS_6G_MED,5.6.1,26-10-15-1500CEST][S4aP260091] Discussion: ' + TITLE,
+    'Reply-To: 3GPP_TSG_SA4_FS_6G_MED@list.etsi.org',
+    'Subject: [5.6.1][26-10-15-1500CEST][S4aP260091] Discussion: ' + TITLE,
     'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: quoted-printable'
   ]);
   check('decoded .eml: "Offline Discussion" links to the absolute Google Docs URL',

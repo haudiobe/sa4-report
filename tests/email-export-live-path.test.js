@@ -98,7 +98,7 @@ const bodyRaw = bodyParts.join('\r\n\r\n');
 const html = qpDecode(bodyRaw);
 
 check('export succeeds', [result.ok, eml.getName()], [true, 'FS_6G_MED_S4aP260091.eml']);
-check('subject as generated live', /^Subject: \[FS_6G_MED,5\.6\.1,26-10-15-1500CEST\]\[S4aP260091\] Discussion: \[FS_6G_MED\] Clarification of AI-native Traffic Characteristics in Clause 6\.3\.3$/m.test(head), true);
+check('subject as generated live (TEMPLATE-002C form: no tag)', /^Subject: \[5\.6\.1\]\[26-10-15-1500CEST\]\[S4aP260091\] Discussion: \[FS_6G_MED\] Clarification of AI-native Traffic Characteristics in Clause 6\.3\.3$/m.test(head), true);
 check('decoded .eml: "Offline Discussion" links to the absolute Google Docs URL',
   html.indexOf('<a href="' + ABSOLUTE + '">Offline Discussion</a>') !== -1, true);
 check('decoded .eml: no document-relative href', ['href="?tab=', 'href="#heading=', 'href="#bookmark='].filter((x) => html.indexOf(x) !== -1), []);

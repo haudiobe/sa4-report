@@ -18,6 +18,14 @@
  * CENTRAL-specific behavior is covered by
  * tests/addon009-discussion-email-export.test.js.
  *
+ * TEMPLATE-002C (decision 2026-10-01): the subject no longer starts with the
+ * list tag. Legacy "[FS_6G_MED,<agenda item>,<deadline>][<TDoc>] Discussion:
+ * <title>" is "[<agenda item>][<deadline>][<TDoc>] Discussion: <title>" here.
+ * Every Legacy subject check is kept with that one difference in its expected
+ * value; agenda item, deadline token, TDoc and title are asserted as before.
+ * Generated e-mails also carry Reply-To (the mailing list), which Legacy's
+ * did not; that is covered in tests/template002c-fullbuild-creator.test.js.
+ *
  * No live Google service is called; DriveApp/Session are faked locally.
  *
  * Run: node tests/addon009-legacy-exporter-port.test.js
@@ -50,7 +58,8 @@ const LEGACY_TAG = 'FS_6G_MED';
 function withTag(s) {
   function pad(args, n) { const a = args.slice(); while (a.length < n) a.push(undefined); return a; }
   return {
-    buildEmailExportSubject_: (...a) => s.buildEmailExportSubject_(...pad(a, 4), LEGACY_TAG),
+    // TEMPLATE-002C: the subject has no tag any more, so none is passed.
+    buildEmailExportSubject_: (...a) => s.buildEmailExportSubject_(...a),
     buildEmailExportForTdocTable_: (...a) => s.buildEmailExportForTdocTable_(...pad(a, 10), LEGACY_TAG),
     buildEmailExportForGroup_: (...a) => s.buildEmailExportForGroup_(...pad(a, 10), LEGACY_TAG),
     buildEmailExportHtmlBody_: (...a) => s.buildEmailExportHtmlBody_(...pad(a, 5), LEGACY_TAG),
@@ -398,7 +407,7 @@ console.log('buildEmailExportForTdocTable_() -- one TDoc -> one EML, subject for
   const { sandbox } = loadCode();
   const table = makeFakeTdocTable([['TDoc', 'S4aP260068'], ['Title', 'Traffic characteristics'], ['Source', 'Qualcomm']]);
   const built = withTag(sandbox).buildEmailExportForTdocTable_(table, { tdoc: 'S4aP260068', title: 'Traffic characteristics', agendaItem: '5.10' }, 'FS_6G_MED@list.etsi.org', '');
-  check('subject follows the canonical [FS_6G_MED,agendaItem][tdoc] Discussion: title format', built.subject, '[FS_6G_MED,5.10][S4aP260068] Discussion: Traffic characteristics');
+  check('subject follows the canonical [agendaItem][tdoc] Discussion: title format', built.subject, '[5.10][S4aP260068] Discussion: Traffic characteristics');
   check('filename includes the TDoc number and .eml extension', built.fileName, 'FS_6G_MED_S4aP260068.eml');
   check('the complete table appears in the generated .eml', built.eml.indexOf('S4aP260068') !== -1 && /Qualcomm|=51ualcomm|Qualcomm/.test(quoted(built.eml)), true);
   check('the discussion disclaimer text is present', quoted(built.eml).indexOf('not an email agreement') !== -1, true);
@@ -414,7 +423,7 @@ console.log('buildEmailExportForTdocTable_() -- one TDoc -> one EML, subject for
   const { sandbox } = loadCode();
   const table = makeFakeTdocTable([['TDoc', 'S4aP260077'], ['Title', ''], ['Source', 'Ericsson']]);
   const built = withTag(sandbox).buildEmailExportForTdocTable_(table, { tdoc: 'S4aP260077', title: '', agendaItem: '5.4' }, '', '');
-  check('missing title falls back to [FS_6G_MED,agendaItem][tdoc] Discussion (no ": title", never invented)', built.subject, '[FS_6G_MED,5.4][S4aP260077] Discussion');
+  check('missing title falls back to [agendaItem][tdoc] Discussion (no ": title", never invented)', built.subject, '[5.4][S4aP260077] Discussion');
 }
 
 {
@@ -787,22 +796,22 @@ console.log('regression: Approved/Agreed filtering is unaffected by the detectio
 
 // ------------------------------------------------------------ canonical subject + Agenda Item
 
-console.log('buildEmailExportSubject_() -- canonical [FS_6G_MED,agendaItem][tdoc] Discussion: title format');
+console.log('buildEmailExportSubject_() -- canonical [agendaItem][tdoc] Discussion: title format');
 
 {
   const { sandbox } = loadCode();
   check('full example (5.10)', withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Token traffic characteristics', '5.10'),
-    '[FS_6G_MED,5.10][S4aP260068] Discussion: Token traffic characteristics');
+    '[5.10][S4aP260068] Discussion: Token traffic characteristics');
   check('full example (5.4)', withTag(sandbox).buildEmailExportSubject_('S4aP260074', 'Draft TR 26.870 FS_6G_MED v0.6.0', '5.4'),
-    '[FS_6G_MED,5.4][S4aP260074] Discussion: Draft TR 26.870 FS_6G_MED v0.6.0');
+    '[5.4][S4aP260074] Discussion: Draft TR 26.870 FS_6G_MED v0.6.0');
   check('Agenda Item 5.10 is used verbatim -- NOT renumbered to 5.1',
-    withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'T', '5.10').indexOf('5.10') !== -1 && withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'T', '5.10').indexOf('[FS_6G_MED,5.1]') === -1, true);
-  check('missing Agenda Item: [FS_6G_MED][tdoc] Discussion: title (no agenda item invented)',
-    withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Token traffic characteristics', ''), '[FS_6G_MED][S4aP260068] Discussion: Token traffic characteristics');
-  check('missing title: [FS_6G_MED,agendaItem][tdoc] Discussion (no title invented)',
-    withTag(sandbox).buildEmailExportSubject_('S4aP260068', '', '5.10'), '[FS_6G_MED,5.10][S4aP260068] Discussion');
-  check('missing both: [FS_6G_MED][tdoc] Discussion',
-    withTag(sandbox).buildEmailExportSubject_('S4aP260068', '', ''), '[FS_6G_MED][S4aP260068] Discussion');
+    withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'T', '5.10').indexOf('5.10') !== -1 && withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'T', '5.10').indexOf('[5.1]') === -1, true);
+  check('missing Agenda Item: [tdoc] Discussion: title (no agenda item invented)',
+    withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Token traffic characteristics', ''), '[S4aP260068] Discussion: Token traffic characteristics');
+  check('missing title: [agendaItem][tdoc] Discussion (no title invented)',
+    withTag(sandbox).buildEmailExportSubject_('S4aP260068', '', '5.10'), '[5.10][S4aP260068] Discussion');
+  check('missing both: [tdoc] Discussion',
+    withTag(sandbox).buildEmailExportSubject_('S4aP260068', '', ''), '[S4aP260068] Discussion');
   check('Agenda Item comes from the table, never asked of the user (buildEmailExportSubject_ takes it as a plain parameter, not user input)',
     typeof sandbox.buildEmailExportSubject_, 'function');
 }
@@ -885,7 +894,7 @@ console.log('generateTdocDiscussionEmails() -- canonical Subject is generated se
   check('export still succeeds', result.ok, true);
   const emlText = Buffer.from(created.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8');
   check('the generated .eml uses the CANONICAL subject, not the client-supplied one',
-    /Subject: \[FS_6G_MED,5\.10,26-10-15-1500CEST\]\[S4aP260068\] Discussion: Token traffic characteristics/.test(emlText), true);
+    /Subject: \[5\.10\]\[26-10-15-1500CEST\]\[S4aP260068\] Discussion: Token traffic characteristics/.test(emlText), true);
   check('the tampered client subject text never appears anywhere in the generated .eml\'s Subject header',
     /Subject: Totally different subject/.test(emlText), false);
 }
@@ -902,7 +911,7 @@ console.log('generateTdocDiscussionEmails() -- Agenda Item is read fresh from th
   check('export succeeds', result.ok, true);
   const emlText = Buffer.from(created.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8');
   check('the exported .eml carries the canonical subject built from the table\'s own Agenda Item (RFC 2047 encoded, since it contains no non-ASCII here it is plain)',
-    /Subject: \[FS_6G_MED,5\.10,26-10-15-1500CEST\]\[S4aP260068\] Discussion: Token traffic characteristics/.test(emlText), true);
+    /Subject: \[5\.10\]\[26-10-15-1500CEST\]\[S4aP260068\] Discussion: Token traffic characteristics/.test(emlText), true);
 }
 
 // ------------------------------------------------------------ Outlook-ready (X-Unsent)
@@ -1046,7 +1055,7 @@ console.log('regression (within this stage): full Minutes preservation, canonica
   const html = sandbox.docTableToHtml_(table);
   check('full Minutes (nested) preserved inside the complete table HTML', html.indexOf('<li>Imed<ul><li>Questioned ...</li></ul></li>') !== -1, true);
   check('canonical subject with Agenda Item unchanged', withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Token traffic characteristics', '5.10'),
-    '[FS_6G_MED,5.10][S4aP260068] Discussion: Token traffic characteristics');
+    '[5.10][S4aP260068] Discussion: Token traffic characteristics');
   check('Approved/Agreed filtering unchanged', [sandbox.isEmailExportStatusExcluded_('Approved'), sandbox.isEmailExportStatusExcluded_('Revised')], [true, false]);
   check('false-TDoc detection unchanged ("Title"/"Original Agenda" still rejected)',
     [sandbox.isPlausibleTdocIdentifier_('Title'), sandbox.isPlausibleTdocIdentifier_('Original Agenda'), sandbox.isPlausibleTdocIdentifier_('S4aP260068')], [false, false, true]);
@@ -1367,21 +1376,21 @@ console.log('buildEmailExportSubject_() -- compact deadline token in the canonic
 
 {
   const { sandbox } = loadCode();
-  check('full example: agendaItem + compact deadline token + title, no spaces in the first bracket',
+  check('full example: agendaItem + compact deadline token + title, no spaces inside the brackets',
     withTag(sandbox).buildEmailExportSubject_('S4aP260069', '[FS_6G_MED] pCR on Editorial Updates to TR 26.870', '5.4', '26-10-15-1500CEST'),
-    '[FS_6G_MED,5.4,26-10-15-1500CEST][S4aP260069] Discussion: [FS_6G_MED] pCR on Editorial Updates to TR 26.870');
+    '[5.4][26-10-15-1500CEST][S4aP260069] Discussion: [FS_6G_MED] pCR on Editorial Updates to TR 26.870');
   check('Agenda Item 5.10 remains verbatim in the deadline-extended subject, never renumbered to 5.1',
     withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Title', '5.10', '26-10-15-1500CEST').indexOf('5.10') !== -1, true);
   check('no deadline supplied: falls back to the pre-006B format exactly (backward compatible)',
     withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Title', '5.10'),
-    '[FS_6G_MED,5.10][S4aP260068] Discussion: Title');
+    '[5.10][S4aP260068] Discussion: Title');
   check('deadline present but no agendaItem: deadline still shown, agendaItem simply omitted',
     withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Title', '', '26-10-15-1500CEST'),
-    '[FS_6G_MED,26-10-15-1500CEST][S4aP260068] Discussion: Title');
+    '[26-10-15-1500CEST][S4aP260068] Discussion: Title');
   check('no agendaItem or deadline: unchanged from the original format',
     withTag(sandbox).buildEmailExportSubject_('S4aP260068', 'Title', '', ''),
-    '[FS_6G_MED][S4aP260068] Discussion: Title');
-  check('no space appears anywhere inside the first bracket', /\[FS_6G_MED,5\.4,26-10-15-1500CEST\]/.test(
+    '[S4aP260068] Discussion: Title');
+  check('no space appears anywhere inside the agenda-item and deadline brackets', /\[5\.4\]\[26-10-15-1500CEST\]/.test(
     withTag(sandbox).buildEmailExportSubject_('S4aP260069', 'Title', '5.4', '26-10-15-1500CEST')), true);
   check('the human-readable part after "Discussion: " keeps its own natural spacing, unaffected',
     withTag(sandbox).buildEmailExportSubject_('S4aP260069', 'pCR on Editorial Updates', '5.4', '26-10-15-1500CEST').indexOf('Discussion: pCR on Editorial Updates') !== -1, true);
@@ -1456,7 +1465,7 @@ console.log('generateTdocDiscussionEmails() -- deadline validation, Subject/body
   const result = sandbox.generateTdocDiscussionEmails([{ tableIndex: 0, deadline: VALID_DEADLINE }]);
   check('export succeeds with a valid deadline', result.ok, true);
   const emlText = Buffer.from(created.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8');
-  check('Subject renders exactly "26-10-15 15:00 CEST"', /Subject: \[FS_6G_MED,5\.4,26-10-15-1500CEST\]/.test(emlText), true);
+  check('Subject renders exactly "26-10-15 15:00 CEST"', /Subject: \[5\.4\]\[26-10-15-1500CEST\]/.test(emlText), true);
   check('body contains exactly "Please provide your comments by 26-10-15 15:00 CEST."', unwrapQuotedPrintableSoftBreaks(emlText).indexOf('Please provide your comments by 26-10-15 15:00 CEST.') !== -1, true);
 }
 
@@ -1469,7 +1478,7 @@ console.log('generateTdocDiscussionEmails() -- deadline validation, Subject/body
   const result = sandbox.generateTdocDiscussionEmails([{ tableIndex: 0, deadline: { date: '2026-10-16', time: '12:30', tz: 'CEST' } }]);
   check('export succeeds with the overridden deadline', result.ok, true);
   const emlText = Buffer.from(created.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8');
-  check('a per-TDoc deadline override changes the Subject', /Subject: \[FS_6G_MED,5\.4,26-10-16-1230CEST\]/.test(emlText), true);
+  check('a per-TDoc deadline override changes the Subject', /Subject: \[5\.4\]\[26-10-16-1230CEST\]/.test(emlText), true);
   check('the SAME override also changes the body sentence (one effective deadline, not two)', unwrapQuotedPrintableSoftBreaks(emlText).indexOf('Please provide your comments by 26-10-16 12:30 CEST.') !== -1, true);
 }
 
@@ -1622,7 +1631,7 @@ console.log('generateTdocDiscussionEmails() -- revision-upload instruction end-t
   const result = sandbox.generateTdocDiscussionEmails([{ tableIndex: 0, deadline: VALID_DEADLINE }]);
   check('export succeeds', result.ok, true);
   const emlText = unwrapQuotedPrintableSoftBreaks(Buffer.from(created.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8'));
-  check('Subject carries the effective deadline', /Subject: \[FS_6G_MED,5\.4,26-10-15-1500CEST\]/.test(emlText), true);
+  check('Subject carries the effective deadline', /Subject: \[5\.4\]\[26-10-15-1500CEST\]/.test(emlText), true);
   check('the "comments by" sentence carries the SAME effective deadline', emlText.indexOf('Please provide your comments by 26-10-15 15:00 CEST.') !== -1, true);
   check('the "upload revisions by" sentence carries the SAME effective deadline', emlText.indexOf('Please upload revisions by 26-10-15 15:00 CEST to:') !== -1, true);
   check('a real clickable <a href> to the resolved revision-upload folder is present',
@@ -1642,7 +1651,7 @@ console.log('generateTdocDiscussionEmails() -- revision-upload instruction end-t
   const result = sandbox.generateTdocDiscussionEmails([{ tableIndex: 0, deadline: { date: '2026-10-16', time: '12:30', tz: 'CEST' } }]);
   check('export succeeds with the override', result.ok, true);
   const emlText = unwrapQuotedPrintableSoftBreaks(Buffer.from(created.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8'));
-  check('Subject reflects the override', /Subject: \[FS_6G_MED,5\.4,26-10-16-1230CEST\]/.test(emlText), true);
+  check('Subject reflects the override', /Subject: \[5\.4\]\[26-10-16-1230CEST\]/.test(emlText), true);
   check('the comments sentence reflects the SAME override', emlText.indexOf('Please provide your comments by 26-10-16 12:30 CEST.') !== -1, true);
   check('the revision-upload sentence reflects the SAME override too (all three together)', emlText.indexOf('Please upload revisions by 26-10-16 12:30 CEST to:') !== -1, true);
 }
@@ -1710,7 +1719,7 @@ console.log('generateTdocDiscussionEmails() -- revision-upload instruction does 
   const eml = Buffer.from(created.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8');
   check('X-Unsent: 1 still appears exactly once', (eml.match(/X-Unsent: 1/g) || []).length, 1);
   check('canonical Subject format is otherwise unchanged apart from the deadline bracket already added in 006B',
-    /Subject: \[FS_6G_MED,5\.4,26-10-15-1500CEST\]\[S4aP260069\] Discussion: Editorial updates/.test(eml), true);
+    /Subject: \[5\.4\]\[26-10-15-1500CEST\]\[S4aP260069\] Discussion: Editorial updates/.test(eml), true);
 }
 
 {
@@ -1895,7 +1904,7 @@ console.log('regression: pre-existing exporter behavior is completely unaffected
   const emlBlob = createdBlobs.find((b) => !/\.zip$/.test(b.getName()));
   const emlText = unwrapQuotedPrintableSoftBreaks(Buffer.from(emlBlob.getBytes().map((b) => (b < 0 ? b + 256 : b))).toString('utf8'));
   check('Subject, deadline, revision-upload instruction, and X-Unsent are all unchanged by this stage', [
-    /Subject: \[FS_6G_MED,5\.4,26-10-15-1500CEST\]\[S4aP260069\] Discussion: Editorial updates/.test(emlText),
+    /Subject: \[5\.4\]\[26-10-15-1500CEST\]\[S4aP260069\] Discussion: Editorial updates/.test(emlText),
     emlText.indexOf('Please provide your comments by 26-10-15 15:00 CEST.') !== -1,
     emlText.indexOf('Please upload revisions by 26-10-15 15:00 CEST to:') !== -1,
     (emlText.match(/X-Unsent: 1/g) || []).length === 1,
@@ -2072,7 +2081,7 @@ console.log('generateTdocDiscussionEmails() -- exact From/To for the current mee
     [/From: reporter@example\.com/.test(firstText), /To: 3gpp_tsg_sa4_fs_6g_med@list\.etsi\.org/.test(firstText)], [true, true]);
   check('From and To are explicitly different addresses', /From: (\S+)/.exec(firstText)[1] !== /To: (\S+)/.exec(firstText)[1], true);
   check('the compact canonical Subject is preserved, unregressed',
-    /Subject: \[FS_6G_MED,5\.4,26-10-15-1500CEST\]\[S4aP260069\] Discussion: \[FS_6G_MED\] pCR on Editorial Updates to TR 26\.870/.test(firstText), true);
+    /Subject: \[5\.4\]\[26-10-15-1500CEST\]\[S4aP260069\] Discussion: \[FS_6G_MED\] pCR on Editorial Updates to TR 26\.870/.test(firstText), true);
   check('every .eml in the batch uses the SAME configured sender for From', emlBlobs.every(function (b) {
     return /From: reporter@example\.com/.test(Buffer.from(b.getBytes().map((x) => (x < 0 ? x + 256 : x))).toString('utf8'));
   }), true);
@@ -2188,8 +2197,8 @@ console.log('regression: revision-upload link, deadline forms, and X-Unsent rema
   check('X-Unsent: 1 appears exactly once', (raw.match(/X-Unsent: 1/g) || []).length, 1);
   check('body deadline sentence remains human-readable "26-10-15 15:00 CEST"', decoded.indexOf('Please provide your comments by 26-10-15 15:00 CEST.') !== -1, true);
   check('revision-upload sentence/deadline remains human-readable "26-10-15 15:00 CEST"', decoded.indexOf('Please upload revisions by 26-10-15 15:00 CEST to:') !== -1, true);
-  check('subject deadline token remains the compact "26-10-15-1500CEST" form, no spaces/colons', /Subject: \[FS_6G_MED,5\.4,26-10-15-1500CEST\]/.test(raw), true);
-  check('no space appears anywhere inside the first Subject bracket', /\[FS_6G_MED,5\.4,26-10-15-1500CEST\]/.test(raw), true);
+  check('subject deadline token remains the compact "26-10-15-1500CEST" form, no spaces/colons', /Subject: \[5\.4\]\[26-10-15-1500CEST\]/.test(raw), true);
+  check('no space appears anywhere inside the agenda-item and deadline brackets of the Subject', /\[5\.4\]\[26-10-15-1500CEST\]/.test(raw), true);
 }
 
 if (failures > 0) {
