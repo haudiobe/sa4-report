@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.17.3 (2026-10-01)
+ * Version: 2.17.4 (2026-10-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,30 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.17.4 (2026-10-01)
+ *   - Changed (SA4 Report Template runtime only, TEMPLATE-003 stage 1): a
+ *     report created from the template has its own menu, "SA4 Report",
+ *     built in ReportCreator.js: Report (Build Report from Scratch, Update
+ *     Report Now, the three partial updates, status summary), Prepare
+ *     Discussion E-mails, Document Reallocation, Automatic Updates,
+ *     Configure Meeting, Advanced and Repair, About. The LEGACY submenu and
+ *     the technical / duplicate items are no longer shown there; every
+ *     function behind them is still in this file. The master template's
+ *     menu is called "SA4 Report" too.
+ *   - Changed (template runtime only): the build confirmation says that the
+ *     document's content is replaced and that minutes entered by hand are
+ *     lost. Still one confirmation before any change, no UI call after it.
+ *   - Added (template runtime only): "Update Report Now" runs the complete
+ *     update of continuousUpdate() and fails visibly: no pop-up after the
+ *     document was changed, a completed update ends normally, a failed one
+ *     throws. For that, collectorUpdate_() now also RETURNS the failures of
+ *     its two steps (it only logged them), and continuousUpdateCore_()
+ *     passes them on in its result. Nothing else reads these values:
+ *     continuousUpdate(), the trigger and the add-on scheduler behave as
+ *     before.
+ *   - Unchanged: the CENTRAL add-on / Legacy menu (the menu code below is
+ *     again exactly what it was before the template runtime), and every
+ *     existing function.
  * 2.17.3 (2026-10-01)
  *   - Fixed: a completed "Run Full Report Build" was reported as FAILED.
  *     Live (T-2026.10.2, report for 86178): all five phases finished in
@@ -553,21 +577,20 @@ function onInstall(e) {
 function onOpen(e) {
   const ui = DocumentApp.getUi();
 
-  // TEMPLATE-002B: in the SA4 Report Template runtime (Release.js present)
-  // the master template gets its own minimal menu, and a report gets this
-  // menu without the CENTRAL add-on submenu. Without Release.js (CENTRAL,
-  // Legacy copies) nothing below changes.
-  const templateRuntime = !!templateRuntimeRelease_();
-  if (templateRuntime && isTemplateMasterDocument_()) {
-    buildTemplateMasterMenu_(ui);
+  // TEMPLATE-002B / TEMPLATE-003: in the SA4 Report Template runtime
+  // (Release.js present) the menus are built in ReportCreator.js -- the
+  // master template gets its own minimal menu, a report gets the
+  // "SA4 Report" menu. Without Release.js (CENTRAL, Legacy copies) neither
+  // branch is taken and the menu below is unchanged.
+  if (templateRuntimeRelease_()) {
+    if (isTemplateMasterDocument_()) buildTemplateMasterMenu_(ui);
+    else buildTemplateReportMenu_(ui);
     return;
   }
 
   // Main menu
   const menu = ui.createMenu('⚠️Scripts⚠️');
   
-  if (templateRuntime) addTemplateReportMenuHead_(menu);
-
   // INITIAL SETUP submenu
   const setupMenu = ui.createMenu('📝 INITIAL SETUP');
   setupMenu.addItem('⚙️ Configure Meeting Settings', 'configureMeetingSettings');
@@ -587,9 +610,7 @@ function onOpen(e) {
   reportMenu.addItem('🔄 Continuous Update (New TDOCs + Status)', 'continuousUpdate');
   reportMenu.addItem('⏰ Manage Auto-Update Trigger', 'manageTriggers');  // ADD THIS LINE
   reportMenu.addSeparator();
-  // TEMPLATE-002B: the normal build is "Run Full Report Build" above; in
-  // the template runtime the old import sits in the LEGACY submenu instead.
-  if (!templateRuntime) reportMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
+  reportMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
   reportMenu.addItem('🔄 Update Report (During Meeting)', 'updateReportIncremental');
   reportMenu.addItem('📊 Analyze Report Status', 'analyzeReportStatus');
 
@@ -647,19 +668,11 @@ function onOpen(e) {
   menu.addSubMenu(toolsMenu);
   menu.addSubMenu(formatMenu);
   menu.addSubMenu(emailExportMenu);
-  if (!templateRuntime) menu.addSubMenu(addonMenu);
+  menu.addSubMenu(addonMenu);
 
   // Legacy functions (for backward compatibility)
   menu.addSeparator();
-  if (templateRuntime) {
-    const legacyMenu = ui.createMenu('🗄️ LEGACY (old workflow)');
-    legacyMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
-    legacyMenu.addItem('⚠️ Legacy: Update All', 'updateAll');
-    menu.addSubMenu(legacyMenu);
-    addTemplateReportMenuTail_(menu);
-  } else {
-    menu.addItem('⚠️ Legacy: Update All', 'updateAll');
-  }
+  menu.addItem('⚠️ Legacy: Update All', 'updateAll');
 
   menu.addToUi();
 }
@@ -1003,7 +1016,10 @@ function continuousUpdateCore_(context) {
     }
 
     // Collect emails and revisions
-    perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context));
+    // 2.17.4: the collector's own failures (logged there, never thrown) are
+    // passed on in the result. `success` is unchanged by them.
+    const collected = perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context));
+    if (collected && collected.failures && collected.failures.length) result.collectorFailures = collected.failures;
 
     // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
     // full-document formatting pass is only actually needed when this run
@@ -4630,10 +4646,15 @@ function collectorUpdate_(context) {
   const cfg = getCollectorConfig_(context);
   log_(cfg, '=== COLLECTOR START ===');
 
-  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg, context)); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); }
-  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg, context)); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); }
+  // 2.17.4: a failed step is still logged and still does not stop the
+  // other one; it is now also returned, so that a caller which wants to
+  // (Update Report Now in a template report) can report it.
+  const failures = [];
+  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg, context)); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); failures.push({ step: 'e-mail discussions', error: e.message }); }
+  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg, context)); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); failures.push({ step: 'TDoc revisions', error: e.message }); }
 
   log_(cfg, '=== COLLECTOR END ===');
+  return { failures: failures };
 }
 
 // --- Email discussion ---
@@ -9578,7 +9599,9 @@ function runFullReportBuild() {
     assertNotTemplateMaster_();
     ensureReportBootstrapped_();
   }
-  const response = ui.alert(
+  // TEMPLATE-003: a template report asks with its own text, which says
+  // that the document's content is replaced (ReportCreator.js).
+  const response = templateRuntimeRelease_() ? confirmTemplateBuildFromScratch_(ui) : ui.alert(
     'Run Full Report Build',
     'This will run all steps:\n\n' +
     '1+2) Build skeleton from agenda + insert TDOC tables\n' +
