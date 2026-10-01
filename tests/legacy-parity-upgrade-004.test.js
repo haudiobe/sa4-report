@@ -422,9 +422,12 @@ console.log('regression: BUGFIX-LEGACY-001 / LEGACY-UPGRADE-002 / LEGACY-UPGRADE
   // and Save does not write EMAIL_START_DATE. Legacy keeps the field. The
   // collector honours a stored EMAIL_START_DATE either way (BUGFIX-LEGACY-003,
   // tests/legacy-parity-adhoc-email-collection.test.js).
+  // TEMPLATE-002B: these suites load the add-on runtime (no Release.js). The
+  // template runtime restores the field (decision 2026-10-01), covered by
+  // tests/template002b-runtime.test.js.
   const { sandbox: s3, docProps: dp3 } = loadCode({ documentProperties: { EMAIL_START_DATE: '2026-09-01' } });
   s3.saveConfigurationSettings({ emailStartDate: '2026-09-28', showPreview: true });
-  check('[template] Save neither writes nor erases EMAIL_START_DATE', dp3._store.EMAIL_START_DATE, '2026-09-01');
+  check('[add-on runtime] Save neither writes nor erases EMAIL_START_DATE', dp3._store.EMAIL_START_DATE, '2026-09-01');
 }
 {
   const { sandbox } = loadCode();

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * SA4 Report Template -- release bundle builder.
- * PROTOTYPE (design/report-template-architecture). See
- * docs/SA4_REPORT_TEMPLATE_ARCHITECTURE.md §10.
+ * See docs/SA4_REPORT_TEMPLATE_ARCHITECTURE.md §10 and
+ * docs/TEMPLATE-002B_RELEASE_CANDIDATE.md.
  *
  * Assembles the exact files for the master template's bound script into
  * dist/template-release/<releaseId>/ together with a generated Release.js,
@@ -135,9 +135,15 @@ function planRelease({ releaseId, target, git, readFile, builtAt, protection }) 
     }
   });
 
+  // The Code.js version of this snapshot, from its own header line.
+  const codeFile = files.find((f) => f.name === 'Code.js');
+  const codeVersion = codeFile ? (String(codeFile.content).slice(0, 400).match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1] || null : null;
+  if (codeFile && !codeVersion) errors.push('Code.js has no "Version: x.y.z" header line.');
+
   const meta = {
     releaseId,
     flavor: 'template',
+    codeVersion,
     gitCommit: git ? git.commit : null,
     gitTag: tag,
     builtAt,
@@ -156,6 +162,7 @@ function planRelease({ releaseId, target, git, readFile, builtAt, protection }) 
     claspIgnore: buildClaspIgnore(published),
     manifest: {
       releaseId,
+      codeVersion,
       gitCommit: meta.gitCommit,
       templateScriptId: meta.templateScriptId,
       files: files.map((f) => ({ name: f.name, source: f.source, sha256: crypto.createHash('sha256').update(f.content).digest('hex') }))

@@ -1,5 +1,5 @@
 /**
- * TEMPLATE prototype -- report creation from the bound template and the
+ * SA4 Report Template -- report creation from the bound template and the
  * first-run bootstrap (template/ReportCreator.js).
  *
  * Every meeting case runs the REAL Code.js discovery pipeline
@@ -141,6 +141,7 @@ console.log('86172 MBS ad-hoc: agenda.csv, discovered list, family from name + T
       'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_MBS/Agenda/agenda.csv',
       'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_MBS/Docs/']);
   check('mailing list left to family derivation (no override stored)', p.MAILING_LIST, undefined);
+  check('e-mail collection starts at the meeting start date', p.EMAIL_START_DATE, '2026-10-01');
   check('no historical SA4#136 folder/number for an ad-hoc meeting', [p.MEETING_FOLDER, p.MEETING_NUMBER], [undefined, undefined]);
   check('build readiness is green (real getBuildReadiness_)', [r.setup.readiness.ready, r.setup.readiness.issues], [true, []]);
   check('release provenance recorded',
@@ -218,7 +219,7 @@ console.log('main meeting: family is always asked, folder/number derived from th
   main[0].Type = 'OR'; main[0].Title = '3GPPSA4#137'; main[0].MtgDocURL = 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_137_Xian/Docs/';
   const s = creatorFor(main, [], { csv: null, list: null });
   const noFamily = plain(s.previewNewReportFromTemplate('86172', {}));
-  const mainType = noFamily.preview.meetingType.value;
+  const mainType = noFamily.resolved.meeting.type;
   if (mainType !== 'main') {
     check('fixture sanity: portal type OR resolves to main', mainType, 'main');
   } else {
@@ -311,8 +312,14 @@ console.log('first-run guards');
   check('damaged payload refused', plain(damaged.s.finishReportSetupWith_(damaged.deps)).errors, ['The setup information in the file description is damaged.']);
 
   const legacy = firstRunFor('', { props: { MEETING_ID: '86178', MEETING_TYPE: 'adhoc' } });
-  check('an existing/migrated report without payload is left alone',
-    [legacy.s.finishReportSetupWith_(legacy.deps).status, legacy.docProps.getKeys()], ['not-a-new-report', ['MEETING_ID', 'MEETING_TYPE']]);
+  check('an existing/migrated report without payload keeps its configuration; only the "checked once" marker is added',
+    [legacy.s.finishReportSetupWith_(legacy.deps).status, plain(legacy.docProps._store)],
+    ['not-a-new-report', { MEETING_ID: '86178', MEETING_TYPE: 'adhoc', SA4_BOOTSTRAP_STATE: 'manual' }]);
+  check('... and is not looked at again', legacy.s.finishReportSetupWith_(Object.assign({}, legacy.deps, { getOwnDescription: () => { throw new Error('read again'); } })).status, 'not-a-new-report');
+
+  const blank = firstRunFor('');
+  check('an unconfigured document without setup information: nothing to finish, no configuration written',
+    [blank.s.finishReportSetupWith_(blank.deps).status, plain(blank.docProps._store)], ['no-setup-info', { SA4_BOOTSTRAP_STATE: 'manual' }]);
 
   const other = firstRunFor(description, { props: { MEETING_ID: '12345' } });
   check('never overwrites a different meeting', plain(other.s.finishReportSetupWith_(other.deps)).errors,
@@ -321,26 +328,15 @@ console.log('first-run guards');
 
 // ============================================================ template role + intervals
 
-console.log('template role and Continuous Update intervals');
+console.log('template role and release metadata');
 {
   const { sandbox: s } = loadTemplateRuntime({ release: RELEASE });
   check('template id -> template', s.templateDocumentRole_(TEMPLATE_DOC_ID, RELEASE), 'template');
   check('any other id -> report', s.templateDocumentRole_(NEW_DOC_ID, RELEASE), 'report');
-  let msg = null;
-  try { s.assertNotTemplateDocument_(TEMPLATE_DOC_ID, RELEASE); } catch (e) { msg = e.message; }
-  check('report operations refused in the template', /SA4 Report Template itself/.test(msg), true);
   check('release metadata valid', plain(s.validateTemplateRelease_(RELEASE)), []);
-  check('Release.js is picked up at call time', s.getTemplateRelease_().releaseId, 'T-2026.10.0');
-
-  const central = [{ minutes: 60, everyHours: 1 }];
-  const tpl = plain(s.continuousTriggerIntervalsForRuntime_(RELEASE, central));
-  check('template runtime offers 15/30/60 with valid builder calls',
-    tpl.map((o) => [o.minutes, o.everyMinutes || null, o.everyHours || null]), [[15, 15, null], [30, 30, null], [60, null, 1]]);
-  check('everyMinutes values are ones ClockTriggerBuilder accepts', tpl.every((o) => !o.everyMinutes || [1, 5, 10, 15, 30].indexOf(o.everyMinutes) !== -1), true);
-  check('CENTRAL/Legacy (no release) keep their own table', plain(s.continuousTriggerIntervalsForRuntime_(null, central)), central);
-
+  check('Release.js is picked up at call time', s.templateRuntimeRelease_().releaseId, 'T-2026.10.0');
   const { sandbox: none } = loadTemplateRuntime();
-  check('without Release.js the runtime reports no release', none.getTemplateRelease_(), null);
+  check('without Release.js the runtime reports no release', none.templateRuntimeRelease_(), null);
 }
 
 // ============================================================ isolation from Code.js

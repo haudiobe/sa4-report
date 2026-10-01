@@ -64,7 +64,10 @@ console.log('2. subject tag is derived from the meeting\'s mailing list, never h
 }
 
 // ---------------------------------------------------------------- 3
-console.log('3. no Email Collection Start Date field in the Meeting Configuration dialog (CENTRAL ADDON-007B1)');
+// TEMPLATE-002B: true for the add-on runtime this file loads (no Release.js).
+// The template runtime restores the field (decision 2026-10-01); see
+// tests/template002b-runtime.test.js.
+console.log('3. no Email Collection Start Date field in the dialog outside the template runtime (CENTRAL ADDON-007B1)');
 {
   const loaded = loadCode({ documentProperties: { EMAIL_START_DATE: '2026-09-15' } });
   const s = loaded.sandbox;

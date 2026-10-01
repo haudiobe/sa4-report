@@ -352,12 +352,15 @@ console.log('EMAIL_START_DATE: no dialog field in the template (intentional diff
 // and Save does not write EMAIL_START_DATE. Legacy keeps the field. The
 // collector honours a stored EMAIL_START_DATE either way (BUGFIX-LEGACY-003,
 // tests/legacy-parity-adhoc-email-collection.test.js).
+// TEMPLATE-002B: these suites load the add-on runtime (no Release.js). The
+// template runtime restores the field (decision 2026-10-01), covered by
+// tests/template002b-runtime.test.js.
 {
   const d2 = openDialog({ EMAIL_START_DATE: '2026-09-01' }, null, []);
-  check('[template] the dialog has no Email Collection Start Date field', /Email Collection Start Date|id="emailStartDate"/.test(d2.html), false);
+  check('[add-on runtime] the dialog has no Email Collection Start Date field', /Email Collection Start Date|id="emailStartDate"/.test(d2.html), false);
   const { sandbox, docProps } = loadCode({ documentProperties: { EMAIL_START_DATE: '2026-09-01' } });
   sandbox.saveConfigurationSettings({ emailStartDate: '2026-09-20', showPreview: true });
-  check('[template] Save neither writes nor erases EMAIL_START_DATE', docProps._store.EMAIL_START_DATE, '2026-09-01');
+  check('[add-on runtime] Save neither writes nor erases EMAIL_START_DATE', docProps._store.EMAIL_START_DATE, '2026-09-01');
 }
 
 console.log('regression: LEGACY-UPGRADE-002 token handling unchanged');

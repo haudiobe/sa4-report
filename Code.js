@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.16.0 (2026-10-01)
+ * Version: 2.17.0 (2026-10-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,33 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.17.0 (2026-10-01)
+ *   - Added (TEMPLATE-002B): this file is also the runtime of the "SA4
+ *     Report Template" Google Doc and of the reports copied from it. A
+ *     template release bundle adds Release.js (generated, defines
+ *     SA4_RELEASE_) and ReportCreator.js. Everything template-specific
+ *     here is switched by templateRuntimeRelease_() at call time; without
+ *     Release.js (the CENTRAL add-on, Legacy copies) behaviour is
+ *     unchanged.
+ *   - Template runtime: the master template gets its own menu ("Create New
+ *     SA4 Report", "Template Release Info") and refuses report operations
+ *     (build, update, trigger, configuration). A report gets the existing
+ *     menu without the CENTRAL add-on submenu, with the old "Legacy: Build
+ *     Initial Report" / "Legacy: Update All" in a LEGACY submenu, plus
+ *     "Finish Report Setup" (until done) and "About This Report".
+ *     Configure Meeting and Run Full Report Build store the creator's
+ *     setup information on first use.
+ *   - Template runtime: Continuous Update every 15, 30 (default) or 60
+ *     minutes (60 = everyHours(1)); the replacement trigger is created
+ *     before the previous one is removed, and the installed interval is
+ *     shown (Document Property CONTINUOUS_UPDATE_INTERVAL_MINUTES). The
+ *     installer lives in ReportCreator.js; the add-on stays hourly only.
+ *   - Template runtime (decision 2026-10-01): "Email Collection Start
+ *     Date" is a Configure Meeting field again. It is stored in the
+ *     existing EMAIL_START_DATE property; without a stored value the
+ *     meeting start date is proposed, and the collector falls back to the
+ *     meeting start date (else 2026-08-21). Outside the template runtime
+ *     the dialog and the fallback are as in 2.16.0.
  * 2.16.0 (2026-10-01)
  *   - TEMPLATE-002A (Legacy parity): the fixes accepted in the Legacy
  *     bound script (sa4-report-legacy b95e06e, live on 86178) that this
@@ -466,9 +493,21 @@ function onInstall(e) {
 function onOpen(e) {
   const ui = DocumentApp.getUi();
 
+  // TEMPLATE-002B: in the SA4 Report Template runtime (Release.js present)
+  // the master template gets its own minimal menu, and a report gets this
+  // menu without the CENTRAL add-on submenu. Without Release.js (CENTRAL,
+  // Legacy copies) nothing below changes.
+  const templateRuntime = !!templateRuntimeRelease_();
+  if (templateRuntime && isTemplateMasterDocument_()) {
+    buildTemplateMasterMenu_(ui);
+    return;
+  }
+
   // Main menu
   const menu = ui.createMenu('⚠️Scripts⚠️');
   
+  if (templateRuntime) addTemplateReportMenuHead_(menu);
+
   // INITIAL SETUP submenu
   const setupMenu = ui.createMenu('📝 INITIAL SETUP');
   setupMenu.addItem('⚙️ Configure Meeting Settings', 'configureMeetingSettings');
@@ -488,7 +527,9 @@ function onOpen(e) {
   reportMenu.addItem('🔄 Continuous Update (New TDOCs + Status)', 'continuousUpdate');
   reportMenu.addItem('⏰ Manage Auto-Update Trigger', 'manageTriggers');  // ADD THIS LINE
   reportMenu.addSeparator();
-  reportMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
+  // TEMPLATE-002B: the normal build is "Run Full Report Build" above; in
+  // the template runtime the old import sits in the LEGACY submenu instead.
+  if (!templateRuntime) reportMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
   reportMenu.addItem('🔄 Update Report (During Meeting)', 'updateReportIncremental');
   reportMenu.addItem('📊 Analyze Report Status', 'analyzeReportStatus');
 
@@ -546,15 +587,74 @@ function onOpen(e) {
   menu.addSubMenu(toolsMenu);
   menu.addSubMenu(formatMenu);
   menu.addSubMenu(emailExportMenu);
-  menu.addSubMenu(addonMenu);
+  if (!templateRuntime) menu.addSubMenu(addonMenu);
 
   // Legacy functions (for backward compatibility)
   menu.addSeparator();
-  menu.addItem('⚠️ Legacy: Update All', 'updateAll');
+  if (templateRuntime) {
+    const legacyMenu = ui.createMenu('🗄️ LEGACY (old workflow)');
+    legacyMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
+    legacyMenu.addItem('⚠️ Legacy: Update All', 'updateAll');
+    menu.addSubMenu(legacyMenu);
+    addTemplateReportMenuTail_(menu);
+  } else {
+    menu.addItem('⚠️ Legacy: Update All', 'updateAll');
+  }
 
   menu.addToUi();
 }
 
+
+// =========================================================
+// TEMPLATE-002B -- SA4 REPORT TEMPLATE RUNTIME HOOKS
+// =========================================================
+//
+// This file is also the bound script of the "SA4 Report Template" Google
+// Doc and of every report copied from it. A template release bundle adds
+// two files next to it: Release.js (generated; defines SA4_RELEASE_) and
+// ReportCreator.js (creator, first run, template menus). Everything
+// template-specific in THIS file asks templateRuntimeRelease_() at call
+// time, so without Release.js (the CENTRAL add-on, a Legacy copy, the
+// tests) every function below is inert and behaviour is unchanged.
+//
+// Three kinds of document can run this code:
+//   - the master template: its id is SA4_RELEASE_.templateDocumentId. It
+//     only creates reports; report operations are refused in it.
+//   - a report created from the template: any other document, set up from
+//     the creator's bootstrap information on first use.
+//   - an ordinary document that happens to contain the code: any other
+//     document without bootstrap information. It behaves like a report and
+//     is configured by hand, as before.
+// The role comes from the document id, never from inherited properties: a
+// copy starts with empty property stores (TEMPLATE-001, live verified).
+
+/** The template release this script copy was built from, or null. */
+function templateRuntimeRelease_() {
+  return typeof SA4_RELEASE_ !== 'undefined' && SA4_RELEASE_ && SA4_RELEASE_.flavor === 'template' ? SA4_RELEASE_ : null;
+}
+
+/** 'template' for the master template document, 'report' for anything else. */
+function templateDocumentRole_(documentId, release) {
+  return release && documentId && documentId === release.templateDocumentId ? 'template' : 'report';
+}
+
+function isTemplateMasterDocument_() {
+  const release = templateRuntimeRelease_();
+  return !!release && templateDocumentRole_(getActiveDocumentIdSafely_(), release) === 'template';
+}
+
+/**
+ * Refuses a report operation in the master template, so the template never
+ * acquires meeting configuration, report content or a trigger. Called by
+ * the build/update guard, the trigger installer and the configuration
+ * dialog and save.
+ */
+function assertNotTemplateMaster_() {
+  if (isTemplateMasterDocument_()) {
+    throw new Error('This is the SA4 Report Template itself. Use "Create New SA4 Report" -- ' +
+      'reports are never built or configured in the template.');
+  }
+}
 
 // =========================================================
 // PERF-001 -- LIGHTWEIGHT PERFORMANCE INSTRUMENTATION
@@ -1470,6 +1570,9 @@ function manageTriggers() {
       : 'Unknown';
     currentInterval = minutes;
   }
+  // TEMPLATE-002B: the template runtime records the interval it installed.
+  const storedInterval = continuousTrigger && templateRuntimeRelease_() ? describeStoredContinuousInterval_(props) : null;
+  if (storedInterval) currentInterval = storedInterval.label;
   
   // Build HTML dialog
   const html = HtmlService.createHtmlOutput(`
@@ -1498,8 +1601,8 @@ function manageTriggers() {
     
     <label>Update Interval:</label>
     <select id="interval">
-      ${CONTINUOUS_TRIGGER_INTERVALS_.map(function (o) {
-        return '<option value="' + o.minutes + '"' + (o.selected ? ' selected' : '') + '>' + o.label + '</option>';
+      ${continuousTriggerIntervals_().map(function (o) {
+        return '<option value="' + o.minutes + '"' + ((storedInterval ? o.minutes === storedInterval.minutes : o.selected) ? ' selected' : '') + '>' + o.label + '</option>';
       }).join('\n      ')}
     </select>
     
@@ -1601,6 +1704,28 @@ var CONTINUOUS_TRIGGER_INTERVALS_ = [
   { minutes: 60, label: 'Every hour (Slow meeting)', everyHours: 1, selected: true }
 ];
 
+// TEMPLATE-002B: Document Property in which the template runtime records
+// the interval of the trigger it installed (Apps Script does not expose a
+// trigger's interval).
+var CONTINUOUS_UPDATE_INTERVAL_KEY_ = 'CONTINUOUS_UPDATE_INTERVAL_MINUTES';
+
+/**
+ * TEMPLATE-002B: the intervals this runtime offers. The bound template
+ * runtime offers 15/30/60 minutes (its table and installer live in
+ * ReportCreator.js, which only template bundles contain -- this file never
+ * creates a sub-hourly trigger); the add-on offers hourly only.
+ */
+function continuousTriggerIntervals_() {
+  return templateRuntimeRelease_() ? templateContinuousTriggerIntervals_() : CONTINUOUS_TRIGGER_INTERVALS_;
+}
+
+/** { minutes, label } for the recorded interval, or null when none is recorded. */
+function describeStoredContinuousInterval_(props) {
+  const minutes = parseInt(props.getProperty(CONTINUOUS_UPDATE_INTERVAL_KEY_) || '', 10);
+  const known = continuousTriggerIntervals_().some(function (o) { return o.minutes === minutes; });
+  return known ? { minutes: minutes, label: minutes + ' minutes' } : null;
+}
+
 /**
  * 2.15.1: the CONTINUOUS_TRIGGER_INTERVALS_ entry for a dialog interval (a
  * whole number of minutes, as a number or a digit string). Anything else --
@@ -1611,10 +1736,10 @@ function resolveContinuousTriggerInterval_(intervalMinutes) {
   const minutes = (typeof raw === 'number' && Number.isInteger(raw)) ? raw
     : (typeof raw === 'string' && /^\d+$/.test(raw)) ? parseInt(raw, 10)
     : null;
-  const entry = minutes === null ? null : CONTINUOUS_TRIGGER_INTERVALS_.find(function (o) { return o.minutes === minutes; });
+  const entry = minutes === null ? null : continuousTriggerIntervals_().find(function (o) { return o.minutes === minutes; });
   if (!entry) {
     throw new Error('Unsupported update interval: ' + JSON.stringify(intervalMinutes === undefined ? null : intervalMinutes) +
-      ' (supported: ' + CONTINUOUS_TRIGGER_INTERVALS_.map(function (o) { return o.minutes; }).join(', ') + ' minutes).');
+      ' (supported: ' + continuousTriggerIntervals_().map(function (o) { return o.minutes; }).join(', ') + ' minutes).');
   }
   return entry;
 }
@@ -1623,6 +1748,11 @@ function createContinuousTrigger(intervalMinutes, fetchAbstracts) {
   // 2.15.1: validate first -- an unsupported interval changes nothing (the
   // existing trigger and the abstracts switch are left as they are).
   const interval = resolveContinuousTriggerInterval_(intervalMinutes);
+
+  // TEMPLATE-002B: the bound template runtime installs the replacement
+  // before it removes the previous trigger (createTemplateContinuousTrigger_()
+  // in ReportCreator.js).
+  if (templateRuntimeRelease_()) return createTemplateContinuousTrigger_(interval, fetchAbstracts);
 
   // Delete existing trigger first
   deleteContinuousTrigger();
@@ -1642,6 +1772,7 @@ function createContinuousTrigger(intervalMinutes, fetchAbstracts) {
 }
 
 function deleteContinuousTrigger() {
+  if (templateRuntimeRelease_()) PropertiesService.getDocumentProperties().deleteProperty(CONTINUOUS_UPDATE_INTERVAL_KEY_);
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(trigger => {
     if (trigger.getHandlerFunction() === 'continuousUpdate') {
@@ -1659,9 +1790,11 @@ function getTriggerStatus() {
     return { active: false, interval: null };
   }
   
+  // TEMPLATE-002B: the template runtime knows the interval it installed.
+  const stored = templateRuntimeRelease_() ? describeStoredContinuousInterval_(PropertiesService.getDocumentProperties()) : null;
   return {
     active: true,
-    interval: 'Active' // Apps Script doesn't expose the exact interval
+    interval: stored ? stored.label : 'Active' // Apps Script doesn't expose the exact interval
   };
 }
 
@@ -3062,10 +3195,41 @@ function resolveCollectorListName_(context, familyListName) {
  * adopted document's central state like every other setting.
  */
 function resolveCollectorStartDate_(context) {
-  const saved = String(getReportStateStore_(context).getProperty('EMAIL_START_DATE') || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(saved) && !isNaN(new Date(saved).getTime())) return saved;
-  if (saved) Logger.log('Ignoring EMAIL_START_DATE "' + saved.replace(/[\r\n]/g, ' ') + '" (expected YYYY-MM-DD); using 2026-08-21');
-  return '2026-08-21';
+  const store = getReportStateStore_(context);
+  const saved = String(store.getProperty('EMAIL_START_DATE') || '').trim();
+  if (isValidCollectorStartDate_(saved)) return saved;
+  // TEMPLATE-002B (decision 2026-10-01): in the template runtime a report
+  // without a usable EMAIL_START_DATE collects from the meeting start date.
+  const meetingStart = templateRuntimeRelease_() ? meetingStartDateIso_(store.getProperty('MEETING_DATE')) : '';
+  const fallback = meetingStart || '2026-08-21';
+  if (saved) Logger.log('Ignoring EMAIL_START_DATE "' + saved.replace(/[\r\n]/g, ' ') + '" (expected YYYY-MM-DD); using ' + fallback);
+  return fallback;
+}
+
+/** The one rule for an e-mail collection start date: a real YYYY-MM-DD date. */
+function isValidCollectorStartDate_(value) {
+  const s = String(value === null || value === undefined ? '' : value).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s).getTime());
+}
+
+/**
+ * TEMPLATE-002B: the meeting start date as YYYY-MM-DD, from MEETING_DATE as
+ * the resolver stores it ("October 1, 2026", computeMeetingDateFromStartDate_())
+ * or from a value that already starts with an ISO date. '' when it cannot
+ * be read -- never a guess.
+ */
+function meetingStartDateIso_(meetingDateText) {
+  const s = String(meetingDateText === null || meetingDateText === undefined ? '' : meetingDateText).trim();
+  const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  let iso = '';
+  const isoMatch = s.match(/^(\d{4}-\d{2}-\d{2})(?:$|[^\d])/);
+  const textMatch = s.match(/^([A-Za-z]+) (\d{1,2}), (\d{4})$/);
+  if (isoMatch) {
+    iso = isoMatch[1];
+  } else if (textMatch && MONTHS.indexOf(textMatch[1].toLowerCase()) !== -1) {
+    iso = textMatch[3] + '-' + String(MONTHS.indexOf(textMatch[1].toLowerCase()) + 1).padStart(2, '0') + '-' + textMatch[2].padStart(2, '0');
+  }
+  return isValidCollectorStartDate_(iso) ? iso : '';
 }
 
 function ensureCollectorConfigTable_() {
@@ -7137,6 +7301,12 @@ function removeInitialEmptyRow_(table) {
  */
 function configureMeetingSettings() {
   const ui = DocumentApp.getUi();
+  // TEMPLATE-002B: refused in the master template; in a report created from
+  // it, the creator's setup information is stored first (once).
+  if (templateRuntimeRelease_()) {
+    assertNotTemplateMaster_();
+    ensureReportBootstrapped_();
+  }
   const props = PropertiesService.getDocumentProperties();
 
   const currentMeetingFolder = props.getProperty('MEETING_FOLDER') || '';
@@ -7146,6 +7316,23 @@ function configureMeetingSettings() {
   const currentTdocUrl = props.getProperty('TDOC_LIST_URL') || '';
   const currentShowPreview = props.getProperty('SHOW_PREVIEW_SNIPPET') !== 'false';
   const tokenConfigured = Boolean(PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN'));
+
+  // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date, in the
+  // template runtime only. A stored value is shown as it is; without one the
+  // meeting start date is proposed (and replaced by the resolved start date
+  // on Resolve, unless the user has typed a date). Outside the template
+  // runtime the field is not rendered, and the dialog script, which only
+  // looks the field up by id, finds nothing.
+  const storedEmailStartDate = String(props.getProperty('EMAIL_START_DATE') || '').trim();
+  const emailStartDateExplicit = isValidCollectorStartDate_(storedEmailStartDate);
+  const emailStartDateValue = emailStartDateExplicit ? storedEmailStartDate : meetingStartDateIso_(props.getProperty('MEETING_DATE'));
+  const emailStartDateFieldHtml = !templateRuntimeRelease_() ? '' :
+    '<label>Email Collection Start Date:</label>' +
+    '<input type="date" id="collectionStartField" name="emailStartDate" data-config-key="emailStartDate"' +
+    ' data-explicit="' + (emailStartDateExplicit ? 'true' : 'false') + '" value="' + emailStartDateValue + '" oninput="this.touched = true">' +
+    '<div class="hint">' + (emailStartDateExplicit
+      ? 'Saved value. E-mails before this date are not collected.'
+      : 'Default: the meeting start date. E-mails before this date are not collected; move it earlier or later if needed.') + '</div>';
 
   // ARCH-010: the SAME pure merge function the "Resolve" button's server
   // call uses (computeResolvedMeetingPreview_()), called here with
@@ -7278,6 +7465,7 @@ function configureMeetingSettings() {
 
     <div class="section">
       <h3>3. Options</h3>
+      ${emailStartDateFieldHtml}
       <label>
         <input type="checkbox" id="showPreview" ${currentShowPreview ? 'checked' : ''}>
         Show email preview snippets in report
@@ -7543,6 +7731,14 @@ function configureMeetingSettings() {
       }
 
       function applyPreview(preview) {
+        // TEMPLATE-002B: the template runtime's start-date field (rendered
+        // only there). Without a saved or typed value it follows the
+        // resolved meeting start date.
+        const startField = document.getElementById('collectionStartField');
+        if (startField && typeof startField.getAttribute === 'function' && startField.getAttribute('data-explicit') !== 'true' &&
+            !startField.touched && /^[0-9]{4}-[0-9]{2}-[0-9]{2}/.test(String(preview.startDateRaw || ''))) {
+          startField.value = String(preview.startDateRaw).slice(0, 10);
+        }
         setFieldWithBadge('meetingName', 'meetingNameBadge', preview.meetingName);
         setFieldWithBadge('meetingType', 'meetingTypeBadge', preview.meetingType);
         setFieldWithBadge('meetingDate', 'meetingDateBadge', preview.meetingDate);
@@ -7724,6 +7920,11 @@ function configureMeetingSettings() {
           apiTokenAction: apiTokenAction,
           apiToken: apiTokenAction === 'replace' ? newToken : ''
         };
+        // TEMPLATE-002B: see applyPreview(); the field names its own config key.
+        const startFieldToSave = document.getElementById('collectionStartField');
+        if (startFieldToSave && typeof startFieldToSave.getAttribute === 'function') {
+          config[startFieldToSave.getAttribute('data-config-key')] = startFieldToSave.value;
+        }
         google.script.run
           .withSuccessHandler(() => {
             // Saved is not the same as ready to build.
@@ -7750,6 +7951,7 @@ function configureMeetingSettings() {
 
 
 function saveConfigurationSettings(config) {
+  assertNotTemplateMaster_(); // TEMPLATE-002B
   // ADDON-007B1: Save writes Document Properties (unchanged, and what every
   // interactive build reads). For a document registered with the central
   // add-on the background scheduler reads a SEPARATE central copy, so the
@@ -7815,6 +8017,16 @@ function redactConfigForLog_(config) {
 function persistConfigurationSettings_(config) {
   const docProps = PropertiesService.getDocumentProperties();
   const scriptProps = PropertiesService.getScriptProperties();
+
+  // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date is a
+  // normal Configure Meeting field in the template runtime. Checked with the
+  // collector's own rule BEFORE anything is written; a blank value never
+  // erases a stored one. Outside the template runtime the dialog has no such
+  // field and the value is not written (ADDON-007B1, unchanged).
+  const emailStartDate = templateRuntimeRelease_() ? String(config.emailStartDate || '').trim() : '';
+  if (emailStartDate && !isValidCollectorStartDate_(emailStartDate)) {
+    throw new Error('Email Collection Start Date must be a date in the form YYYY-MM-DD.');
+  }
 
   const submittedType = String(config.meetingType || '').trim().toLowerCase();
   const effectiveType = submittedType || String(docProps.getProperty('MEETING_TYPE') || '').trim().toLowerCase();
@@ -7918,6 +8130,8 @@ function persistConfigurationSettings_(config) {
   if (config.discussionEmailSender && config.discussionEmailSender.trim()) {
     docProps.setProperty('DISCUSSION_EMAIL_SENDER', config.discussionEmailSender.trim());
   }
+
+  if (emailStartDate) docProps.setProperty('EMAIL_START_DATE', emailStartDate);
 
   Logger.log('Configuration saved: ' + JSON.stringify(redactConfigForLog_(config)));
 }
@@ -9293,6 +9507,11 @@ function parseAgendaStructure_(body, prefix) {
 
 function runFullReportBuild() {
   const ui = DocumentApp.getUi();
+  // TEMPLATE-002B: see configureMeetingSettings().
+  if (templateRuntimeRelease_()) {
+    assertNotTemplateMaster_();
+    ensureReportBootstrapped_();
+  }
   const response = ui.alert(
     'Run Full Report Build',
     'This will run all steps:\n\n' +
@@ -12802,6 +13021,9 @@ function getBuildReadiness_(context) {
  * meetings are never blocked here (legacy fallbacks keep working).
  */
 function assertMeetingReadyToBuild_(context) {
+  // TEMPLATE-002B: never build or update in the master template (a
+  // background context is the CENTRAL scheduler, which has no template).
+  if (!context) assertNotTemplateMaster_();
   const readiness = getBuildReadiness_(context);
   if (readiness.ready) return;
   throw new Error('Cannot build report yet.\n\n' +

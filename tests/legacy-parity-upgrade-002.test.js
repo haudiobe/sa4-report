@@ -359,12 +359,15 @@ console.log('EMAIL_START_DATE: no dialog field in the template (intentional diff
 // and Save does not write EMAIL_START_DATE. Legacy keeps the field. The
 // collector honours a stored EMAIL_START_DATE either way (BUGFIX-LEGACY-003,
 // tests/legacy-parity-adhoc-email-collection.test.js).
+// TEMPLATE-002B: these suites load the add-on runtime (no Release.js). The
+// template runtime restores the field (decision 2026-10-01), covered by
+// tests/template002b-runtime.test.js.
 {
   const { html } = renderDialog(loadCode, { documentProperties: { EMAIL_START_DATE: '2026-09-01' } });
-  check('[template] the dialog has no Email Collection Start Date field', /Email Collection Start Date|id="emailStartDate"/.test(html), false);
+  check('[add-on runtime] the dialog has no Email Collection Start Date field', /Email Collection Start Date|id="emailStartDate"/.test(html), false);
   const { sandbox, docProps } = loadCode({ documentProperties: { EMAIL_START_DATE: '2026-09-01' } });
   sandbox.saveConfigurationSettings({ emailStartDate: '2026-09-15', showPreview: true });
-  check('[template] Save neither writes nor erases EMAIL_START_DATE', docProps._store.EMAIL_START_DATE, '2026-09-01');
+  check('[add-on runtime] Save neither writes nor erases EMAIL_START_DATE', docProps._store.EMAIL_START_DATE, '2026-09-01');
 }
 
 if (!LEGACY_GIT_HISTORY) skipLegacyHistory('collector config byte-identical to the Legacy baseline (2 checks)'); else {
@@ -400,8 +403,12 @@ if (!LEGACY_GIT_HISTORY) skipLegacyHistory('collector config byte-identical to t
 
 {
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
-  check('[template] the dialog code neither reads nor writes EMAIL_START_DATE',
-    [/props\.getProperty\('EMAIL_START_DATE'\)/.test(source), /docProps\.setProperty\('EMAIL_START_DATE'/.test(source)], [false, false]);
+  // TEMPLATE-002B: the code that writes EMAIL_START_DATE now exists, for the
+  // template runtime only (decision 2026-10-01). What still holds here is
+  // that it sits behind the template-runtime switch.
+  check('[add-on runtime] EMAIL_START_DATE is written only behind the template-runtime switch',
+    [/const emailStartDate = templateRuntimeRelease_\(\) \? String\(config\.emailStartDate/.test(source),
+      (source.match(/setProperty\('EMAIL_START_DATE'/g) || []).length], [true, 1]);
   check('the collector still reads cfg.EMAIL_START_DATE (unchanged usage sites)',
     (source.match(/cfg\.EMAIL_START_DATE/g) || []).length >= 3, true);
 }
