@@ -8,6 +8,12 @@ file created or modified, no trigger, deployment, version or property touched.
 in scratch Google Docs. Programmatic template copying works, so the architecture below is the
 recommended implementation path. The next stage is TEMPLATE-002A (§21).
 
+**Status, TEMPLATE-002A and 002B: done locally.** The Legacy parity gate passed
+(`docs/TEMPLATE-002A_LEGACY_PARITY.md`) and the first release candidate of the template
+runtime exists (`docs/TEMPLATE-002B_RELEASE_CANDIDATE.md`), which also describes the final
+menus, the creator flow, the trigger model and the live smoke test. Where this study and
+that document differ in detail, that document describes what was built.
+
 Evidence labels used throughout:
 
 | Label | Meaning |

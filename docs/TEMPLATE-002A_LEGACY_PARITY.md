@@ -115,7 +115,9 @@ mutation.
 | 5 | One readiness rule set instead of Legacy's `computeMeetingConfigReadiness_()`. | CENTRAL ADDON-007B3 | `addon007b3-readiness` |
 | 6 | Two unused Legacy helpers are not ported: `extractTdocFromEmailExportSubject_()` (the collector's scanner does this) and the unwired diagnostic `diagnoseDuplicateTdocTables_()` with its helper. Neither is reachable from a menu or from other code in Legacy. | CENTRAL ADDON-009 port | `addon009-legacy-exporter-port` header; `legacy-parity-diagnose-6g-email-collection` |
 
-**Item 3 needs Thomas's confirmation.** CENTRAL removed the field because nothing read the
+**Item 3 was decided on 2026-10-01 (TEMPLATE-002B): the template runtime restores the field;
+the add-on runtime keeps this behaviour. See `docs/TEMPLATE-002B_RELEASE_CANDIDATE.md` §5.**
+The analysis that led to the question: CENTRAL removed the field because nothing read the
 saved value. That reason no longer holds: after A2 the collector does read it. As the code
 stands, a template report can set the start date only through a Collector Configuration table
 row, not through the dialog, so the ported behaviour is reachable for documents that already
