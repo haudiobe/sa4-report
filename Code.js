@@ -29,6 +29,10 @@
  *     passes them on in its result. Nothing else reads these values:
  *     continuousUpdate(), the trigger and the add-on scheduler behave as
  *     before.
+ *   - Changed (all runtimes, text only): the hint under "Fetch abstracts
+ *     during each update" in the trigger dialog no longer names a menu
+ *     item ("5️⃣ Add Abstracts", which a template report does not have).
+ *     It now reads "Abstracts can also be updated manually at any time."
  *   - Unchanged: the CENTRAL add-on / Legacy menu (the menu code below is
  *     again exactly what it was before the template runtime), and every
  *     existing function.
@@ -1690,7 +1694,7 @@ function manageTriggers() {
     <div class="hint">
       Off by default. When on, every automatic update calls the Reviewer API for
       each TDOC still missing an abstract, which makes updates noticeably slower.
-      The menu step "5️⃣ Add Abstracts" always works regardless of this setting.
+      Abstracts can also be updated manually at any time.
     </div>
     
     <div style="margin-top: 20px;">

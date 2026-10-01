@@ -486,10 +486,22 @@ console.log('5. the automatic trigger behaves as before');
     failed, { success: true, error: null, collectorFailures: [{ step: 'e-mail discussions', error: 'RSS is down' }] });
   check('collectorUpdate_(): one step failing does not stop the other', updateReport({ failEmail: true }).s.collectorUpdate_(), { failures: [{ step: 'e-mail discussions', error: 'RSS is down' }] });
 
+  // The add-on scheduler and the other callers of the collector do not read the new values.
+  check('continuousUpdateForDocument_() reads success / error only',
+    [/coreResult\.success/.test(functionSource(CODE, 'continuousUpdateForDocument_')), /collectorFailures/.test(functionSource(CODE, 'continuousUpdateForDocument_'))], [true, false]);
+  check('collectorFailures is read nowhere in Code.js; only Update Report Now reads it',
+    [(CODE.replace(/^\s*(\/\/|\*).*$/gm, '').match(/collectorFailures/g) || []).length, /result\.collectorFailures/.test(functionSource(CREATOR, 'describeUpdateReportNowFailure_'))], [1, true]);
+  check('every other caller of collectorUpdate_() ignores its result',
+    ['updateAll', 'updateAllFromWeb', 'buildInitialReport', 'updateReportIncremental'].map((n) => /^\s*collectorUpdate_\(\);$/m.test(functionSource(CODE, n))), [true, true, true, true]);
+  check('collectorUpdate_(): a clean run returns no failures', updateReport().s.collectorUpdate_(), { failures: [] });
+  check('updateReportNow exists in the template runtime only (not in Code.js)',
+    [typeof loadCode().sandbox.updateReportNow, typeof updateReport().s.updateReportNow, /function updateReportNow\(/.test(CODE)], ['undefined', 'function', false]);
+
   check('the trigger is still created for continuousUpdate, never for updateReportNow',
     [/ScriptApp\.newTrigger\('continuousUpdate'\)/.test(CODE), /ScriptApp\.newTrigger\('continuousUpdate'\)/.test(CREATOR), /newTrigger\('updateReportNow'\)/.test(CODE + CREATOR)], [true, true, false]);
   if (haveBaseline) {
-    ['continuousUpdate', 'continuousUpdateForDocument_', 'createContinuousTrigger', 'deleteContinuousTrigger', 'manageTriggers', 'updateReportIncremental', 'updateAll', 'buildInitialReport']
+    ['continuousUpdate', 'continuousUpdateForDocument_', 'runAddonScheduler_', 'runAddonSchedulerTrigger', 'createContinuousTrigger', 'deleteContinuousTrigger',
+      'updateReportIncremental', 'updateAll', 'updateAllFromWeb', 'buildInitialReport']
       .forEach((name) => check(`${name}() is byte-for-byte the T-2026.10.3 function`, functionSource(CODE, name) === functionSource(OLD_CODE, name), true));
     check('createTemplateContinuousTrigger_() is byte-for-byte the T-2026.10.3 function',
       functionSource(CREATOR, 'createTemplateContinuousTrigger_') === functionSource(OLD_CREATOR, 'createTemplateContinuousTrigger_'), true);
@@ -525,6 +537,25 @@ console.log('6. the partial updates and Automatic Updates call their existing fu
   check('Automatic Updates opens the existing trigger dialog with 15 / 30 / 60 minutes',
     [r.ui.dialogs.length, r.ui.dialogs[0].title, ['15', '30', '60'].map((m) => r.ui.dialogs[0].html.indexOf('<option value="' + m + '"') !== -1)],
     [1, 'Manage Continuous Update Trigger', [true, true, true]]);
+
+  // The abstracts hint is shared with the add-on: it names no menu item of either menu.
+  const NEW_HINT = 'Abstracts can also be updated manually at any time.';
+  const OLD_HINT = 'The menu step "5️⃣ Add Abstracts" always works regardless of this setting.';
+  const addon = runtime({ release: false });
+  addon.s.ScriptApp = r.s.ScriptApp;
+  addon.s.HtmlService = r.s.HtmlService;
+  addon.s.manageTriggers();
+  [['template report', r.ui.dialogs[0].html], ['add-on', addon.ui.dialogs[0].html]].forEach(([where, html]) => {
+    check(`trigger dialog (${where}): neutral abstracts hint, no menu item named`,
+      [html.indexOf(NEW_HINT) !== -1, /5️⃣|Add Abstracts|menu step|Update Abstracts/.test(html)], [true, false]);
+  });
+  check('no user-facing text of Code.js says "The menu step" any more', /The menu step/.test(CODE.replace(/^\s*(\/\/|\*).*$/gm, '')), false);
+  check('title and Start / Stop wording of the dialog are unchanged',
+    [/<h2>⏰ Continuous Update Trigger<\/h2>/.test(r.ui.dialogs[0].html), /▶️ Start Trigger/.test(r.ui.dialogs[0].html), /⏹️ Stop Trigger/.test(functionSource(CODE, 'manageTriggers'))], [true, true, true]);
+  if (haveBaseline) {
+    check('manageTriggers() differs from T-2026.10.3 in that one sentence only',
+      [functionSource(CODE, 'manageTriggers') === functionSource(OLD_CODE, 'manageTriggers'), functionSource(CODE, 'manageTriggers').replace(NEW_HINT, OLD_HINT) === functionSource(OLD_CODE, 'manageTriggers')], [false, true]);
+  }
   if (haveBaseline) {
     ['collectEmailDiscussionOnly', 'collectRevisionsOnly', 'addAbstractsOnly', 'analyzeReportStatus', 'prepareTdocDiscussionEmails', 'configureMeetingSettings',
       'addDocumentReallocation', 'viewAllReallocations', 'applyDocumentReallocations', 'clearAllReallocations', 'testAllConnections', 'removeRowHeightAndSpacing',

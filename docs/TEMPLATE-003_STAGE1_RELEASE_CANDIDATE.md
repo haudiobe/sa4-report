@@ -21,6 +21,7 @@ was decided and what was built.
 | 4 | *Build Skeleton + TDOC Tables* is removed from the template menu, not moved to Advanced. The function stays. |
 | 5 | *Create Configuration Tables* is removed from the template menu. The function stays. |
 | 6 | Texts in `Code.js` that CENTRAL and Legacy also show are not rewritten. Template-only texts follow the new labels. Shared texts that are now stale in a template report are listed in §6. |
+| 7 | Final adjustment: the one shared sentence that named a menu item ("The menu step 5️⃣ Add Abstracts…") is replaced by neutral wording, the same in every runtime (§6). |
 | – | *Re-arrange Revision Tables* is not shown either: the complete update already places revisions. |
 
 ---
@@ -173,6 +174,7 @@ Two files change. `HyperLink.js`, the manifest and both HTML files are unchanged
 | `runFullReportBuild()` | In the template runtime the question comes from `confirmTemplateBuildFromScratch_()`; otherwise the old `ui.alert` | A |
 | `collectorUpdate_()` | also returns the failures it logs | B |
 | `continuousUpdateCore_()` | passes those failures on in its result | B |
+| `manageTriggers()` | one sentence of the dialog (§6); nothing else | decision 7 |
 
 No other function of `Code.js` differs.
 
@@ -195,14 +197,20 @@ Nothing in behaviour. Two things are worth naming because they are not menu line
    are part of B, but they are in code CENTRAL also runs. Nothing there reads them.
 2. Template-only text changes (file description of new reports, Finish Report Setup results,
    the creator's closing text, About).
+3. One sentence in the trigger dialog (§6). This is the only change CENTRAL users can see.
 
 ### CENTRAL and Legacy
 
 - Without `Release.js` the menu is identical, item by item, to the menu the T-2026.10.3
   `Code.js` builds (tested against that release, and against a literal copy of the tree).
-- `continuousUpdate`, `continuousUpdateForDocument_`, `createContinuousTrigger`,
-  `deleteContinuousTrigger`, `manageTriggers`, `updateReportIncremental`, `updateAll`,
-  `buildInitialReport` are byte-for-byte the T-2026.10.3 functions (tested).
+- `continuousUpdate`, `continuousUpdateForDocument_`, `runAddonScheduler_`,
+  `runAddonSchedulerTrigger`, `createContinuousTrigger`, `deleteContinuousTrigger`,
+  `updateReportIncremental`, `updateAll`, `updateAllFromWeb`, `buildInitialReport` are
+  byte-for-byte the T-2026.10.3 functions (tested).
+- `manageTriggers` differs from T-2026.10.3 in one sentence of its dialog and nothing else
+  (tested).
+- The new `collectorFailures` value is read by `updateReportNow()` only; the scheduler reads
+  `success` and `error`, and the other callers of the collector ignore its result (tested).
 - The Legacy parity suites pass unchanged: 9 files, 409 checks.
 - The Legacy repository was not touched.
 
@@ -210,17 +218,22 @@ Nothing in behaviour. Two things are worth naming because they are not menu line
 
 ## 6. Shared texts that are now stale in a template report
 
-Not changed (decision 6). Reported:
+**Changed (decision 7).** The hint under "Fetch abstracts during each update" in the trigger
+dialog said `The menu step "5️⃣ Add Abstracts" always works regardless of this setting.` A
+template report has no such item. It now reads, in every runtime:
+
+> Abstracts can also be updated manually at any time.
+
+The sentence names no menu item, so it is correct for the template menu (*Update Abstracts*)
+and for the CENTRAL / Legacy menu (*5️⃣ Add Abstracts*).
+
+**Not changed (decision 6):**
 
 | Where | Text | In a template report |
 |---|---|---|
-| Automatic Updates dialog | `The menu step "5️⃣ Add Abstracts" always works regardless of this setting.` | **Misleading**: the item is now *Report › Update Abstracts*. |
 | Automatic Updates dialog | title "Manage Continuous Update Trigger", heading "Continuous Update Trigger", buttons "Start Trigger" / "Stop Trigger", messages "Trigger started / stopped" | Different vocabulary from the menu item that opens it. Understandable, not wrong. |
 | Discussion e-mail export errors | "Open Configure Meeting Settings …" | The item is *Configure Meeting…*. Close enough. |
 | Partial updates | "E-mail discussion collection completed." etc. | Fine. |
-
-The first one is the only text I would call wrong. Fixing it means either a runtime-dependent
-sentence or a neutral one ("Update Abstracts / Add Abstracts in the menu") in the shared dialog.
 
 Messages inside functions that are no longer in the template menu (the single tests,
 *Validate Configuration*, *Auto-Create Report Structure*) also quote old labels, but cannot be
@@ -230,14 +243,14 @@ reached from the template menu.
 
 ## 7. Tests
 
-Complete suite: **78 test files, 4,130 checks, 0 failures** in a clean checkout. In the main
-worktree one more check runs (4,131), because `tests/template-release.test.js` adds a check
-where a root `.clasp.json` exists. Legacy parity: 9 files, 409 checks, 0 failures.
+Complete suite: **78 test files, 4,143 checks, 0 failures** in the main worktree. One of those
+checks runs only where a root `.clasp.json` exists (`tests/template-release.test.js`), so a
+clean checkout has 4,142. Legacy parity: 9 files, 409 checks, 0 failures.
 
 | | Files | Checks |
 |---|---|---|
 | Before (T-2026.10.3 closeout) | 77 | 4,030 |
-| New: `tests/template003-menu.test.js` | +1 | +100 |
+| New: `tests/template003-menu.test.js` | +1 | +112 |
 | Changed: `tests/template002b-runtime.test.js` | | 4 checks rewritten, count unchanged (125) |
 
 `template003-menu.test.js` covers, in the order of the task:
@@ -255,7 +268,9 @@ no dialog, and throws for a failed update, a failed collector step, and a busy l
 13. `continuousUpdate()` still swallows, skips and returns nothing, and is byte-identical;
 14. the three partial updates run their own steps with their existing messages;
 15. *Automatic Updates* opens the existing trigger dialog;
-16. no function of T-2026.10.3 was removed, and exactly four were added.
+16. no function of T-2026.10.3 was removed, and exactly four were added;
+17. the trigger dialog's abstracts hint is the neutral sentence in both runtimes, names no
+menu item, and is the only difference of `manageTriggers()` from T-2026.10.3.
 
 The comparisons with T-2026.10.3 read that release from git and are skipped, with a note, in a
 checkout that does not have the tag.
