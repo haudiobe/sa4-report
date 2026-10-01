@@ -6,6 +6,11 @@
 **Status: review only. No production code, test, version or release was changed. Nothing was
 deployed or run.**
 
+**Follow-up:** the decisions taken on this review and the stage 1 implementation are in
+`TEMPLATE-003_STAGE1_RELEASE_CANDIDATE.md`. The agreed menu is smaller than the proposal in §4
+(19 items): *Re-arrange Revision Tables* and *Write Configuration Tables into Report* are not
+shown.
+
 The subject is the menu a user sees in a report created from the template. The CENTRAL add-on
 menu and the Legacy bound script are out of scope and must not change.
 
