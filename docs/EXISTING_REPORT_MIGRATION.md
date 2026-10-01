@@ -7,7 +7,7 @@
 | Report | State |
 |---|---|
 | 6G (meeting 86178) | **COMPLETE / LIVE on T-2026.10.4** (§2) |
-| MBS (meeting 86172) | Rehearsal passed (§4). Live migration not started: the live document has no known bound script yet. |
+| MBS (meeting 86172) | **COMPLETE / LIVE on T-2026.10.4** (§5). Rehearsal in §4, earlier analysis in §3. |
 
 ---
 
@@ -86,6 +86,10 @@ No further change is planned for 6G.
 ---
 
 ## 3. MBS: preflight (analysis only)
+
+*This section is the analysis made from the code before the live inventory. It is kept as
+written. The inventory (§4.1) corrected two of its assumptions: the document was not registered
+with the CENTRAL scheduler, and its state was in one place only.*
 
 The MBS report runs under the CENTRAL add-on. Nothing was changed, and no clasp command was
 run against any MBS or CENTRAL project.
@@ -184,3 +188,100 @@ because CENTRAL would work from its own, older ledgers.
 - The start date must be set to `2026-08-21` explicitly.
 - The add-on keeps its own state for the document, untouched by the migration, so going back
   means restarting the add-on's hourly trigger.
+
+---
+
+## 5. MBS: live migration (complete)
+
+**Method: script installation plus configuration.** Unlike 6G, there was no existing bound
+runtime to replace.
+
+### 5.1 What MBS ran before, and what it runs now
+
+- **Before:** the MBS document had **no bound report implementation**. It was operated through
+  the CENTRAL add-on: the add-on's menu, the add-on's Document Properties for this document,
+  the Reviewer token shared in CENTRAL, and a per-document hourly Continuous Update trigger of
+  the add-on. It was not registered with the CENTRAL scheduler.
+- **Migration:** a bound Apps Script project was **deliberately created** in the live document
+  (by the user, through Extensions › Apps Script), and the unchanged T-2026.10.4 template
+  runtime was installed into it.
+- **Now:** the document runs its own pinned bound runtime, T-2026.10.4, with its own
+  configuration, its own collector ledgers, its own token and its own trigger.
+
+MBS never ran this bound implementation before the migration. The add-on's state for the
+document was neither read nor changed; it is simply no longer used.
+
+### 5.2 Release
+
+| | |
+|---|---|
+| Meeting | 86172, family MBS |
+| Live bound Script ID | `REDACTED-LIVE-MBS-SCRIPT-ID` |
+| Release | T-2026.10.4, `Code.js` 2.17.4 |
+| Source commit | `962fb7de1f58302b54c51eeafa3c5c57d50f12c3` |
+
+### 5.3 Deployment — VERIFIED
+
+- A pre-migration version was named in the live document.
+- The previous hourly updater was stopped before deployment, and no execution was running.
+- The newly created project was pulled first: Google's empty default project (two files). That
+  pull is the rollback source.
+- T-2026.10.4 was pushed from `dist/template-adopt/T-2026.10.4/mbs-live` on 2026-10-01 at
+  18:13:00, with one explicitly authorised `--force` (manifest change), targeting only the
+  live MBS Script ID.
+- A fresh pull showed exactly seven files, each byte-identical to the accepted T-2026.10.4
+  release.
+
+### 5.4 Live configuration — PASSED
+
+- Meeting 86172 resolved; MBS family and the meeting period recognised correctly.
+- *Discover Agenda / TDocs* succeeded: validated `agenda.csv` fallback, and the TDoc list for
+  `meetingId=86172`.
+- Mailing List `3GPP_TSG_SA_WG4_MBS`; Discussion E-mail Sender `reporter@example.com`; Email
+  Collection Start Date `2026-08-21`; e-mail preview snippets enabled.
+- Reviewer API token entered by hand. Revisions / drafts URL from discovery.
+- The configuration reached "Ready to build".
+
+### 5.5 Live acceptance
+
+| Check | Result |
+|---|---|
+| Rehearsal on a copy (§4.2) | **PASSED** |
+| Live deployment | **VERIFIED** |
+| Live configuration | **PASSED** |
+| First Update Report Now (run exactly once; no Full Build) | **PASSED** |
+| Version-history comparison with the named pre-migration version | **PASSED** |
+
+In the comparison, discussion e-mails, TDoc revisions / drafts, minutes, dispositions and the
+document structure looked correct. The user accepted it ("sieht gut aus").
+
+- **No ledger migration was required.** The first update rebuilt the e-mail and revision
+  information from the current sources, as in the rehearsal.
+- **Automatic updates restored:** every hour, abstracts enabled, trigger confirmed running.
+
+### 5.6 Rollback
+
+The rollback source remains available at `dist/migration-rollback/mbs-live` (the two default
+files and a `.clasp.json` for the same Script ID; local, not in Git). Going back would mean:
+stop the new trigger, push those two files back (a manifest change, so it needs `--force`
+again), and restart the add-on's hourly trigger. The add-on's state is untouched.
+
+### 5.7 To keep in mind
+
+- The CENTRAL add-on's menu is still available in the document. It should not be used there
+  any more: it would work from the add-on's own, older state, and the two runtimes do not
+  share a lock.
+- The report is pinned to T-2026.10.4. A later template release reaches it only through
+  another deliberate push to its Script ID.
+
+---
+
+## 6. Summary
+
+| Report | Before | Method | Now |
+|---|---|---|---|
+| 6G (86178) | Legacy bound script, `Code.js` 2.12.0 | Files replaced in the existing bound project; properties, ledgers and token kept | T-2026.10.4, COMPLETE / LIVE |
+| MBS (86172) | CENTRAL add-on, no bound script | Bound project created, runtime installed, configuration re-entered, ledgers rebuilt by the first update | T-2026.10.4, COMPLETE / LIVE |
+
+Both migrations used the unchanged T-2026.10.4 payload through the adoption mode of the
+release tool (§1). No new template release was created, and no production code was changed.
