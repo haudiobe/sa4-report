@@ -128,8 +128,15 @@ console.log('source-structure: full-build/"Update All"/manual formatting call si
   check('at least 6 other unconditional call sites still exist besides continuousUpdate()\'s', realCallSites.length >= 6, true);
   check('exactly ONE call site is the new conditional one (inside the perfTimed_ formatting branch)',
     realCallSites.filter(line => line.includes("perfTimed_('formatting")).length, 1);
+  // TEMPLATE-002C: one more call site is deliberately conditional -- the
+  // skeleton build skips its own pass when Run Full Report Build asks it to,
+  // because Full Build formats once after its enrichment phases
+  // (tests/template002c-fullbuild-creator.test.js). Every other call site is
+  // still a bare, unconditional call.
+  const FULL_BUILD_SKIP = 'if (!(options && options.skipFormatting)) removeRowHeightAndSpacing();';
+  check('exactly ONE call site is the Full Build option (the skeleton build)', realCallSites.filter(line => line === FULL_BUILD_SKIP).length, 1);
   check('every OTHER call site is a bare, unconditional call (not wrapped in a new if-condition)',
-    realCallSites.filter(line => !line.includes("perfTimed_('formatting")).every(line => line === 'removeRowHeightAndSpacing();'),
+    realCallSites.filter(line => !line.includes("perfTimed_('formatting") && line !== FULL_BUILD_SKIP).every(line => line === 'removeRowHeightAndSpacing();'),
     true);
 }
 

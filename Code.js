@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.15.2 (2026-09-30)
+ * Version: 2.17.3 (2026-10-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,120 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.17.3 (2026-10-01)
+ *   - Fixed: a completed "Run Full Report Build" was reported as FAILED.
+ *     Live (T-2026.10.2, report for 86178): all five phases finished in
+ *     65 s and the report was saved, but the final "Success" pop-up never
+ *     appeared -- that ui.alert() call hung for about 96 s and then threw
+ *     "Service Documents failed while accessing document with id ...".
+ *     Full Build no longer calls the UI after it has changed the
+ *     document. A completed build simply ends (the result is in the
+ *     [FULLBUILD] log lines; the execution is "Completed"). A build in
+ *     which a phase fails still fails: it throws an error carrying the
+ *     summary (failed phase, its message, the phases not run), which Docs
+ *     shows and the execution records as "Failed". The confirmation
+ *     before the build is unchanged. No build phase changed.
+ * 2.17.2 (2026-10-01)
+ *   - Fixed: the 6G report family derived the general list 3GPP_TSG_SA_WG4
+ *     as its mailing list. Its list is 3GPP_TSG_SA4_FS_6G_MED
+ *     (MAILING_LISTS, the one family -> list table). Found live: "Create
+ *     New SA4 Report" pre-filled the general list for a 6G meeting. Every
+ *     consumer derives from that table, so Configure Meeting, the RSS and
+ *     A1 collectors and the discussion e-mail To / Reply-To now use the 6G
+ *     list for a 6G report without a Mailing List override, ad-hoc or
+ *     main. A saved Mailing List override still wins. The other families
+ *     are unchanged.
+ * 2.17.1 (2026-10-01)
+ *   - Fixed (TEMPLATE-002C): "Run Full Report Build" ran the single-step
+ *     menu functions, each of which ends with its own blocking pop-up
+ *     ("Done", "E-mail discussion collection completed", ...). The build
+ *     therefore stopped four times inside its one 6-minute execution and
+ *     waited for a click; live on the first template report (86178) it
+ *     ended with "Exceeded maximum execution time" although the work
+ *     itself took about a minute. Full Build now runs non-interactive
+ *     phases (runFullReportBuildCore_()): one confirmation before, no
+ *     pop-up between phases, one summary at the end. A failed phase stops
+ *     the build and is reported once. The single-step menu items keep
+ *     their own completion pop-ups.
+ *   - Fixed: Full Build formatted the whole document twice (inside the
+ *     skeleton step and again at the end). It now formats once, after the
+ *     enrichment phases; the single-step "Build Skeleton + TDOC Tables"
+ *     still formats.
+ *   - Fixed: the optional Reviewer API token is read once per execution.
+ *     Without a token Full Build skips the abstracts phase (no table scan,
+ *     no request) and says so once, instead of one property read and one
+ *     "No REVIEWER_API_TOKEN found" line per TDoc table, twice. With a
+ *     token the abstracts are fetched in their own phase.
+ *   - Added: [FULLBUILD] log lines -- "<phase>: start" and "<phase>:
+ *     done|skipped|failed in N ms", plus one total line -- so a timeout
+ *     shows which phase was running.
+ *   - Changed (decision 2026-10-01): generated discussion e-mails carry
+ *     "Reply-To: <list>@list.etsi.org" -- the effective mailing list (an
+ *     ad-hoc meeting's Mailing List, else the report-family list; a main
+ *     meeting always the family list), normalized like the collector does.
+ *     Replies used to go to the sender. From and To are unchanged. A list
+ *     that cannot be normalized refuses the export.
+ *   - Changed (decision 2026-10-01): the discussion subject no longer
+ *     starts with the list/family tag. Old: "[<tag>,<agenda item>,
+ *     <deadline>][<TDoc>] Discussion: <title>"; new: "[<agenda item>]
+ *     [<deadline>][<TDoc>] Discussion: <title>" (written without spaces
+ *     between the brackets). The tag still names the exported files and
+ *     the default introduction. Replies to e-mails sent in the old form
+ *     are still associated (the collector looks for the TDoc identifier).
+ * 2.17.0 (2026-10-01)
+ *   - Added (TEMPLATE-002B): this file is also the runtime of the "SA4
+ *     Report Template" Google Doc and of the reports copied from it. A
+ *     template release bundle adds Release.js (generated, defines
+ *     SA4_RELEASE_) and ReportCreator.js. Everything template-specific
+ *     here is switched by templateRuntimeRelease_() at call time; without
+ *     Release.js (the CENTRAL add-on, Legacy copies) behaviour is
+ *     unchanged.
+ *   - Template runtime: the master template gets its own menu ("Create New
+ *     SA4 Report", "Template Release Info") and refuses report operations
+ *     (build, update, trigger, configuration). A report gets the existing
+ *     menu without the CENTRAL add-on submenu, with the old "Legacy: Build
+ *     Initial Report" / "Legacy: Update All" in a LEGACY submenu, plus
+ *     "Finish Report Setup" (until done) and "About This Report".
+ *     Configure Meeting and Run Full Report Build store the creator's
+ *     setup information on first use.
+ *   - Template runtime: Continuous Update every 15, 30 (default) or 60
+ *     minutes (60 = everyHours(1)); the replacement trigger is created
+ *     before the previous one is removed, and the installed interval is
+ *     shown (Document Property CONTINUOUS_UPDATE_INTERVAL_MINUTES). The
+ *     installer lives in ReportCreator.js; the add-on stays hourly only.
+ *   - Template runtime (decision 2026-10-01): "Email Collection Start
+ *     Date" is a Configure Meeting field again. It is stored in the
+ *     existing EMAIL_START_DATE property; without a stored value the
+ *     meeting start date is proposed, and the collector falls back to the
+ *     meeting start date (else 2026-08-21). Outside the template runtime
+ *     the dialog and the fallback are as in 2.16.0.
+ * 2.16.0 (2026-10-01)
+ *   - TEMPLATE-002A (Legacy parity): the fixes accepted in the Legacy
+ *     bound script (sa4-report-legacy b95e06e, live on 86178) that this
+ *     file did not have. Legacy's own regression suites now run here
+ *     (tests/legacy-parity-*.test.js).
+ *   - Fixed (Legacy BUGFIX-LEGACY-002): duplicate TDoc tables. A TDoc
+ *     listed under two agenda groups in one Continuous Update run was
+ *     inserted twice, and every further run of "Legacy: Build Initial
+ *     Report" duplicated every TDoc table. A TDoc inserted in a run now
+ *     counts as existing at once, and the web-sheet import skips a TDoc
+ *     that already has a table. Existing duplicates are left alone.
+ *   - Fixed (Legacy LEGACY-0099): the web-sheet import filed a TDoc
+ *     reallocated to Removed/Withdrawn/N/A under a literal "Removed" item;
+ *     it now skips it, like the build and Continuous Update already did
+ *     (ADDON-008A1b).
+ *   - Fixed (Legacy BUGFIX-LEGACY-003): e-mail collector. A stored
+ *     EMAIL_START_DATE is used (2026-08-21 remains the fallback). The A1
+ *     archive reads the same list as RSS instead of always the general
+ *     SA4 list. A Collector Configuration table that only repeats the
+ *     family default no longer masks an ad-hoc meeting's Mailing List; an
+ *     explicit LIST_NAME also sets the RSS URL and an explicit RSS_URL_V2
+ *     also sets the archive list. A Mailing List saved as
+ *     "<list>@list.etsi.org" is read as that list.
+ *   - Unchanged on purpose: the meeting-neutral discussion e-mail
+ *     introduction, the subject tag derived from the mailing list, the
+ *     Meeting Configuration dialog (no e-mail start date field), and the
+ *     hourly-only trigger interval of the add-on runtime.
  * 2.15.2 (2026-09-30)
  *   - Fixed: "Manage Auto-Update Trigger" offered 15/30-minute intervals
  *     that CENTRAL cannot create -- add-on time-driven triggers run at most
@@ -398,7 +512,7 @@ const MAILING_LISTS = {
   'Video': '3GPP_TSG_SA_WG4_VIDEO',
   'MBS': '3GPP_TSG_SA_WG4_MBS',
   'RTC': '3GPP_TSG_SA_WG4_RTC',
-  '6G': '3GPP_TSG_SA_WG4',
+  '6G': '3GPP_TSG_SA4_FS_6G_MED',
   'Liaison': '3GPP_TSG_SA_WG4',
   'New': '3GPP_TSG_SA_WG4'
 };
@@ -439,9 +553,21 @@ function onInstall(e) {
 function onOpen(e) {
   const ui = DocumentApp.getUi();
 
+  // TEMPLATE-002B: in the SA4 Report Template runtime (Release.js present)
+  // the master template gets its own minimal menu, and a report gets this
+  // menu without the CENTRAL add-on submenu. Without Release.js (CENTRAL,
+  // Legacy copies) nothing below changes.
+  const templateRuntime = !!templateRuntimeRelease_();
+  if (templateRuntime && isTemplateMasterDocument_()) {
+    buildTemplateMasterMenu_(ui);
+    return;
+  }
+
   // Main menu
   const menu = ui.createMenu('⚠️Scripts⚠️');
   
+  if (templateRuntime) addTemplateReportMenuHead_(menu);
+
   // INITIAL SETUP submenu
   const setupMenu = ui.createMenu('📝 INITIAL SETUP');
   setupMenu.addItem('⚙️ Configure Meeting Settings', 'configureMeetingSettings');
@@ -461,7 +587,9 @@ function onOpen(e) {
   reportMenu.addItem('🔄 Continuous Update (New TDOCs + Status)', 'continuousUpdate');
   reportMenu.addItem('⏰ Manage Auto-Update Trigger', 'manageTriggers');  // ADD THIS LINE
   reportMenu.addSeparator();
-  reportMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
+  // TEMPLATE-002B: the normal build is "Run Full Report Build" above; in
+  // the template runtime the old import sits in the LEGACY submenu instead.
+  if (!templateRuntime) reportMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
   reportMenu.addItem('🔄 Update Report (During Meeting)', 'updateReportIncremental');
   reportMenu.addItem('📊 Analyze Report Status', 'analyzeReportStatus');
 
@@ -519,15 +647,74 @@ function onOpen(e) {
   menu.addSubMenu(toolsMenu);
   menu.addSubMenu(formatMenu);
   menu.addSubMenu(emailExportMenu);
-  menu.addSubMenu(addonMenu);
+  if (!templateRuntime) menu.addSubMenu(addonMenu);
 
   // Legacy functions (for backward compatibility)
   menu.addSeparator();
-  menu.addItem('⚠️ Legacy: Update All', 'updateAll');
+  if (templateRuntime) {
+    const legacyMenu = ui.createMenu('🗄️ LEGACY (old workflow)');
+    legacyMenu.addItem('📝 Legacy: Build Initial Report', 'buildInitialReport');
+    legacyMenu.addItem('⚠️ Legacy: Update All', 'updateAll');
+    menu.addSubMenu(legacyMenu);
+    addTemplateReportMenuTail_(menu);
+  } else {
+    menu.addItem('⚠️ Legacy: Update All', 'updateAll');
+  }
 
   menu.addToUi();
 }
 
+
+// =========================================================
+// TEMPLATE-002B -- SA4 REPORT TEMPLATE RUNTIME HOOKS
+// =========================================================
+//
+// This file is also the bound script of the "SA4 Report Template" Google
+// Doc and of every report copied from it. A template release bundle adds
+// two files next to it: Release.js (generated; defines SA4_RELEASE_) and
+// ReportCreator.js (creator, first run, template menus). Everything
+// template-specific in THIS file asks templateRuntimeRelease_() at call
+// time, so without Release.js (the CENTRAL add-on, a Legacy copy, the
+// tests) every function below is inert and behaviour is unchanged.
+//
+// Three kinds of document can run this code:
+//   - the master template: its id is SA4_RELEASE_.templateDocumentId. It
+//     only creates reports; report operations are refused in it.
+//   - a report created from the template: any other document, set up from
+//     the creator's bootstrap information on first use.
+//   - an ordinary document that happens to contain the code: any other
+//     document without bootstrap information. It behaves like a report and
+//     is configured by hand, as before.
+// The role comes from the document id, never from inherited properties: a
+// copy starts with empty property stores (TEMPLATE-001, live verified).
+
+/** The template release this script copy was built from, or null. */
+function templateRuntimeRelease_() {
+  return typeof SA4_RELEASE_ !== 'undefined' && SA4_RELEASE_ && SA4_RELEASE_.flavor === 'template' ? SA4_RELEASE_ : null;
+}
+
+/** 'template' for the master template document, 'report' for anything else. */
+function templateDocumentRole_(documentId, release) {
+  return release && documentId && documentId === release.templateDocumentId ? 'template' : 'report';
+}
+
+function isTemplateMasterDocument_() {
+  const release = templateRuntimeRelease_();
+  return !!release && templateDocumentRole_(getActiveDocumentIdSafely_(), release) === 'template';
+}
+
+/**
+ * Refuses a report operation in the master template, so the template never
+ * acquires meeting configuration, report content or a trigger. Called by
+ * the build/update guard, the trigger installer and the configuration
+ * dialog and save.
+ */
+function assertNotTemplateMaster_() {
+  if (isTemplateMasterDocument_()) {
+    throw new Error('This is the SA4 Report Template itself. Use "Create New SA4 Report" -- ' +
+      'reports are never built or configured in the template.');
+  }
+}
 
 // =========================================================
 // PERF-001 -- LIGHTWEIGHT PERFORMANCE INSTRUMENTATION
@@ -773,6 +960,13 @@ function continuousUpdateCore_(context) {
 
       if (!existingTdocs.has(tdocNumber)) {
         perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg, tdocTableIndex, context));
+        // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-002, d1021cf):
+        // `existingTdocs` was only populated from the document scan taken
+        // BEFORE this loop, so a TDoc number appearing twice within this
+        // same run's downloaded groups (e.g. under two agenda items) was
+        // inserted twice. Recording it at insertion makes the repeat an
+        // in-place update instead.
+        existingTdocs.add(tdocNumber);
         newTdocsAdded++;
       } else {
         if (perfTimedAccum_('status updates (updateTdocStatus_, accumulated)', () => updateTdocStatus_(body, tdocNumber, tdocData, tdocTableIndex))) {
@@ -1436,6 +1630,9 @@ function manageTriggers() {
       : 'Unknown';
     currentInterval = minutes;
   }
+  // TEMPLATE-002B: the template runtime records the interval it installed.
+  const storedInterval = continuousTrigger && templateRuntimeRelease_() ? describeStoredContinuousInterval_(props) : null;
+  if (storedInterval) currentInterval = storedInterval.label;
   
   // Build HTML dialog
   const html = HtmlService.createHtmlOutput(`
@@ -1464,8 +1661,8 @@ function manageTriggers() {
     
     <label>Update Interval:</label>
     <select id="interval">
-      ${CONTINUOUS_TRIGGER_INTERVALS_.map(function (o) {
-        return '<option value="' + o.minutes + '"' + (o.selected ? ' selected' : '') + '>' + o.label + '</option>';
+      ${continuousTriggerIntervals_().map(function (o) {
+        return '<option value="' + o.minutes + '"' + ((storedInterval ? o.minutes === storedInterval.minutes : o.selected) ? ' selected' : '') + '>' + o.label + '</option>';
       }).join('\n      ')}
     </select>
     
@@ -1567,6 +1764,28 @@ var CONTINUOUS_TRIGGER_INTERVALS_ = [
   { minutes: 60, label: 'Every hour (Slow meeting)', everyHours: 1, selected: true }
 ];
 
+// TEMPLATE-002B: Document Property in which the template runtime records
+// the interval of the trigger it installed (Apps Script does not expose a
+// trigger's interval).
+var CONTINUOUS_UPDATE_INTERVAL_KEY_ = 'CONTINUOUS_UPDATE_INTERVAL_MINUTES';
+
+/**
+ * TEMPLATE-002B: the intervals this runtime offers. The bound template
+ * runtime offers 15/30/60 minutes (its table and installer live in
+ * ReportCreator.js, which only template bundles contain -- this file never
+ * creates a sub-hourly trigger); the add-on offers hourly only.
+ */
+function continuousTriggerIntervals_() {
+  return templateRuntimeRelease_() ? templateContinuousTriggerIntervals_() : CONTINUOUS_TRIGGER_INTERVALS_;
+}
+
+/** { minutes, label } for the recorded interval, or null when none is recorded. */
+function describeStoredContinuousInterval_(props) {
+  const minutes = parseInt(props.getProperty(CONTINUOUS_UPDATE_INTERVAL_KEY_) || '', 10);
+  const known = continuousTriggerIntervals_().some(function (o) { return o.minutes === minutes; });
+  return known ? { minutes: minutes, label: minutes + ' minutes' } : null;
+}
+
 /**
  * 2.15.1: the CONTINUOUS_TRIGGER_INTERVALS_ entry for a dialog interval (a
  * whole number of minutes, as a number or a digit string). Anything else --
@@ -1577,10 +1796,10 @@ function resolveContinuousTriggerInterval_(intervalMinutes) {
   const minutes = (typeof raw === 'number' && Number.isInteger(raw)) ? raw
     : (typeof raw === 'string' && /^\d+$/.test(raw)) ? parseInt(raw, 10)
     : null;
-  const entry = minutes === null ? null : CONTINUOUS_TRIGGER_INTERVALS_.find(function (o) { return o.minutes === minutes; });
+  const entry = minutes === null ? null : continuousTriggerIntervals_().find(function (o) { return o.minutes === minutes; });
   if (!entry) {
     throw new Error('Unsupported update interval: ' + JSON.stringify(intervalMinutes === undefined ? null : intervalMinutes) +
-      ' (supported: ' + CONTINUOUS_TRIGGER_INTERVALS_.map(function (o) { return o.minutes; }).join(', ') + ' minutes).');
+      ' (supported: ' + continuousTriggerIntervals_().map(function (o) { return o.minutes; }).join(', ') + ' minutes).');
   }
   return entry;
 }
@@ -1589,6 +1808,11 @@ function createContinuousTrigger(intervalMinutes, fetchAbstracts) {
   // 2.15.1: validate first -- an unsupported interval changes nothing (the
   // existing trigger and the abstracts switch are left as they are).
   const interval = resolveContinuousTriggerInterval_(intervalMinutes);
+
+  // TEMPLATE-002B: the bound template runtime installs the replacement
+  // before it removes the previous trigger (createTemplateContinuousTrigger_()
+  // in ReportCreator.js).
+  if (templateRuntimeRelease_()) return createTemplateContinuousTrigger_(interval, fetchAbstracts);
 
   // Delete existing trigger first
   deleteContinuousTrigger();
@@ -1608,6 +1832,7 @@ function createContinuousTrigger(intervalMinutes, fetchAbstracts) {
 }
 
 function deleteContinuousTrigger() {
+  if (templateRuntimeRelease_()) PropertiesService.getDocumentProperties().deleteProperty(CONTINUOUS_UPDATE_INTERVAL_KEY_);
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(trigger => {
     if (trigger.getHandlerFunction() === 'continuousUpdate') {
@@ -1625,9 +1850,11 @@ function getTriggerStatus() {
     return { active: false, interval: null };
   }
   
+  // TEMPLATE-002B: the template runtime knows the interval it installed.
+  const stored = templateRuntimeRelease_() ? describeStoredContinuousInterval_(PropertiesService.getDocumentProperties()) : null;
   return {
     active: true,
-    interval: 'Active' // Apps Script doesn't expose the exact interval
+    interval: stored ? stored.label : 'Active' // Apps Script doesn't expose the exact interval
   };
 }
 
@@ -2426,7 +2653,7 @@ function getReportConfig_(context) {
   // ========================================
   // 7. API INTEGRATION (Optional)
   // ========================================
-  const REVIEWER_API_TOKEN = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN') || '';
+  const REVIEWER_API_TOKEN = getReviewerApiTokenForRun_(); // TEMPLATE-002C: one read per execution
   const REVIEWER_API_BASE = 'https://reviewer.bouazizi.dev/api/v1';
   
   return {
@@ -2948,43 +3175,121 @@ function getCollectorConfig_(context) {
   if (!cfg.TIMEZONE) cfg.TIMEZONE = Session.getScriptTimeZone();
   if (!cfg.SHOW_PREVIEW_SNIPPET) cfg.SHOW_PREVIEW_SNIPPET = 'false';
   if (!cfg.TDOC_ID_REGEX) cfg.TDOC_ID_REGEX = '^S4-\\d{6}$';
-  if (!cfg.EMAIL_START_DATE) cfg.EMAIL_START_DATE = '2026-08-21';
+  if (!cfg.EMAIL_START_DATE) cfg.EMAIL_START_DATE = resolveCollectorStartDate_(context);
 
   // ADDON-008A2: read the list the report is configured for -- the same
   // precedence getMeetingContext_() already applies (an ad-hoc meeting's
   // saved MAILING_LIST override, else the report-family list; main meetings
-  // keep the family list) -- instead of always the family list. A Collector
-  // Configuration table's own LIST_NAME/RSS_URL_V2 still wins, as before.
-  if (!collectorTableConfig.LIST_NAME && !collectorTableConfig.RSS_URL_V2) {
-    const listName = resolveCollectorListName_(context, reportConfig.LIST_NAME);
-    if (listName !== cfg.LIST_NAME) {
-      cfg.LIST_NAME = listName;
-      cfg.RSS_URL_V2 = `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=2.0&LIMIT=2000`;
-      cfg.RSS_URL_V1 = `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=1.0&LIMIT=2000`;
+  // keep the family list) -- instead of always the family list.
+  //
+  // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003, 123369b): a Collector
+  // Configuration table's own LIST_NAME/RSS_URL_V2 still wins -- unless it
+  // merely repeats the derived family default (the snapshot "Create
+  // Configuration Tables" writes), which is not an intentional override and
+  // used to mask the meeting's MAILING_LIST.
+  const tableList = String(collectorTableConfig.LIST_NAME || '').trim();
+  const tableRss = String(collectorTableConfig.RSS_URL_V2 || '').trim();
+  const explicitList = tableList && tableList !== reportConfig.LIST_NAME;
+  const explicitRss = tableRss && tableRss !== reportConfig.RSS_URL_V2;
+  if (explicitList || explicitRss) {
+    // The A1 archive and RSS read the same list: derive whichever one the
+    // table does not set from the one it does.
+    if (explicitList && !explicitRss) {
+      cfg.RSS_URL_V2 = buildCollectorRssUrl_(tableList, '2.0');
+      cfg.RSS_URL_V1 = buildCollectorRssUrl_(tableList, '1.0');
+    } else if (explicitRss && !explicitList) {
+      const rssList = normalizeEtsiListName_((tableRss.match(/[?&]L=([^&]+)/i) || [])[1]);
+      if (rssList) cfg.LIST_NAME = rssList;
     }
+  } else {
+    const listName = resolveCollectorListName_(context, reportConfig.LIST_NAME);
+    cfg.LIST_NAME = listName;
+    cfg.RSS_URL_V2 = buildCollectorRssUrl_(listName, '2.0');
+    cfg.RSS_URL_V1 = buildCollectorRssUrl_(listName, '1.0');
   }
 
   return cfg;
 }
 
-/** ADDON-008A2: an ETSI list name as used in list.etsi.org URLs (e.g. 3GPP_TSG_SA_WG4_MBS). */
-function isValidEtsiListName_(name) {
-  return /^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/.test(String(name === null || name === undefined ? '' : name));
+function buildCollectorRssUrl_(listName, version) {
+  return `https://list.etsi.org/scripts/wa.exe?RSS&L=${listName}&v=${version}&LIMIT=2000`;
 }
 
 /**
- * ADDON-008A2: the mailing list the collector reads. A configured value that
- * is not a plain list name (spaces, an e-mail address, a URL...) is not
- * used: the family list is read instead and the rejection is logged.
+ * TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003): an ETSI list identifier
+ * as used in list.etsi.org URLs, from either stored form:
+ * "3GPP_TSG_SA4_FS_6G_MED" or "3gpp_tsg_sa4_fs_6g_med@list.etsi.org" (the
+ * form deriveEmailExportRecipientFromMailingList_() also accepts). Returns
+ * '' for anything else (CR/LF, spaces, other domains, URLs...).
+ */
+function normalizeEtsiListName_(value) {
+  const raw = String(value === null || value === undefined ? '' : value).trim();
+  if (!raw || /[\r\n]/.test(raw)) return '';
+  const name = raw.replace(/@list\.etsi\.org$/i, '');
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/.test(name) ? name : '';
+}
+
+/**
+ * ADDON-008A2: the mailing list the collector reads: the meeting's
+ * configured MAILING_LIST (ad-hoc only, via getMeetingContext_()), else the
+ * report-family list. A configured value that is not a valid list
+ * identifier is not used: the family list is read instead and the rejection
+ * is logged.
  */
 function resolveCollectorListName_(context, familyListName) {
   const configured = String(getMeetingContext_(context).sources.mailingList || '').trim();
   if (!configured || configured === familyListName) return familyListName;
-  if (!isValidEtsiListName_(configured)) {
-    Logger.log('Ignoring configured mailing list "' + configured + '" (not a valid list name); reading ' + familyListName);
+  const name = normalizeEtsiListName_(configured);
+  if (!name) {
+    Logger.log('Ignoring configured mailing list "' + configured.replace(/[\r\n]/g, ' ') + '" (not a valid ETSI list name); reading ' + familyListName);
     return familyListName;
   }
-  return configured;
+  return name;
+}
+
+/**
+ * TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003): the collection start
+ * date when no Collector Configuration table sets one -- a stored
+ * EMAIL_START_DATE (YYYY-MM-DD) when valid, else the historical default.
+ * Read through the report state store, so a background run reads the
+ * adopted document's central state like every other setting.
+ */
+function resolveCollectorStartDate_(context) {
+  const store = getReportStateStore_(context);
+  const saved = String(store.getProperty('EMAIL_START_DATE') || '').trim();
+  if (isValidCollectorStartDate_(saved)) return saved;
+  // TEMPLATE-002B (decision 2026-10-01): in the template runtime a report
+  // without a usable EMAIL_START_DATE collects from the meeting start date.
+  const meetingStart = templateRuntimeRelease_() ? meetingStartDateIso_(store.getProperty('MEETING_DATE')) : '';
+  const fallback = meetingStart || '2026-08-21';
+  if (saved) Logger.log('Ignoring EMAIL_START_DATE "' + saved.replace(/[\r\n]/g, ' ') + '" (expected YYYY-MM-DD); using ' + fallback);
+  return fallback;
+}
+
+/** The one rule for an e-mail collection start date: a real YYYY-MM-DD date. */
+function isValidCollectorStartDate_(value) {
+  const s = String(value === null || value === undefined ? '' : value).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s).getTime());
+}
+
+/**
+ * TEMPLATE-002B: the meeting start date as YYYY-MM-DD, from MEETING_DATE as
+ * the resolver stores it ("October 1, 2026", computeMeetingDateFromStartDate_())
+ * or from a value that already starts with an ISO date. '' when it cannot
+ * be read -- never a guess.
+ */
+function meetingStartDateIso_(meetingDateText) {
+  const s = String(meetingDateText === null || meetingDateText === undefined ? '' : meetingDateText).trim();
+  const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  let iso = '';
+  const isoMatch = s.match(/^(\d{4}-\d{2}-\d{2})(?:$|[^\d])/);
+  const textMatch = s.match(/^([A-Za-z]+) (\d{1,2}), (\d{4})$/);
+  if (isoMatch) {
+    iso = isoMatch[1];
+  } else if (textMatch && MONTHS.indexOf(textMatch[1].toLowerCase()) !== -1) {
+    iso = textMatch[3] + '-' + String(MONTHS.indexOf(textMatch[1].toLowerCase()) + 1).padStart(2, '0') + '-' + textMatch[2].padStart(2, '0');
+  }
+  return isValidCollectorStartDate_(iso) ? iso : '';
 }
 
 function ensureCollectorConfigTable_() {
@@ -3618,7 +3923,15 @@ function processWebDownloadedSheet_(sheet) {
     // Apply reallocation if exists
     if (reallocations[tdoc]) {
       const originalAgenda = agendaItem;
-      agendaItem = reallocations[tdoc].new;
+      // TEMPLATE-002A (port of Legacy LEGACY-0099, cb1208c): the same shared
+      // interpretation as downloadAndGroupTdocs_() (ADDON-008A1b) -- a
+      // removed/withdrawn/n/a TDoc is never imported.
+      const target = interpretReallocationTarget_(reallocations[tdoc].new);
+      if (target.kind === 'remove') {
+        Logger.log(`Skipping ${tdoc}: reallocated to "${target.value}" (${reallocations[tdoc].reason || 'no reason'})`);
+        continue;
+      }
+      agendaItem = target.kind === 'move' ? target.agendaItem : reallocations[tdoc].new;
       Logger.log(`Reallocating ${tdoc}: ${originalAgenda} → ${agendaItem} (${reallocations[tdoc].reason || 'no reason'})`);
     }
     
@@ -3666,6 +3979,22 @@ function processWebDownloadedSheet_(sheet) {
   registeredHeading.setHeading(DocumentApp.ParagraphHeading.HEADING2);
   createSummaryTable_(body, allTdocs, tdocCol, titleCol, sourceCol, agendaCol);
   
+  // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-002, d1021cf): this import
+  // (the "📝 Legacy: Build Initial Report" menu item) never clears the
+  // document and never checked whether a table for a TDoc already existed,
+  // so every further run duplicated every TDoc table it processed. Existing
+  // tables are scanned ONCE (the isTDocTable_()/safeCellText_() technique
+  // continuousUpdateCore_() uses) and a TDoc already present is skipped.
+  // Duplicate tables already in a document are left untouched -- this only
+  // prevents new ones. Updated as tables are inserted, so a source list
+  // repeating a TDoc number cannot duplicate it either.
+  const existingTdocNumbers = {};
+  body.getTables().forEach(function (t) {
+    if (!isTDocTable_(t)) return;
+    const existingTdoc = safeCellText_(t, 0, 1).trim();
+    if (existingTdoc) existingTdocNumbers[existingTdoc] = true;
+  });
+
   // Insert TDOC tables under the matching agenda heading in the document.
   // If the skeleton was already created, tables go under the existing heading.
   sortedAgendaItems.forEach(agendaItem => {
@@ -3682,6 +4011,11 @@ function processWebDownloadedSheet_(sheet) {
     // Revisions are emitted directly below the document they revise.
     orderTdocsByRevision_(group.tdocs).forEach(tdocData => {
       const row = tdocData.row;
+      const tdocNumber = String(row[tdocCol] || '').trim();
+      if (existingTdocNumbers[tdocNumber]) {
+        Logger.log(`Skipping ${tdocNumber}: a table for this TDoc already exists in the document (BUGFIX-LEGACY-002 idempotency guard).`);
+        return;
+      }
       const revisedTo = getRevisedTo_(tdocData);
       const typeFor = (typeCol >= 0 && forCol >= 0 && row[typeCol] && row[forCol])
         ? `${row[typeCol]} for ${row[forCol]}`
@@ -3702,6 +4036,7 @@ function processWebDownloadedSheet_(sheet) {
       ];
       
       insertTDocTableAtIndex_(body, currentIdx, tempData, tdocData.richTextRow, tdocCol);
+      existingTdocNumbers[tdocNumber] = true;
       currentIdx++;
     });
   });
@@ -3938,7 +4273,8 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
   // just-created table's abstract immediately, independent of the
   // trigger-level toggle) is still real and intentional, it just was not
   // what fired in that specific measured run.
-  const skipAbstracts = PropertiesService.getDocumentProperties().getProperty('SKIP_ABSTRACTS_DURING_TABLE_BUILD') === 'true';
+  const skipAbstracts = SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ ||
+    PropertiesService.getDocumentProperties().getProperty('SKIP_ABSTRACTS_DURING_TABLE_BUILD') === 'true';
   const tdocNumber = String(data[0][1] || '').trim();
   const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
   if (!skipAbstracts && parsedTdoc.isValid) {
@@ -3958,9 +4294,13 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
  */
 function fetchAndAddAbstract_(table, tdocNumber, context) {
   try {
-    const apiToken = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');
+    // TEMPLATE-002C: read once per execution; a missing token is logged once.
+    const apiToken = getReviewerApiTokenForRun_();
     if (!apiToken) {
-      Logger.log('No REVIEWER_API_TOKEN found in script properties');
+      if (!REVIEWER_TOKEN_RUN_STATE_.missingLogged) {
+        Logger.log('No REVIEWER_API_TOKEN found in script properties');
+        REVIEWER_TOKEN_RUN_STATE_.missingLogged = true;
+      }
       return;
     }
 
@@ -6266,6 +6606,10 @@ function isLateResponse_(msg, deadlineMillis, author, firstAuthor) {
 function loadJsonObject_(s) { try { const o = JSON.parse(s || '{}'); return (o && typeof o === 'object') ? o : {}; } catch (e) { return {}; } }
 
 function buildArchiveIndexUrlsByDaysBack_(list, daysBack, cfg) {
+  // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-003): the archive of the
+  // list the collector resolved (the same one RSS reads); the SA4 default
+  // only when none is given.
+  const listName = String(list || '').trim() || LIST_NAME_LOCK;
   const urls = [];
   const now = new Date();
   const start = new Date(now.getTime() - daysBack * 24 * 3600 * 1000);
@@ -6275,7 +6619,7 @@ function buildArchiveIndexUrlsByDaysBack_(list, daysBack, cfg) {
   while (cur.getTime() <= endMonth.getTime()) {
     const yy = String(cur.getFullYear()).slice(-2);
     const mm = String(cur.getMonth() + 1).padStart(2, '0');
-    weeks.forEach(w => urls.push(`https://list.etsi.org/scripts/wa.exe?A1=ind${yy}${mm}${w}&L=${encodeURIComponent(LIST_NAME_LOCK)}`));
+    weeks.forEach(w => urls.push(`https://list.etsi.org/scripts/wa.exe?A1=ind${yy}${mm}${w}&L=${encodeURIComponent(listName)}`));
     cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
   }
   return urls;
@@ -7022,6 +7366,12 @@ function removeInitialEmptyRow_(table) {
  */
 function configureMeetingSettings() {
   const ui = DocumentApp.getUi();
+  // TEMPLATE-002B: refused in the master template; in a report created from
+  // it, the creator's setup information is stored first (once).
+  if (templateRuntimeRelease_()) {
+    assertNotTemplateMaster_();
+    ensureReportBootstrapped_();
+  }
   const props = PropertiesService.getDocumentProperties();
 
   const currentMeetingFolder = props.getProperty('MEETING_FOLDER') || '';
@@ -7031,6 +7381,23 @@ function configureMeetingSettings() {
   const currentTdocUrl = props.getProperty('TDOC_LIST_URL') || '';
   const currentShowPreview = props.getProperty('SHOW_PREVIEW_SNIPPET') !== 'false';
   const tokenConfigured = Boolean(PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN'));
+
+  // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date, in the
+  // template runtime only. A stored value is shown as it is; without one the
+  // meeting start date is proposed (and replaced by the resolved start date
+  // on Resolve, unless the user has typed a date). Outside the template
+  // runtime the field is not rendered, and the dialog script, which only
+  // looks the field up by id, finds nothing.
+  const storedEmailStartDate = String(props.getProperty('EMAIL_START_DATE') || '').trim();
+  const emailStartDateExplicit = isValidCollectorStartDate_(storedEmailStartDate);
+  const emailStartDateValue = emailStartDateExplicit ? storedEmailStartDate : meetingStartDateIso_(props.getProperty('MEETING_DATE'));
+  const emailStartDateFieldHtml = !templateRuntimeRelease_() ? '' :
+    '<label>Email Collection Start Date:</label>' +
+    '<input type="date" id="collectionStartField" name="emailStartDate" data-config-key="emailStartDate"' +
+    ' data-explicit="' + (emailStartDateExplicit ? 'true' : 'false') + '" value="' + emailStartDateValue + '" oninput="this.touched = true">' +
+    '<div class="hint">' + (emailStartDateExplicit
+      ? 'Saved value. E-mails before this date are not collected.'
+      : 'Default: the meeting start date. E-mails before this date are not collected; move it earlier or later if needed.') + '</div>';
 
   // ARCH-010: the SAME pure merge function the "Resolve" button's server
   // call uses (computeResolvedMeetingPreview_()), called here with
@@ -7163,6 +7530,7 @@ function configureMeetingSettings() {
 
     <div class="section">
       <h3>3. Options</h3>
+      ${emailStartDateFieldHtml}
       <label>
         <input type="checkbox" id="showPreview" ${currentShowPreview ? 'checked' : ''}>
         Show email preview snippets in report
@@ -7428,6 +7796,14 @@ function configureMeetingSettings() {
       }
 
       function applyPreview(preview) {
+        // TEMPLATE-002B: the template runtime's start-date field (rendered
+        // only there). Without a saved or typed value it follows the
+        // resolved meeting start date.
+        const startField = document.getElementById('collectionStartField');
+        if (startField && typeof startField.getAttribute === 'function' && startField.getAttribute('data-explicit') !== 'true' &&
+            !startField.touched && /^[0-9]{4}-[0-9]{2}-[0-9]{2}/.test(String(preview.startDateRaw || ''))) {
+          startField.value = String(preview.startDateRaw).slice(0, 10);
+        }
         setFieldWithBadge('meetingName', 'meetingNameBadge', preview.meetingName);
         setFieldWithBadge('meetingType', 'meetingTypeBadge', preview.meetingType);
         setFieldWithBadge('meetingDate', 'meetingDateBadge', preview.meetingDate);
@@ -7609,6 +7985,11 @@ function configureMeetingSettings() {
           apiTokenAction: apiTokenAction,
           apiToken: apiTokenAction === 'replace' ? newToken : ''
         };
+        // TEMPLATE-002B: see applyPreview(); the field names its own config key.
+        const startFieldToSave = document.getElementById('collectionStartField');
+        if (startFieldToSave && typeof startFieldToSave.getAttribute === 'function') {
+          config[startFieldToSave.getAttribute('data-config-key')] = startFieldToSave.value;
+        }
         google.script.run
           .withSuccessHandler(() => {
             // Saved is not the same as ready to build.
@@ -7635,6 +8016,7 @@ function configureMeetingSettings() {
 
 
 function saveConfigurationSettings(config) {
+  assertNotTemplateMaster_(); // TEMPLATE-002B
   // ADDON-007B1: Save writes Document Properties (unchanged, and what every
   // interactive build reads). For a document registered with the central
   // add-on the background scheduler reads a SEPARATE central copy, so the
@@ -7701,6 +8083,16 @@ function persistConfigurationSettings_(config) {
   const docProps = PropertiesService.getDocumentProperties();
   const scriptProps = PropertiesService.getScriptProperties();
 
+  // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date is a
+  // normal Configure Meeting field in the template runtime. Checked with the
+  // collector's own rule BEFORE anything is written; a blank value never
+  // erases a stored one. Outside the template runtime the dialog has no such
+  // field and the value is not written (ADDON-007B1, unchanged).
+  const emailStartDate = templateRuntimeRelease_() ? String(config.emailStartDate || '').trim() : '';
+  if (emailStartDate && !isValidCollectorStartDate_(emailStartDate)) {
+    throw new Error('Email Collection Start Date must be a date in the form YYYY-MM-DD.');
+  }
+
   const submittedType = String(config.meetingType || '').trim().toLowerCase();
   const effectiveType = submittedType || String(docProps.getProperty('MEETING_TYPE') || '').trim().toLowerCase();
 
@@ -7755,6 +8147,7 @@ function persistConfigurationSettings_(config) {
   } else if (tokenAction === 'replace' && config.apiToken && config.apiToken.trim()) {
     scriptProps.setProperty('REVIEWER_API_TOKEN', config.apiToken.trim());
   }
+  resetReviewerTokenRunState_(); // TEMPLATE-002C: the token may just have changed
 
   // ARCH-010: resolver-driven fields, skip-if-blank -- a blank submitted
   // value means "nothing new to say", never "erase what was configured".
@@ -7803,6 +8196,8 @@ function persistConfigurationSettings_(config) {
   if (config.discussionEmailSender && config.discussionEmailSender.trim()) {
     docProps.setProperty('DISCUSSION_EMAIL_SENDER', config.discussionEmailSender.trim());
   }
+
+  if (emailStartDate) docProps.setProperty('EMAIL_START_DATE', emailStartDate);
 
   Logger.log('Configuration saved: ' + JSON.stringify(redactConfigForLog_(config)));
 }
@@ -9178,6 +9573,11 @@ function parseAgendaStructure_(body, prefix) {
 
 function runFullReportBuild() {
   const ui = DocumentApp.getUi();
+  // TEMPLATE-002B: see configureMeetingSettings().
+  if (templateRuntimeRelease_()) {
+    assertNotTemplateMaster_();
+    ensureReportBootstrapped_();
+  }
   const response = ui.alert(
     'Run Full Report Build',
     'This will run all steps:\n\n' +
@@ -9190,17 +9590,139 @@ function runFullReportBuild() {
   );
   if (response !== ui.Button.YES) return;
 
-  try {
-    buildSkeletonWithTdocTables();
-    collectEmailDiscussionOnly();
-    collectRevisionsOnly();
-    addAbstractsOnly();
-    removeRowHeightAndSpacing();
-    ui.alert('Success', 'Full report build completed.', ui.ButtonSet.OK);
-  } catch (e) {
-    ui.alert('Error', 'Full report build failed: ' + e.message, ui.ButtonSet.OK);
-    Logger.log('Full report build failed: ' + e.message);
+  // TEMPLATE-002C: the phases run without any pop-up in between -- a pop-up
+  // suspends the script until it is clicked, inside this execution's time
+  // limit.
+  const result = runFullReportBuildCore_();
+
+  // 2.17.3: no UI call after the build has changed the document. Live, the
+  // final "Success" ui.alert() never appeared: the call hung for ~96 s and
+  // threw "Service Documents failed while accessing document ...", turning
+  // a completed, saved build into a FAILED execution. A completed build
+  // therefore just ends here; its result is in the [FULLBUILD] log lines.
+  // A failed phase must stay visible, and needs no UI call for that: the
+  // error thrown below is shown by Docs and recorded by the execution.
+  if (!result.ok) {
+    Logger.log('Full report build failed: ' + result.failedPhase + ': ' + result.error);
+    throw new Error(formatFullBuildSummary_(result));
   }
+  return result;
+}
+
+/**
+ * TEMPLATE-002C: the Full Build itself -- no UI at all. Phases run in
+ * order; the first one that fails stops the build (later phases are not
+ * started) and is reported once in the result (runFullReportBuild() turns
+ * that into one thrown error; a completed build ends silently). Each phase logs
+ * "[FULLBUILD] <phase>: start" and "[FULLBUILD] <phase>: <status> in N ms",
+ * so the last line before a timeout names the phase that was running.
+ *
+ * Formatting runs ONCE, at the end: removeRowHeightAndSpacing() formats
+ * every table of the document from scratch, and the enrichment phases add
+ * content (e-mail lines, revision tables, abstract rows) that needs it, so
+ * a pass before them is repeated work.
+ *
+ * Abstracts need the optional Reviewer API token. Without one the phase is
+ * skipped as a whole. With one, the tables are built without abstracts and
+ * the abstracts phase fetches them, so their cost shows under its own name.
+ */
+function runFullReportBuildCore_() {
+  const totalStart = Date.now();
+  const phases = [];
+  let failed = null;
+
+  function phase(name, fn) {
+    if (failed) return;
+    const start = Date.now();
+    const entry = { name: name, status: 'done', detail: '', ms: 0 };
+    Logger.log('[FULLBUILD] ' + name + ': start');
+    try {
+      const outcome = fn() || {};
+      if (outcome.skipped) entry.status = 'skipped';
+      entry.detail = outcome.detail || '';
+    } catch (e) {
+      entry.status = 'failed';
+      entry.detail = e.message;
+      failed = entry;
+    }
+    entry.ms = Date.now() - start;
+    phases.push(entry);
+    Logger.log('[FULLBUILD] ' + name + ': ' + entry.status + ' in ' + entry.ms + ' ms' + (entry.detail ? ' -- ' + entry.detail : ''));
+  }
+
+  resetReviewerTokenRunState_();
+
+  phase('skeleton', function () {
+    SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = true;
+    try {
+      const built = buildSkeletonWithTdocTables({ nonInteractive: true, skipFormatting: true });
+      if (!built.ok) throw new Error(built.message);
+      return { detail: built.agendaItems + ' agenda items, ' + built.tdocs + ' TDocs' + (built.note || '') };
+    } finally {
+      SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = false;
+    }
+  });
+  phase('e-mail', function () { collectEmailDiscussionCore_(); });
+  phase('revisions', function () { collectRevisionsCore_(); });
+  phase('abstracts', function () {
+    if (!getReviewerApiTokenForRun_()) return { skipped: true, detail: 'no Reviewer API token configured' };
+    const added = addAbstractsForTables_();
+    return { detail: added.candidatesProcessed + ' candidate table(s), ' + added.rowsInserted + ' abstract(s) inserted' };
+  });
+  phase('formatting', function () {
+    removeRowHeightAndSpacing();
+  });
+
+  const totalMs = Date.now() - totalStart;
+  Logger.log('[FULLBUILD] total: ' + totalMs + ' ms -- ' + phases.map(function (p) { return p.name + ' ' + p.status + ' ' + p.ms + ' ms'; }).join(', '));
+  return {
+    ok: !failed,
+    failedPhase: failed ? failed.name : null,
+    error: failed ? failed.detail : null,
+    phases: phases,
+    totalMs: totalMs
+  };
+}
+
+/** The one dialog text of a Full Build (pure). */
+function formatFullBuildSummary_(result) {
+  const LABELS = { 'skeleton': 'Skeleton + TDoc tables', 'e-mail': 'E-mail discussion', 'revisions': 'Revisions', 'abstracts': 'Abstracts', 'formatting': 'Formatting' };
+  const seconds = function (ms) { return Math.round(ms / 1000) + ' s'; };
+  const lines = [result.ok ? 'Full report build completed.' : 'Full report build failed: ' + result.error, ''];
+  result.phases.forEach(function (p) {
+    lines.push((p.status === 'failed' ? '✗ ' : p.status === 'skipped' ? '– ' : '✓ ') + LABELS[p.name] + ': ' +
+      (p.status === 'failed' ? 'FAILED' : p.status === 'skipped' ? 'skipped' : 'done') +
+      (p.detail && p.status !== 'failed' ? ' (' + p.detail + ')' : '') + ', ' + seconds(p.ms));
+  });
+  if (!result.ok) {
+    const notRun = Object.keys(LABELS).filter(function (name) { return !result.phases.some(function (p) { return p.name === name; }); });
+    if (notRun.length) lines.push('Not run: ' + notRun.map(function (name) { return LABELS[name]; }).join(', ') + '.');
+  }
+  lines.push('');
+  lines.push('Total: ' + seconds(result.totalMs));
+  return lines.join('\n');
+}
+
+// TEMPLATE-002C: the optional Reviewer API token, read once per execution
+// (Apps Script starts every execution with fresh globals). A missing token
+// is logged once, not once per TDoc table.
+var REVIEWER_TOKEN_RUN_STATE_ = { read: false, token: '', missingLogged: false };
+// Set by Full Build while it builds the tables: abstracts get their own phase.
+var SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = false;
+
+function getReviewerApiTokenForRun_() {
+  if (!REVIEWER_TOKEN_RUN_STATE_.read) {
+    REVIEWER_TOKEN_RUN_STATE_.token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN') || '';
+    REVIEWER_TOKEN_RUN_STATE_.read = true;
+  }
+  return REVIEWER_TOKEN_RUN_STATE_.token;
+}
+
+/** Forget the cached token: at the start of an operation, and when Configure Meeting changes it. */
+function resetReviewerTokenRunState_() {
+  REVIEWER_TOKEN_RUN_STATE_.read = false;
+  REVIEWER_TOKEN_RUN_STATE_.token = '';
+  REVIEWER_TOKEN_RUN_STATE_.missingLogged = false;
 }
 
 /**
@@ -9214,7 +9736,13 @@ function runFullReportBuild() {
  * 5. For each agenda item: insert heading + agenda text + TDOC tables
  * 6. Append "Registered Documents" summary table at the end
  */
-function buildSkeletonWithTdocTables() {
+function buildSkeletonWithTdocTables(options) {
+  // TEMPLATE-002C: the menu calls this without arguments (unchanged: its
+  // own pop-ups, formatting at the end). Run Full Report Build passes
+  // { nonInteractive: true, skipFormatting: true }: no pop-up may suspend
+  // the build, and it formats once, after its enrichment phases. The
+  // outcome is also returned: { ok, message } (+ agendaItems, tdocs, note).
+  const quiet = !!(options && options.nonInteractive);
   // ADDON-007B3: an ad-hoc meeting with missing sources fails here, before
   // the document is cleared, instead of building an empty/wrong report.
   assertMeetingReadyToBuild_();
@@ -9223,11 +9751,11 @@ function buildSkeletonWithTdocTables() {
   if (!cfg.TDOC_LIST_URL) {
     Logger.log('Error: TDOC List URL not configured');
     try {
-      DocumentApp.getUi().alert('Error', 'TDOC List URL not configured. Please run "Configure Meeting" first.', DocumentApp.getUi().ButtonSet.OK);
+      if (!quiet) DocumentApp.getUi().alert('Error', 'TDOC List URL not configured. Please run "Configure Meeting" first.', DocumentApp.getUi().ButtonSet.OK);
     } catch (e) {
       // UI not available in this context
     }
-    return;
+    return { ok: false, message: 'TDOC List URL not configured. Please run "Configure Meeting" first.' };
   }
 
   // ADDON-008A1b: the saved Document Reallocations live in this document,
@@ -9251,11 +9779,11 @@ function buildSkeletonWithTdocTables() {
   if (!agendaItems || agendaItems.length === 0) {
     Logger.log('Warning: No agenda items found for prefix: ' + getConfiguredAgendaPrefix_());
     try {
-      DocumentApp.getUi().alert('Warning', 'No agenda items found for prefix: ' + getConfiguredAgendaPrefix_(), DocumentApp.getUi().ButtonSet.OK);
+      if (!quiet) DocumentApp.getUi().alert('Warning', 'No agenda items found for prefix: ' + getConfiguredAgendaPrefix_(), DocumentApp.getUi().ButtonSet.OK);
     } catch (e) {
       // UI not available in this context
     }
-    return;
+    return { ok: false, message: 'No agenda items found for prefix: ' + getConfiguredAgendaPrefix_() };
   }
   
   // Filter out the parent item (e.g., "9 Video SWG") - we only want sub-items (9.1, 9.2, etc.)
@@ -9274,11 +9802,11 @@ function buildSkeletonWithTdocTables() {
   if (filteredAgendaItems.length === 0) {
     Logger.log('Warning: No sub-agenda items found for prefix: ' + agendaPrefix);
     try {
-      DocumentApp.getUi().alert('Warning', 'No sub-agenda items found for prefix: ' + agendaPrefix, DocumentApp.getUi().ButtonSet.OK);
+      if (!quiet) DocumentApp.getUi().alert('Warning', 'No sub-agenda items found for prefix: ' + agendaPrefix, DocumentApp.getUi().ButtonSet.OK);
     } catch (e) {
       // UI not available in this context
     }
-    return;
+    return { ok: false, message: 'No sub-agenda items found for prefix: ' + agendaPrefix };
   }
   // ADDON-008A1b: every saved destination must be usable before anything is
   // cleared. Ad-hoc: it must be an item of this report's agenda (the
@@ -9671,13 +10199,21 @@ function buildSkeletonWithTdocTables() {
     }
   }
 
-  removeRowHeightAndSpacing();
+  // TEMPLATE-002C: Full Build formats once, after its enrichment phases.
+  if (!(options && options.skipFormatting)) removeRowHeightAndSpacing();
   Logger.log(`Done: Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.`);
   try {
-    DocumentApp.getUi().alert('Done', `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.` + reallocationRestoreNote, DocumentApp.getUi().ButtonSet.OK);
+    if (!quiet) DocumentApp.getUi().alert('Done', `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.` + reallocationRestoreNote, DocumentApp.getUi().ButtonSet.OK);
   } catch (e) {
     // UI not available in this context
   }
+  return {
+    ok: true,
+    message: `Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.` + reallocationRestoreNote,
+    agendaItems: filteredAgendaItems.length,
+    tdocs: allTdocs.length,
+    note: reallocationRestoreNote
+  };
 }
 
 /**
@@ -10329,15 +10865,25 @@ function addTdocTablesOnly() {
   }
 }
 
-function collectEmailDiscussionOnly() {
+// TEMPLATE-002C: each single step is a non-interactive core (also a Full
+// Build phase) and a menu wrapper that keeps its completion pop-up.
+function collectEmailDiscussionCore_() {
   const cfg = getCollectorConfig_();
   checkRSSFeed_(cfg);
+}
+
+function collectEmailDiscussionOnly() {
+  collectEmailDiscussionCore_();
   DocumentApp.getUi().alert('Success', 'E-mail discussion collection completed.', DocumentApp.getUi().ButtonSet.OK);
 }
 
-function collectRevisionsOnly() {
+function collectRevisionsCore_() {
   const cfg = getCollectorConfig_();
   updateRevisions_(cfg);
+}
+
+function collectRevisionsOnly() {
+  collectRevisionsCore_();
   DocumentApp.getUi().alert('Success', 'Revision collection completed.', DocumentApp.getUi().ButtonSet.OK);
 }
 
@@ -12687,6 +13233,9 @@ function getBuildReadiness_(context) {
  * meetings are never blocked here (legacy fallbacks keep working).
  */
 function assertMeetingReadyToBuild_(context) {
+  // TEMPLATE-002B: never build or update in the master template (a
+  // background context is the CENTRAL scheduler, which has no template).
+  if (!context) assertNotTemplateMaster_();
   const readiness = getBuildReadiness_(context);
   if (readiness.ready) return;
   throw new Error('Cannot build report yet.\n\n' +
@@ -12942,7 +13491,7 @@ function discoverAgendaForConfigDialog(meetingIdInput, coreResolved) {
  *   3gpp_tsg_sa4_fs_6g_med@list.etsi.org -> FS_6G_MED
  *   3gpp_tsg_sa_wg4_mbs@list.etsi.org    -> MBS
  *
- * The general SA4 list (3GPP_TSG_SA_WG4, main 6G/Liaison/New reports) names
+ * The general SA4 list (3GPP_TSG_SA_WG4, main Liaison/New reports) names
  * no topic, so the report family's SWG name (getReportConfig_().DRAFTS_FOLDER,
  * e.g. 6G -> FS_6G_MED) is used instead. Returns null when nothing usable
  * remains; the tag may never contain a comma, bracket or whitespace.
@@ -13431,20 +13980,37 @@ function sanitizeEmailExportFilename_(name) {
  *   no title:                         [FS_6G_MED,<agendaItem>,<deadlineText>][<tdoc>] Discussion
  *   no agendaItem, deadline, or title: [FS_6G_MED][<tdoc>] Discussion
  *
- * ADDON-009: `listTag` (deriveEmailExportListTag_()) replaces Legacy's
- * constant FS_6G_MED; it is required -- never defaulted or invented.
+ * ADDON-009: `listTag` (deriveEmailExportListTag_()) replaced Legacy's
+ * constant FS_6G_MED as the first field.
+ *
+ * TEMPLATE-002C (decision 2026-10-01): that first field is gone. It was a
+ * report-family / list label ("MBS", "FS_6G_MED"), not the work item, and
+ * it is redundant next to the agenda item. Nothing replaces it -- no work
+ * item code either. Each remaining part has its own bracket, in the old
+ * order:
+ *
+ *   old   [<tag>,<agendaItem>,<deadlineText>][<tdoc>] Discussion: <title>
+ *   new   [<agendaItem>][<deadlineText>][<tdoc>] Discussion: <title>
+ *
+ * e.g. "[2.5][26-10-15-1500CEST][S4aI260082] Discussion: ...". The
+ * deadline token, the TDoc bracket and "Discussion: <title>" are exactly
+ * as before; an unavailable agenda item or deadline is still simply
+ * omitted:
+ *
+ *   no deadline:                       [<agendaItem>][<tdoc>] Discussion: <title>
+ *   no agendaItem:                     [<deadlineText>][<tdoc>] Discussion: <title>
+ *   no agendaItem or deadline:         [<tdoc>] Discussion: <title>
+ *   no title:                          [<agendaItem>][<deadlineText>][<tdoc>] Discussion
+ *
+ * The collector is unaffected: it finds the TDoc identifier anywhere in
+ * the subject (findSA4DocumentIdsInText_()).
  */
-function buildEmailExportSubject_(tdocNumber, title, agendaItem, deadlineText, listTag) {
-  const tag = String(listTag || '').trim();
-  if (!tag) throw new Error('buildEmailExportSubject_: a list tag is required.');
+function buildEmailExportSubject_(tdocNumber, title, agendaItem, deadlineText) {
   const t = String(title || '').trim();
   const a = String(agendaItem || '').trim();
   const dl = String(deadlineText || '').trim();
-  const bracketParts = [tag];
-  if (a) bracketParts.push(a);
-  if (dl) bracketParts.push(dl);
-  const listTagBracket = '[' + bracketParts.join(',') + ']';
-  const base = `${listTagBracket}[${tdocNumber}] Discussion`;
+  const prefix = (a ? '[' + a + ']' : '') + (dl ? '[' + dl + ']' : '');
+  const base = `${prefix}[${tdocNumber}] Discussion`;
   return t ? `${base}: ${t}` : base;
 }
 
@@ -13902,6 +14468,10 @@ function buildEmlContent_(headers, htmlBody) {
   lines.push('X-Unsent: 1');
   if (h.from) lines.push('From: ' + h.from);
   if (h.to) lines.push('To: ' + h.to);
+  // TEMPLATE-002C: replies go to the meeting's mailing list, not to the
+  // sender. Written only when the caller supplies it -- never derived from
+  // From here.
+  if (h.replyTo) lines.push('Reply-To: ' + h.replyTo);
   lines.push('Subject: ' + encodeMimeHeaderValue_(h.subject || ''));
   if (h.date) lines.push('Date: ' + h.date);
   lines.push('Content-Type: text/html; charset=UTF-8');
@@ -13973,14 +14543,14 @@ function buildEmlContent_(headers, htmlBody) {
  * 2.15.2: `documentUrl` (buildEmailExportDocumentUrl_()) makes links into
  * the report document absolute (resolveEmailExportLinkUrl_()).
  */
-function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl) {
-  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(meta.tdoc, meta.title, meta.agendaItem, subjectDeadlineToken || deadlineText, listTag);
+function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl, replyToAddress) {
+  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(meta.tdoc, meta.title, meta.agendaItem, subjectDeadlineToken || deadlineText);
   const tableHtml = docTableToHtml_(table, documentUrl);
   const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
   const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
   const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
   const from = String(senderAddress || '').trim();
-  const eml = buildEmlContent_({ to: mailingList || '', from: from, subject: subject }, htmlBody);
+  const eml = buildEmlContent_({ to: mailingList || '', from: from, replyTo: String(replyToAddress || '').trim(), subject: subject }, htmlBody);
   const fileName = sanitizeEmailExportFilename_(listTag + '_' + meta.tdoc) + '.eml';
   return { fileName: fileName, eml: eml, subject: subject };
 }
@@ -13996,15 +14566,15 @@ function buildEmailExportForTdocTable_(table, meta, mailingList, subjectOverride
  * order given, under one shared subject/intro/discussion/closing.
  * ADDON-009: `listTag` as for buildEmailExportForTdocTable_().
  */
-function buildEmailExportForGroup_(tables, metas, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl) {
+function buildEmailExportForGroup_(tables, metas, mailingList, subjectOverride, introText, discussionText, deadlineText, revisionUploadUrl, senderAddress, subjectDeadlineToken, listTag, documentUrl, replyToAddress) {
   const primary = metas[0];
-  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(primary.tdoc, primary.title, primary.agendaItem, subjectDeadlineToken || deadlineText, listTag);
+  const subject = (subjectOverride && subjectOverride.trim()) || buildEmailExportSubject_(primary.tdoc, primary.title, primary.agendaItem, subjectDeadlineToken || deadlineText);
   const tableHtml = tables.map(function (t) { return docTableToHtml_(t, documentUrl); }).join('<br>');
   const introHtml = introText ? plainTextToSafeHtmlParagraphs_(introText) : null;
   const discussionHtml = discussionText ? plainTextToSafeHtmlParagraphs_(discussionText) : null;
   const htmlBody = buildEmailExportHtmlBody_(tableHtml, introHtml, discussionHtml, deadlineText, revisionUploadUrl, listTag);
   const from = String(senderAddress || '').trim();
-  const eml = buildEmlContent_({ to: mailingList || '', from: from, subject: subject }, htmlBody);
+  const eml = buildEmlContent_({ to: mailingList || '', from: from, replyTo: String(replyToAddress || '').trim(), subject: subject }, htmlBody);
   const fileNameBase = metas.length === 1 ? metas[0].tdoc : metas.map(function (m) { return m.tdoc; }).join('_');
   const fileName = sanitizeEmailExportFilename_(listTag + '_' + fileNameBase) + '.eml';
   return { fileName: fileName, eml: eml, subject: subject };
@@ -14375,15 +14945,38 @@ function resolveEmailExportConfiguration_() {
     throw new Error((recipientDerivation.error || 'Could not derive a discussion recipient from the configured Mailing List.') + ' Open Configure Meeting Settings and set the Mailing List before generating discussion e-mails.');
   }
   const recipientAddress = recipientDerivation.recipient;
+  // TEMPLATE-002C: Reply-To is the effective mailing list itself -- the same
+  // getMeetingContext_() value the recipient comes from (an ad-hoc meeting's
+  // Mailing List, else the report-family list; a main meeting always the
+  // family list), normalized with the collector's rule. It is never the
+  // sender, and a list that cannot be normalized refuses the export instead
+  // of producing a misleading header.
+  const replyToAddress = deriveEmailExportReplyToFromMailingList_(mailingList);
+  if (!replyToAddress) {
+    throw new Error('Could not derive the Reply-To address from the Mailing List "' + mailingList.replace(/[\r\n]/g, ' ') +
+      '". Open Configure Meeting Settings and set the Mailing List to the ETSI list name (or its ...@list.etsi.org address) before generating discussion e-mails.');
+  }
+  // The list tag names the files and the default introduction; it is no
+  // longer part of the subject (TEMPLATE-002C).
   const listTag = deriveEmailExportListTag_(recipientAddress, getReportConfig_().DRAFTS_FOLDER);
   if (!listTag) {
-    throw new Error('Could not derive the discussion subject tag from the Mailing List "' + mailingList + '".');
+    throw new Error('Could not derive the discussion list tag from the Mailing List "' + mailingList + '".');
   }
   const revisionUploadUrl = resolveEmailExportRevisionUploadUrl_();
   if (!isSafeEmailExportUrl_(revisionUploadUrl)) {
     throw new Error('Revision upload location is not configured or is invalid (checked getMeetingContext_().sources.revisionsUrl / REVISIONS_URL) -- cannot generate discussion e-mails without a real upload destination.');
   }
-  return { senderAddress: senderAddress, recipientAddress: recipientAddress, listTag: listTag, revisionUploadUrl: revisionUploadUrl };
+  return { senderAddress: senderAddress, recipientAddress: recipientAddress, replyToAddress: replyToAddress, listTag: listTag, revisionUploadUrl: revisionUploadUrl };
+}
+
+/**
+ * TEMPLATE-002C: "<list>@list.etsi.org" for an effective mailing list given
+ * as "<list>" or "<list>@list.etsi.org" (normalizeEtsiListName_(), the
+ * collector's rule; the list name keeps its spelling). '' for anything else.
+ */
+function deriveEmailExportReplyToFromMailingList_(mailingList) {
+  const name = normalizeEtsiListName_(mailingList);
+  return name ? name + '@list.etsi.org' : '';
 }
 
 /**
@@ -14542,7 +15135,7 @@ function generateTdocDiscussionEmails(selections, globalText) {
       // LEGACY-UPGRADE-006H: To (recipientAddress, derived from the Mailing
       // List) and From (senderAddress, configured DISCUSSION_EMAIL_SENDER)
       // are DELIBERATELY DIFFERENT values.
-      const email = buildEmailExportForTdocTable_(table, meta, exportConfig.recipientAddress, null, introText, discussionText, deadlineText, exportConfig.revisionUploadUrl, exportConfig.senderAddress, subjectDeadlineToken, exportConfig.listTag, documentUrl); // no subjectOverride: always canonical
+      const email = buildEmailExportForTdocTable_(table, meta, exportConfig.recipientAddress, null, introText, discussionText, deadlineText, exportConfig.revisionUploadUrl, exportConfig.senderAddress, subjectDeadlineToken, exportConfig.listTag, documentUrl, exportConfig.replyToAddress); // no subjectOverride: always canonical
       return { tdoc: meta.tdoc, fileName: email.fileName, eml: email.eml };
     });
 

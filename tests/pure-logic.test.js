@@ -77,7 +77,7 @@ function check(name, actual, expected) {
 {
   console.log('report type -> mailing list / drafts folder (observed via getReportConfig_)');
   const expected = {
-    '6G':      { mailingList: '3GPP_TSG_SA_WG4',       draftsFolder: 'FS_6G_MED' },
+    '6G':      { mailingList: '3GPP_TSG_SA4_FS_6G_MED', draftsFolder: 'FS_6G_MED' }, // 2.17.2: the 6G family's own list
     Audio:     { mailingList: '3GPP_TSG_SA_WG4_AUDIO',  draftsFolder: 'Audio' },
     Video:     { mailingList: '3GPP_TSG_SA_WG4_VIDEO',  draftsFolder: 'Video' },
     MBS:       { mailingList: '3GPP_TSG_SA_WG4_MBS',    draftsFolder: 'MBS' },

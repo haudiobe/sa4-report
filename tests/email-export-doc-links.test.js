@@ -150,7 +150,7 @@ console.log('generateTdocDiscussionEmails() -- the .eml carries the absolute lin
   check('heading link resolved too', out.html.indexOf('<a href="' + DOC_URL + '#heading=h.4b2x9k1">Section 5.4</a>') !== -1, true);
   check('external contribution link unchanged', out.html.indexOf('<a href="https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/Ad-hoc_FS_6G_MED/Docs/S4aP260069.zip">S4aP260069</a>') !== -1, true);
   check('still quoted-printable with soft line breaks (lines <= 76)', out.raw.split('\r\n\r\n').slice(1).join('').split('\r\n').every((l) => l.length <= 76), true);
-  check('subject unchanged', /^Subject: \[FS_6G_MED,5\.4,26-10-15-1500CEST\]\[S4aP260069\] Discussion: pCR on Editorial Updates to TR 26\.870$/m.test(out.raw), true);
+  check('subject (TEMPLATE-002C form: no tag)', /^Subject: \[5\.4\]\[26-10-15-1500CEST\]\[S4aP260069\] Discussion: pCR on Editorial Updates to TR 26\.870$/m.test(out.raw), true);
 }
 
 {
