@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.15.2 (2026-09-30)
+ * Version: 2.16.0 (2026-10-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,33 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.16.0 (2026-10-01)
+ *   - TEMPLATE-002A (Legacy parity): the fixes accepted in the Legacy
+ *     bound script (sa4-report-legacy b95e06e, live on 86178) that this
+ *     file did not have. Legacy's own regression suites now run here
+ *     (tests/legacy-parity-*.test.js).
+ *   - Fixed (Legacy BUGFIX-LEGACY-002): duplicate TDoc tables. A TDoc
+ *     listed under two agenda groups in one Continuous Update run was
+ *     inserted twice, and every further run of "Legacy: Build Initial
+ *     Report" duplicated every TDoc table. A TDoc inserted in a run now
+ *     counts as existing at once, and the web-sheet import skips a TDoc
+ *     that already has a table. Existing duplicates are left alone.
+ *   - Fixed (Legacy LEGACY-0099): the web-sheet import filed a TDoc
+ *     reallocated to Removed/Withdrawn/N/A under a literal "Removed" item;
+ *     it now skips it, like the build and Continuous Update already did
+ *     (ADDON-008A1b).
+ *   - Fixed (Legacy BUGFIX-LEGACY-003): e-mail collector. A stored
+ *     EMAIL_START_DATE is used (2026-08-21 remains the fallback). The A1
+ *     archive reads the same list as RSS instead of always the general
+ *     SA4 list. A Collector Configuration table that only repeats the
+ *     family default no longer masks an ad-hoc meeting's Mailing List; an
+ *     explicit LIST_NAME also sets the RSS URL and an explicit RSS_URL_V2
+ *     also sets the archive list. A Mailing List saved as
+ *     "<list>@list.etsi.org" is read as that list.
+ *   - Unchanged on purpose: the meeting-neutral discussion e-mail
+ *     introduction, the subject tag derived from the mailing list, the
+ *     Meeting Configuration dialog (no e-mail start date field), and the
+ *     hourly-only trigger interval of the add-on runtime.
  * 2.15.2 (2026-09-30)
  *   - Fixed: "Manage Auto-Update Trigger" offered 15/30-minute intervals
  *     that CENTRAL cannot create -- add-on time-driven triggers run at most
