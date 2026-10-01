@@ -436,6 +436,14 @@ console.log('5. Update Report Now (B): the complete update');
   const src = functionSource(CREATOR, 'updateReportNow');
   check('updateReportNow(): continuousUpdateCore_() once, no UI call (source)',
     [(src.match(/continuousUpdateCore_\(\)/g) || []).length, /getUi|ui\.|\.alert\(|updateReportIncremental|collectorUpdate_/.test(src.replace(/^\s*\/\/.*$/gm, ''))], [1, false]);
+  // The runtime never saves or flushes the document itself (decided with
+  // 2.17.3: no saveAndClose()). The TEMPLATE-002C suite asserts this for
+  // Code.js; this is the same rule for the template-only file, which now
+  // holds a document-changing entry point of its own. Carried over from
+  // the T-2026.10.2 post-build diagnostic (d1dcb6c), whose other checks
+  // described the pop-up that 2.17.3 removed.
+  check('ReportCreator.js never saves or flushes the document explicitly (source)',
+    /saveAndClose\s*\(|\.flush\s*\(/.test(CREATOR.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')), false);
 }
 
 console.log('5. Update Report Now (B): failures are visible');
