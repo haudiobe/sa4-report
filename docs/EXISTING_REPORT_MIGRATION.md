@@ -7,7 +7,7 @@
 | Report | State |
 |---|---|
 | 6G (meeting 86178) | **COMPLETE / LIVE on T-2026.10.4** (§2) |
-| MBS | Preflight done, manual inventory next (§3). Not migrated. |
+| MBS (meeting 86172) | Rehearsal passed (§4). Live migration not started: the live document has no known bound script yet. |
 
 ---
 
@@ -139,3 +139,48 @@ Deleting the entry or the saved state has no menu item and would mean running co
 Two cautions: re-enabling later overwrites CENTRAL's copy with the add-on's Document
 Properties; and after migration nobody should run CENTRAL's menu actions in the MBS document,
 because CENTRAL would work from its own, older ledgers.
+
+---
+
+## 4. MBS: inventory and rehearsal (accepted)
+
+### 4.1 Live inventory (manual, read-only)
+
+- Document "MBS SWG Minutes – SA4-e (AH) MBS SWG post 137-e"; meeting 86172, ad-hoc, family MBS.
+- No agenda TDoc; TDoc list URL for meeting 86172; Mailing List `3GPP_TSG_SA_WG4_MBS`; sender
+  `reporter@example.com`; revisions / drafts URL saved; e-mail preview snippets enabled;
+  Reviewer API token configured in the existing runtime.
+- No `LIST_NAME` and no `EMAIL_START_DATE` in the document, so no Key/Value override table.
+- **Not registered with the CENTRAL scheduler.** The document is updated by a per-document
+  Continuous Update trigger, hourly, with abstracts enabled. This corrects §3.2 and §3.4: there
+  is no registry entry to disable, and the MBS state is in one place, the add-on's Document
+  Properties for this document. What has to be stopped at migration is that trigger.
+
+### 4.2 Rehearsal
+
+- Copy: document `REDACTED-MBS-REHEARSAL-DOCUMENT-ID`, bound script
+  `REDACTED-MBS-REHEARSAL-SCRIPT-ID`.
+- The copy's bound project was Google's empty default project: the copy inherited no report
+  code, so the original has no bound report script.
+- T-2026.10.4 was pushed with a one-time, separately approved `--force` (manifest change) and
+  verified by a fresh pull: seven files, byte-identical to the accepted release.
+- The first Update Report Now was refused by the ad-hoc readiness guard, before any document
+  change: the copy had no agenda source and no TDoc list URL, because only *Resolve* had been
+  used. *Discover Agenda / TDocs* supplied both: validated `agenda.csv` fallback (18 of 53
+  items, sections 2 and 3) and the TDoc list URL for meeting 86172.
+- Configured: Mailing List `3GPP_TSG_SA_WG4_MBS`, sender `reporter@example.com`, Email
+  Collection Start Date `2026-08-21`, revisions URL discovered, token entered by hand.
+- Update Report Now then completed. The version-history comparison showed no unexpected
+  changes, and the existing e-mail discussion and revision information was reconstructed
+  sufficiently.
+
+**Decision: no CENTRAL ledger export or import is required. MBS rehearsal passed.**
+
+### 4.3 For the live migration
+
+- A bound script must first exist in the live document; none is known. Creating one is a
+  change to the original and is the user's step.
+- Configure Meeting needs *Resolve*, then *Discover Agenda / TDocs*, then Save.
+- The start date must be set to `2026-08-21` explicitly.
+- The add-on keeps its own state for the document, untouched by the migration, so going back
+  means restarting the add-on's hourly trigger.
