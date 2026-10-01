@@ -29,8 +29,14 @@
  * Pure functions (no Apps Script service calls) are the tested core; the
  * *With_(deps) functions take every service as an injected dependency so the
  * control flow is tested with fakes; the public menu/RPC functions at the
- * bottom are the only code that touches live services, and they are
- * UNVERIFIED until the TEMPLATE-001 copy experiment has passed.
+ * bottom are the only code that touches live services.
+ *
+ * TEMPLATE-001 (live, 2026-10-01, GO): a DriveApp.makeCopy() copy keeps the
+ * bound script as its own project (own Script ID), starts with empty
+ * property stores and no triggers, can read the description the creator
+ * wrote, and can create its own everyMinutes(30) trigger. The copy call in
+ * liveTemplateDeps_() is the one that was tested. The entry points
+ * themselves have not run live yet (TEMPLATE-006).
  *******************************/
 
 var TEMPLATE_BOOTSTRAP_SCHEMA_ = 'sa4-report-bootstrap/1';
@@ -386,8 +392,7 @@ function createReportFromTemplateWith_(deps, request) {
  *
  * deps: { release, activeDocumentId(), scriptId(), nowIso(),
  * documentProperties, getOwnDescription(), setOwnDescription(text),
- * persistConfiguration(config), buildReadiness() -> readiness,
- * projectTriggerHandlers() -> [names] }.
+ * persistConfiguration(config), buildReadiness() -> readiness }.
  */
 function finishReportSetupWith_(deps) {
   const release = deps.release;
@@ -429,16 +434,13 @@ function finishReportSetupWith_(deps) {
   } catch (e) {
     warnings.push('The file description could not be tidied up (' + e.message + '); this is harmless.');
   }
-  // Installable triggers belong to one script project, so a fresh copy
-  // should have none. Report (never delete) anything unexpected.
-  const handlers = deps.projectTriggerHandlers();
-  if (handlers.length) warnings.push('Unexpected triggers already exist in this report: ' + handlers.join(', ') + '.');
 
   return { status: 'configured', readiness: deps.buildReadiness(), pending: parsed.payload.pending || [], warnings: warnings };
 }
 
 // ------------------------------------------------------------------
-// Live entry points -- UNVERIFIED until TEMPLATE-001 has passed.
+// Live entry points -- copy semantics verified by TEMPLATE-001; first live
+// run of these functions is TEMPLATE-006.
 // Public names (no trailing "_") because menus and google.script.run can
 // only call public functions (RESOLVER-HOTFIX).
 // ------------------------------------------------------------------
@@ -462,10 +464,7 @@ function liveTemplateDeps_() {
     setDescription: function (id, text) { DriveApp.getFileById(id).setDescription(text); },
     trashFile: function (id) { DriveApp.getFileById(id).setTrashed(true); },
     persistConfiguration: function (config) { persistConfigurationSettings_(config); },
-    buildReadiness: function () { return getBuildReadiness_(); },
-    projectTriggerHandlers: function () {
-      return ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
-    }
+    buildReadiness: function () { return getBuildReadiness_(); }
   };
 }
 

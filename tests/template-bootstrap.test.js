@@ -7,8 +7,9 @@
  * applyAdhocSourceDiscovery_ -> computeResolvedMeetingPreview_) against the
  * captured 86172/85916 fixtures, and the first run persists through the REAL
  * persistConfigurationSettings_() and is checked with the REAL
- * getBuildReadiness_(). Drive/Docs/ScriptApp are injected fakes: what they
- * do live is exactly what the TEMPLATE-001 experiment must confirm.
+ * getBuildReadiness_(). Drive/Docs/ScriptApp are injected fakes that behave
+ * as TEMPLATE-001 found live (2026-10-01): the copy is a fresh project with
+ * empty property stores and no triggers, and can read its description.
  *
  * Run: node tests/template-bootstrap.test.js
  */
@@ -96,7 +97,7 @@ function fakeCreatorDeps(s, overrides) {
 function firstRunFor(description, overrides) {
   const loaded = loadTemplateRuntime({ release: RELEASE, documentProperties: (overrides && overrides.props) || {} });
   const s = loaded.sandbox;
-  const state = { description, triggers: (overrides && overrides.triggers) || [] };
+  const state = { description };
   const deps = Object.assign({
     release: RELEASE,
     activeDocumentId: () => NEW_DOC_ID,
@@ -106,8 +107,7 @@ function firstRunFor(description, overrides) {
     getOwnDescription: () => state.description,
     setOwnDescription: (t) => { state.description = t; },
     persistConfiguration: (config) => s.persistConfigurationSettings_(config),
-    buildReadiness: () => plain(s.getBuildReadiness_()),
-    projectTriggerHandlers: () => state.triggers
+    buildReadiness: () => plain(s.getBuildReadiness_())
   }, (overrides && overrides.deps) || {});
   return { s, deps, state, docProps: loaded.docProps };
 }
@@ -317,11 +317,6 @@ console.log('first-run guards');
   const other = firstRunFor(description, { props: { MEETING_ID: '12345' } });
   check('never overwrites a different meeting', plain(other.s.finishReportSetupWith_(other.deps)).errors,
     ['This document is already configured for meeting 12345.']);
-
-  const withTrigger = firstRunFor(description, { triggers: ['continuousUpdate'] });
-  const wt = plain(withTrigger.s.finishReportSetupWith_(withTrigger.deps));
-  check('an inherited trigger is reported, not silently kept or deleted',
-    wt.warnings, ['Unexpected triggers already exist in this report: continuousUpdate.']);
 }
 
 // ============================================================ template role + intervals

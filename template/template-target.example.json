@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to template-target.json after TEMPLATE-001 created the master template. Both ids come from that one document: the Doc id from its URL, the Script id from Extensions > Apps Script > Project Settings.",
+  "_comment": "Copy to template-target.json once the master template document exists (TEMPLATE-005). Both ids come from that one document: the Doc id from its URL, the Script id from Extensions > Apps Script > Project Settings.",
   "templateDocumentId": "<template Google Doc id>",
   "templateScriptId": "<template bound Script id>"
 }

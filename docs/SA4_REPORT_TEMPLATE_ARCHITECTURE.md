@@ -4,6 +4,10 @@ Design study, 2026-09-30 (overnight). Branch `design/report-template-architectur
 master `d7c23bc` (CENTRAL 2.15.2). Nothing in production was changed: no clasp push, no Google
 file created or modified, no trigger, deployment, version or property touched.
 
+**Status, 2026-10-01: TEMPLATE-001 is LIVE VERIFIED / GO** (§19.6). Thomas ran the copy probe
+in scratch Google Docs. Programmatic template copying works, so the architecture below is the
+recommended implementation path. The next stage is TEMPLATE-002A (§21).
+
 Evidence labels used throughout:
 
 | Label | Meaning |
@@ -13,7 +17,8 @@ Evidence labels used throughout:
 | **PROJECT HISTORY** | Recorded as observed live in this project's changelog/LEGACY_UPGRADES.md. |
 | **COMMUNITY** | Stated by experienced community sources, not by Google docs. |
 | **INFERRED** | My conclusion from the above; not confirmed. |
-| **UNKNOWN** | Needs the TEMPLATE-001 experiment (§19). |
+| **LIVE VERIFIED** | Observed by Thomas in real Google Docs with the TEMPLATE-001 probe on 2026-10-01 (§19.6). |
+| **UNKNOWN** | Not established. |
 
 ---
 
@@ -42,10 +47,28 @@ Why it is the simplest option that works:
 one-time consent screens for that report. A main meeting, or an ad-hoc meeting whose family
 is ambiguous, adds one choice (the report family).
 
-**Go/no-go gate:** whether a *programmatic* copy (`DriveApp.makeCopy`) keeps the bound script
-is backed by community sources, not by Google's documentation. The same goes for whether
-properties and triggers stay behind in the template. One 10-minute probe (§19) settles all of
-this before any production step.
+**Go/no-go gate: passed.** The one open question was whether a *programmatic* copy
+(`DriveApp.makeCopy`) keeps the bound script. The TEMPLATE-001 probe confirmed it live on
+2026-10-01: the copy has its own document ID and its own script project, inherits no
+properties and no triggers, can use its own Document Properties, can read the description the
+creator wrote, and can create its own 30-minute trigger (§19.6).
+
+**Decision (2026-10-01).** One master Google Doc, "SA4 Report Template", holds the bound SA4
+report script. The primary new-report workflow is:
+
+1. Open SA4 Report Template.
+2. Choose "Create New SA4 Report".
+3. Enter the meeting ID.
+4. The template creates the new Google Doc with `DriveApp.makeCopy()`.
+5. Open the new report.
+6. Complete meeting setup / validation.
+7. Build the initial report.
+8. Optionally enable the normal bound-script continuous-update trigger.
+
+Each report is independent and pinned to the script version the template held when it was
+created. New reports need no CENTRAL add-on test deployment. Manual *File → Make a copy* is no
+longer the primary workflow; it remains a fallback only. Neither the Advanced Drive service
+nor the Apps Script API is needed to copy the bound script.
 
 A local, tested prototype exists (§12, §16). It is not deployed.
 
@@ -57,7 +80,7 @@ A local, tested prototype exists (§12, §16). It is not deployed.
 
 | Checkout | Script ID (`.clasp.json`) | What it is |
 |---|---|---|
-| `sa4-report-legacy/` (master `e564f70`) | `1jZOi…oznXA` | **Legacy**: 2.12.0 plus LEGACY-UPGRADE-002…006. The script bound to *"6G Media Minutes – SA4-e (AH) on FS_6G_MED"* (86178). 12,295 lines. |
+| `sa4-report-legacy/` (master `b95e06e` on 2026-10-01; `e564f70` when this study started) | `1jZOi…oznXA` | **Legacy**: 2.12.0 plus LEGACY-UPGRADE-002…006 and, since 2026-10-01, the integrated reallocation + ad-hoc e-mail release (deployed and live accepted). The script bound to *"6G Media Minutes – SA4-e (AH) on FS_6G_MED"* (86178). |
 | `sa4-report/` (master `d7c23bc`) | **`1jZOi…oznXA` (Legacy!)** | **CENTRAL source**: 2.15.2, 14,579 lines, 62 test files. `.clasp.json` is gitignored and points at the *Legacy* project. |
 | `sa4-report-central-addon/` (no git) | `13Dpx…zzKc` | Push directory for **CENTRAL**; `rootDir: ..\sa4-report`, so it pushes whatever branch `sa4-report` currently has checked out. |
 
@@ -131,21 +154,21 @@ collector are all document-relative. VERIFIED (repo).
 |---|---|---|
 | UI *File > Make a copy* copies the bound script? | **Yes.** "If they make a copy of the container file, they become the owner of the copy and can see and run a copy of the script." | DOCUMENTED ([bound scripts](https://developers.google.com/apps-script/guides/bound)) |
 | Source files copied? | Yes: "a copy of the script". | DOCUMENTED |
-| Programmatic copy (`DriveApp.File.makeCopy`, Drive `files.copy`) copies it? | **Very likely yes.** People write workarounds to *strip* the bound script from programmatic copies, which only makes sense if it is copied. Google's docs say nothing either way. | COMMUNITY (tanaike, "Copying Google Spreadsheet by Removing Container-Bound Script"; *Better Sheets*: "copying the spreadsheet copies the script container"), then **UNKNOWN → TEMPLATE-001** |
-| New project / new Script ID for the copy? | Yes, "a copy of the script" is a separate project. | INFERRED, then TEMPLATE-001 checks `ScriptApp.getScriptId()` |
-| Document Properties copied? | No: "The data in Properties Service will never get copied, regardless of whether you use Script, Document or User properties." | COMMUNITY (Alan Wells, apps-script community group); Google: "Properties are never shared between scripts" (DOCUMENTED, [properties](https://developers.google.com/apps-script/guides/properties)). TEMPLATE-001 confirms. |
-| Script Properties copied? | No (same sources). | COMMUNITY → TEMPLATE-001 |
-| User Properties copied? | No; they are per user per script. | DOCUMENTED scope + COMMUNITY |
-| Installable triggers copied? | No. Triggers belong to one project and one user; the copy is a new project. | INFERRED → TEMPLATE-001 |
-| Authorizations copied? | No. Authorization is per project, so the copy asks for consent on first use. | INFERRED from DOCUMENTED per-project authorization ([authorization](https://developers.google.com/apps-script/guides/services/authorization)) → TEMPLATE-001 |
+| Programmatic copy (`DriveApp.File.makeCopy`) copies it? | **Yes.** The copy made by `makeCopy(title, folder)` had the bound script and a working menu. (Drive `files.copy` was not tested and is not used.) | **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01); previously COMMUNITY |
+| New project / new Script ID for the copy? | **Yes.** Original `REDACTED-PROBE-SCRIPT-ID`, programmatic copy `REDACTED-COPY-SCRIPT-ID`; the document ID differs too. | **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01) |
+| Document Properties copied? | **No.** The original's marker was missing in the copy, and the copy could write and read its own. | **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01); Google: "Properties are never shared between scripts" ([properties](https://developers.google.com/apps-script/guides/properties)) |
+| Script Properties copied? | **No.** Marker missing in the copy. | **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01) |
+| User Properties copied? | **No.** Marker missing in the copy (they are per user per script). | **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01) |
+| Installable triggers copied? | **No.** The original owned a 30-minute trigger; the copy inherited none. | **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01) |
+| Authorizations copied? | No. Authorization is per project, so the copy asks for consent on first use. | INFERRED from DOCUMENTED per-project authorization ([authorization](https://developers.google.com/apps-script/guides/services/authorization)); the per-copy prompt was not part of the reported TEMPLATE-001 result |
 | Advanced service settings / OAuth scopes preserved? | Yes. They live in `appsscript.json`, a project file, which is copied with the source. | INFERRED. Not part of TEMPLATE-001: copying does not use the Advanced Drive service (§19); the first real template report exercises it (TEMPLATE-006). |
-| `onOpen` works in the copy? | Yes, before any authorization: a simple trigger "runs automatically whenever a file is opened by a user who has edit access". | DOCUMENTED; TEMPLATE-001 checks the menu appears |
+| `onOpen` works in the copy? | Yes, before any authorization: a simple trigger "runs automatically whenever a file is opened by a user who has edit access". | DOCUMENTED; the menu worked in the copy (LIVE VERIFIED). Whether it showed before the permission prompt was not reported. |
 | Deployment/version metadata? | Irrelevant. Bound reports are not deployed; the release is recorded in `Release.js` and copied as source. | Design choice |
-| Drive description readable/writable by the copy's script? | Yes with the `drive` scope already in the manifest (`File.getDescription/setDescription`). | DOCUMENTED API; TEMPLATE-001 exercises it |
-| Is the description itself copied by `makeCopy`? | Not relied upon. The creator writes the description *after* copying, and the payload carries the target document ID. | TEMPLATE-001 records it |
+| Drive description readable by the copy's script? | **Yes.** The text the creator wrote after copying was readable from the copy. | **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01) |
+| Is the description itself copied by `makeCopy`? | Not relied upon, and not reported in the TEMPLATE-001 result. The creator writes the description *after* copying, and the payload carries the target document ID. | UNKNOWN (harmless) |
 | Can a creator write the copy's Document Properties? | **No.** Properties belong to a script project; the template's project cannot write the copy's store. | DOCUMENTED ("never shared between scripts") |
-| Apps Script API alternative (`projects.create` with `parentId`) | Exists: it creates a new project bound to a given Doc (scope `script.projects`). Kept as a fallback if TEMPLATE-001 fails (§4, option E2). | DOCUMENTED ([projects.create](https://developers.google.com/apps-script/api/reference/rest/v1/projects/create)) |
-| Time-driven intervals | `everyMinutes(n)`: "n must be 1, 5, 10, 15 or 30"; `everyHours(n)`. | DOCUMENTED ([ClockTriggerBuilder](https://developers.google.com/apps-script/reference/script/clock-trigger-builder)) |
+| Apps Script API alternative (`projects.create` with `parentId`) | Exists, but is **not needed**: `DriveApp.makeCopy` carries the bound script. | DOCUMENTED ([projects.create](https://developers.google.com/apps-script/api/reference/rest/v1/projects/create)); superseded by TEMPLATE-001 |
+| Time-driven intervals | `everyMinutes(n)`: "n must be 1, 5, 10, 15 or 30"; `everyHours(n)`. A copied bound script created its own `everyMinutes(30)` trigger. | DOCUMENTED ([ClockTriggerBuilder](https://developers.google.com/apps-script/reference/script/clock-trigger-builder)); creation **LIVE VERIFIED** (TEMPLATE-001, 2026-10-01). The first execution was not waited for (§19.6). |
 | Add-on limit | "An add-on can use a time-driven trigger once per hour at most." Bound scripts are not add-ons. | DOCUMENTED ([installable triggers](https://developers.google.com/apps-script/guides/triggers/installable)); PROJECT HISTORY: 2.15.1 failed live with 30 min in CENTRAL |
 | Trigger identity | "Installable triggers always run under the account of the person who created them." | DOCUMENTED |
 | Quotas (consumer account) | **Triggers total runtime 90 min/day** (across all scripts of the user); 6 min per execution; 20 triggers per user per script; 250 documents created per day. | DOCUMENTED ([quotas](https://developers.google.com/apps-script/guides/services/quotas)) |
@@ -184,8 +207,8 @@ Notes that decided it:
   (deployments are exactly the kind of setup to avoid). D gets the same result by putting the
   creator in the template, whose code is the release anyway.
 - **E2** avoids relying on copy semantics, but it needs the user-level Apps Script API toggle,
-  the `script.projects` scope and a place to host source bundles. It is the last-resort
-  fallback if TEMPLATE-001 shows that copies drop the script (§19.5).
+  the `script.projects` scope and a place to host source bundles. TEMPLATE-001 showed it is
+  not needed.
 - **E3** (considered, rejected): a library that every report references. It keeps one copy
   of the code, but library versions need deployments, and "HEAD" mode would silently update
   every report. That is the CENTRAL risk again.
@@ -213,7 +236,10 @@ Normal Legacy-style bound report: Build, Continuous Update trigger (15/30/60), e
 ```
 
 - **Canonical source:** `sa4-report` master. One `Code.js` serves CENTRAL (for as long as it
-  lives) and the template. Legacy stays a frozen, separate lineage.
+  lives) and the template; there is never a template-specific copy of `Code.js`. Legacy is a
+  separate lineage that is still receiving accepted fixes (a release went live on 2026-10-01),
+  so everything accepted in Legacy has to be present in `sa4-report` master before the first
+  template release. That is the TEMPLATE-002A gate (§21).
 - **Runtime flavor** is set by the presence of `Release.js` (`SA4_RELEASE_`), which only
   template bundles contain. `Code.js` checks it at call time with
   `typeof SA4_RELEASE_ !== 'undefined'`, so file load order does not matter. CENTRAL and
@@ -264,7 +290,7 @@ Meeting ID  [ 86172 ]  (Look up)
 After *Create*: "✅ Created. [Open report]" (new tab). **In the new report:** a placeholder page
 (§8) and the normal `⚠️Scripts⚠️` menu with `🚀 Finish Setup & Build` at the top. Clicking it
 shows Google's consent screens for this report once, then the same item is clicked again (the
-usual Apps Script behavior after first consent: INFERRED, confirmed by TEMPLATE-001). The
+usual Apps Script behavior after first consent: INFERRED; not part of the reported TEMPLATE-001 result). The
 setup dialog then shows:
 
 ```
@@ -379,7 +405,7 @@ so Thomas is never left with a half-prepared report.
 5. `persistConfigurationSettings_(config)` (the Reviewer token is untouched: `apiTokenAction: 'keep'`).
 6. Record provenance and set `SA4_BOOTSTRAP_STATE = done` last, so an interrupted run is simply repeated.
 7. Replace the description with the provenance line.
-8. Report any installable triggers found (never delete them silently), then show readiness
+8. Show readiness
    from the real `getBuildReadiness_()`.
 
 In TEMPLATE-003, `configureMeetingSettings` and `runFullReportBuild` call the same
@@ -453,7 +479,7 @@ There is no mass-update command, by design.
 | CENTRAL pushes whatever branch is checked out | Recommend building CENTRAL pushes with the same bundle tool (a `central` target) |
 | Wrong project confused with the right one | Release ID prefix `T-`; `Release.js` shown in the menu; the script ID is printed before the push |
 | Template accidentally configured or built | `assertNotTemplateDocument_` on every mutating entry point |
-| Template holds a trigger that copies might inherit | Guard in `createContinuousTrigger`; the first run reports any trigger it finds |
+| Template holds a trigger that copies might inherit | Triggers are not copied (LIVE VERIFIED); the guard in `createContinuousTrigger` keeps the template from owning one anyway |
 
 ---
 
@@ -463,16 +489,15 @@ There is no mass-update command, by design.
   `TEMPLATE_CONTINUOUS_TRIGGER_INTERVALS_` = 15 min → `everyMinutes(15)`,
   30 min (default) → `everyMinutes(30)`, 60 min → `everyHours(1)`. This is the 2.15.1 table,
   which was correct for bound scripts. DOCUMENTED as valid for non-add-on scripts; PROJECT
-  HISTORY: Legacy's bound 30-minute trigger has been in production use; TEMPLATE-001 verifies
-  a 30-minute trigger firing in a *copied* project. **This is a concrete advantage over CENTRAL.**
+  HISTORY: Legacy's bound 30-minute trigger has been in production use; TEMPLATE-001 verified
+  live that a *copied* project can create its own 30-minute trigger. **This is a concrete advantage over CENTRAL.**
   Legacy's own "every hour" option is still broken (`everyMinutes(60)`) and is fixed only in
   new template reports. Legacy stays untouched by policy.
 - **Ownership:** each report's trigger belongs to Thomas, in that report's own project, with
   handler `continuousUpdate`. The existing `DocumentLock` guards against overlaps, and
   `DocumentApp.getActiveDocument()` resolves to the report (PROJECT HISTORY: Legacy).
-- **Copying:** triggers are per project, so a copy starts with none (INFERRED, checked by
-  TEMPLATE-001). The template can never create one (guard), and the first run reports any
-  trigger it finds.
+- **Copying:** a copy starts with no triggers (LIVE VERIFIED, TEMPLATE-001). The template can
+  never create one (guard).
 - **First-run setup:** optional checkbox "Start automatic updates every 30 min" in the setup
   dialog. Nothing starts without that click.
 - **Cleanup:** *Manage Auto-Update Trigger → Stop*. Trashing a report stops its trigger from
@@ -525,7 +550,7 @@ after deprecation in one reviewed change.
 
 - **Scopes** are unchanged from `appsscript.json`: documents, drive, spreadsheets,
   external_request, scriptapp, container.ui. Consent is shown once per new report (per project).
-  An "unverified app" screen is likely, as with Legacy today (INFERRED; TEMPLATE-001 records it).
+  An "unverified app" screen is likely, as with Legacy today (INFERRED; not part of the reported TEMPLATE-001 result).
 - **Bound code is visible to document editors, and editors can run it.** This is the same as
   Legacy today. Script Properties (the Reviewer token) are visible to editors through the
   project settings. Recommendation: share reports with delegates as *commenter/viewer*, or accept the
@@ -563,7 +588,8 @@ after deprecation in one reviewed change.
 
 ### 16.1 Automated (local, no Google): what exists tonight
 
-`tests/template-bootstrap.test.js` (58 checks) and `tests/template-release.test.js` (21 checks):
+`tests/template-bootstrap.test.js` (57 checks), `tests/template-release.test.js` (21 checks) and
+`tests/template001-probe.test.js` (46 checks, the probe's own verdict logic):
 
 | Area | Covered by |
 |---|---|
@@ -575,7 +601,7 @@ after deprecation in one reviewed change.
 | Ambiguous meeting | conflict → question; choice; unknown family refused |
 | Missing required configuration | pending list; real build guard codes after setup |
 | Build guard / template guard | `assertNotTemplateDocument_`; readiness via `getBuildReadiness_` |
-| First-run behavior | idempotent; template refusal; copy-of-copy; tampered/damaged payload; existing report untouched; different meeting refused; inherited trigger reported |
+| First-run behavior | idempotent; template refusal; copy-of-copy; tampered/damaged payload; existing report untouched; different meeting refused |
 | Old-report isolation | payload-less configured docs untouched; release tool denies Legacy/CENTRAL IDs; CENTRAL `.claspignore` cannot pick up `template/` |
 | Continuous trigger intervals | template table valid for `ClockTriggerBuilder`; CENTRAL table unchanged without `Release.js` |
 | Release-version recording | `Release.js` content; provenance properties |
@@ -584,7 +610,7 @@ after deprecation in one reviewed change.
 Reallocation persistence, the e-mail collector and exporter, and relative Docs links are
 runtime behavior of the **unchanged** `Code.js`. They are covered by the existing suites
 (`addon008a1*`, `addon008a2`, `addon009*`, `email-export-*`), which run against exactly the
-code the template bundles. Full suite tonight: **64 test files, 0 failures.**
+code the template bundles. Full suite on 2026-10-01: **65 test files, 0 failures.**
 
 ### 16.2 Still to write (TEMPLATE-002/003)
 
@@ -596,11 +622,10 @@ code the template bundles. Full suite tonight: **64 test files, 0 failures.**
 
 ### 16.3 What only a real Google experiment can show
 
-Exactly the rows marked COMMUNITY/INFERRED/UNKNOWN in §3: whether a programmatic copy keeps
-the script, the new Script ID, properties and triggers not copied, consent per copy, `onOpen`
-before consent, a 30-minute trigger firing in the copy, and description read/write. That is
-**one** experiment (§19, TEMPLATE-001). After that, only one acceptance run of the real
-template (TEMPLATE-006).
+The copy semantics in §3 were settled by one experiment, TEMPLATE-001 (LIVE VERIFIED / GO,
+§19.6). What remains for a real run is one acceptance of the real template (TEMPLATE-006):
+the creator and first-run entry points themselves, the permission prompts per report, and the
+first trigger execution in a copy.
 
 ---
 
@@ -608,14 +633,15 @@ template (TEMPLATE-006).
 
 | Stage | Goal | Files | Tests | Prod risk | Rollback | Thomas does |
 |---|---|---|---|---|---|---|
-| **TEMPLATE-001** Copy-semantics proof | Confirm §3 unknowns with the probe | `template/probe/Template001Probe.gs`, `tests/template001-probe.test.js` | probe self-diagnosis tested locally against simulated copy outcomes | **None**: scratch docs only | Trash the probe docs | About 10 minutes, no waiting (§19.1) |
-| **TEMPLATE-002** Template runtime hooks | Flavor-aware intervals, menu, template guard in `Code.js` (small, call-time `typeof SA4_RELEASE_` checks) | `Code.js` (onOpen, `CONTINUOUS_TRIGGER_INTERVALS_` accessor, 3 guard calls), `template/ReportCreator.js` | new: bound trigger fake, menu spec; the full suite must stay green (CENTRAL unchanged without `Release.js`) | None until pushed; CENTRAL push is behavior-identical | Revert commit | Review |
+| **TEMPLATE-001** Copy-semantics proof | **DONE: LIVE VERIFIED / GO, 2026-10-01** (§19.6) | `template/probe/Template001Probe.gs`, `tests/template001-probe.test.js` | probe verdict logic tested locally; result observed live | None: scratch docs only | n/a | Clean up the probe (§19.6) |
+| **TEMPLATE-002A** Legacy parity gate | Bring every accepted Legacy behavior into `sa4-report` master, proven by Legacy's own regression suites (§21) | `Code.js`, ported `tests/legacy-*.test.js` | Legacy suites + full CENTRAL suite green | None until pushed; changes CENTRAL behavior only where Legacy's accepted fix differs | Revert commits | Review; decide the listed differences |
+| **TEMPLATE-002B** Template runtime hooks | Flavor-aware intervals, menu, template guard in `Code.js` (small, call-time `typeof SA4_RELEASE_` checks) | `Code.js` (onOpen, `CONTINUOUS_TRIGGER_INTERVALS_` accessor, 3 guard calls), `template/ReportCreator.js` | new: bound trigger fake, menu spec; the full suite must stay green (CENTRAL unchanged without `Release.js`) | None until pushed; CENTRAL push is behavior-identical | Revert commit | Review |
 | **TEMPLATE-003** Creator + first run UI | Creator dialog, *Finish Setup & Build* dialog, `ensureReportBootstrapped_`, optional token field | `template/ReportCreator.js`, `template/CreatorDialog.html` | client-rendering test, bootstrap tests | None (template-only file) | Revert | Review |
 | **TEMPLATE-004** Trigger hygiene | 30-min default, auto-stop after meeting end + 2 days, *About this report* | `ReportCreator.js` (+ one hook in `continuousUpdate`) | trigger/clock tests | None until pushed | Revert | Review |
 | **TEMPLATE-005** Release pipeline | Finalize `tools/template-release.js` (report targets, optional CENTRAL target), commit `template-target.json` | `tools/`, `template/` | release tests | None | Revert | Create the template doc; paste its two IDs |
 | **TEMPLATE-006** Acceptance: first real report | Tag `template-release/T-2026.10.0`, bundle, push to the template, create one scratch report, then the first real one | none | manual checklist (§20) | Low: only the new template project and new documents | Push the previous bundle, or trash the template | `clasp push` from the bundle; create a report |
 
-Stages 002 to 005 are local and reviewable in isolation; only 001 and 006 touch Google.
+Stages 002A to 005 are local and reviewable in isolation; only 001 (done) and 006 touch Google.
 
 ---
 
@@ -737,12 +763,66 @@ The manual copy's result does not decide GO. It decides which fallback applies.
 
 ### 19.5 If the programmatic copy does not keep the bound script
 
-No redesign yet; only the preferred fallback:
+Not needed: the programmatic copy kept its script (§19.6). Kept for the record; manual
+*File → Make a copy* remains available as a fallback workflow.
 
 | Manual copy result | Preferred fallback | Why |
 |---|---|---|
 | MANUAL COPY OK | **Manual copy of the template + setup in the copy.** Thomas does *File → Make a copy* on the template; the meeting lookup and "Finish Setup & Build" run in the copy's first run instead of in the template. | It rests on behavior Google documents, needs no new scope, no Apps Script API switch and no place to host source bundles. The runtime, release model, triggers and guards are unchanged. Cost: one extra manual action, and the copy is named after the lookup instead of before. |
 | Manual copy also has no script | **Apps Script API** (§4, E2): the creator makes a plain document and attaches a new bound project with `projects.create` + `updateContent`. | Only remaining route to a bound report. It needs the `script.projects` scope, the user-level Apps Script API setting and a hosted source bundle, so it is the last resort. |
+
+### 19.6 Result: LIVE VERIFIED / GO (2026-10-01)
+
+Thomas ran the probe in scratch Google Docs. The programmatic copy's status box ended with
+`RESULT: GO`:
+
+| Observation (programmatic copy) | Class |
+|---|---|
+| Bound script present; Report menu works | PASS |
+| Document ID differs from the original | PASS |
+| Own Apps Script project: original `REDACTED-TEMPLATE-001-PROBE-SCRIPT-ID`, copy `REDACTED-TEMPLATE-001-COPY-SCRIPT-ID` | PASS |
+| Document, Script and User Property markers of the original are missing in the copy | EXPECTED |
+| Document Properties usable independently in the copy | PASS |
+| No triggers inherited from the original | PASS |
+| Drive description written by the creator is readable from the copy | PASS |
+| `everyMinutes(30)` installable trigger created in the copy (handler `template001TriggerTick`) | PASS |
+| Last trigger execution: not yet | EXPECTED |
+
+Facts established:
+
+- `DriveApp.makeCopy()` preserved the bound Apps Script project.
+- The copied document received its own document ID.
+- The copied bound script received its own Script ID.
+- Installable triggers were not inherited from the source document.
+- The copied script can use its own Document Properties.
+- The copied script can create its own `everyMinutes(30)` trigger.
+- Programmatic template copying is therefore viable for the planned SA4 report architecture.
+- Neither the Advanced Drive service nor the Apps Script API is required to copy the bound
+  script in the tested environment.
+- Manual *File → Make a copy* is no longer required as the primary workflow. It remains a fallback.
+
+Limits of the evidence:
+
+- **The first trigger execution was deliberately not waited for.** It is not required for the
+  GO decision: independent trigger creation is the architectural question. Whether a
+  time-driven run in a copy sees its own document and Document Properties is the same
+  mechanism Legacy's bound trigger uses in production, and TEMPLATE-006 observes it on the
+  first real report.
+- The manual-copy status box and the per-copy permission prompt were not part of the reported
+  result. Neither decides GO.
+- The menu item was clicked several times and only one test trigger existed afterwards. That
+  is the probe's own behavior (it deletes its previous test trigger before creating one); it
+  says nothing about Google.
+- One account, one environment, one day.
+
+**Manual cleanup (one step):** in the PROGRAMMATIC COPY, **Report → Clean Up Test State**. It
+removes that copy's test trigger and every `TEMPLATE001_` property. The scratch documents can
+then be deleted by hand later.
+
+Note for completeness: *Initialize* also created a test trigger in the original scratch
+document (so there was something a copy could inherit), and a trigger exists in the manual
+copy if step 7 was done there. Each test trigger deletes itself the first time it runs. If
+those documents are deleted before that, run the same menu item in them first.
 
 ---
 
@@ -774,3 +854,82 @@ add-on menu.
 `T-2026.10.0`; build succeeds; one e-mail collector run; export of one TDoc discussion e-mail
 (document links absolute); reallocation survives a rebuild; 30-min trigger visible in
 *Manage Auto-Update Trigger*; the template still has no configuration and no trigger.
+
+---
+
+## 21. Next stage: turning the prototype into the real SA4 Report Template
+
+### 21.1 Source-of-truth strategy
+
+- **One production `Code.js`: `sa4-report` master.** Template releases bundle it byte-identical
+  (`tests/template-release.test.js` asserts this). There is no template fork and no second
+  `Code.js` to maintain.
+- **Template-only behavior lives outside `Code.js` or behind a runtime check.** `Release.js`
+  (generated, template bundles only) switches the flavor; `Code.js` asks
+  `typeof SA4_RELEASE_ !== 'undefined'` at call time. Without `Release.js` (CENTRAL, tests)
+  nothing changes.
+- **Legacy (`sa4-report-legacy`) is not a source for the template.** It stays the script of
+  the 86178 report and is not touched. Its accepted fixes are carried forward into
+  `sa4-report` master, where they are reviewed and tested like any other change.
+- **A report is pinned to its release** (`Release.js` copied with the script,
+  `SA4_CREATED_FROM_RELEASE` in its properties). Fixes reach an existing report only by a
+  deliberate per-report push (§10.5).
+
+### 21.2 What TEMPLATE-001 allows to be simplified
+
+| Item | Before | Now |
+|---|---|---|
+| First run checked for inherited triggers and warned | prototype code + one test | **Removed** (triggers are not copied) |
+| Fallback creator via the Apps Script API (E2) | design fallback | **Dropped**; no `script.projects` scope, no API setting, no bundle hosting |
+| Manual *Make a copy* + setup-in-copy as an alternative primary flow | design fallback | **Fallback only**, no code |
+| First-run wipe of inherited properties | planned if properties were copied | **Not needed** (stores start empty) |
+| "UNVERIFIED" markers on the live entry points | prototype comments | Replaced by the verified facts |
+
+Kept on purpose, because they do not depend on copy semantics: the `targetDocumentId` check
+(someone may copy a report that has not been set up yet), payload validation (the description
+is editable text), the template guard, and moving a half-prepared copy to the trash.
+
+### 21.3 Finding: `sa4-report` master does not yet contain everything Legacy has accepted
+
+Legacy received an integrated release on 2026-10-01 (deployed and live accepted on the 86178
+report). To size the gap, Legacy's ten regression suites were run, unmodified, against the
+current `sa4-report/Code.js` in a scratch folder (read-only for both repositories):
+
+| Legacy suite | Result against `sa4-report` `Code.js` | Reading |
+|---|---|---|
+| `bugfix-legacy-002` (duplicate TDoc tables) | 4 checks fail | **Real gap.** A second import run, or one TDoc under two agenda groups in one run, duplicates its table. Legacy fixed this (`d1021cf`); master has not. |
+| `legacy-adhoc-email-collection`, `diagnose-6g-email-collection`, `legacy-integration-reallocation-email` | 15 + 4 + 2 checks fail; the diagnostic suite then stops on a Legacy-only helper (`extractTdocFromEmailExportSubject_`) | **Real gap** (BUGFIX-LEGACY-003): the saved `EMAIL_START_DATE` is not read by the collector; a Collector Configuration `LIST_NAME` / `RSS_URL_V2` override does not win; the A1 archive does not follow the meeting's list; `…@list.etsi.org` forms are not normalized. Master's ADDON-008A2 covers only part of this. |
+| `legacy-0099-reallocation-suppression` | 2 of 82 checks fail | Small difference in one reallocation scenario and its log line; to be read in detail. |
+| `legacy-upgrade-004` | 1 check fails (`EMAIL_START_DATE unchanged`), then stops on test mechanics | Same start-date gap. |
+| `legacy-email-doc-links` | 1 check fails | **Intended difference**: CENTRAL's introduction text is meeting-neutral (2.15.0). Needs a decision, not a port. |
+| `legacy-upgrade-006` | stops: "a list tag is required" | **Intended difference**: CENTRAL derives the subject tag from the mailing list instead of the constant `FS_6G_MED`. |
+| `legacy-upgrade-002`, `-003` | stop on test mechanics (Legacy git history, dialog markup) | Not behavior; the tests need adapting, not the code. |
+
+So a template built from today's master would lose accepted Legacy behavior in at least two
+places (duplicate-table protection and the ad-hoc e-mail collector). That is why the next
+stage is a parity gate and not the runtime hooks.
+
+### 21.4 TEMPLATE-002A: Legacy parity gate (recommended next stage)
+
+Goal: `sa4-report` master contains every accepted Legacy behavior, proven by Legacy's own
+tests, so the template never introduces a second, diverging production `Code.js`.
+
+1. Branch from `sa4-report` master (not from this design branch).
+2. Copy Legacy's regression suites into `sa4-report/tests/` as `legacy-*.test.js`, adapted only
+   in mechanics (loader path, no dependency on Legacy's git history).
+3. Port the real gaps into `Code.js`, one reviewed commit each: (a) duplicate-TDoc insertion
+   guard; (b) collector list / start-date resolution; (c) the two reallocation-suppression
+   differences, after reading them.
+4. For each intended difference (introduction text, subject tag, deadline default), record the
+   decision in the test: either "template keeps CENTRAL's behavior" or "template keeps Legacy's".
+   These are Thomas's calls.
+5. Gate: all ported Legacy suites and the full existing suite pass on one `Code.js`.
+
+Files: `Code.js`, new `tests/legacy-*.test.js`. No Google operation. Production risk: none
+until something is pushed; CENTRAL would receive the same fixes at its next push, which is a
+separate decision. Rollback: revert the commits.
+
+Then, unchanged from §17: **TEMPLATE-002B** (flavor-aware trigger intervals, menu without the
+CENTRAL submenu, template guard), **003** (creator and first-run dialogs), **004** (trigger
+hygiene), **005** (release pipeline, create the template document), **006** (first real
+report, which also observes the first trigger execution in a copy).
