@@ -2,9 +2,10 @@
  * TEMPLATE-002C -- regression tests for what the first live template report
  * (86178, template T-2026.10.0) exposed, and for the decisions taken with it:
  *
- *   1. Run Full Report Build: one confirmation, no pop-up between phases, one
- *      summary; one formatting pass; the optional Reviewer token read once;
- *      phase timing; a failed phase stops the build and is reported once.
+ *   1. Run Full Report Build: one confirmation, no pop-up between phases and
+ *      (2.17.3) none at the end -- a completed build makes no UI call after
+ *      changing the document; one formatting pass; the optional Reviewer token
+ *      read once; phase timing; a failed phase stops the build and throws.
  *   2. The single-step menu items keep their own completion pop-ups.
  *   3. Create New SA4 Report: optional Mailing List override.
  *   4. Generated discussion e-mails: Reply-To = the effective mailing list.
@@ -73,7 +74,15 @@ function fullBuildReport(options) {
   s.DocumentApp.openById = () => ({ getBody: () => makeFakeDocumentBody(s) });
   s.DocumentApp.GlyphType = { BULLET: 'BULLET' };
   s.DocumentApp.getUi = () => ({
-    alert: (title, message) => { alerts.push([title, message]); events.push('ALERT ' + title); return o.decline ? 'NO' : 'YES'; },
+    alert: (title, message) => {
+      // o.uiFailsAfterWork: as live on T-2026.10.2 -- once the build has
+      // changed the document, a ui.alert() throws instead of appearing.
+      if (o.uiFailsAfterWork && events.some((e) => /^WORK/.test(e))) {
+        events.push('ALERT ATTEMPT ' + title);
+        throw new Error('Service Documents failed while accessing document with id FAKE_DOC.');
+      }
+      alerts.push([title, message]); events.push('ALERT ' + title); return o.decline ? 'NO' : 'YES';
+    },
     Button: { YES: 'YES', NO: 'NO' }, ButtonSet: { OK: 'OK', YES_NO: 'YES_NO' }
   });
   s.setDocumentTitleFromTemplate_ = () => {};
@@ -102,30 +111,47 @@ function fullBuildReport(options) {
   return { s, body, events, alerts, logs, reviewerRequests, tokenReads: () => tokenReads, tdocTables, docProps: loaded.docProps };
 }
 const fullBuildLog = (r) => r.logs.filter((l) => /^\[FULLBUILD\]/.test(l));
+/** Runs the menu function; returns what it returned and what it threw. */
+function runMenu(r) { try { return { returned: r.s.runFullReportBuild(), thrown: null }; } catch (e) { return { returned: undefined, thrown: e.message }; } }
 
-console.log('1. Run Full Report Build: one confirmation, no pop-up between phases, one summary');
+console.log('1. Run Full Report Build: one confirmation, then no UI call at all');
 {
   const r = fullBuildReport();
-  r.s.runFullReportBuild();
-  check('dialogs: exactly the confirmation and the final summary', r.alerts.map((a) => a[0]), ['Run Full Report Build', 'Success']);
-  check('nothing suspends the build between its phases',
-    r.events, ['ALERT Run Full Report Build', 'WORK e-mail', 'WORK revisions', 'WORK formatting', 'ALERT Success']);
+  const run = runMenu(r);
+  check('dialogs: exactly the confirmation; no pop-up between phases and none at the end', r.alerts.map((a) => a[0]), ['Run Full Report Build']);
+  check('the confirmation is unchanged', [/^This will run all steps:/.test(r.alerts[0][1]), /Continue\?$/.test(r.alerts[0][1])], [true, true]);
+  check('nothing suspends the build: confirmation, then only work', r.events, ['ALERT Run Full Report Build', 'WORK e-mail', 'WORK revisions', 'WORK formatting']);
+  check('a completed build ends normally (no error thrown)', run.thrown, null);
   check('the skeleton was built once, with the real TDoc tables', [r.logs.filter((l) => /^Done: Built skeleton/.test(l)).length, r.tdocTables().length > 0], [1, true]);
   check('e-mail core once, revisions core once', [r.events.filter((e) => e === 'WORK e-mail').length, r.events.filter((e) => e === 'WORK revisions').length], [1, 1]);
   check('phases start in this order', fullBuildLog(r).filter((l) => /: start$/.test(l)).map((l) => l.replace(/^\[FULLBUILD\] |: start$/g, '')),
     ['skeleton', 'e-mail', 'revisions', 'abstracts', 'formatting']);
-  const summary = r.alerts[1][1];
-  check('the summary names every phase and the total',
-    [/^Full report build completed\./.test(summary), /Skeleton \+ TDoc tables: done \(\d+ agenda items, \d+ TDocs\)/.test(summary), /E-mail discussion: done/.test(summary),
+  check('the total line is the last thing logged', /^\[FULLBUILD\] total: \d+ ms/.test(r.logs[r.logs.length - 1]), true);
+  const summary = r.s.formatFullBuildSummary_(run.returned);
+  check('the result still describes every phase and the total (available to the log and to tests, not shown in a pop-up)',
+    [run.returned.ok, /^Full report build completed\./.test(summary), /Skeleton \+ TDoc tables: done \(\d+ agenda items, \d+ TDocs\)/.test(summary), /E-mail discussion: done/.test(summary),
       /Revisions: done/.test(summary), /Abstracts: skipped \(no Reviewer API token configured\)/.test(summary), /Formatting: done/.test(summary), /Total: \d+ s$/.test(summary)],
-    [true, true, true, true, true, true, true]);
+    [true, true, true, true, true, true, true, true]);
+}
+
+console.log('1. the live failure (T-2026.10.2): a UI that fails once the document has changed');
+{
+  const r = fullBuildReport({ uiFailsAfterWork: true });
+  const run = runMenu(r);
+  check('the completed build is not turned into a failure', [run.thrown, run.returned && run.returned.ok], [null, true]);
+  check('because no UI call is even attempted after the work', r.events.filter((e) => /^ALERT ATTEMPT/.test(e)), []);
+  check('all five phases ran and the total was logged', [fullBuildLog(r).filter((l) => /: (done|skipped) in \d+ ms/.test(l)).length, /^\[FULLBUILD\] total/.test(r.logs[r.logs.length - 1])], [5, true]);
+  const wrapper = CODE.slice(CODE.indexOf('function runFullReportBuild()'), CODE.indexOf('function runFullReportBuildCore_()')).replace(/^\s*\/\/.*$/gm, '');
+  check('after runFullReportBuildCore_() the menu function makes no UI or document call (source)',
+    /ui\.|getUi|DocumentApp|DriveApp|saveAndClose/.test(wrapper.slice(wrapper.indexOf('runFullReportBuildCore_()'))), false);
+  check('the build still never saves or flushes explicitly, and still runs in one execution', [/saveAndClose\s*\(|\.flush\s*\(/.test(CODE_ONLY), (CODE.match(/phase\('/g) || []).length], [false, 5]);
 }
 
 console.log('1. declining the confirmation runs nothing');
 {
   const r = fullBuildReport({ decline: true });
-  r.s.runFullReportBuild();
-  check('one question, no work, no further dialog', [r.events, r.body.getNumChildren(), fullBuildLog(r)], [['ALERT Run Full Report Build'], 0, []]);
+  const run = runMenu(r);
+  check('one question, no work, no further dialog, no error', [r.events, r.body.getNumChildren(), fullBuildLog(r), run.thrown], [['ALERT Run Full Report Build'], 0, [], null]);
 }
 
 console.log('1. formatting: once, after the enrichment phases');
@@ -162,7 +188,7 @@ console.log('1. Reviewer token present: the abstracts phase does the work, once 
   check('every request happens in the abstracts phase (after e-mail and revisions, before formatting)',
     [r.events.indexOf('REVIEWER request') > r.events.indexOf('WORK revisions'), r.events.lastIndexOf('REVIEWER request') < r.events.indexOf('WORK formatting')], [true, true]);
   check('the phase reports what it did', fullBuildLog(r).some((l) => new RegExp('^\\[FULLBUILD\\] abstracts: done in \\d+ ms -- ' + n + ' candidate table\\(s\\), 0 abstract\\(s\\) inserted$').test(l)), true);
-  check('the token never appears in a log line or in the summary', [r.logs.join('\n').indexOf('TESTONLY'), r.alerts[1][1].indexOf('TESTONLY')], [-1, -1]);
+  check('the token never appears in a log line or in the summary', [r.logs.join('\n').indexOf('TESTONLY'), r.s.formatFullBuildSummary_(r.s.runFullReportBuildCore_()).indexOf('TESTONLY')], [-1, -1]);
 }
 
 console.log('1. phase timing in the log');
@@ -178,22 +204,40 @@ console.log('1. phase timing in the log');
   check('concise: two lines per phase plus the total', lines.length, 11);
 }
 
-console.log('1. a failed phase stops the build and is reported once');
+console.log('1. a failed phase stops the build and stays a visible failure');
 {
   const r = fullBuildReport({ failEmail: true });
-  r.s.runFullReportBuild();
-  check('later phases are not started', r.events, ['ALERT Run Full Report Build', 'WORK e-mail', 'ALERT Error']);
-  check('one error dialog, naming the failure and what did not run',
-    [r.alerts.length, /^Full report build failed: RSS is down/.test(r.alerts[1][1]), /E-mail discussion: FAILED/.test(r.alerts[1][1]), /Not run: Revisions, Abstracts, Formatting\./.test(r.alerts[1][1])],
-    [2, true, true, true]);
-  check('the log shows the failing phase last', fullBuildLog(r).filter((l) => !/total/.test(l)).slice(-1)[0].replace(/in \d+ ms/, 'in N ms'), '[FULLBUILD] e-mail: failed in N ms -- RSS is down');
+  const run = runMenu(r);
+  check('later phases are not started, and no pop-up is used to report it', r.events, ['ALERT Run Full Report Build', 'WORK e-mail']);
+  check('the failure propagates: the menu function throws, so Docs shows it and the execution is "Failed"',
+    [run.thrown !== null, /^Full report build failed: RSS is down/.test(run.thrown || '')], [true, true]);
+  check('the error names the failed phase and what did not run, once',
+    [/E-mail discussion: FAILED/.test(run.thrown), /Not run: Revisions, Abstracts, Formatting\./.test(run.thrown), (run.thrown.match(/RSS is down/g) || []).length], [true, true, 1]);
+  check('it is logged too', [r.logs.filter((l) => l === 'Full report build failed: e-mail: RSS is down').length,
+    fullBuildLog(r).filter((l) => !/total/.test(l)).slice(-1)[0].replace(/in \d+ ms/, 'in N ms')], [1, '[FULLBUILD] e-mail: failed in N ms -- RSS is down']);
   check('the skeleton that was already built stays', r.tdocTables().length > 0, true);
 
+  const uiDown = fullBuildReport({ failEmail: true, uiFailsAfterWork: true });
+  const run2 = runMenu(uiDown);
+  check('a real failure is reported even when the UI cannot show anything', [/^Full report build failed: RSS is down/.test(run2.thrown || ''), uiDown.events.filter((e) => /^ALERT ATTEMPT/.test(e))], [true, []]);
+
+  ['skeleton', 'revisions', 'formatting'].forEach((name) => {
+    const f = fullBuildReport();
+    if (name === 'skeleton') f.s.buildSkeletonWithTdocTables = () => { throw new Error('boom in ' + name); };
+    if (name === 'revisions') f.s.updateRevisions_ = () => { throw new Error('boom in ' + name); };
+    if (name === 'formatting') f.s.removeRowHeightAndSpacing = () => { throw new Error('boom in ' + name); };
+    const res = runMenu(f);
+    check(`an error in the ${name} phase fails the build`, [/^Full report build failed: boom in /.test(res.thrown || ''), f.alerts.map((a) => a[0])], [true, ['Run Full Report Build']]);
+  });
+  const abs = fullBuildReport({ token: 'TESTONLY-not-a-real-token' });
+  abs.s.addAbstractsForTables_ = () => { throw new Error('boom in abstracts'); };
+  check('an error in the abstracts phase fails the build', /^Full report build failed: boom in abstracts/.test(runMenu(abs).thrown || ''), true);
+
   const notReady = fullBuildReport({ props: { MEETING_TYPE: 'adhoc', MEETING_ID: '86172' } });
-  notReady.s.runFullReportBuild();
-  check('a build that is not ready fails in the skeleton phase, before the document is touched, with one dialog',
-    [notReady.alerts.map((a) => a[0]), /^Full report build failed: Cannot build report yet\./.test(notReady.alerts[1][1]), notReady.body.getNumChildren(), notReady.events.filter((e) => /^WORK/.test(e))],
-    [['Run Full Report Build', 'Error'], true, 0, []]);
+  const nr = runMenu(notReady);
+  check('a build that is not ready fails in the skeleton phase, before the document is touched',
+    [notReady.alerts.map((a) => a[0]), /^Full report build failed: Cannot build report yet\./.test(nr.thrown || ''), notReady.body.getNumChildren(), notReady.events.filter((e) => /^WORK/.test(e))],
+    [['Run Full Report Build'], true, 0, []]);
 }
 
 console.log('1. the summary text (pure)');
@@ -247,7 +291,7 @@ console.log('2. the token is re-read after Configure Meeting changes it');
 // =====================================================================
 
 const TEMPLATE_ID = 'TEMPLATEdoc0000000000000000000000000000000';
-const RELEASE = { releaseId: 'T-2026.10.2', flavor: 'template', codeVersion: '2.17.2', gitCommit: 'abcdef0000000000000000000000000000000000', templateDocumentId: TEMPLATE_ID };
+const RELEASE = { releaseId: 'T-2026.10.3', flavor: 'template', codeVersion: '2.17.3', gitCommit: 'abcdef0000000000000000000000000000000000', templateDocumentId: TEMPLATE_ID };
 // The 6G ad-hoc of the live test, as the Portal describes it (captured 86172 record, re-labelled).
 const MEETING_86178 = (() => { const m = plain(GM.getMeetings86172); m[0].Id = 86178; m[0].Title = '3GPPSA4-e (AH) on FS_6G_MED';
   m[0].MtgDocURL = 'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/Docs/'; return m; })();

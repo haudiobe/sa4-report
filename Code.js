@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.17.2 (2026-10-01)
+ * Version: 2.17.3 (2026-10-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,19 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.17.3 (2026-10-01)
+ *   - Fixed: a completed "Run Full Report Build" was reported as FAILED.
+ *     Live (T-2026.10.2, report for 86178): all five phases finished in
+ *     65 s and the report was saved, but the final "Success" pop-up never
+ *     appeared -- that ui.alert() call hung for about 96 s and then threw
+ *     "Service Documents failed while accessing document with id ...".
+ *     Full Build no longer calls the UI after it has changed the
+ *     document. A completed build simply ends (the result is in the
+ *     [FULLBUILD] log lines; the execution is "Completed"). A build in
+ *     which a phase fails still fails: it throws an error carrying the
+ *     summary (failed phase, its message, the phases not run), which Docs
+ *     shows and the execution records as "Failed". The confirmation
+ *     before the build is unchanged. No build phase changed.
  * 2.17.2 (2026-10-01)
  *   - Fixed: the 6G report family derived the general list 3GPP_TSG_SA_WG4
  *     as its mailing list. Its list is 3GPP_TSG_SA4_FS_6G_MED
@@ -9579,16 +9592,28 @@ function runFullReportBuild() {
 
   // TEMPLATE-002C: the phases run without any pop-up in between -- a pop-up
   // suspends the script until it is clicked, inside this execution's time
-  // limit. One summary is shown when everything has run (or one phase failed).
+  // limit.
   const result = runFullReportBuildCore_();
-  if (!result.ok) Logger.log('Full report build failed: ' + result.failedPhase + ': ' + result.error);
-  ui.alert(result.ok ? 'Success' : 'Error', formatFullBuildSummary_(result), ui.ButtonSet.OK);
+
+  // 2.17.3: no UI call after the build has changed the document. Live, the
+  // final "Success" ui.alert() never appeared: the call hung for ~96 s and
+  // threw "Service Documents failed while accessing document ...", turning
+  // a completed, saved build into a FAILED execution. A completed build
+  // therefore just ends here; its result is in the [FULLBUILD] log lines.
+  // A failed phase must stay visible, and needs no UI call for that: the
+  // error thrown below is shown by Docs and recorded by the execution.
+  if (!result.ok) {
+    Logger.log('Full report build failed: ' + result.failedPhase + ': ' + result.error);
+    throw new Error(formatFullBuildSummary_(result));
+  }
+  return result;
 }
 
 /**
  * TEMPLATE-002C: the Full Build itself -- no UI at all. Phases run in
  * order; the first one that fails stops the build (later phases are not
- * started) and is reported once in the result. Each phase logs
+ * started) and is reported once in the result (runFullReportBuild() turns
+ * that into one thrown error; a completed build ends silently). Each phase logs
  * "[FULLBUILD] <phase>: start" and "[FULLBUILD] <phase>: <status> in N ms",
  * so the last line before a timeout names the phase that was running.
  *
