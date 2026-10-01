@@ -237,9 +237,9 @@ in the master template, a **new** report is created for the final smoke test.
 
 | # | Action | Expected |
 |---|---|---|
-| 1 | Template → Template Release Info | T-2026.10.1 (Code.js 2.17.1) |
-| 2 | Create New SA4 Report → 86178 → Look up | Mailing list field shows `3GPP_TSG_SA_WG4` |
-| 3 | Replace it with `3GPP_TSG_SA4_FS_6G_MED` → Create Report → open it | New report |
+| 1 | Template → Template Release Info | T-2026.10.2 (Code.js 2.17.2) |
+| 2 | Create New SA4 Report → 86178 → Look up | Mailing list field shows `3GPP_TSG_SA4_FS_6G_MED` (with T-2026.10.2; T-2026.10.1 showed the general list, see §9) |
+| 3 | Leave it as it is → Create Report → open it | New report |
 | 4 | Run Full Report Build → confirm once | No pop-up until one summary with all five phases; well under 6 minutes |
 | 5 | Configure Meeting | Mailing List `3GPP_TSG_SA4_FS_6G_MED`; start date = meeting start date |
 | 6 | Set the Discussion E-mail Sender, then Prepare TDoc Discussion E-mails for one TDoc; open the `.eml` | `Reply-To: 3GPP_TSG_SA4_FS_6G_MED@list.etsi.org`; subject `[<agenda item>][<deadline>][<TDoc>] Discussion: …` |
@@ -247,3 +247,53 @@ in the master template, a **new** report is created for the final smoke test.
 
 Still to be seen live for the first time: a complete Full Build in a copy, the creator dialog
 with the new field, and the first trigger execution in a copy.
+
+---
+
+## 9. Patch after the T-2026.10.1 creator smoke test: 6G family mailing list (Code.js 2.17.2)
+
+T-2026.10.1 was deployed and its creator was tried live with meeting 86178. The Mailing list
+field was pre-filled with `3GPP_TSG_SA_WG4`. That is wrong for the 6G report family.
+
+**Root cause.** The one family → list table, `MAILING_LISTS` in `Code.js`, mapped `6G` to the
+general SA4 list. Every consumer derives from that table, so all of them showed or used the
+general list for a 6G report without a saved Mailing List. Legacy has the same table entry;
+its 86178 report works because a Mailing List override was saved in it.
+
+**Fix.** One table entry: `'6G': '3GPP_TSG_SA4_FS_6G_MED'`. No other code changed, and nothing
+is keyed on a meeting ID.
+
+| Consumer | How it gets the list | After the fix, 6G without an override |
+|---|---|---|
+| Creator (lookup) | `MAILING_LISTS[family]` | field shows `3GPP_TSG_SA4_FS_6G_MED` |
+| Configure Meeting | `buildReportFamilyInfo_()` | derived default `3GPP_TSG_SA4_FS_6G_MED` |
+| Collector, RSS | `getReportConfig_().LIST_NAME` → `getCollectorConfig_()` | `…RSS&L=3GPP_TSG_SA4_FS_6G_MED…` |
+| Collector, A1 archive | the same resolved list | `…A1=…&L=3GPP_TSG_SA4_FS_6G_MED` |
+| Discussion e-mail To | `getMeetingContext_().sources.mailingList` | `3gpp_tsg_sa4_fs_6g_med@list.etsi.org` |
+| Discussion e-mail Reply-To | the same value | `3GPP_TSG_SA4_FS_6G_MED@list.etsi.org` |
+
+A saved Mailing List override still wins, and the creator's override field works as before.
+Audio, Video, MBS, RTC, Liaison and New are unchanged.
+
+Consequences to know:
+
+- **Main-meeting 6G reports** read the 6G list too, because a main-meeting report always uses
+  its family list. Before, they read the general SA4 list.
+- **An unconfigured document** defaults to family 6G, so its default list is now the 6G list.
+- **A "Create Configuration Tables" snapshot written before 2.17.2** in a 6G document holds
+  the old default (the general list). It now differs from the family default, so the
+  collector treats it as an explicit table override and reads the general list. This cannot
+  happen in a report newly created from the template; it matters only if an existing 6G
+  document with such a table is moved to this code.
+- This is one more intentional difference from Legacy (marked in the parity suite).
+
+**Release.** `Code.js` 2.17.2, proposed template release **T-2026.10.2**.
+`template-release/T-2026.10.1` stays on `6b65ebd` as the record of what was live-tested.
+
+**Tests.** Complete suite 77 files, 4,016 checks, 0 failures. Seven existing expectations of
+the old 6G default were updated (golden fixture, `pure-logic`, `meeting-context` ×2,
+`addon008a2`, `addon009-discussion-email-export`, and the Legacy parity e-mail suite, where
+the changed checks are marked as intentional differences). The TEMPLATE-002C suite gained the
+family-table checks, the collector RSS / A1 checks, the To / Reply-To checks for an unchanged
+default, a second 6G meeting with a different ID, and keeps the override checks with another
+list.
