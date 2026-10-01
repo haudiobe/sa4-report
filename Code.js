@@ -3625,7 +3625,15 @@ function processWebDownloadedSheet_(sheet) {
     // Apply reallocation if exists
     if (reallocations[tdoc]) {
       const originalAgenda = agendaItem;
-      agendaItem = reallocations[tdoc].new;
+      // TEMPLATE-002A (port of Legacy LEGACY-0099, cb1208c): the same shared
+      // interpretation as downloadAndGroupTdocs_() (ADDON-008A1b) -- a
+      // removed/withdrawn/n/a TDoc is never imported.
+      const target = interpretReallocationTarget_(reallocations[tdoc].new);
+      if (target.kind === 'remove') {
+        Logger.log(`Skipping ${tdoc}: reallocated to "${target.value}" (${reallocations[tdoc].reason || 'no reason'})`);
+        continue;
+      }
+      agendaItem = target.kind === 'move' ? target.agendaItem : reallocations[tdoc].new;
       Logger.log(`Reallocating ${tdoc}: ${originalAgenda} → ${agendaItem} (${reallocations[tdoc].reason || 'no reason'})`);
     }
     
