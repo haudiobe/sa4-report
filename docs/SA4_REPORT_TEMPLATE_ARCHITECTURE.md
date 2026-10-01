@@ -44,7 +44,7 @@ is ambiguous, adds one choice (the report family).
 
 **Go/no-go gate:** whether a *programmatic* copy (`DriveApp.makeCopy`) keeps the bound script
 is backed by community sources, not by Google's documentation. The same goes for whether
-properties and triggers stay behind in the template. One 15-minute probe (§19) settles all of
+properties and triggers stay behind in the template. One 10-minute probe (§19) settles all of
 this before any production step.
 
 A local, tested prototype exists (§12, §16). It is not deployed.
@@ -138,7 +138,7 @@ collector are all document-relative. VERIFIED (repo).
 | User Properties copied? | No; they are per user per script. | DOCUMENTED scope + COMMUNITY |
 | Installable triggers copied? | No. Triggers belong to one project and one user; the copy is a new project. | INFERRED → TEMPLATE-001 |
 | Authorizations copied? | No. Authorization is per project, so the copy asks for consent on first use. | INFERRED from DOCUMENTED per-project authorization ([authorization](https://developers.google.com/apps-script/guides/services/authorization)) → TEMPLATE-001 |
-| Advanced service settings / OAuth scopes preserved? | Yes. They live in `appsscript.json`, a project file, which is copied with the source. | INFERRED; TEMPLATE-001 checks `typeof Drive` |
+| Advanced service settings / OAuth scopes preserved? | Yes. They live in `appsscript.json`, a project file, which is copied with the source. | INFERRED. Not part of TEMPLATE-001: copying does not use the Advanced Drive service (§19); the first real template report exercises it (TEMPLATE-006). |
 | `onOpen` works in the copy? | Yes, before any authorization: a simple trigger "runs automatically whenever a file is opened by a user who has edit access". | DOCUMENTED; TEMPLATE-001 checks the menu appears |
 | Deployment/version metadata? | Irrelevant. Bound reports are not deployed; the release is recorded in `Release.js` and copied as source. | Design choice |
 | Drive description readable/writable by the copy's script? | Yes with the `drive` scope already in the manifest (`File.getDescription/setDescription`). | DOCUMENTED API; TEMPLATE-001 exercises it |
@@ -184,8 +184,8 @@ Notes that decided it:
   (deployments are exactly the kind of setup to avoid). D gets the same result by putting the
   creator in the template, whose code is the release anyway.
 - **E2** avoids relying on copy semantics, but it needs the user-level Apps Script API toggle,
-  the `script.projects` scope and a place to host source bundles. It is the documented
-  fallback if TEMPLATE-001 shows that programmatic copies drop the script (§19).
+  the `script.projects` scope and a place to host source bundles. It is the last-resort
+  fallback if TEMPLATE-001 shows that copies drop the script (§19.5).
 - **E3** (considered, rejected): a library that every report references. It keeps one copy
   of the code, but library versions need deployments, and "HEAD" mode would silently update
   every report. That is the CENTRAL risk again.
@@ -608,7 +608,7 @@ template (TEMPLATE-006).
 
 | Stage | Goal | Files | Tests | Prod risk | Rollback | Thomas does |
 |---|---|---|---|---|---|---|
-| **TEMPLATE-001** Copy-semantics proof | Confirm §3 unknowns with the probe | none (probe `template/probe/Template001Probe.gs` exists) | the probe itself | **None**: scratch docs only | Trash the probe docs | ~15 min, then read the Report after 35 min (§19) |
+| **TEMPLATE-001** Copy-semantics proof | Confirm §3 unknowns with the probe | `template/probe/Template001Probe.gs`, `tests/template001-probe.test.js` | probe self-diagnosis tested locally against simulated copy outcomes | **None**: scratch docs only | Trash the probe docs | About 10 minutes, no waiting (§19.1) |
 | **TEMPLATE-002** Template runtime hooks | Flavor-aware intervals, menu, template guard in `Code.js` (small, call-time `typeof SA4_RELEASE_` checks) | `Code.js` (onOpen, `CONTINUOUS_TRIGGER_INTERVALS_` accessor, 3 guard calls), `template/ReportCreator.js` | new: bound trigger fake, menu spec; the full suite must stay green (CENTRAL unchanged without `Release.js`) | None until pushed; CENTRAL push is behavior-identical | Revert commit | Review |
 | **TEMPLATE-003** Creator + first run UI | Creator dialog, *Finish Setup & Build* dialog, `ensureReportBootstrapped_`, optional token field | `template/ReportCreator.js`, `template/CreatorDialog.html` | client-rendering test, bootstrap tests | None (template-only file) | Revert | Review |
 | **TEMPLATE-004** Trigger hygiene | 30-min default, auto-stop after meeting end + 2 days, *About this report* | `ReportCreator.js` (+ one hook in `continuousUpdate`) | trigger/clock tests | None until pushed | Revert | Review |
@@ -637,26 +637,112 @@ Stages 002 to 005 are local and reviewable in isolation; only 001 and 006 touch 
 
 ---
 
-## 19. GO / NO-GO criteria and the one experiment
+## 19. GO / NO-GO criteria and the one experiment (TEMPLATE-001)
 
-**TEMPLATE-001 probe.** Paste `template/probe/Template001Probe.gs` into the bound script of a
-new, empty scratch Doc, add the Drive (v3) service, reload, and follow the steps in the file
-header. It needs no clasp and touches no existing file.
+**Question:** can a Google Doc with a bound Apps Script be copied, by hand and by script, so
+that the copy is an independent document with its own usable bound script?
 
-| # | Criterion | GO if | If NO-GO |
-|---|---|---|---|
-| G1 | `makeCopy` copy has the bound script | 🧪 menu appears in the DriveApp copy | Switch the creator to **E2** (Apps Script API `projects.create` + `updateContent`), or to UI *Make a copy* plus the first-run wizard (option B); the rest of the design stands |
-| G2 | New Script ID in each copy | `Report` shows a different Script ID | If shared: stop, the design is invalid |
-| G3 | Properties not copied | All three `PROBE_*` values are null in both copies | If copied: harmless, because the template holds none; add a first-run wipe of inherited keys |
-| G4 | Triggers not copied | No `probeTick` trigger in the copies before step 6 | If copied: the first run must delete inherited `continuousUpdate` triggers (tested path exists as a warning) |
-| G5 | `onOpen` before consent | Menu visible before authorizing | Setup text says "authorize via Extensions > Apps Script first" |
-| G6 | Consent per copy | Record it (expected: yes) | Only UX wording changes |
-| G7 | 30-min trigger fires in a copy | `PROBE_TICKS` shows ticks with this copy's doc ID after ≥ 35 min | Use hourly (still no worse than CENTRAL) |
-| G8 | Description read/write in the copy | `Report` shows the description | Fall back to option B (re-discover at first run) |
-| G9 | Drive advanced service in copy | `Drive advanced service present: true` | Enable it in the template's manifest (it already is) |
+The probe is `template/probe/Template001Probe.gs`. It is pasted into one scratch Doc. It
+needs no clasp, no manifest edit and **no Advanced Drive service**: the production creator
+copies with `DriveApp` only (`File.makeCopy(title, folder)` then `File.setDescription`), and
+the probe uses that exact call. The Advanced Drive service in `appsscript.json` exists only
+for converting a Word agenda (`convertWordBlobToGoogleDoc_`); it has nothing to do with copying.
 
-Overall **GO** requires G1 (or its fallback), G2, G5 and G8. Everything else changes wording
-or adds a guard.
+### 19.1 Checklist for Thomas
+
+1. Create a new, empty scratch Google Doc.
+2. **Extensions → Apps Script**: replace everything with `Template001Probe.gs`, save.
+3. Reload the Doc. A **Report** menu appears.
+4. **Report → Initialize TEMPLATE-001** (allow the permission prompt, then click the item again).
+5. **Report → Create Programmatic Copy**, and open the link it shows.
+6. Back in the original: **File → Make a copy**.
+7. In **each of the two copies**: **Report → Install 30-Minute Test Trigger**. Note whether
+   Google asked for permission (it is expected to; click the item again afterwards).
+8. Send back the text of the three status boxes (original and both copies). Clicking the
+   text selects all of it. **Report → TEMPLATE-001 Status** shows the box again at any time.
+
+There is no waiting step. The decision is made on "trigger created". Later, at any time
+after about 35 minutes, *TEMPLATE-001 Status* in a copy also shows whether the trigger ran;
+the test trigger deletes itself after its first run. When finished: **Report → Clean Up Test
+State** in each of the three documents, then move them to the trash.
+
+If a copy has **no Report menu even after a reload**, that is the result: the copy lost its
+script. Report that instead of a status box (Extensions → Apps Script in the copy will show
+an empty project).
+
+### 19.2 How the probe tells the cases apart
+
+| Marker | Where | Purpose |
+|---|---|---|
+| Template marker `TEMPLATE-001 ORIGINAL doc=… script=…` | document body (always copied) | Tells every copy who the original was, so document and script IDs can be compared without opening Apps Script |
+| `TEMPLATE001_DOCUMENT_MARKER` | Document Properties of the original | MISSING / PRESENT-COPIED / SET IN THIS DOCUMENT in a copy |
+| `TEMPLATE001_SCRIPT_MARKER` | Script Properties of the original | same |
+| `TEMPLATE001_USER_MARKER` | User Properties of the original | same |
+| `TEMPLATE001_WRITE_TEST` | Document Properties, written by every status check | Shows a copy can create its own Document Properties |
+| One `everyMinutes(30)` trigger in the original | created by Initialize | Something a copy could inherit |
+| Description `TEMPLATE001-PROGRAMMATIC-COPY target=<id>` | Drive description, written by the creator after copying | Identifies the programmatic copy; shows the bootstrap transport works |
+
+Every stored value carries the document and script ID that wrote it, so a value copied from
+the original is never mistaken for one created in the copy. The first check in a document
+records which triggers existed before the probe created any there.
+
+### 19.3 Expected status matrix
+
+| Line in the status box | Original | Manual copy | **Programmatic copy** | If different |
+|---|---|---|---|---|
+| Bound script present, Report menu works | INFO | PASS | **PASS** | No menu, no box: **FAIL** (see 19.5) |
+| Document ID differs from the original | INFO | PASS | **PASS** | Same ID: FAIL |
+| Script ID differs from the original | INFO | PASS | **PASS** | Same project: FAIL |
+| Template marker in body | INFO | INFO | INFO | |
+| Document Property marker | SET IN THIS DOCUMENT | EXPECTED: MISSING | EXPECTED: MISSING | PRESENT / COPIED: WARNING |
+| Script Property marker | SET IN THIS DOCUMENT | EXPECTED: MISSING | EXPECTED: MISSING | PRESENT / COPIED: WARNING |
+| User Property marker | SET IN THIS DOCUMENT | EXPECTED: MISSING | EXPECTED: MISSING | PRESENT / COPIED: WARNING |
+| Document Properties usable here | INFO | PASS | **PASS** | Cannot write/read: FAIL |
+| Triggers inherited from the original | n/a | PASS: NONE | **PASS: NONE** | Any: FAIL |
+| Drive description | INFO | INFO (copied or empty) | PASS: creator's text readable | Not readable / not found: WARNING |
+| 30-minute trigger | INFO | PASS: CREATED | **PASS: CREATED** | CREATION FAILED: FAIL |
+| Last trigger execution | INFO | EXPECTED: NOT YET | EXPECTED: NOT YET | Later: PASS if it ran and saw this document; WARNING if it saw another or none |
+| **RESULT** | ORIGINAL, no verdict | MANUAL COPY OK | **GO** | |
+
+Meaning of the classes: **PASS** and **FAIL** decide the result. **EXPECTED** is the
+predicted, harmless outcome. **WARNING** is an outcome the design absorbs, but the bootstrap
+has to be adjusted for it:
+
+- Properties copied: the first run must clear inherited keys before storing the configuration.
+  The template holds no configuration, so nothing wrong could be inherited either way.
+- Description not readable in the copy: the creator cannot hand over the configuration; the
+  first run asks for the meeting ID and discovers it there (§9, option B).
+- Trigger ran but did not see its own document: automatic updates in copies need a closer look
+  before TEMPLATE-004; creation and manual operation are unaffected.
+
+Authorization is observed by Thomas, not by the probe: a permission prompt per copy is
+EXPECTED (each copy is a new project). No prompt at all would be a pleasant surprise, not a problem.
+
+### 19.4 The GO / NO-GO rule
+
+**GO** if the **programmatic copy's** status box ends with `RESULT: GO` (with or without
+warnings). That line is printed only when all of these hold:
+
+1. the bound script is present and the Report menu works;
+2. the document ID differs from the original;
+3. the script ID differs from the original (its own project);
+4. Document Properties can be written and read in the copy;
+5. no installable trigger was inherited;
+6. an `everyMinutes(30)` trigger was created in the copy.
+
+**NO-GO** if the programmatic copy has no Report menu, or its box ends with `RESULT: NO-GO`.
+`RESULT: INCOMPLETE` only means step 7 has not been done in that copy yet.
+
+The manual copy's result does not decide GO. It decides which fallback applies.
+
+### 19.5 If the programmatic copy does not keep the bound script
+
+No redesign yet; only the preferred fallback:
+
+| Manual copy result | Preferred fallback | Why |
+|---|---|---|
+| MANUAL COPY OK | **Manual copy of the template + setup in the copy.** Thomas does *File → Make a copy* on the template; the meeting lookup and "Finish Setup & Build" run in the copy's first run instead of in the template. | It rests on behavior Google documents, needs no new scope, no Apps Script API switch and no place to host source bundles. The runtime, release model, triggers and guards are unchanged. Cost: one extra manual action, and the copy is named after the lookup instead of before. |
+| Manual copy also has no script | **Apps Script API** (§4, E2): the creator makes a plain document and attaches a new bound project with `projects.create` + `updateContent`. | Only remaining route to a bound report. It needs the `script.projects` scope, the user-level Apps Script API setting and a hosted source bundle, so it is the last resort. |
 
 ---
 
