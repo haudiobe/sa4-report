@@ -1,0 +1,568 @@
+/**
+ * TEMPLATE-003 stage 1 -- the "SA4 Report" menu of the template runtime.
+ *
+ *   1. The exact menu trees: master template, report before setup, report
+ *      after setup. No LEGACY submenu, none of the hidden operations.
+ *   2. What was hidden is still in the code; nothing was removed.
+ *   3. The CENTRAL add-on / Legacy menu (no Release.js) is exactly what it
+ *      was in release T-2026.10.3.
+ *   4. A: "Build Report from Scratch" is runFullReportBuild(); its one
+ *      question warns that the content is replaced; no UI call afterwards.
+ *   5. B: "Update Report Now" runs the complete update and fails visibly;
+ *      the trigger's continuousUpdate() behaves as before.
+ *   6. The partial updates and Automatic Updates call their existing functions.
+ *
+ * Run: node tests/template003-menu.test.js
+ */
+
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const { execFileSync } = require('child_process');
+const { loadTemplateRuntime, REPORT_CREATOR_PATH } = require('./helpers/load-template.js');
+const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
+const { makeFakeDocumentBody } = require('./helpers/fake-document.js');
+
+let failures = 0;
+function check(name, actual, expected) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a === e) {
+    console.log(`  ok   ${name}`);
+  } else {
+    failures++;
+    console.log(`  FAIL ${name}\n         expected ${e}\n         actual   ${a}`);
+  }
+}
+const thrown = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
+
+const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
+
+const TEMPLATE_ID = 'TEMPLATEdoc0000000000000000000000000000000';
+const REPORT_ID = 'REPORTdoc000000000000000000000000000000000';
+const RELEASE = {
+  releaseId: 'T-2026.10.4', flavor: 'template', codeVersion: (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1],
+  gitCommit: 'abcdef0000000000000000000000000000000000', gitTag: 'template-release/T-2026.10.4', templateDocumentId: TEMPLATE_ID
+};
+/** The accepted live release: the reference for "unchanged". */
+const BASELINE = 'template-release/T-2026.10.3';
+const SET_UP = { SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'adhoc', MEETING_ID: '86178', REPORT_SUFFIX: '6G' };
+
+// ------------------------------------------------------------------ helpers
+
+function fakeUi(events) {
+  const ui = { menus: [], alerts: [], dialogs: [], alertResponse: 'YES', ButtonSet: { OK: 'OK', YES_NO: 'YES_NO' }, Button: { YES: 'YES', NO: 'NO', OK: 'OK' } };
+  ui.createMenu = (name) => {
+    const m = { name, entries: [] };
+    m.addItem = (label, fn) => { m.entries.push({ label, fn }); return m; };
+    m.addSeparator = () => { m.entries.push({ sep: true }); return m; };
+    m.addSubMenu = (sub) => { m.entries.push({ sub }); return m; };
+    m.addToUi = () => { ui.menus.push(m); };
+    return m;
+  };
+  ui.alert = (...args) => { ui.alerts.push(args); if (events) events.push('ALERT ' + args[0]); return ui.alertResponse; };
+  ui.showModalDialog = (out, title) => { ui.dialogs.push({ title, html: out.html }); };
+  return ui;
+}
+
+/** The installed menus as indented lines: "label -> function", "---" for a separator. */
+function tree(ui) {
+  const out = [];
+  const walk = (m, depth) => {
+    out.push('  '.repeat(depth) + m.name);
+    m.entries.forEach((e) => {
+      if (e.sub) walk(e.sub, depth + 1);
+      else out.push('  '.repeat(depth + 1) + (e.sep ? '---' : e.label + ' -> ' + e.fn));
+    });
+  };
+  ui.menus.forEach((m) => walk(m, 0));
+  return out;
+}
+const targets = (ui) => tree(ui).filter((l) => / -> /.test(l)).map((l) => l.split(' -> ')[1]);
+
+/** A template-runtime sandbox bound to one document. opts: { docId, props, release (false = none) }. */
+function runtime(opts) {
+  const o = opts || {};
+  const loaded = loadTemplateRuntime({ release: o.release === false ? null : RELEASE, documentProperties: o.props || {} });
+  const s = loaded.sandbox;
+  const events = [];
+  const logs = [];
+  const ui = fakeUi(events);
+  const body = makeFakeDocumentBody(s);
+  const docId = o.docId || REPORT_ID;
+  s.Logger = { log: (m) => logs.push(String(m)) };
+  s.DocumentApp.getActiveDocument = () => ({ getId: () => docId, getBody: () => body });
+  s.DocumentApp.getUi = () => ui;
+  return { s, ui, events, logs, body, docProps: loaded.docProps };
+}
+
+/** A git object as text, or null when this checkout cannot provide it. */
+function gitShow(spec) {
+  try {
+    return execFileSync('git', ['show', spec], { cwd: path.join(__dirname, '..'), maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
+  } catch (e) {
+    return null;
+  }
+}
+const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
+/** The source of one top-level function (up to its closing brace in column 0). */
+function functionSource(src, name) {
+  const start = src.indexOf('\nfunction ' + name + '(');
+  if (start === -1) return null;
+  return src.slice(start + 1, src.indexOf('\n}\n', start) + 2);
+}
+
+const OLD_CODE = gitShow(BASELINE + ':Code.js');
+const OLD_CREATOR = gitShow(BASELINE + ':template/ReportCreator.js');
+const haveBaseline = !!(OLD_CODE && OLD_CREATOR);
+if (!haveBaseline) console.log('  note: ' + BASELINE + ' is not available in this checkout; the comparisons with it are skipped.');
+
+// ================================================================ 1. menu trees
+
+const MASTER_TREE = [
+  'SA4 Report',
+  '  🆕 Create New SA4 Report -> showCreateReportDialog',
+  '  ---',
+  '  ℹ️ Template Release Info -> showTemplateInfo'
+];
+const REPORT_TREE_AFTER_SETUP = [
+  'SA4 Report',
+  '  📄 Report',
+  '    Build Report from Scratch… -> runFullReportBuild',
+  '    Update Report Now -> updateReportNow',
+  '    ---',
+  '    Update E-mail Discussions -> collectEmailDiscussionOnly',
+  '    Update TDoc Revisions -> collectRevisionsOnly',
+  '    Update Abstracts -> addAbstractsOnly',
+  '    ---',
+  '    Report Status Summary -> analyzeReportStatus',
+  '  💬 Prepare Discussion E-mails… -> prepareTdocDiscussionEmails',
+  '  🔀 Document Reallocation',
+  '    Add or Change a Reallocation… -> addDocumentReallocation',
+  '    Show Reallocations -> viewAllReallocations',
+  '    Apply Reallocations to Report… -> applyDocumentReallocations',
+  '    Remove All Reallocations… -> clearAllReallocations',
+  '  🔄 Automatic Updates… -> manageTriggers',
+  '  ⚙️ Configure Meeting… -> configureMeetingSettings',
+  '  ---',
+  '  🛠 Advanced and Repair',
+  '    Check Connections -> testAllConnections',
+  '    Format Report -> removeRowHeightAndSpacing',
+  '    Remove Duplicate E-mail Entries… -> removeDuplicateEmailEntries',
+  '    Remove Wrong E-mail Matches… -> cleanUpWrongEmailDiscussions',
+  '    Clear Collection Caches… -> clearAllCaches',
+  '  ℹ️ About This Report -> showTemplateInfo'
+];
+const REPORT_TREE_BEFORE_SETUP = [REPORT_TREE_AFTER_SETUP[0], '  🚀 Finish Report Setup -> finishReportSetup', '  ---'].concat(REPORT_TREE_AFTER_SETUP.slice(1));
+
+/** Operations that left the template report menu and must stay in the code. */
+const HIDDEN = ['buildInitialReport', 'updateAll', 'updateReportIncremental', 'buildSkeletonWithTdocTables', 'parseAgendaDocument',
+  'autoCreateReportStructure', 'rearrangeRevisionTables', 'createConfigurationTables', 'testTdocListUrl', 'testReviewerApi',
+  'testEmailFeeds', 'testRevisionsFolder', 'validateConfiguration', 'rewritePortalLinksInDoc_', 'fixColumnWidths', 'continuousUpdate'];
+
+console.log('1. master template menu');
+{
+  const r = runtime({ docId: TEMPLATE_ID });
+  r.s.onOpen();
+  check('exact tree', tree(r.ui), MASTER_TREE);
+  check('one menu, no report operation', [r.ui.menus.length, targets(r.ui)], [1, ['showCreateReportDialog', 'showTemplateInfo']]);
+}
+
+console.log('1. report menu before setup');
+let reportTargets;
+{
+  const r = runtime({ docId: REPORT_ID });
+  r.s.onOpen();
+  check('exact tree', tree(r.ui), REPORT_TREE_BEFORE_SETUP);
+  check('one menu', r.ui.menus.length, 1);
+}
+
+console.log('1. report menu after setup');
+{
+  const r = runtime({ docId: REPORT_ID, props: SET_UP });
+  r.s.onOpen();
+  const t = tree(r.ui);
+  reportTargets = targets(r.ui);
+  check('exact tree', t, REPORT_TREE_AFTER_SETUP);
+  check('the menu is not called Scripts', [r.ui.menus[0].name, t.some((l) => /Scripts/.test(l))], ['SA4 Report', false]);
+  check('no LEGACY submenu and no Legacy item', t.filter((l) => /legacy/i.test(l)), []);
+  check('none of the hidden operations is offered', HIDDEN.filter((f) => reportTargets.indexOf(f) !== -1), []);
+  check('Configure Meeting is offered once', reportTargets.filter((f) => f === 'configureMeetingSettings').length, 1);
+  check('every item calls an existing public function (a menu cannot call a private one)',
+    reportTargets.filter((f) => typeof r.s[f] !== 'function' || /_$/.test(f)), []);
+  check('no label is used twice', t.filter((l, i) => / -> /.test(l) && t.indexOf(l) !== i), []);
+  check('19 items after setup, 3 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [19, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
+  check('a document configured by hand (state "manual") gets the same menu',
+    (() => { const m = runtime({ docId: REPORT_ID, props: { SA4_BOOTSTRAP_STATE: 'manual' } }); m.s.onOpen(); return tree(m.ui); })(), REPORT_TREE_AFTER_SETUP);
+}
+
+console.log('1. texts of the template runtime name the new menu');
+{
+  const r = runtime({ docId: REPORT_ID, props: SET_UP });
+  check('no template text mentions the old menu or its submenus', /Scripts⚠️|Scripts menu|INITIAL SETUP|REPORT OPERATIONS|Run Full Report Build\./.test(CREATOR.replace(/^\s*(\/\/|\*).*$/gm, '')), false);
+  const about = r.s.describeTemplateRuntime_({ release: RELEASE, documentId: REPORT_ID, scriptId: 'S', bootstrapState: null, meetingId: null, continuousInterval: '30 minutes' }).join('\n');
+  check('About This Report: the build by its new name, "Automatic updates"', [/Build Report from Scratch/.test(about), /Automatic updates: every 30 minutes/.test(about), /Continuous Update/.test(about)], [true, true, false]);
+  // A document without the creator's setup information (an empty file description).
+  const plainDoc = runtime({ docId: REPORT_ID });
+  plainDoc.s.DriveApp = { getFileById: () => ({ getDescription: () => '', setDescription: () => {} }) };
+  plainDoc.s.ScriptApp = { getScriptId: () => 'SCRIPT' };
+  plainDoc.s.finishReportSetup();
+  check('Finish Report Setup without setup information points to Configure Meeting in the new menu',
+    /Use SA4 Report > ⚙️ Configure Meeting…\./.test(plainDoc.ui.alerts[plainDoc.ui.alerts.length - 1][1]), true);
+  check('its "ready" result names the build in the new menu (source)', CREATOR.indexOf("'✅ Ready to build: ' + TEMPLATE_MENU_NAME_ + ' > 📄 Report > Build Report from Scratch….'") !== -1, true);
+  check('the setup note written into a new report names the new menu (source)', CREATOR.indexOf("'. Open it and run ' + TEMPLATE_MENU_NAME_ + ' > 🚀 Finish Report Setup.\\n'") !== -1, true);
+}
+
+// ================================================================ 2. nothing removed
+
+console.log('2. hidden operations are still in the code');
+{
+  const r = runtime({ docId: REPORT_ID, props: SET_UP });
+  check('every hidden operation is still a function', HIDDEN.filter((f) => typeof r.s[f] !== 'function'), []);
+  const addon = loadCode().sandbox;
+  check('and in the add-on runtime (Code.js alone) too', HIDDEN.filter((f) => typeof addon[f] !== 'function'), []);
+  if (haveBaseline) {
+    const before = functionNames(OLD_CODE).concat(functionNames(OLD_CREATOR));
+    const now = functionNames(CODE).concat(functionNames(CREATOR));
+    check('no function of T-2026.10.3 was removed', before.filter((f) => now.indexOf(f) === -1), []);
+    check('the new functions are exactly these, all in ReportCreator.js',
+      [now.filter((f) => before.indexOf(f) === -1).sort(), functionNames(CODE).filter((f) => functionNames(OLD_CODE).indexOf(f) === -1)],
+      [['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_', 'describeUpdateReportNowFailure_', 'updateReportNow'], []]);
+  }
+}
+
+// ================================================================ 3. CENTRAL / Legacy menu
+
+const ADDON_TREE = [
+  '⚠️Scripts⚠️',
+  '  📝 INITIAL SETUP',
+  '    ⚙️ Configure Meeting Settings -> configureMeetingSettings',
+  '    🧪 Test All Connections -> testAllConnections',
+  '    📋 Create Configuration Tables -> createConfigurationTables',
+  '  🚀 REPORT OPERATIONS',
+  '    ▶️ Run Full Report Build -> runFullReportBuild',
+  '    ---',
+  '    0️⃣ Configure Meeting -> configureMeetingSettings',
+  '    1️⃣+2️⃣ Build Skeleton + TDOC Tables -> buildSkeletonWithTdocTables',
+  '    3️⃣ Collect E-mail Discussion -> collectEmailDiscussionOnly',
+  '    4️⃣ Collect Revisions -> collectRevisionsOnly',
+  '    5️⃣ Add Abstracts -> addAbstractsOnly',
+  '    ---',
+  '    🔄 Continuous Update (New TDOCs + Status) -> continuousUpdate',
+  '    ⏰ Manage Auto-Update Trigger -> manageTriggers',
+  '    ---',
+  '    📝 Legacy: Build Initial Report -> buildInitialReport',
+  '    🔄 Update Report (During Meeting) -> updateReportIncremental',
+  '    📊 Analyze Report Status -> analyzeReportStatus',
+  '  📋 DOCUMENT MANAGEMENT',
+  '    ➕ Add Document Reallocation -> addDocumentReallocation',
+  '    📊 View All Reallocations -> viewAllReallocations',
+  '    🗑️ Clear All Reallocations -> clearAllReallocations',
+  '    🔄 Apply Document Reallocations -> applyDocumentReallocations',
+  '    🔀 Re-arrange Revision Tables -> rearrangeRevisionTables',
+  '    ---',
+  '    📄 Parse Agenda Document -> parseAgendaDocument',
+  '    🏗️ Auto-Create Report Structure -> autoCreateReportStructure',
+  '    ---',
+  '    🧹 Clean Up Wrong Email Discussions -> cleanUpWrongEmailDiscussions',
+  '    🔧 Remove Duplicate Email Entries -> removeDuplicateEmailEntries',
+  '  🔧 TOOLS & DIAGNOSTICS',
+  '    🧪 Test TDOC List URL -> testTdocListUrl',
+  '    🧪 Test Reviewer API -> testReviewerApi',
+  '    🧪 Test Email Feeds -> testEmailFeeds',
+  '    🧪 Test Revisions Folder -> testRevisionsFolder',
+  '    ✅ Validate Configuration -> validateConfiguration',
+  '    🗑️ Clear All Caches -> clearAllCaches',
+  '  🎨 FORMATTING & FIXES',
+  '    🎨 Format Document -> removeRowHeightAndSpacing',
+  '    🔗 Fix Links (portal→FTP) -> rewritePortalLinksInDoc_',
+  '    📏 Fix Column Widths -> fixColumnWidths',
+  '  📧 EMAIL EXPORT',
+  '    Prepare TDoc Discussion E-mails -> prepareTdocDiscussionEmails',
+  '  ☁️ CENTRAL ADD-ON (hourly)',
+  '    ▶️ Enable Automatic Updates (this doc) -> enableAutomaticUpdatesForAddon',
+  '    ⏹️ Disable Automatic Updates (this doc) -> disableAutomaticUpdatesForAddon',
+  '    ⏱️ Set Update Interval (this doc) -> setAutomaticUpdateIntervalForAddon',
+  '    📊 Show Add-on Status (this doc) -> showAddonSchedulerStatusForAddon',
+  '  ---',
+  '  ⚠️ Legacy: Update All -> updateAll'
+];
+
+console.log('3. the CENTRAL add-on / Legacy menu (no Release.js) is unchanged');
+{
+  // Code.js alone, as the CENTRAL add-on project and a Legacy-style bound copy have it.
+  const addon = loadCode().sandbox;
+  const ui = fakeUi();
+  addon.DocumentApp.getUi = () => ui;
+  addon.onOpen();
+  check('exact tree, as before TEMPLATE-003', tree(ui), ADDON_TREE);
+  ui.menus.length = 0;
+  addon.onInstall({});
+  check('onInstall() builds the same menu', tree(ui), ADDON_TREE);
+
+  // Code.js + ReportCreator.js without Release.js: still not the template runtime.
+  const noRelease = runtime({ release: false });
+  noRelease.s.onOpen();
+  check('with ReportCreator.js but without Release.js: the same menu', tree(noRelease.ui), ADDON_TREE);
+
+  if (haveBaseline) {
+    const base = loadCode().sandbox;
+    const old = { console };
+    ['Logger', 'PropertiesService', 'DocumentApp', 'Session', 'Utilities', 'UrlFetchApp', 'DriveApp', 'SpreadsheetApp', 'HtmlService', 'ScriptApp', 'MimeType', 'XmlService', 'LockService']
+      .forEach((k) => { old[k] = base[k]; });
+    vm.createContext(old);
+    vm.runInContext(OLD_CODE, old, { filename: 'Code.js@T-2026.10.3' });
+    const oldUi = fakeUi();
+    old.DocumentApp.getUi = () => oldUi;
+    old.onOpen();
+    check('identical to the menu the T-2026.10.3 Code.js builds without Release.js', tree(oldUi), ADDON_TREE);
+  }
+  const onOpen = functionSource(CODE, 'onOpen');
+  check('onOpen(): the template runtime returns before the first line of this menu',
+    [onOpen.indexOf('if (templateRuntimeRelease_()) {') !== -1, onOpen.indexOf('if (templateRuntimeRelease_()) {') < onOpen.indexOf("ui.createMenu('⚠️Scripts⚠️')"),
+      /templateRuntime\b(?!Release_)/.test(onOpen.slice(onOpen.indexOf("ui.createMenu('⚠️Scripts⚠️')")))],
+    [true, true, false]);
+}
+
+// ================================================================ 4. A: Build Report from Scratch
+
+/** A set-up template report whose build core is recorded instead of run. */
+function buildReport(opts) {
+  const o = opts || {};
+  const r = runtime({ docId: REPORT_ID, props: SET_UP, release: o.release });
+  r.s.runFullReportBuildCore_ = () => {
+    r.events.push('WORK build');
+    return o.fail ? { ok: false, failedPhase: 'e-mail', error: 'RSS is down', phases: [{ name: 'skeleton', status: 'done', ms: 1 }, { name: 'e-mail', status: 'failed', ms: 1, detail: 'RSS is down' }], totalMs: 2 }
+      : { ok: true, phases: [], totalMs: 1 };
+  };
+  if (o.uiFailsAfterWork) {
+    const alert = r.ui.alert;
+    r.ui.alert = (...args) => {
+      if (r.events.some((e) => /^WORK/.test(e))) { r.events.push('ALERT ATTEMPT ' + args[0]); throw new Error('Service Documents failed while accessing document with id FAKE_DOC.'); }
+      return alert(...args);
+    };
+  }
+  return r;
+}
+
+console.log('4. Build Report from Scratch (A)');
+{
+  check('the menu item calls runFullReportBuild', REPORT_TREE_AFTER_SETUP.filter((l) => /Build Report from Scratch/.test(l)), ['    Build Report from Scratch… -> runFullReportBuild']);
+
+  const r = buildReport();
+  const out = r.s.runFullReportBuild();
+  const [title, text, buttons] = r.ui.alerts[0];
+  check('one question, before any work; nothing after the work', r.events, ['ALERT Build Report from Scratch', 'WORK build']);
+  check('a YES/NO question', buttons, 'YES_NO');
+  check('it says the content of the document is replaced', [/replaces the content of this document/.test(text), /Everything that is in the document now is removed/.test(text)], [true, true]);
+  check('it says minutes and other content entered by hand will be lost', /Meeting minutes and any other content entered by hand will be lost/.test(text), true);
+  check('it names what is kept, and the alternative that loses nothing', [/Only the Document Reallocations table is kept/.test(text), /Update Report Now/.test(text)], [true, true]);
+  check('it says there is no completion message', /no completion message/.test(text), true);
+  check('it ends with the question', /Replace the content of this document and build the report from scratch\?$/.test(text), true);
+  check('a completed build ends normally and returns its result', out && out.ok, true);
+  check('title', title, 'Build Report from Scratch');
+
+  const no = buildReport();
+  no.ui.alertResponse = 'NO';
+  check('No: nothing is built, no further dialog, no error', [thrown(() => no.s.runFullReportBuild()), no.events], [null, ['ALERT Build Report from Scratch']]);
+
+  const uiDown = buildReport({ uiFailsAfterWork: true });
+  check('no UI call is attempted after the build (a UI that fails then cannot fail the build)',
+    [thrown(() => uiDown.s.runFullReportBuild()), uiDown.events], [null, ['ALERT Build Report from Scratch', 'WORK build']]);
+
+  const failed = buildReport({ fail: true });
+  const message = thrown(() => failed.s.runFullReportBuild());
+  check('a failed phase still throws (execution "Failed"), without a pop-up', [/^Full report build failed: RSS is down/.test(message || ''), failed.events], [true, ['ALERT Build Report from Scratch', 'WORK build']]);
+
+  const wrapper = functionSource(CODE, 'runFullReportBuild').replace(/^\s*\/\/.*$/gm, '');
+  check('runFullReportBuild(): nothing but the result handling after the build (source)',
+    /ui\.|getUi|DocumentApp|saveAndClose/.test(wrapper.slice(wrapper.indexOf('runFullReportBuildCore_()'))), false);
+  check('the confirmation is the only UI call of confirmTemplateBuildFromScratch_()', (functionSource(CREATOR, 'confirmTemplateBuildFromScratch_').match(/ui\.alert\(/g) || []).length, 1);
+
+  // The clearing the warning speaks of is real: the skeleton step empties the body.
+  check('the build does clear the document body (source)', /getActiveDocument\(\)\.getBody\(\)\.clear\(\)/.test(functionSource(CODE, 'buildSkeletonWithTdocTables')), true);
+
+  const addon = buildReport({ release: false });
+  addon.s.runFullReportBuild();
+  check('add-on / Legacy runtime: the question is the old one, word for word',
+    [addon.ui.alerts[0][0], /^This will run all steps:\n\n1\+2\) Build skeleton from agenda \+ insert TDOC tables\n3\) Collect e-mail discussion\n4\) Collect revisions\n5\) Add abstracts\n\nContinue\?$/.test(addon.ui.alerts[0][1])],
+    ['Run Full Report Build', true]);
+}
+
+// ================================================================ 5. B: Update Report Now
+
+/**
+ * A set-up report with the REAL continuousUpdateCore_() and collectorUpdate_();
+ * only the network / document work below them is recorded. opts: { failList,
+ * failEmail, failRevisions, lockBusy, release }.
+ */
+function updateReport(opts) {
+  const o = opts || {};
+  const r = runtime({ docId: o.docId || REPORT_ID, props: SET_UP, release: o.release });
+  const lock = { tries: 0, releases: 0 };
+  r.lock = lock;
+  r.s.LockService = { getDocumentLock: () => ({ tryLock: () => { lock.tries++; return !o.lockBusy; }, releaseLock: () => { lock.releases++; } }) };
+  r.s.assertMeetingReadyToBuild_ = () => {};
+  r.s.downloadAndGroupTdocs_ = () => { r.events.push('WORK TDoc list'); if (o.failList) throw new Error('TDoc list not reachable'); return {}; };
+  r.s.rearrangeRevisionTables_ = () => { r.events.push('WORK revision placement'); return { moved: 0, dispositions: 0 }; };
+  r.s.checkRSSFeed_ = () => { r.events.push('WORK e-mail'); if (o.failEmail) throw new Error('RSS is down'); };
+  r.s.updateRevisions_ = () => { r.events.push('WORK revisions'); if (o.failRevisions) throw new Error('drafts folder not found'); };
+  r.s.removeRowHeightAndSpacing = () => r.events.push('WORK formatting');
+  r.s.updateReportIncremental = () => r.events.push('CALLED updateReportIncremental');
+  return r;
+}
+const COMPLETE_UPDATE = ['WORK TDoc list', 'WORK revision placement', 'WORK e-mail', 'WORK revisions'];
+
+console.log('5. Update Report Now (B): the complete update');
+{
+  check('the menu item calls updateReportNow', REPORT_TREE_AFTER_SETUP.filter((l) => /Update Report Now/.test(l)), ['    Update Report Now -> updateReportNow']);
+  check('nothing in the template menu calls updateReportIncremental or continuousUpdate', reportTargets.filter((f) => /updateReportIncremental|^continuousUpdate$/.test(f)), []);
+
+  const r = updateReport();
+  let out;
+  const message = thrown(() => { out = r.s.updateReportNow(); });
+  check('a completed update ends normally', [message, out && out.success], [null, true]);
+  check('it ran the complete update: TDoc list, revision placement, e-mail, revisions', r.events, COMPLETE_UPDATE);
+  check('no dialog at all: none before, none after the document was changed', r.ui.alerts.length + r.ui.dialogs.length, 0);
+  check('it did not go through updateReportIncremental', r.events.indexOf('CALLED updateReportIncremental'), -1);
+  check('it held the document lock for the run and released it', [r.lock.tries, r.lock.releases], [1, 1]);
+
+  // The same work as the function the timer runs.
+  const timer = updateReport();
+  timer.s.continuousUpdate();
+  check('the same work as continuousUpdate()', timer.events, r.events);
+  const src = functionSource(CREATOR, 'updateReportNow');
+  check('updateReportNow(): continuousUpdateCore_() once, no UI call (source)',
+    [(src.match(/continuousUpdateCore_\(\)/g) || []).length, /getUi|ui\.|\.alert\(|updateReportIncremental|collectorUpdate_/.test(src.replace(/^\s*\/\/.*$/gm, ''))], [1, false]);
+}
+
+console.log('5. Update Report Now (B): failures are visible');
+{
+  const list = updateReport({ failList: true });
+  const m1 = thrown(() => list.s.updateReportNow());
+  check('the update itself fails: the menu function throws', [/^The report update failed: TDoc list not reachable/.test(m1 || ''), list.ui.alerts.length], [true, 0]);
+  check('the lock is released after a failure', [list.lock.tries, list.lock.releases], [1, 1]);
+  check('the failure is logged as well', list.logs.filter((l) => /^Update Report Now failed: The report update failed: TDoc list not reachable/.test(l)).length, 1);
+
+  const email = updateReport({ failEmail: true });
+  const m2 = thrown(() => email.s.updateReportNow());
+  check('e-mail collection fails: thrown after the rest of the update ran', [/^The report update finished, but one part failed:\n• e-mail discussions: RSS is down/.test(m2 || ''), email.events], [true, COMPLETE_UPDATE]);
+
+  const both = updateReport({ failEmail: true, failRevisions: true });
+  const m3 = thrown(() => both.s.updateReportNow()) || '';
+  check('both collector steps fail: both are named', [/2 parts failed/.test(m3), /• e-mail discussions: RSS is down/.test(m3), /• TDoc revisions: drafts folder not found/.test(m3)], [true, true, true]);
+  check('no pop-up is used for any failure', email.ui.alerts.length + both.ui.alerts.length, 0);
+
+  const busy = updateReport({ lockBusy: true });
+  const m4 = thrown(() => busy.s.updateReportNow());
+  check('another update is running: nothing is done, and that is an error too', [/^The report was not updated: another update of this report is running/.test(m4 || ''), busy.events, busy.lock.releases], [true, [], 0]);
+
+  const master = updateReport({ docId: TEMPLATE_ID });
+  check('in the master template it refuses before taking the lock', [/SA4 Report Template itself/.test(thrown(() => master.s.updateReportNow()) || ''), master.events, master.lock.tries], [true, [], 0]);
+
+  const d = updateReport().s.describeUpdateReportNowFailure_;
+  check('describeUpdateReportNowFailure_ (pure)', [d({ success: true, error: null }), d({ success: true, error: null, collectorFailures: [] }),
+    /^The report update failed: no result was returned/.test(d(undefined)), /^The report update failed: x/.test(d({ success: false, error: 'x' }))], ['', '', true, true]);
+}
+
+console.log('5. the automatic trigger behaves as before');
+{
+  // continuousUpdate() -- the function the timer calls -- still swallows and logs.
+  const list = updateReport({ failList: true });
+  check('continuousUpdate(): a failed update ends normally (logged, not thrown)',
+    [thrown(() => list.s.continuousUpdate()), list.logs.some((l) => l === 'ERROR: TDoc list not reachable'), list.ui.alerts.length], [null, true, 0]);
+  const email = updateReport({ failEmail: true });
+  check('continuousUpdate(): a failed e-mail collection ends normally', [thrown(() => email.s.continuousUpdate()), email.events], [null, COMPLETE_UPDATE]);
+  const busy = updateReport({ lockBusy: true });
+  check('continuousUpdate(): a busy lock is skipped silently', [thrown(() => busy.s.continuousUpdate()), busy.events], [null, []]);
+  check('continuousUpdate() returns nothing', updateReport().s.continuousUpdate(), undefined);
+
+  const ok = updateReport().s.continuousUpdateCore_();
+  check('continuousUpdateCore_(): the result of a clean run is what it was', ok, { success: true, error: null });
+  const failed = updateReport({ failEmail: true }).s.continuousUpdateCore_();
+  check('continuousUpdateCore_(): a collector failure is added to the result, success stays true',
+    failed, { success: true, error: null, collectorFailures: [{ step: 'e-mail discussions', error: 'RSS is down' }] });
+  check('collectorUpdate_(): one step failing does not stop the other', updateReport({ failEmail: true }).s.collectorUpdate_(), { failures: [{ step: 'e-mail discussions', error: 'RSS is down' }] });
+
+  // The add-on scheduler and the other callers of the collector do not read the new values.
+  check('continuousUpdateForDocument_() reads success / error only',
+    [/coreResult\.success/.test(functionSource(CODE, 'continuousUpdateForDocument_')), /collectorFailures/.test(functionSource(CODE, 'continuousUpdateForDocument_'))], [true, false]);
+  check('collectorFailures is read nowhere in Code.js; only Update Report Now reads it',
+    [(CODE.replace(/^\s*(\/\/|\*).*$/gm, '').match(/collectorFailures/g) || []).length, /result\.collectorFailures/.test(functionSource(CREATOR, 'describeUpdateReportNowFailure_'))], [1, true]);
+  check('every other caller of collectorUpdate_() ignores its result',
+    ['updateAll', 'updateAllFromWeb', 'buildInitialReport', 'updateReportIncremental'].map((n) => /^\s*collectorUpdate_\(\);$/m.test(functionSource(CODE, n))), [true, true, true, true]);
+  check('collectorUpdate_(): a clean run returns no failures', updateReport().s.collectorUpdate_(), { failures: [] });
+  check('updateReportNow exists in the template runtime only (not in Code.js)',
+    [typeof loadCode().sandbox.updateReportNow, typeof updateReport().s.updateReportNow, /function updateReportNow\(/.test(CODE)], ['undefined', 'function', false]);
+
+  check('the trigger is still created for continuousUpdate, never for updateReportNow',
+    [/ScriptApp\.newTrigger\('continuousUpdate'\)/.test(CODE), /ScriptApp\.newTrigger\('continuousUpdate'\)/.test(CREATOR), /newTrigger\('updateReportNow'\)/.test(CODE + CREATOR)], [true, true, false]);
+  if (haveBaseline) {
+    ['continuousUpdate', 'continuousUpdateForDocument_', 'runAddonScheduler_', 'runAddonSchedulerTrigger', 'createContinuousTrigger', 'deleteContinuousTrigger',
+      'updateReportIncremental', 'updateAll', 'updateAllFromWeb', 'buildInitialReport']
+      .forEach((name) => check(`${name}() is byte-for-byte the T-2026.10.3 function`, functionSource(CODE, name) === functionSource(OLD_CODE, name), true));
+    check('createTemplateContinuousTrigger_() is byte-for-byte the T-2026.10.3 function',
+      functionSource(CREATOR, 'createTemplateContinuousTrigger_') === functionSource(OLD_CREATOR, 'createTemplateContinuousTrigger_'), true);
+  }
+}
+
+// ================================================================ 6. partial updates, Automatic Updates
+
+console.log('6. the partial updates and Automatic Updates call their existing functions');
+{
+  const map = {};
+  REPORT_TREE_AFTER_SETUP.filter((l) => / -> /.test(l)).forEach((l) => { const [label, fn] = l.trim().split(' -> '); map[label] = fn; });
+  check('Update E-mail Discussions / TDoc Revisions / Abstracts',
+    [map['Update E-mail Discussions'], map['Update TDoc Revisions'], map['Update Abstracts']], ['collectEmailDiscussionOnly', 'collectRevisionsOnly', 'addAbstractsOnly']);
+  check('Automatic Updates, Configure Meeting, Prepare Discussion E-mails',
+    [map['🔄 Automatic Updates…'], map['⚙️ Configure Meeting…'], map['💬 Prepare Discussion E-mails…']], ['manageTriggers', 'configureMeetingSettings', 'prepareTdocDiscussionEmails']);
+
+  const r = runtime({ docId: REPORT_ID, props: SET_UP });
+  r.s.checkRSSFeed_ = () => r.events.push('WORK e-mail');
+  r.s.updateRevisions_ = () => r.events.push('WORK revisions');
+  r.s.addAbstractsForTables_ = () => { r.events.push('WORK abstracts'); return { candidatesProcessed: 0, requestsMade: 0, cacheSkips: 0, rowsInserted: 0 }; };
+  r.s.collectEmailDiscussionOnly();
+  r.s.collectRevisionsOnly();
+  r.s.addAbstractsOnly();
+  check('each runs its own step once and reports as before', r.events,
+    ['WORK e-mail', 'ALERT Success', 'WORK revisions', 'ALERT Success', 'WORK abstracts', 'ALERT Success']);
+  check('their messages are the existing ones', r.ui.alerts.map((a) => a[1].replace(/:.*$/, '')),
+    ['E-mail discussion collection completed.', 'Revision collection completed.', 'Abstract step completed']);
+
+  r.s.ScriptApp = { TriggerSource: { CLOCK: 'CLOCK' }, getProjectTriggers: () => [] };
+  r.s.HtmlService = { createHtmlOutput: (html) => { const out = { html, setWidth: () => out, setHeight: () => out }; return out; } };
+  r.s.manageTriggers();
+  check('Automatic Updates opens the existing trigger dialog with 15 / 30 / 60 minutes',
+    [r.ui.dialogs.length, r.ui.dialogs[0].title, ['15', '30', '60'].map((m) => r.ui.dialogs[0].html.indexOf('<option value="' + m + '"') !== -1)],
+    [1, 'Manage Continuous Update Trigger', [true, true, true]]);
+
+  // The abstracts hint is shared with the add-on: it names no menu item of either menu.
+  const NEW_HINT = 'Abstracts can also be updated manually at any time.';
+  const OLD_HINT = 'The menu step "5️⃣ Add Abstracts" always works regardless of this setting.';
+  const addon = runtime({ release: false });
+  addon.s.ScriptApp = r.s.ScriptApp;
+  addon.s.HtmlService = r.s.HtmlService;
+  addon.s.manageTriggers();
+  [['template report', r.ui.dialogs[0].html], ['add-on', addon.ui.dialogs[0].html]].forEach(([where, html]) => {
+    check(`trigger dialog (${where}): neutral abstracts hint, no menu item named`,
+      [html.indexOf(NEW_HINT) !== -1, /5️⃣|Add Abstracts|menu step|Update Abstracts/.test(html)], [true, false]);
+  });
+  check('no user-facing text of Code.js says "The menu step" any more', /The menu step/.test(CODE.replace(/^\s*(\/\/|\*).*$/gm, '')), false);
+  check('title and Start / Stop wording of the dialog are unchanged',
+    [/<h2>⏰ Continuous Update Trigger<\/h2>/.test(r.ui.dialogs[0].html), /▶️ Start Trigger/.test(r.ui.dialogs[0].html), /⏹️ Stop Trigger/.test(functionSource(CODE, 'manageTriggers'))], [true, true, true]);
+  if (haveBaseline) {
+    check('manageTriggers() differs from T-2026.10.3 in that one sentence only',
+      [functionSource(CODE, 'manageTriggers') === functionSource(OLD_CODE, 'manageTriggers'), functionSource(CODE, 'manageTriggers').replace(NEW_HINT, OLD_HINT) === functionSource(OLD_CODE, 'manageTriggers')], [false, true]);
+  }
+  if (haveBaseline) {
+    ['collectEmailDiscussionOnly', 'collectRevisionsOnly', 'addAbstractsOnly', 'analyzeReportStatus', 'prepareTdocDiscussionEmails', 'configureMeetingSettings',
+      'addDocumentReallocation', 'viewAllReallocations', 'applyDocumentReallocations', 'clearAllReallocations', 'testAllConnections', 'removeRowHeightAndSpacing',
+      'removeDuplicateEmailEntries', 'cleanUpWrongEmailDiscussions', 'clearAllCaches', 'runFullReportBuildCore_']
+      .forEach((name) => check(`${name}() is byte-for-byte the T-2026.10.3 function`, functionSource(CODE, name) === functionSource(OLD_CODE, name), true));
+  }
+}
+
+console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll TEMPLATE-003 menu checks passed.');
+process.exitCode = failures ? 1 : 0;

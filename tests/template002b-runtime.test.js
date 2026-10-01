@@ -224,17 +224,19 @@ let addonMenuFns;
   const r = runtime({ docId: REPORT_ID });
   r.s.onOpen();
   const items = menuItems(r.ui);
-  check('submenus: the accepted structure without CENTRAL, plus LEGACY',
-    submenus(r.ui), ['📝 INITIAL SETUP', '🚀 REPORT OPERATIONS', '📋 DOCUMENT MANAGEMENT', '🔧 TOOLS & DIAGNOSTICS', '🎨 FORMATTING & FIXES', '📧 EMAIL EXPORT', '🗄️ LEGACY (old workflow)']);
+  // TEMPLATE-003: a template report has its own menu (exact tree: tests/template003-menu.test.js).
+  check('submenus: the TEMPLATE-003 report menu',
+    submenus(r.ui), ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']);
   check('CENTRAL add-on operations absent', items.filter((i) => /ForAddon$|CENTRAL/.test(i.fn + i.path)), []);
   const addonOnly = ['enableAutomaticUpdatesForAddon', 'disableAutomaticUpdatesForAddon', 'setAutomaticUpdateIntervalForAddon', 'showAddonSchedulerStatusForAddon'];
-  check('no existing report operation was dropped',
-    addonMenuFns.filter((f) => addonOnly.indexOf(f) === -1 && !items.some((i) => i.fn === f)), []);
+  // TEMPLATE-003: operations may be hidden from the template menu, but none may disappear from the code.
+  check('every report operation of the add-on menu still exists as a function',
+    addonMenuFns.filter((f) => addonOnly.indexOf(f) === -1 && typeof r.s[f] !== 'function'), []);
   check('first item of a new report: Finish Report Setup', items[0], { path: '🚀 Finish Report Setup', fn: 'finishReportSetup' });
-  check('Run Full Report Build is the first report operation',
-    items.filter((i) => /^🚀 REPORT OPERATIONS > /.test(i.path))[0], { path: '🚀 REPORT OPERATIONS > ▶️ Run Full Report Build', fn: 'runFullReportBuild' });
-  check('the old "Legacy: Build Initial Report" is only in the LEGACY submenu',
-    items.filter((i) => i.fn === 'buildInitialReport').map((i) => i.path), ['🗄️ LEGACY (old workflow) > 📝 Legacy: Build Initial Report']);
+  check('the build (runFullReportBuild) is the first report operation',
+    items.filter((i) => /^📄 Report > /.test(i.path))[0], { path: '📄 Report > Build Report from Scratch…', fn: 'runFullReportBuild' });
+  check('TEMPLATE-003: the old import is not in a template report menu',
+    items.filter((i) => i.fn === 'buildInitialReport' || i.fn === 'updateAll' || /LEGACY|Legacy/.test(i.path)).map((i) => i.path), []);
   check('About This Report is the last item', items[items.length - 1], { path: 'ℹ️ About This Report', fn: 'showTemplateInfo' });
   check('every target exists', items.filter((i) => typeof r.s[i.fn] !== 'function'), []);
 
@@ -344,7 +346,7 @@ console.log('3. the new report: its first use stores the setup information, then
   // A copy is a new project: empty property stores, no triggers (TEMPLATE-001).
   const report = runtime({ docId: copyId, drive });
   report.s.onOpen();
-  check('menu offers Finish Report Setup and Run Full Report Build',
+  check('menu offers Finish Report Setup and the build',
     ['finishReportSetup', 'runFullReportBuild'].map((f) => menuItems(report.ui).some((i) => i.fn === f)), [true, true]);
 
   report.ui.alertResponse = 'NO'; // decline the "Continue?" question: only the setup runs

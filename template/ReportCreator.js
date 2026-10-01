@@ -330,7 +330,7 @@ function proposeReportTitle_(config) {
 function serializeBootstrapDescription_(payload) {
   const cfg = payload.config || {};
   const text = 'SA4 report being set up from template ' + payload.templateRelease + ' for meeting ' + cfg.meetingId +
-    '. Open it and run ⚠️Scripts⚠️ > 🚀 Finish Report Setup.\n' + TEMPLATE_BOOTSTRAP_MARKER_ + JSON.stringify(payload);
+    '. Open it and run ' + TEMPLATE_MENU_NAME_ + ' > 🚀 Finish Report Setup.\n' + TEMPLATE_BOOTSTRAP_MARKER_ + JSON.stringify(payload);
   if (text.length > TEMPLATE_BOOTSTRAP_MAX_CHARS_) throw new Error('Bootstrap payload too large (' + text.length + ' characters).');
   return text;
 }
@@ -525,13 +525,13 @@ function describeTemplateRuntime_(facts) {
   } else if (origin === 'ordinary-document') {
     lines.push('Report (not created by the template creator; configured by hand)');
   } else {
-    lines.push('Report, not set up yet: use Finish Report Setup, Configure Meeting or Run Full Report Build');
+    lines.push('Report, not set up yet: use Finish Report Setup, Configure Meeting or Build Report from Scratch');
   }
   lines.push('');
   lines.push('Script release: ' + (release.releaseId || '?') + ' (Code.js ' + (release.codeVersion || '?') + ', commit ' + String(release.gitCommit || '?').slice(0, 7) + ')');
   if (origin !== 'master-template') {
     lines.push('Meeting ID: ' + (facts.meetingId || 'not configured'));
-    lines.push('Continuous Update: ' + (facts.continuousInterval ? 'every ' + facts.continuousInterval : 'off'));
+    lines.push('Automatic updates: ' + (facts.continuousInterval ? 'every ' + facts.continuousInterval : 'off'));
   }
   lines.push('Script ID: ' + (facts.scriptId || '?'));
   lines.push('');
@@ -543,9 +543,12 @@ function describeTemplateRuntime_(facts) {
 // Menus (called from onOpen() in Code.js, template runtime only)
 // ------------------------------------------------------------------
 
+/** TEMPLATE-003: the name of the menu in the master template and in every report. */
+var TEMPLATE_MENU_NAME_ = 'SA4 Report';
+
 /** The master template: creation and release information, nothing else. */
 function buildTemplateMasterMenu_(ui) {
-  ui.createMenu('⚠️Scripts⚠️')
+  ui.createMenu(TEMPLATE_MENU_NAME_)
     .addItem('🆕 Create New SA4 Report', 'showCreateReportDialog')
     .addSeparator()
     .addItem('ℹ️ Template Release Info', 'showTemplateInfo')
@@ -553,7 +556,58 @@ function buildTemplateMasterMenu_(ui) {
 }
 
 /**
- * A report: "Finish Report Setup" leads the menu until the first run has
+ * TEMPLATE-003: the menu of a report created from the template, ordered by
+ * what a rapporteur does with a report. Every item calls an existing
+ * function without arguments; only "Update Report Now" has a wrapper of its
+ * own (updateReportNow() below). "…" marks an item that opens a dialog or
+ * asks before it acts.
+ *
+ * Not shown here, and still in Code.js for the CENTRAL add-on, for Legacy
+ * copies and for reports created from earlier releases: the old import
+ * (buildInitialReport, updateAll), updateReportIncremental,
+ * buildSkeletonWithTdocTables, parseAgendaDocument, autoCreateReportStructure,
+ * rearrangeRevisionTables, createConfigurationTables, the single connection
+ * tests, validateConfiguration, rewritePortalLinksInDoc_, fixColumnWidths.
+ */
+function buildTemplateReportMenu_(ui) {
+  const menu = ui.createMenu(TEMPLATE_MENU_NAME_);
+  addTemplateReportMenuHead_(menu);
+
+  menu.addSubMenu(ui.createMenu('📄 Report')
+    .addItem('Build Report from Scratch…', 'runFullReportBuild')
+    .addItem('Update Report Now', 'updateReportNow')
+    .addSeparator()
+    .addItem('Update E-mail Discussions', 'collectEmailDiscussionOnly')
+    .addItem('Update TDoc Revisions', 'collectRevisionsOnly')
+    .addItem('Update Abstracts', 'addAbstractsOnly')
+    .addSeparator()
+    .addItem('Report Status Summary', 'analyzeReportStatus'));
+
+  menu.addItem('💬 Prepare Discussion E-mails…', 'prepareTdocDiscussionEmails');
+
+  menu.addSubMenu(ui.createMenu('🔀 Document Reallocation')
+    .addItem('Add or Change a Reallocation…', 'addDocumentReallocation')
+    .addItem('Show Reallocations', 'viewAllReallocations')
+    .addItem('Apply Reallocations to Report…', 'applyDocumentReallocations')
+    .addItem('Remove All Reallocations…', 'clearAllReallocations'));
+
+  menu.addItem('🔄 Automatic Updates…', 'manageTriggers');
+  menu.addItem('⚙️ Configure Meeting…', 'configureMeetingSettings');
+  menu.addSeparator();
+
+  menu.addSubMenu(ui.createMenu('🛠 Advanced and Repair')
+    .addItem('Check Connections', 'testAllConnections')
+    .addItem('Format Report', 'removeRowHeightAndSpacing')
+    .addItem('Remove Duplicate E-mail Entries…', 'removeDuplicateEmailEntries')
+    .addItem('Remove Wrong E-mail Matches…', 'cleanUpWrongEmailDiscussions')
+    .addItem('Clear Collection Caches…', 'clearAllCaches'));
+
+  addTemplateReportMenuTail_(menu);
+  menu.addToUi();
+}
+
+/**
+ * A report (buildTemplateReportMenu_()): "Finish Report Setup" leads the menu until the first run has
  * looked at the document once. onOpen() is a simple trigger, so only the
  * document's own properties are read here (no authorization needed); if
  * even that fails the item is simply shown.
@@ -809,7 +863,7 @@ function showCreateReportDialog() {
           el('status').textContent = '';
           el('result').innerHTML = '<div class="note">Report created: ' + esc(r.title) + '</div>' +
             '<p><a href="' + esc(r.url) + '" target="_blank">Open the new report</a></p>' +
-            '<p>In the report: Scripts menu, then Run Full Report Build (or Configure Meeting first). ' +
+            '<p>In the report: SA4 Report menu, then Report, then Build Report from Scratch (or Configure Meeting first). ' +
             'Google asks for permission once for the new report; allow it and click the item again.</p>';
         }).withFailureHandler(showFailure)
           .createNewReportFromTemplate(el('meetingId').value, resolvedMeeting, choices());
@@ -845,18 +899,96 @@ function finishReportSetup() {
   }
   if (result.status === 'no-setup-info') {
     ui.alert('Report setup', 'This document was not created with "Create New SA4 Report", so there is nothing to finish.\n\n' +
-      'Use ⚠️Scripts⚠️ > 📝 INITIAL SETUP > ⚙️ Configure Meeting Settings.', ui.ButtonSet.OK);
+      'Use ' + TEMPLATE_MENU_NAME_ + ' > ⚙️ Configure Meeting….', ui.ButtonSet.OK);
     return result;
   }
   const r = result.readiness || { ready: false, issues: [] };
   ui.alert('Report setup',
     (result.status === 'configured' ? '✅ Meeting configuration stored.' : 'ℹ️ This report is already set up.') + '\n\n' +
-    (r.ready ? '✅ Ready to build: ⚠️Scripts⚠️ > 🚀 REPORT OPERATIONS > ▶️ Run Full Report Build.'
+    (r.ready ? '✅ Ready to build: ' + TEMPLATE_MENU_NAME_ + ' > 📄 Report > Build Report from Scratch….'
       : '⚠️ Not ready to build yet:\n' + r.issues.map(function (i) { return '• ' + i.message; }).join('\n') +
         '\n\nOpen Configure Meeting to discover the missing sources.') +
     ((result.warnings || []).length ? '\n\n' + result.warnings.join('\n') : ''),
     ui.ButtonSet.OK);
   return result;
+}
+
+/**
+ * TEMPLATE-003 (A): the one question before "Build Report from Scratch".
+ * Called by runFullReportBuild() in Code.js, before anything is changed;
+ * returns the button that was clicked. The build clears the document body
+ * and writes a new report; only the Document Reallocations table is read
+ * first and written back.
+ */
+function confirmTemplateBuildFromScratch_(ui) {
+  return ui.alert(
+    'Build Report from Scratch',
+    'This replaces the content of this document with a newly generated report.\n\n' +
+    '⚠️ Everything that is in the document now is removed first. Meeting minutes and any other ' +
+    'content entered by hand will be lost. Only the Document Reallocations table is kept.\n\n' +
+    'To bring an existing report up to date without losing anything, answer No and use ' +
+    'Report > Update Report Now.\n\n' +
+    'The build then runs without further questions:\n' +
+    '• report structure and TDoc tables\n' +
+    '• e-mail discussions\n' +
+    '• TDoc revisions\n' +
+    '• abstracts (only if a Reviewer API token is configured)\n' +
+    '• formatting\n\n' +
+    'There is no completion message: the build has finished when "Running script" disappears.\n\n' +
+    'Replace the content of this document and build the report from scratch?',
+    ui.ButtonSet.YES_NO
+  );
+}
+
+/**
+ * TEMPLATE-003 (B), menu: "Update Report Now" -- the complete update, the
+ * same work the Automatic Updates timer does (continuousUpdateCore_()): new
+ * TDocs, statuses, revision placement, e-mail discussions, revisions,
+ * abstracts if switched on.
+ *
+ * The timer keeps calling continuousUpdate(), which logs a failure and ends
+ * normally. A person who clicked the item must see a failure, so this
+ * wrapper throws instead: Docs shows the error and the execution is
+ * "Failed". As in Full Build (Code.js 2.17.3) there is no UI call after the
+ * document was changed: a completed update simply ends.
+ *
+ * It takes the same document lock as continuousUpdate(), so it never runs
+ * together with an automatic update; when one is running, nothing is done
+ * and that is reported as an error too.
+ */
+function updateReportNow() {
+  assertNotTemplateMaster_();
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    throw new Error('The report was not updated: another update of this report is running right now. Try again in a minute.');
+  }
+  let result;
+  try {
+    result = continuousUpdateCore_();
+  } finally {
+    lock.releaseLock();
+  }
+  const problem = describeUpdateReportNowFailure_(result);
+  if (problem) {
+    Logger.log('Update Report Now failed: ' + problem);
+    throw new Error(problem);
+  }
+  return result;
+}
+
+/** The error text for a result of continuousUpdateCore_(), or '' when the update completed (pure). */
+function describeUpdateReportNowFailure_(result) {
+  if (!result || result.success !== true) {
+    return 'The report update failed: ' + ((result && result.error) || 'no result was returned') +
+      '\nThe report may have been updated in part. Nothing is lost; run Update Report Now again once the cause is fixed.';
+  }
+  const failures = result.collectorFailures || [];
+  if (failures.length) {
+    return 'The report update finished, but ' + (failures.length === 1 ? 'one part' : failures.length + ' parts') + ' failed:\n' +
+      failures.map(function (f) { return '• ' + f.step + ': ' + f.error; }).join('\n') +
+      '\nNew TDocs and statuses were updated. Run Update Report Now again later.';
+  }
+  return '';
 }
 
 /** Menu: "Template Release Info" (master) / "About This Report" (report). */
