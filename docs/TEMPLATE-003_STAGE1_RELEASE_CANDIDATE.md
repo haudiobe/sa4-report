@@ -3,8 +3,11 @@
 2026-10-01. Branch `template-003/stage1-menu`, based on the menu review
 (`template-003/menu-review`, `a00012e`) on master `02c46fc`.
 
-**Status: release candidate, ready for review. `Code.js` 2.17.4, proposed template release
-T-2026.10.4. Not deployed, not tagged. The live template is still T-2026.10.3.**
+**Status: COMPLETE / LIVE. Template release T-2026.10.4 (`Code.js` 2.17.4, commit `962fb7d`)
+is deployed to the master template and accepted live. No further manual acceptance is
+required for TEMPLATE-003 stage 1. See §10.**
+
+Sections 1 to 9 are the release candidate as reviewed; §10 is the closeout record.
 
 The review and the reasons are in `TEMPLATE-003_MENU_REVIEW.md`. This document records what
 was decided and what was built.
@@ -293,8 +296,8 @@ themselves, exported file names and the list tag, the default discussion introdu
 ## 9. Release
 
 - `Code.js` **2.17.4**; proposed template release **T-2026.10.4**.
-- No tag `template-release/T-2026.10.4` exists. It is created on the reviewed commit at
-  deployment, as before. T-2026.10.0 to .3 are not moved.
+- At the time of the review no tag `template-release/T-2026.10.4` existed; it was created on
+  the reviewed commit at deployment (§10). T-2026.10.0 to .3 are not moved.
 - Reports already created keep their menu: each is pinned to the release it was created from.
 
 ### Acceptance after deployment (for later)
@@ -307,3 +310,66 @@ themselves, exported file names and the list tag, the default discussion introdu
 | 4 | Reload | *Finish Report Setup* is gone |
 | 5 | Report › Update Report Now | No dialog; `continuousUpdate`-style log; execution `updateReportNow` Completed |
 | 6 | Automatic Updates… → Start, 30 minutes | Trigger for `continuousUpdate`; About shows "Automatic updates: every 30 minutes" |
+
+---
+
+## 10. Closeout: T-2026.10.4 deployed and accepted live
+
+### 10.1 Release
+
+| | |
+|---|---|
+| Template release | **T-2026.10.4** |
+| `Code.js` | 2.17.4 |
+| Release commit | `962fb7de1f58302b54c51eeafa3c5c57d50f12c3` (tag `template-release/T-2026.10.4`, local) |
+| Deployed | 2026-10-01, to the master template "SA4 Report Template", by a normal `clasp push` of the release bundle (seven files, no `--force`) |
+| Verified | Before the push the template held exactly T-2026.10.3. A fresh pull after the push showed seven files, each byte-identical to the bundle. |
+| Status | **Accepted. Stage 1 is COMPLETE / LIVE.** |
+
+Template releases so far. The tags are local and are not moved.
+
+| Release | `Code.js` | Commit | |
+|---|---|---|---|
+| T-2026.10.0 | 2.17.0 | `d8cb075` | TEMPLATE-002B |
+| T-2026.10.1 | 2.17.1 | `6b65ebd` | TEMPLATE-002C |
+| T-2026.10.2 | 2.17.2 | `77a23f3` | TEMPLATE-002C |
+| T-2026.10.3 | 2.17.3 | `39dbfa1` | TEMPLATE-002C, accepted |
+| **T-2026.10.4** | **2.17.4** | **`962fb7d`** | **TEMPLATE-003 stage 1, accepted** |
+
+### 10.2 Live acceptance
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Reload the master template | Reloaded successfully. |
+| 2 | Template Release Info | "SA4 Report Template (master document)", T-2026.10.4, Code.js 2.17.4, commit `962fb7d`, the correct template Script ID. |
+| 3 | Create a new report for meeting 86178 | Created successfully. The normal one-time authorization prompt of the newly copied bound script appeared and was completed. |
+| 4 | Inspect the *Build Report from Scratch* question | It clearly stated that the document content is replaced, that meeting minutes and content entered by hand are lost, that the Document Reallocations table is preserved, that *Update Report Now* is the non-destructive alternative, which phases the build runs, and that there is no completion pop-up. |
+| 5 | Run *Build Report from Scratch* on the new report | Completed successfully, in about one minute. |
+| 6 | Run *Update Report Now* on the built report | Completed normally. No error was reported, and no success or completion pop-up interfered with the workflow. |
+
+**No further manual acceptance is required for TEMPLATE-003 stage 1.**
+
+### 10.3 What is live now
+
+- A report created from the template has the **SA4 Report** menu of §2.2; the master template
+  has the two-item menu of §2.1.
+- *Build Report from Scratch…* asks once, with the warning of §3, and shows nothing afterwards.
+- *Update Report Now* runs the complete update and shows nothing when it completes; a failure
+  is an error and a Failed execution (§4).
+- The timer of *Automatic Updates…* still runs `continuousUpdate()`, unchanged.
+- Reports created from T-2026.10.0 to .3 keep the menu of their release.
+- The CENTRAL add-on and Legacy were not deployed. In `Code.js` 2.17.4 their only visible
+  difference is the neutral abstracts sentence in the trigger dialog (§6), and it reaches
+  CENTRAL only with a future CENTRAL deployment.
+
+### 10.4 Still open, not part of stage 1
+
+The review items that were deferred (§8, and items D to G of the review): the trigger dialog's
+vocabulary and changing the interval while updates run, the mailing list the connection test
+uses, trigger ownership per user, and the document lock for the manual partial updates.
+
+### 10.5 Automated tests at closeout
+
+Complete suite: **78 test files, 4,143 checks, 0 failures** (main worktree). Legacy parity:
+9 files, 409 checks, 0 failures. The closeout changed this document only: no production
+code, no test and no version number.
