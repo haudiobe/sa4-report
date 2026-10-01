@@ -62,8 +62,13 @@ report script. The primary new-report workflow is:
 4. The template creates the new Google Doc with `DriveApp.makeCopy()`.
 5. Open the new report.
 6. Complete meeting setup / validation.
-7. Build the initial report.
+7. Build the initial report (the normal **Run Full Report Build**).
 8. Optionally enable the normal bound-script continuous-update trigger.
+
+**Terminology.** "Build Initial Report" in this workflow means the normal, current full
+build: the menu item *Run Full Report Build* (`runFullReportBuild`). It does **not** mean the
+historical menu item *"Legacy: Build Initial Report"* (`buildInitialReport`, the web-sheet
+import), which is not part of the template workflow.
 
 Each report is independent and pinned to the script version the template held when it was
 created. New reports need no CENTRAL add-on test deployment. Manual *File → Make a copy* is no
@@ -909,7 +914,13 @@ So a template built from today's master would lose accepted Legacy behavior in a
 places (duplicate-table protection and the ad-hoc e-mail collector). That is why the next
 stage is a parity gate and not the runtime hooks.
 
-### 21.4 TEMPLATE-002A: Legacy parity gate (recommended next stage)
+### 21.4 TEMPLATE-002A: Legacy parity gate
+
+**Status, 2026-10-01: done on branch `template-002a/legacy-parity`** (worktree
+`sa4-report-template-002a`, based on master `d7c23bc`; not merged). The matrix, the ported
+fixes and the test totals are in `docs/TEMPLATE-002A_LEGACY_PARITY.md` on that branch. The
+two product decisions were taken as: keep the meeting-neutral e-mail introduction, keep the
+subject tag derived from the mailing list. The plan as written before the work:
 
 Goal: `sa4-report` master contains every accepted Legacy behavior, proven by Legacy's own
 tests, so the template never introduces a second, diverging production `Code.js`.
