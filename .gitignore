@@ -41,3 +41,7 @@ coverage/
 # Build outputs
 dist/
 build/
+
+# SA4 Report Template: the real template target (Script ID / document ID).
+# Copy template/template-target.example.json; never commit the real file.
+template/template-target.json
