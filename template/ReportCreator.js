@@ -591,6 +591,18 @@ function buildTemplateReportMenu_(ui) {
     .addItem('Apply Reallocations to Report…', 'applyDocumentReallocations')
     .addItem('Remove All Reallocations…', 'clearAllReallocations'));
 
+  // Ad-hoc sessions: only an ad-hoc report has this submenu. A main-meeting
+  // report's menu is unchanged.
+  if (isAdhocReportForMenu_()) {
+    menu.addSubMenu(ui.createMenu('🗓 Sessions and Attendance')
+      .addItem('Configure Sessions…', 'configureAdhocSessions')
+      .addItem('Import Teams Attendance…', 'importTeamsAttendance')
+      .addItem('Refresh Attendance Section', 'refreshAdhocAttendanceSection')
+      .addItem('Assign TDoc Sessions…', 'assignAdhocTdocSessions')
+      .addItem('Edit Opening Details…', 'editAdhocOpeningDetails')
+      .addItem('Post-meeting Statistics…', 'showAdhocSessionStatistics'));
+  }
+
   menu.addItem('🔄 Automatic Updates…', 'manageTriggers');
   menu.addItem('⚙️ Configure Meeting…', 'configureMeetingSettings');
   menu.addSeparator();
@@ -622,6 +634,20 @@ function addTemplateReportMenuHead_(menu) {
   if (!checked) {
     menu.addItem('🚀 Finish Report Setup', 'finishReportSetup');
     menu.addSeparator();
+  }
+}
+
+/**
+ * Whether this document is configured as an ad-hoc report. Like the check
+ * above, it reads only the document's own properties (onOpen() is a simple
+ * trigger); a report that becomes ad-hoc gets the submenu the next time the
+ * document is opened. If the property cannot be read, the submenu is not shown.
+ */
+function isAdhocReportForMenu_() {
+  try {
+    return String(PropertiesService.getDocumentProperties().getProperty('MEETING_TYPE') || '').trim().toLowerCase() === 'adhoc';
+  } catch (e) {
+    return false;
   }
 }
 
@@ -921,11 +947,28 @@ function finishReportSetup() {
  * first and written back.
  */
 function confirmTemplateBuildFromScratch_(ui) {
+  // Ad-hoc attendance (stage D): imported attendance is stored outside the
+  // document and is written again by the build, so the question says so.
+  // Ad-hoc opening (stage E): the same for the opening details of the sessions.
+  let kept = 'Only the Document Reallocations table is kept.';
+  try {
+    const also = [];
+    if (adhocSessionsEnabled_()) {
+      if ((adhocAttendanceSessionIds_(adhocAttendanceStore_()) || []).length) also.push('the imported attendance (with its Company cells)');
+      if ((adhocOpeningSessionIds_(adhocOpeningStore_().getProperty(ADHOC_OPENING_KEY_)) || []).length) also.push('the opening details of the sessions');
+    }
+    if (also.length) {
+      const all = ['the Document Reallocations table'].concat(also);
+      kept = 'Only ' + all.slice(0, -1).join(', ') + ' and ' + all[all.length - 1] + ' are kept.';
+    }
+  } catch (e) {
+    // The question is asked as for a report without attendance.
+  }
   return ui.alert(
     'Build Report from Scratch',
     'This replaces the content of this document with a newly generated report.\n\n' +
     '⚠️ Everything that is in the document now is removed first. Meeting minutes and any other ' +
-    'content entered by hand will be lost. Only the Document Reallocations table is kept.\n\n' +
+    'content entered by hand will be lost. ' + kept + '\n\n' +
     'To bring an existing report up to date without losing anything, answer No and use ' +
     'Report > Update Report Now.\n\n' +
     'The build then runs without further questions:\n' +

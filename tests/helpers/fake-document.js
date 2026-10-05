@@ -8,6 +8,19 @@
  * Body.removeChild() returns the BODY (not the removed child),
  * insertTable() only accepts a DETACHED table (e.g. from Table.copy()),
  * and elements know their parent.
+ *
+ * Ad-hoc attendance (stage D), additions only: a paragraph's text can be
+ * set and its bold state is recorded (_bold); a link set on a cell's text is
+ * recorded (_links: [start, end, url]); appendTable() takes cell texts like
+ * insertTable().
+ *
+ * Attendee-table formatting (G2 smoke finding), additions only: a cell
+ * records its bold state, background and width (_bold, _background,
+ * _width), holds one paragraph whose spacing is recorded (_spacing), and a
+ * row records its minimum height (_minHeight). As in Google Docs, a table
+ * that is inserted or appended with cell texts TAKES ITS TEXT ATTRIBUTES
+ * FROM THE PARAGRAPH BEFORE IT: its cells start bold when that paragraph is
+ * bold. (That inheritance is what made the generated attendee table bold.)
  */
 
 function makeFakeDocumentBody(sandbox) {
@@ -24,30 +37,41 @@ function makeFakeDocumentBody(sandbox) {
       getText: () => p._text,
       getHeading: () => p._heading,
       setHeading: (h) => { p._heading = h; return p; },
-      setGlyphType: () => p
+      setGlyphType: () => p,
+      setText: (v) => { p._text = String(v); return p; },
+      // A link set on a paragraph's text is recorded (_links: [start, end, url]).
+      editAsText: () => ({ setBold: (b) => { p._bold = !!b; }, setLinkUrl: (...args) => { (p._links = p._links || []).push(args); } })
     };
     return p;
   }
-  function makeTable(rowsData) {
+  function makeTable(rowsData, inheritedBold) {
     const rows = [];
     function makeCell(text) {
-      const c = { _t: String(text), getText: () => c._t, setText: (v) => { c._t = String(v); return c; } };
+      const c = { _t: String(text), _links: [], _bold: !!inheritedBold, _background: null, _width: null, _spacing: [null, null],
+        getText: () => c._t, setText: (v) => { c._t = String(v); return c; },
+        setBackgroundColor: (v) => { c._background = v; return c; }, setWidth: (v) => { c._width = v; return c; }, getWidth: () => c._width };
+      const para = { getType: () => PARAGRAPH, asParagraph: () => para, getText: () => c._t,
+        setSpacingBefore: (v) => { c._spacing[0] = v; return para; }, setSpacingAfter: (v) => { c._spacing[1] = v; return para; } };
+      c.getNumChildren = () => 1;
+      c.getChild = () => para;
       // ADDON-008A2: a minimal Text element over the cell's text (the e-mail
       // collector appends and styles text in place); styling is a no-op.
       const te = {
         getText: () => c._t,
         appendText: (v) => { c._t += String(v); return te; },
-        setLinkUrl: () => te, setFontSize: () => te, setForegroundColor: () => te, setBold: () => te
+        setLinkUrl: (...args) => { c._links.push(args); return te; }, setFontSize: () => te, setForegroundColor: () => te, setBold: (b) => { c._bold = !!b; return te; }
       };
       c.editAsText = () => te;
       return c;
     }
     function makeRow(cellTexts) {
       const cells = cellTexts.map(makeCell);
-      return {
+      const row = {
+        _minHeight: null, setMinimumHeight: (v) => { row._minHeight = v; return row; },
         getNumCells: () => cells.length, getCell: (i) => cells[i],
         appendTableCell: (t) => { const c = makeCell(t); cells.push(c); return c; }
       };
+      return row;
     }
     (rowsData || []).forEach(r => rows.push(makeRow(r)));
     const t = {
@@ -64,6 +88,9 @@ function makeFakeDocumentBody(sandbox) {
     return t;
   }
 
+  /** Whether the element before position `idx` is a bold paragraph: what a table inserted there starts with. */
+  const boldBefore = (idx) => { const prev = children[idx - 1]; return !!(prev && prev.getType() === PARAGRAPH && prev._bold); };
+
   const body = {
     _children: children,
     getType: () => 'BODY_SECTION',
@@ -78,7 +105,7 @@ function makeFakeDocumentBody(sandbox) {
     getParagraphs: () => children.filter(c => c.getType() === PARAGRAPH),
     appendParagraph: (text) => { const p = makeParagraph(text); children.push(p); return p; },
     appendListItem: (text) => { const p = makeParagraph(text); children.push(p); return p; },
-    appendTable: () => { const t = makeTable([]); children.push(t); return t; },
+    appendTable: (data) => { const t = makeTable(Array.isArray(data) ? data : [], boldBefore(children.length)); children.push(t); return t; },
     insertParagraph: (idx, text) => { const p = makeParagraph(text); children.splice(idx, 0, p); return p; },
     insertTable: (idx, data) => {
       let t;
@@ -86,7 +113,7 @@ function makeFakeDocumentBody(sandbox) {
         if (children.indexOf(data) !== -1) throw new Error('Element must be detached.');
         t = data;
       } else {
-        t = makeTable(data);
+        t = makeTable(data, boldBefore(idx));
       }
       children.splice(idx, 0, t);
       return t;

@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.17.4 (2026-10-01)
+ * Version: 2.18.0 (2026-10-02)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,63 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.18.0 (2026-10-02)
+ *   - Added (ad-hoc reports only): sessions. An ad-hoc report can describe
+ *     the meetings of its series as sessions in "Configure Sessions…". A
+ *     session is one logical meeting and may span several days: a first
+ *     day, optionally a last day, optional planned times (the start on the
+ *     first day, the end on the last) and an optional label. Stored as
+ *     ADHOC_SESSIONS with stable session ids; a session of one day has no
+ *     end date. Everything below is active only in an ad-hoc report that
+ *     has sessions configured.
+ *   - Added: "Import Teams Attendance…" reads the attendance report
+ *     Microsoft Teams exports for one meeting, shows a preview, and after
+ *     confirmation stores the summary Teams states and a name / company /
+ *     e-mail list. A session has one attendance record per day: an export
+ *     is accepted when its date is one of the days of the session, and
+ *     importing a day again replaces that day only. The report gets one
+ *     generated "Attendance" section at the end of the closing section
+ *     (statistics and an attendee table per session and day); Company
+ *     cells completed by hand are kept. Participant IDs,
+ *     dial-in numbers, join / leave times and individual durations are
+ *     never stored, shown or logged. "Refresh Attendance Section" writes
+ *     the section again from what is stored.
+ *   - Added: TDoc sessions. Each TDoc is assigned to the first session
+ *     whose cut-off (planned end on its last day, else the end of that day) is not before
+ *     its "Uploaded" time in the TDoc list. The Portal records that time in
+ *     UTC; it is converted to the time zone of the script. "Assign TDoc
+ *     Sessions…" shows the result and takes manual additions and
+ *     replacements (ADHOC_TDOC_SESSIONS). The registration table gets a
+ *     fifth column "Session" when a report is built with sessions, or
+ *     through the explicit action in that dialog -- never by an update.
+ *     downloadAndGroupTdocs_() adds the upload time to each TDoc,
+ *     createSummaryTable_() and updateRegisteredDocumentsTable_() accept
+ *     the fifth column, continuousUpdateCore_() keeps it up to date.
+ *   - Added: "Edit Opening Details…" -- Chair, minute taker(s) and an
+ *     administrative note per session (ADHOC_SESSION_OPENING), written as
+ *     one generated "Session administration" section before "Registration
+ *     of Documents". With sessions configured, Build from Scratch writes
+ *     that section and no longer the line "<Chair> opens the session on
+ *     ... CEST."
+ *   - Added: "Report Status Summary" ends with a "Sessions and attendance"
+ *     block for such a report, and "Post-meeting Statistics…" shows the
+ *     same per session: counts, and the values Teams states. Nothing is
+ *     calculated from the attendance, nothing is stored for it, and both
+ *     views are read-only. For this, analyzeReportStatus() calls
+ *     adhocSessionStatusLines_() before its alert.
+ *   - Added (template runtime only): the submenu "Sessions and Attendance"
+ *     with these six actions, shown in an ad-hoc report. Build from Scratch
+ *     keeps the imported attendance and the opening details, and its
+ *     confirmation says so.
+ *   - Adoption: ADHOC_SESSIONS and ADHOC_TDOC_SESSIONS are report state
+ *     and are copied; attendance and opening details stay in the
+ *     document's own properties.
+ *   - Unchanged: main-meeting reports, and ad-hoc reports without
+ *     sessions -- same build, same update, same status summary, same menu
+ *     apart from the submenu of an ad-hoc report. No existing report gains
+ *     a table, a column or text because of this release. Every function
+ *     that existed is unchanged except the five named above and
+ *     buildSkeletonWithTdocTables().
  * 2.17.4 (2026-10-01)
  *   - Changed (SA4 Report Template runtime only, TEMPLATE-003 stage 1): a
  *     report created from the template has its own menu, "SA4 Report",
@@ -995,9 +1052,14 @@ function continuousUpdateCore_(context) {
     Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);
 
     // Update summary table
+    // Ad-hoc sessions (stage B): null unless this is an ad-hoc report with
+    // sessions. With it, a report that HAS the Session column gets the
+    // column brought up to date; a four-column report stays four-column.
+    const tdocSessions = makeAdhocTdocSessionResolverSafely_(context);
     if (newTdocsAdded > 0) {
-      perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups));
+      perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, tdocSessions));
     }
+    const sessionColumnFailure = refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions);
 
     // Revision placement: new TDOCs are appended at the end of their agenda
     // section, so move every revision back under the document it revises and
@@ -1023,7 +1085,9 @@ function continuousUpdateCore_(context) {
     // 2.17.4: the collector's own failures (logged there, never thrown) are
     // passed on in the result. `success` is unchanged by them.
     const collected = perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context));
-    if (collected && collected.failures && collected.failures.length) result.collectorFailures = collected.failures;
+    // Stage B: a Session column that could not be updated is reported the same way.
+    const failures = (sessionColumnFailure ? [sessionColumnFailure] : []).concat((collected && collected.failures) || []);
+    if (failures.length) result.collectorFailures = failures;
 
     // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
     // full-document formatting pass is only actually needed when this run
@@ -2017,25 +2081,25 @@ function updateTdocStatus_(body, tdocNumber, tdocData, index) {
   return false;
 }
 
-function updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups) {
+function updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, sessionResolver) {
   const tables = getTablesCounted_(body, 'updateRegisteredDocumentsTable_');
   let summaryTable = null;
-  
+  // Ad-hoc sessions (stage B): the table is the four-column one of every
+  // release, or the same with a fifth "Session" column. A row is appended
+  // with as many cells as the table has -- a column is never added here.
+  let columns = 0;
+
   for (let i = 0; i < tables.length; i++) {
     const table = tables[i];
     if (table.getNumRows() < 1) continue;
-    
-    const row0 = table.getRow(0);
-    if (row0.getNumCells() === 4 &&
-        row0.getCell(0).getText().trim() === 'TDoc' &&
-        row0.getCell(1).getText().trim() === 'Title' &&
-        row0.getCell(2).getText().trim() === 'Source' &&
-        row0.getCell(3).getText().trim() === 'Agenda Item') {
+
+    columns = registrationTableColumns_(table);
+    if (columns) {
       summaryTable = table;
       break;
     }
   }
-  
+
   if (!summaryTable) return;
   
   const existingInSummary = new Set();
@@ -2064,11 +2128,15 @@ function updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups) {
       dataRow.appendTableCell(String(row[tdocData.titleCol] || ''));
       dataRow.appendTableCell(String(row[tdocData.sourceCol] || ''));
       dataRow.appendTableCell(String(tdocData.agendaItem || ''));
-      
+      if (columns === 5) dataRow.appendTableCell(sessionResolver ? sessionResolver.cell(tdocData) : '');
+
       added++;
     }
   });
   
+  // New rows of a table with the Session column get the widths of its columns.
+  if (columns === 5) applyRegistrationTableWidths_(summaryTable);
+
   Logger.log(`Added ${added} to summary table`);
 }
 
@@ -2494,7 +2562,13 @@ var ADDON003_ADOPTION_FIXED_KEYS_ = [
   'MEETING_TYPE', 'MEETING_NAME', 'REVISIONS_URL', 'MAILING_LIST',
   'FETCH_ABSTRACTS_ON_UPDATE',
   'REVISION_MAP',
-  'DEADLINE_EXTENSIONS'
+  'DEADLINE_EXTENSIONS',
+  // Ad-hoc sessions: read by every update and build of an ad-hoc report (the
+  // Session column and the generated sections are computed from them).
+  'ADHOC_SESSIONS',
+  // Manual TDoc session assignments and the upload clock (stage B): read by
+  // every update of a report that has the Session column.
+  'ADHOC_TDOC_SESSIONS'
 ];
 
 var ADDON003_ADOPTION_PREFIX_FAMILIES_ = [
@@ -4187,16 +4261,19 @@ function getConfiguredAgendaPrefix_() {
 /**
  * Create summary table listing all TDOCs (4 columns: TDoc, Title, Source, Agenda Item)
  */
-function createSummaryTable_(body, tdocs, tdocCol, titleCol, sourceCol, agendaCol) {
+function createSummaryTable_(body, tdocs, tdocCol, titleCol, sourceCol, agendaCol, sessionResolver) {
   const summaryTable = body.appendTable();
-  
+
   // Add header row
   const headerRow = summaryTable.appendTableRow();
   headerRow.appendTableCell('TDoc');
   headerRow.appendTableCell('Title');
   headerRow.appendTableCell('Source');
   headerRow.appendTableCell('Agenda Item');
-  
+  // Ad-hoc sessions (stage B): a fifth column, only when the caller passes
+  // the sessions of an ad-hoc report (makeAdhocTdocSessionResolver_()).
+  if (sessionResolver) headerRow.appendTableCell(ADHOC_SESSION_COLUMN_HEADER_);
+
   // Add each TDOC as a row
   tdocs.forEach(tdocData => {
     const row = tdocData.row;
@@ -4221,10 +4298,13 @@ function createSummaryTable_(body, tdocs, tdocCol, titleCol, sourceCol, agendaCo
     
     // Agenda Item
     dataRow.appendTableCell(String(tdocData.agendaItem || ''));
+    if (sessionResolver) dataRow.appendTableCell(sessionResolver.cell(tdocData));
   });
-  
+
   // Remove initial empty row if present
   removeInitialEmptyRow_(summaryTable);
+  // With the Session column the columns get explicit widths (the four-column table is left as it is).
+  if (sessionResolver) applyRegistrationTableWidths_(summaryTable);
   
   return summaryTable;
 }
@@ -8683,6 +8763,11 @@ function analyzeReportStatus() {
   if (stats.noEmailDiscussion.length > 0) {
     lines.push(`\n\nℹ️  No Email Discussion: ${stats.noEmailDiscussion.length} documents`);
   }
+
+  // Ad-hoc sessions (stage F): sessions, opening details, attendance and
+  // TDoc sessions. No lines -- and nothing read -- unless this is an ad-hoc
+  // report with sessions.
+  adhocSessionStatusLines_().forEach(line => lines.push(line));
   
   DocumentApp.getUi().alert('Report Status', lines.join('\n'), DocumentApp.getUi().ButtonSet.OK);
 }
@@ -9845,6 +9930,14 @@ function buildSkeletonWithTdocTables(options) {
 
   const tdocGroups = downloadAndGroupTdocs_(cfg, undefined, savedReallocations);
 
+  // Ad-hoc attendance (stage D): the Company cells typed into the attendee
+  // tables are kept before the document is cleared. null, and nothing read
+  // or written, unless this ad-hoc report has sessions and imported attendance.
+  const attendanceRebuild = beginAdhocAttendanceRebuild_();
+  // Ad-hoc sessions (stage B): what the Session column is computed from; null
+  // unless this ad-hoc report has sessions.
+  const tdocSessions = makeAdhocTdocSessionResolverSafely_();
+
   // Step 2: Clear document, set title
   const body = DocumentApp.getActiveDocument().getBody().clear();
   setDocumentTitleFromTemplate_(templateDocId);
@@ -9983,7 +10076,12 @@ function buildSkeletonWithTdocTables(options) {
       const openingSubSection = anchors.openingSubSection;
       body.appendParagraph(`${openingSubSection} Opening of the session`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
       const meetingDateText = (cfg.MEETING_DATE || '').trim() || '<meeting date>';
-      body.appendParagraph(`<Chair> opens the session on ${meetingDateText} at <start> CEST.`);
+      // Ad-hoc opening (stage E): with sessions configured the Session
+      // administration section says who chaired and when, so this line is
+      // not written as well. Every other report gets it as before.
+      if (!adhocSessionsEnabled_(context)) {
+        body.appendParagraph(`<Chair> opens the session on ${meetingDateText} at <start> CEST.`);
+      }
     } else {
       // Opening section for SWG reports - copy X.1 content from template
       const openingHeader = findHeading_(sourceBody, /^X\.1\s+/);
@@ -9998,8 +10096,10 @@ function buildSkeletonWithTdocTables(options) {
     }
 
     // Always add/update the registered documents summary table
+    // Ad-hoc sessions (stage B): with sessions configured it is built with
+    // the Session column (tdocSessions is null for every other report).
     if (allTdocs.length > 0) {
-      createSummaryTable_(body, allTdocs, allTdocs[0].tdocCol, allTdocs[0].titleCol, allTdocs[0].sourceCol, -1);
+      createSummaryTable_(body, allTdocs, allTdocs[0].tdocCol, allTdocs[0].titleCol, allTdocs[0].sourceCol, -1, tdocSessions);
     }
 
     // SA4-PROD-003: {agendaPrefixNum}.1.4 "Documents" -- collects every
@@ -10226,6 +10326,13 @@ function buildSkeletonWithTdocTables(options) {
     }
   }
 
+  // Ad-hoc attendance (stage D): the Attendance section is written again
+  // from what is stored; a problem is added to the note of the result.
+  reallocationRestoreNote += finishAdhocAttendanceRebuild_(body, attendanceRebuild);
+  // Ad-hoc opening (stage E): the Session administration section, from the
+  // sessions and the stored opening details ('' and nothing done without sessions).
+  reallocationRestoreNote += finishAdhocOpeningRebuild_(body);
+
   // TEMPLATE-002C: Full Build formats once, after its enrichment phases.
   if (!(options && options.skipFormatting)) removeRowHeightAndSpacing();
   Logger.log(`Done: Built skeleton with ${filteredAgendaItems.length} agenda items and ${allTdocs.length} TDOCs.`);
@@ -10294,6 +10401,9 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {
     if (revisedToCol === -1) {
       Logger.log('Warning: no "Revised to" column in the TDOC list; revision placement is skipped');
     }
+    // Ad-hoc sessions (stage B): the upload time of each TDoc. null, and
+    // nothing read, unless this is an ad-hoc report with sessions.
+    const uploadTimes = readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, context);
 
     // SA4-IMPL-005: agenda selection now goes through MeetingContext's
     // agendaSelector (SA4-IMPL-004) instead of a direct
@@ -10342,6 +10452,7 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {
         tdocCol, titleCol, sourceCol, contactCol, agendaCol, agendaTopicCol, statusCol, typeCol, forCol,
         revisedToCol
       });
+      if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];
     }
 
     Logger.log(`Grouped TDOCs: ${Object.keys(groups).length} agenda items`);
@@ -11616,6 +11727,4473 @@ function setTdocTableAgendaItem_(table, value) {
     }
   }
   return false;
+}
+
+// =========================================================
+// AD-HOC SESSIONS (stage A) -- SESSION MODEL AND CONFIGURATION
+// =========================================================
+//
+// docs/ADHOC_SESSIONS_ATTENDANCE_DESIGN.md. An ad-hoc report can describe
+// the meetings of its series as sessions. A session is one logical meeting
+// and may span several calendar days. It is metadata: a stable id, a label,
+// its first day (`date`), optionally its last day (`endDate`; absent for a
+// session of one day) and optional planned times -- `start` on the first
+// day, `end` on the last, where it is the cut-off for the TDocs of the
+// session. All are wall-clock values of the report's time zone, stored as
+// text. A session of one day is stored exactly as before `endDate` existed.
+//
+// Opt-in and ad-hoc only: sessions are active when the meeting type is
+// adhoc AND the ADHOC_SESSIONS property holds a valid configuration with at
+// least one session (adhocSessionsEnabled_()). Everything else of the
+// feature -- the Session column, the Attendance and Session administration
+// sections, the status -- reads them through getAdhocSessions_().
+//
+// The property is written by one function (saveAdhocSessionsWith_()) and
+// only on Save. A value that cannot be read is treated as "no sessions" by
+// every reader and never throws.
+
+const ADHOC_SESSIONS_KEY_ = 'ADHOC_SESSIONS';
+const ADHOC_SESSIONS_SCHEMA_VERSION_ = 1;
+const ADHOC_SESSION_LABEL_MAX_LENGTH_ = 16;
+// One property value holds at most 9 KB (see the report state store above).
+const ADHOC_SESSIONS_MAX_CHARS_ = 8000;
+const ADHOC_SESSION_MONTHS_ = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** A real calendar date written YYYY-MM-DD. */
+function isValidAdhocSessionDate_(value) {
+  const m = String(value === null || value === undefined ? '' : value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
+/** A time of day written HH:mm (24-hour clock). */
+function isValidAdhocSessionTime_(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value === null || value === undefined ? '' : value));
+}
+
+/**
+ * "22 Sep" for 2026-09-22; with a later last day "26–28 Oct", "30 Oct – 1
+ * Nov" or "31 Dec – 2 Jan". '' for anything that is not a valid date.
+ */
+function defaultAdhocSessionLabel_(date, endDate) {
+  if (!isValidAdhocSessionDate_(date)) return '';
+  const day = function (d) { return String(parseInt(d.slice(8, 10), 10)); };
+  const month = function (d) { return ADHOC_SESSION_MONTHS_[parseInt(d.slice(5, 7), 10) - 1]; };
+  if (!isValidAdhocSessionDate_(endDate) || endDate <= date) return day(date) + ' ' + month(date);
+  if (endDate.slice(0, 7) === date.slice(0, 7)) return day(date) + '–' + day(endDate) + ' ' + month(date);
+  return day(date) + ' ' + month(date) + ' – ' + day(endDate) + ' ' + month(endDate);
+}
+
+/** The label shown for a session: the user's own, else the one derived from its dates. */
+function adhocSessionLabel_(session) {
+  return (session && session.label) || defaultAdhocSessionLabel_(session && session.date, session && session.endDate);
+}
+
+/** The last calendar day of a session: its endDate, else its date. */
+function adhocSessionLastDay_(session) {
+  return (session && session.endDate) || (session && session.date) || '';
+}
+
+/** True for a session that spans more than one calendar day. */
+function isAdhocMultiDaySession_(session) {
+  return !!(session && session.endDate && session.endDate > session.date);
+}
+
+/** How many calendar days a session spans (1 for a session of one day). */
+function adhocSessionDayCount_(session) {
+  const at = function (d) { const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; };
+  const days = Math.round((at(adhocSessionLastDay_(session)) - at(session.date)) / 86400000) + 1;
+  return days >= 1 ? days : 1;
+}
+
+/**
+ * THE way a range of days is written: "September 22, 2026", "October 26–28,
+ * 2026", "October 30 – November 1, 2026", "December 31, 2026 – January 2,
+ * 2027". `first` and `last` are YYYY-MM-DD; '' when `first` is not a date.
+ */
+function adhocDateRangeText_(first, last) {
+  const a = adhocLongDate_(first);
+  const b = adhocLongDate_(last);
+  if (!a || !b || b === a || String(last) < String(first)) return a;
+  const pa = a.match(/^(\S+) (\d+), (\d+)$/);
+  const pb = b.match(/^(\S+) (\d+), (\d+)$/);
+  if (!pa || !pb || pa[3] !== pb[3]) return a + ' – ' + b;
+  if (pa[1] === pb[1]) return pa[1] + ' ' + pa[2] + '–' + pb[2] + ', ' + pa[3];
+  return pa[1] + ' ' + pa[2] + ' – ' + pb[1] + ' ' + pb[2] + ', ' + pa[3];
+}
+
+/** The days of one session, written as a range. */
+function adhocSessionDatesText_(session) {
+  return adhocDateRangeText_(session.date, adhocSessionLastDay_(session));
+}
+
+/**
+ * Chronological order: date, then planned start. The id decides only between
+ * sessions the validation rejects anyway (same date, same or no start), so
+ * that sorting is total and never depends on the input order.
+ */
+function compareAdhocSessions_(a, b) {
+  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+  if (a.start !== b.start) return a.start < b.start ? -1 : 1;
+  return (parseInt(String(a.id).slice(1), 10) || 0) - (parseInt(String(b.id).slice(1), 10) || 0);
+}
+
+function sortAdhocSessions_(sessions) {
+  return sessions.slice().sort(compareAdhocSessions_);
+}
+
+/**
+ * Pure: the short code of the session at position `index` (from 0) of the
+ * chronological order: "A01", "A02", ... "A10", ... "A100". It is what the
+ * Session column of the registration table shows, where a label would not
+ * fit. A code is derived from the order every time it is needed and is
+ * never stored: sessions are stored and referred to by their ids only.
+ */
+function adhocSessionCode_(index) {
+  const n = index + 1;
+  return 'A' + (n < 10 ? '0' : '') + n;
+}
+
+/** Pure: { <session id>: code } for these sessions, by their chronological order. */
+function adhocSessionCodes_(sessions) {
+  const codes = {};
+  sortAdhocSessions_(sessions).forEach(function (session, i) { codes[session.id] = adhocSessionCode_(i); });
+  return codes;
+}
+
+/**
+ * Normalizes and validates a list of sessions that already have their ids.
+ * Returns { errors, sessions }: `sessions` is the normalized list in
+ * chronological order and is meaningful only when `errors` is empty.
+ *
+ * Sessions on the same date must be orderable without guessing: each needs
+ * a planned start, the starts differ, and every session but the last of
+ * that day needs a planned end that is not after the next start.
+ *
+ * A session may span several days (endDate after date). Its planned start
+ * is then on the first day and its planned end on the last, so the end need
+ * not be later in the day than the start. The days of two sessions must not
+ * overlap; a session may begin on the last day of the one before only when
+ * that one's planned end and its own planned start say so.
+ */
+function validateAdhocSessions_(sessions) {
+  const errors = [];
+  if (!Array.isArray(sessions)) return { errors: ['The session list is missing.'], sessions: [] };
+  const text = function (v) { return String(v === null || v === undefined ? '' : v).trim(); };
+
+  const normalized = [];
+  const seenIds = {};
+  sessions.forEach(function (raw, i) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push('Session ' + (i + 1) + ' is not a session.');
+      return;
+    }
+    const s = { id: text(raw.id), label: text(raw.label).replace(/\s+/g, ' '), date: text(raw.date) };
+    // The last day, only for a session of several days: one that ends on its first day is stored as before.
+    const endDate = text(raw.endDate);
+    if (endDate && endDate !== s.date) s.endDate = endDate;
+    s.start = text(raw.start);
+    s.end = text(raw.end);
+    const name = s.label || s.date || 'Session ' + (i + 1);
+
+    if (!/^s[1-9]\d*$/.test(s.id)) errors.push(name + ': the session id is missing or malformed.');
+    else if (seenIds[s.id]) errors.push(name + ': the session id ' + s.id + ' is used twice.');
+    else seenIds[s.id] = true;
+
+    if (!s.date) errors.push(name + ': enter a date.');
+    else if (!isValidAdhocSessionDate_(s.date)) errors.push(name + ': "' + s.date + '" is not a date (YYYY-MM-DD).');
+    if (s.start && !isValidAdhocSessionTime_(s.start)) errors.push(name + ': the planned start "' + s.start + '" is not a time (HH:mm).');
+    if (s.end && !isValidAdhocSessionTime_(s.end)) errors.push(name + ': the planned end "' + s.end + '" is not a time (HH:mm).');
+    if (s.endDate && !isValidAdhocSessionDate_(s.endDate)) errors.push(name + ': the end date "' + s.endDate + '" is not a date (YYYY-MM-DD).');
+    else if (s.endDate && isValidAdhocSessionDate_(s.date) && s.endDate < s.date) errors.push(name + ': the end date is before the start date.');
+    // On one day the end is later than the start. Over several days the start is on the first and the end on the last.
+    if (!s.endDate && isValidAdhocSessionTime_(s.start) && isValidAdhocSessionTime_(s.end) && s.end <= s.start) {
+      errors.push(name + ': the planned end must be after the planned start.');
+    }
+    if (s.label.length > ADHOC_SESSION_LABEL_MAX_LENGTH_) {
+      errors.push(name + ': the label is longer than ' + ADHOC_SESSION_LABEL_MAX_LENGTH_ + ' characters.');
+    }
+    normalized.push(s);
+  });
+  if (errors.length) return { errors: errors, sessions: [] };
+
+  const sorted = sortAdhocSessions_(normalized);
+
+  const seenLabels = {};
+  sorted.forEach(function (s) {
+    const label = adhocSessionLabel_(s);
+    const key = label.toLowerCase();
+    if (seenLabels[key]) errors.push('The label "' + label + '" is used by more than one session. Give each session its own label.');
+    seenLabels[key] = true;
+  });
+
+  sorted.forEach(function (s, i) {
+    const next = sorted[i + 1];
+    if (!next) return;
+    if (isAdhocMultiDaySession_(s) || isAdhocMultiDaySession_(next)) {
+      // Sessions of several days: their days must not overlap.
+      const last = adhocSessionLastDay_(s);
+      if (next.date > last) return;
+      if (next.date < last || next.date === s.date) {
+        errors.push(adhocSessionLabel_(s) + ' and ' + adhocSessionLabel_(next) + ' overlap: their days must not overlap.');
+      } else if (!s.end || !next.start) {
+        errors.push(adhocSessionLabel_(next) + ' begins on the last day of ' + adhocSessionLabel_(s) + ': enter the planned end of the first and the planned start of the second, so that their order is known.');
+      } else if (s.end > next.start) {
+        errors.push(adhocSessionLabel_(s) + ': the planned end (' + s.end + ') is after the start of ' + adhocSessionLabel_(next) + ' on that day (' + next.start + ').');
+      }
+      return;
+    }
+    if (next.date !== s.date) return;
+    const day = defaultAdhocSessionLabel_(s.date);
+    if (!s.start || !next.start) {
+      errors.push('Two sessions are on ' + day + ': enter a planned start for each of them, so that their order is known.');
+    } else if (s.start === next.start) {
+      errors.push('Two sessions on ' + day + ' have the same planned start (' + s.start + ').');
+    } else if (!s.end) {
+      errors.push(adhocSessionLabel_(s) + ': enter a planned end, because another session follows on the same day.');
+    } else if (s.end > next.start) {
+      errors.push(adhocSessionLabel_(s) + ': the planned end (' + s.end + ') is after the start of the next session on that day (' + next.start + ').');
+    }
+  });
+
+  return { errors: errors.filter(function (e, i) { return errors.indexOf(e) === i; }), sessions: errors.length ? [] : sorted };
+}
+
+/**
+ * Reads an ADHOC_SESSIONS property value.
+ *   { status: 'absent' }                      no value
+ *   { status: 'ok', config }                  { v, nextId, sessions } -- sessions in order
+ *   { status: 'unsupported', error }          written by a newer schema version
+ *   { status: 'invalid', error }              anything else that cannot be used
+ * Never throws.
+ */
+function parseAdhocSessionsProperty_(raw) {
+  if (raw === null || raw === undefined || String(raw).trim() === '') return { status: 'absent', config: null, error: null };
+  let data;
+  try {
+    data = JSON.parse(String(raw));
+  } catch (e) {
+    return { status: 'invalid', config: null, error: 'The stored session configuration is not valid JSON.' };
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { status: 'invalid', config: null, error: 'The stored session configuration is not an object.' };
+  }
+  if (data.v !== ADHOC_SESSIONS_SCHEMA_VERSION_) {
+    return { status: 'unsupported', config: null, error: 'The stored session configuration has version ' + JSON.stringify(data.v) +
+      '; this release reads version ' + ADHOC_SESSIONS_SCHEMA_VERSION_ + '.' };
+  }
+  const checked = validateAdhocSessions_(data.sessions);
+  if (checked.errors.length) return { status: 'invalid', config: null, error: checked.errors.join(' ') };
+  const highest = checked.sessions.reduce(function (max, s) { return Math.max(max, parseInt(s.id.slice(1), 10)); }, 0);
+  if (typeof data.nextId !== 'number' || Math.floor(data.nextId) !== data.nextId || data.nextId <= highest) {
+    return { status: 'invalid', config: null, error: 'The stored session configuration has no usable id counter.' };
+  }
+  return { status: 'ok', config: { v: ADHOC_SESSIONS_SCHEMA_VERSION_, nextId: data.nextId, sessions: checked.sessions }, error: null };
+}
+
+/** The one stored form: fixed key order, sessions in chronological order. */
+function serializeAdhocSessions_(config) {
+  return JSON.stringify({
+    v: ADHOC_SESSIONS_SCHEMA_VERSION_,
+    nextId: config.nextId,
+    sessions: sortAdhocSessions_(config.sessions).map(adhocSessionRecord_)
+  });
+}
+
+/** One session as it is stored and handed on: `endDate` only for a session of several days, after `date`. */
+function adhocSessionRecord_(s) {
+  const out = { id: s.id, label: s.label, date: s.date };
+  if (s.endDate && s.endDate !== s.date) out.endDate = s.endDate;
+  out.start = s.start;
+  out.end = s.end;
+  return out;
+}
+
+/**
+ * The lowest id number that is safe to issue when a stored value cannot be
+ * read: above every id and counter that can still be found in its text, so
+ * that replacing a damaged configuration does not reuse an id either.
+ */
+function salvageAdhocSessionNextId_(raw) {
+  let next = 1;
+  const text = String(raw === null || raw === undefined ? '' : raw);
+  const idRe = /"s([1-9]\d{0,8})"/g;
+  let m;
+  while ((m = idRe.exec(text)) !== null) next = Math.max(next, parseInt(m[1], 10) + 1);
+  const counter = text.match(/"nextId"\s*:\s*(\d{1,9})/);
+  if (counter) next = Math.max(next, parseInt(counter[1], 10));
+  return next;
+}
+
+/**
+ * Pure: the configuration that results from the dialog's rows.
+ * `raw` is the current property value; `rows` is [{ id, label, date,
+ * endDate, start, end }], where a blank id is a new session. A row keeps its id whatever
+ * else changed; a new row gets the next id of the counter, which only ever
+ * grows -- the id of a removed session is never issued again.
+ * Returns { ok, errors, config }.
+ */
+function applyAdhocSessionsEdit_(raw, rows) {
+  const stored = parseAdhocSessionsProperty_(raw);
+  if (stored.status === 'unsupported') {
+    return { ok: false, errors: [stored.error + ' It was written by a newer release and is not changed here.'], config: null };
+  }
+  if (!Array.isArray(rows)) return { ok: false, errors: ['The session list is missing.'], config: null };
+
+  const known = {};
+  if (stored.status === 'ok') stored.config.sessions.forEach(function (s) { known[s.id] = true; });
+  let nextId = stored.status === 'ok' ? stored.config.nextId : salvageAdhocSessionNextId_(raw);
+
+  const errors = [];
+  const sessions = rows.map(function (row) {
+    const r = row && typeof row === 'object' ? row : {};
+    let id = String(r.id === null || r.id === undefined ? '' : r.id).trim();
+    if (!id) {
+      id = 's' + nextId;
+      nextId++;
+    } else if (!known[id]) {
+      errors.push('A session of this dialog is no longer stored. Close the dialog and open Configure Sessions again.');
+    }
+    return { id: id, label: r.label, date: r.date, endDate: r.endDate, start: r.start, end: r.end };
+  });
+  const checked = validateAdhocSessions_(sessions);
+  const all = errors.concat(checked.errors).filter(function (e, i, list) { return list.indexOf(e) === i; });
+  if (all.length) return { ok: false, errors: all, config: null };
+
+  const config = { v: ADHOC_SESSIONS_SCHEMA_VERSION_, nextId: nextId, sessions: checked.sessions };
+  if (serializeAdhocSessions_(config).length > ADHOC_SESSIONS_MAX_CHARS_) {
+    return { ok: false, errors: ['There are too many sessions to store.'], config: null };
+  }
+  return { ok: true, errors: [], config: config };
+}
+
+/** True for an ad-hoc meeting; false for a main meeting and for a meeting type that cannot be read. */
+function isAdhocMeetingForSessions_(context) {
+  try {
+    return normalizeMeetingType_(getReportStateStore_(context).getProperty('MEETING_TYPE')) === 'adhoc';
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The sessions of this report in chronological order, each with the label
+ * to show (`displayLabel`); [] unless the meeting is ad-hoc and a valid
+ * configuration with at least one session is stored. Never throws.
+ */
+function getAdhocSessions_(context) {
+  if (!isAdhocMeetingForSessions_(context)) return [];
+  let stored;
+  try {
+    stored = parseAdhocSessionsProperty_(getReportStateStore_(context).getProperty(ADHOC_SESSIONS_KEY_));
+  } catch (e) {
+    return [];
+  }
+  if (stored.status !== 'ok') return [];
+  return stored.config.sessions.map(function (s) {
+    const session = adhocSessionRecord_(s);
+    session.displayLabel = adhocSessionLabel_(s);
+    return session;
+  });
+}
+
+/** The one switch of the session feature (design §3). */
+function adhocSessionsEnabled_(context) {
+  return getAdhocSessions_(context).length > 0;
+}
+
+/**
+ * Saves the dialog's rows into `store`. Everything is validated first; a
+ * refused save writes nothing. Saving what is already stored writes nothing
+ * either, and neither does saving "no sessions" into a report that never
+ * had any. Removing every session keeps the property, with its id counter.
+ * Returns { ok, errors, changed, sessions }.
+ *
+ * Stage D: `attendanceSessionIds` are the sessions that have imported
+ * attendance (null: that cannot be told). Such a session is not removed
+ * here -- its attendance has to be removed first, explicitly -- so that
+ * attendance is never deleted, or left without its session, by the way.
+ *
+ * Stage B: `tdocSessionReferences` are the sessions that manual TDoc
+ * assignments name, { <session id>: [TDoc, ...] } (null: that cannot be
+ * told). Such a session is not removed either; the assignments are never
+ * stripped silently. A session that TDocs belong to only automatically can
+ * be removed -- those TDocs are then placed among the remaining sessions.
+ *
+ * Stage E: `openingSessionIds` are the sessions that have opening details
+ * (null: that cannot be told). Such a session is not removed until its
+ * details were cleared.
+ *
+ * Attendance stays inside its session: `attendanceDays` is { <session id>:
+ * [the days that have an imported attendance record] } (null: that cannot
+ * be told; left out: not checked). The days of a session cannot be changed
+ * so that one of those days falls outside it. Such a save is refused as a
+ * whole and writes nothing; no attendance is removed or moved, and the
+ * session is not extended to fit.
+ */
+function saveAdhocSessionsWith_(store, isAdhoc, rows, attendanceSessionIds, tdocSessionReferences, openingSessionIds, attendanceDays) {
+  if (!isAdhoc) return { ok: false, errors: ['Sessions are available for ad-hoc reports only.'], changed: false, sessions: [] };
+  const raw = store.getProperty(ADHOC_SESSIONS_KEY_);
+  const edit = applyAdhocSessionsEdit_(raw, rows);
+  if (!edit.ok) return { ok: false, errors: edit.errors, changed: false, sessions: [] };
+
+  const before = parseAdhocSessionsProperty_(raw);
+  const outside = adhocSessionsLeavingAttendanceOutside_(before.status === 'ok' ? before.config.sessions : [], edit.config.sessions, attendanceDays);
+  if (outside.length) return { ok: false, errors: outside, changed: false, sessions: [] };
+  const removed = (before.status === 'ok' ? before.config.sessions : []).filter(function (s) {
+    return !edit.config.sessions.some(function (kept) { return kept.id === s.id; });
+  });
+  if (removed.length && attendanceSessionIds === null) {
+    return { ok: false, errors: ['The stored attendance was written by a newer release, so it cannot be told which sessions have attendance. No session was removed.'], changed: false, sessions: [] };
+  }
+  const blocked = removed.filter(function (s) { return (attendanceSessionIds || []).indexOf(s.id) !== -1; });
+  if (blocked.length) {
+    return { ok: false, errors: blocked.map(function (s) {
+      return adhocSessionLabel_(s) + ' has imported attendance and was not removed. Remove its attendance first: Sessions and Attendance > Import Teams Attendance… > Remove attendance….';
+    }), changed: false, sessions: [] };
+  }
+  if (removed.length && tdocSessionReferences === null) {
+    return { ok: false, errors: ['The manual TDoc session assignments were written by a newer release, so it cannot be told which sessions they name. No session was removed.'], changed: false, sessions: [] };
+  }
+  const named = removed.filter(function (s) { return ((tdocSessionReferences || {})[s.id] || []).length > 0; });
+  if (named.length) {
+    return { ok: false, errors: named.map(function (s) {
+      const tdocs = tdocSessionReferences[s.id];
+      return adhocSessionLabel_(s) + ' is named by manual TDoc session assignments (' + tdocs.slice(0, 3).join(', ') + (tdocs.length > 3 ? ' and ' + (tdocs.length - 3) + ' more' : '') +
+        ') and was not removed. Change those assignments first: Sessions and Attendance > Assign TDoc Sessions….';
+    }), changed: false, sessions: [] };
+  }
+  if (removed.length && openingSessionIds === null) {
+    return { ok: false, errors: ['The opening details were written by a newer release, so it cannot be told which sessions have them. No session was removed.'], changed: false, sessions: [] };
+  }
+  const withOpening = removed.filter(function (s) { return (openingSessionIds || []).indexOf(s.id) !== -1; });
+  if (withOpening.length) {
+    return { ok: false, errors: withOpening.map(function (s) {
+      return adhocSessionLabel_(s) + ' has opening details and was not removed. Clear them first: Sessions and Attendance > Edit Opening Details….';
+    }), changed: false, sessions: [] };
+  }
+
+  const serialized = serializeAdhocSessions_(edit.config);
+  const nothingToStore = (raw === null || raw === undefined) && edit.config.sessions.length === 0;
+  const changed = !nothingToStore && serialized !== raw;
+  if (changed) store.setProperty(ADHOC_SESSIONS_KEY_, serialized);
+  return { ok: true, errors: [], changed: changed, sessions: edit.config.sessions };
+}
+
+/**
+ * Pure: why the edited sessions cannot be saved because of the attendance
+ * that is imported -- one message per session whose new days would leave a
+ * day with attendance outside, in the order of the sessions; [] when
+ * nothing stands in the way. `attendanceDays` as for saveAdhocSessionsWith_().
+ */
+function adhocSessionsLeavingAttendanceOutside_(storedSessions, editedSessions, attendanceDays) {
+  if (attendanceDays === undefined) return [];
+  const errors = [];
+  if (attendanceDays === null) {
+    // Which days have attendance is not known: the days of an existing session are then not changed.
+    const moved = editedSessions.filter(function (s) {
+      const was = storedSessions.filter(function (x) { return x.id === s.id; })[0];
+      return was && (was.date !== s.date || adhocSessionLastDay_(was) !== adhocSessionLastDay_(s));
+    });
+    return moved.length ? ['The stored attendance was written by a newer release, so it cannot be told which days have attendance. The dates of ' +
+      moved.map(adhocSessionLabel_).join(', ') + ' were not changed.'] : [];
+  }
+  editedSessions.forEach(function (s) {
+    const last = adhocSessionLastDay_(s);
+    const days = (attendanceDays[s.id] || []).filter(function (day) { return day < s.date || day > last; }).sort();
+    if (days.length === 0) return;
+    const which = days.map(adhocLongDate_).join(', ');
+    errors.push(adhocSessionLabel_(s) + ' cannot be changed to ' + adhocSessionDatesText_(s) + ' because attendance for ' + which + ' is already imported. ' +
+      'Remove that attendance first (Sessions and Attendance > Import Teams Attendance… > Remove attendance…) or keep ' + (days.length === 1 ? 'that day' : 'those days') + ' within the session.');
+  });
+  return errors;
+}
+
+/**
+ * The days that have an attendance record, per session: { <session id>:
+ * [YYYY-MM-DD, ...] }, each day once, in order. The day of a record is the
+ * one adhocAttendanceRecordsOf_() gives: the date of its own Teams start
+ * time, whatever key it is stored under. A record whose day cannot be told
+ * (it cannot be read and its key names none) is left out.
+ */
+function adhocAttendanceDaysBySession_(state) {
+  const days = {};
+  Object.keys(state.sessions).concat(state.problems).forEach(function (key) {
+    const parts = adhocAttendanceRecordParts_(key);
+    if (!parts || days[parts.sessionId]) return;
+    const list = [];
+    adhocAttendanceRecordsOf_(state, parts.sessionId).forEach(function (r) { if (r.day && list.indexOf(r.day) === -1) list.push(r.day); });
+    days[parts.sessionId] = list.sort();
+  });
+  return days;
+}
+
+/** RPC of the Configure Sessions dialog. */
+function saveAdhocSessionsConfiguration(rows) {
+  assertNotTemplateMaster_();
+  let attendanceSessionIds = [];
+  // The days that have attendance, per session: null when that cannot be told.
+  let attendanceDays = {};
+  try {
+    attendanceSessionIds = adhocAttendanceSessionIds_(adhocAttendanceStore_());
+    const attendance = readAdhocAttendance_(adhocAttendanceStore_());
+    attendanceDays = attendance.status === 'unsupported' ? null : adhocAttendanceDaysBySession_(attendance);
+  } catch (e) {
+    attendanceSessionIds = null;
+    attendanceDays = null;
+  }
+  let tdocSessionReferences = {};
+  try {
+    tdocSessionReferences = adhocTdocSessionReferences_(getReportStateStore_().getProperty(ADHOC_TDOC_SESSIONS_KEY_));
+  } catch (e) {
+    tdocSessionReferences = null;
+  }
+  let openingSessionIds = [];
+  try {
+    openingSessionIds = adhocOpeningSessionIds_(adhocOpeningStore_().getProperty(ADHOC_OPENING_KEY_));
+  } catch (e) {
+    openingSessionIds = null;
+  }
+  const result = saveAdhocSessionsWith_(getReportStateStore_(), isAdhocMeetingForSessions_(), rows, attendanceSessionIds, tdocSessionReferences, openingSessionIds, attendanceDays);
+
+  // Stage E: the Session administration section says when each session is,
+  // so it follows the sessions -- in a report that has the section, or has
+  // opening details stored. A report that has neither is not touched.
+  if (result.ok && result.changed) {
+    let relevant = !!(openingSessionIds && openingSessionIds.length);
+    try {
+      relevant = relevant || !!findAdhocOpeningContainer_(DocumentApp.getActiveDocument().getBody());
+    } catch (e) {
+      // Without a document to look at there is nothing to bring in line.
+    }
+    if (relevant) {
+      const openingNotice = renderAdhocOpeningAfterChange_('The sessions were saved.');
+      if (openingNotice) result.notice = openingNotice;
+    }
+  }
+
+  // Stage D: the Attendance section names the sessions and follows their
+  // order, so it is written again when sessions with attendance changed.
+  // The sessions are saved either way; a section that could not be written
+  // is reported with the way to write it later.
+  if (result.ok && result.changed && attendanceSessionIds && attendanceSessionIds.length && result.sessions.length) {
+    const rendered = withAdhocAttendanceLock_(function () {
+      try {
+        refreshAdhocAttendanceSection_(DocumentApp.getActiveDocument().getBody());
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    });
+    if (!rendered.ok) {
+      result.notice = (result.notice ? result.notice + '\n\n' : '') +
+        'The sessions were saved. The Attendance section could not be updated (' + rendered.error + '). Use ' + ADHOC_ATTENDANCE_REFRESH_HINT_ + '.';
+    }
+  }
+  // Stage B: the Session column follows the sessions with the next update of
+  // the report (it needs the TDoc list); the dialog says so.
+  if (result.ok && result.changed) {
+    let hasColumn = false;
+    try {
+      const found = findRegistrationTable_(DocumentApp.getActiveDocument().getBody());
+      hasColumn = !!found && found.columns === 5;
+    } catch (e) {
+      hasColumn = false;
+    }
+    if (hasColumn) {
+      result.notice = (result.notice ? result.notice + '\n\n' : 'The sessions were saved. ') +
+        'The Session column of the registration table follows with the next update: SA4 Report > Report > Update Report Now.';
+    }
+  }
+  return result;
+}
+
+/**
+ * What the Configure Sessions dialog shows (pure; reads nothing but its
+ * arguments, writes nothing). Without a stored configuration one session is
+ * proposed from the meeting date; it is stored only if the user saves.
+ */
+function buildAdhocSessionsDialogModel_(raw, meetingDateText) {
+  const stored = parseAdhocSessionsProperty_(raw);
+  const model = { sessions: [], notice: '', readOnly: false, labelMaxLength: ADHOC_SESSION_LABEL_MAX_LENGTH_ };
+  if (stored.status === 'ok') {
+    model.sessions = stored.config.sessions.map(adhocSessionRecord_);
+  } else if (stored.status === 'unsupported') {
+    model.readOnly = true;
+    model.notice = stored.error + ' It was written by a newer release and cannot be changed here.';
+  } else if (stored.status === 'invalid') {
+    model.notice = 'The stored sessions cannot be read and are not used (' + stored.error + ') Saving replaces them.';
+  } else {
+    const date = meetingStartDateIso_(meetingDateText);
+    if (date) {
+      model.sessions = [{ id: '', label: '', date: date, start: '', end: '' }];
+      model.notice = 'No sessions are configured yet. One session is proposed from the meeting date; nothing is stored until you save.';
+    }
+  }
+  return model;
+}
+
+/** Menu (ad-hoc template report): Sessions and Attendance > Configure Sessions… */
+function configureAdhocSessions() {
+  assertNotTemplateMaster_();
+  const ui = DocumentApp.getUi();
+  if (!isAdhocMeetingForSessions_()) {
+    ui.alert('Configure Sessions', 'Sessions are available for ad-hoc reports only.', ui.ButtonSet.OK);
+    return;
+  }
+  const props = getReportStateStore_();
+  const model = buildAdhocSessionsDialogModel_(props.getProperty(ADHOC_SESSIONS_KEY_), props.getProperty('MEETING_DATE'));
+  // "<" is written as an escape so that no stored text can end the script element.
+  const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');
+
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; font-size: 13px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+      th { text-align: left; font-size: 12px; padding: 4px 6px 4px 0; }
+      td { padding: 3px 6px 3px 0; vertical-align: middle; }
+      input { padding: 6px; box-sizing: border-box; width: 100%; }
+      button { margin-top: 16px; padding: 9px 18px; background: #4285f4; color: white; border: none; cursor: pointer; }
+      button:hover { background: #357ae8; }
+      button:disabled { background: #999; cursor: default; }
+      button.remove { margin-top: 0; padding: 6px 10px; background: #666; }
+      .hint { font-size: 11px; color: #666; margin-top: 4px; }
+      #notice { margin-top: 10px; padding: 8px; background: #fff6e0; border-left: 3px solid #c77c00; display: none; }
+      #errors { color: #a94442; margin-top: 12px; white-space: pre-wrap; }
+    </style>
+
+    <h2>Sessions</h2>
+    <div class="hint">The meetings of this ad-hoc series. A session can span several days: enter its last day as End date, or leave End date empty for a session of one day. Times are optional and are meant in the report's time zone: the start time is on the first day, the end time is the final cut-off on the last day. An empty label is shown as the day and month of the dates.</div>
+    <div id="notice"></div>
+
+    <table>
+      <thead><tr><th>Label</th><th>Start date</th><th>End date</th><th>Start time</th><th>End time (final cut-off)</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="hint" id="empty"></div>
+    <button type="button" id="addBtn" onclick="addSession()">Add session</button>
+
+    <div id="errors"></div>
+    <div>
+      <button type="button" id="saveBtn" onclick="saveSessions()">Save</button>
+      <button type="button" style="background: #666;" onclick="google.script.host.close()">Cancel</button>
+    </div>
+
+    <script>
+      var MODEL = ${modelJson};
+      var rows = [];
+      function el(id) { return document.getElementById(id); }
+      function field(type, value) {
+        var input = document.createElement('input');
+        input.type = type;
+        input.value = value || '';
+        return input;
+      }
+      function addRow(session) {
+        var tr = document.createElement('tr');
+        var row = {
+          id: session.id || '', tr: tr,
+          label: field('text', session.label), date: field('date', session.date), endDate: field('date', session.endDate),
+          start: field('time', session.start), end: field('time', session.end)
+        };
+        row.label.placeholder = 'from the dates';
+        row.label.maxLength = MODEL.labelMaxLength;
+        row.endDate.title = 'The last day of a session of several days. Leave empty for a session of one day.';
+        ['label', 'date', 'endDate', 'start', 'end'].forEach(function (name) {
+          var td = document.createElement('td');
+          td.appendChild(row[name]);
+          tr.appendChild(td);
+        });
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'remove';
+        remove.textContent = 'Remove';
+        remove.disabled = MODEL.readOnly;
+        remove.onclick = function () { removeRow(row); };
+        var last = document.createElement('td');
+        last.appendChild(remove);
+        tr.appendChild(last);
+        el('rows').appendChild(tr);
+        rows.push(row);
+        refresh();
+      }
+      function removeRow(row) {
+        el('rows').removeChild(row.tr);
+        rows.splice(rows.indexOf(row), 1);
+        refresh();
+      }
+      function addSession() { addRow({}); }
+      function refresh() {
+        el('empty').textContent = rows.length ? '' : 'No sessions. Without sessions the report behaves as it does today.';
+      }
+      function collect() {
+        return rows.map(function (r) {
+          var out = { id: r.id, label: r.label.value, date: r.date.value, start: r.start.value, end: r.end.value };
+          // Sent only for a session of several days, so that a session of one day is saved as it always was.
+          if (r.endDate.value && r.endDate.value !== r.date.value) out.endDate = r.endDate.value;
+          return out;
+        });
+      }
+      function showErrors(list) { el('errors').textContent = list.join(String.fromCharCode(10)); }
+      function saveSessions() {
+        el('saveBtn').disabled = true;
+        showErrors([]);
+        google.script.run
+          .withSuccessHandler(function (result) {
+            if (result && result.ok) {
+              if (result.notice) alert(result.notice);
+              google.script.host.close();
+              return;
+            }
+            el('saveBtn').disabled = false;
+            showErrors((result && result.errors) || ['The sessions were not saved.']);
+          })
+          .withFailureHandler(function (error) {
+            el('saveBtn').disabled = false;
+            showErrors([error && error.message ? error.message : String(error)]);
+          })
+          .saveAdhocSessionsConfiguration(collect());
+      }
+      MODEL.sessions.forEach(addRow);
+      refresh();
+      if (MODEL.notice) {
+        el('notice').textContent = MODEL.notice;
+        el('notice').style.display = 'block';
+      }
+      if (MODEL.readOnly) {
+        el('addBtn').disabled = true;
+        el('saveBtn').disabled = true;
+      }
+    </script>
+  `)
+  .setWidth(780)
+  .setHeight(480);
+
+  ui.showModalDialog(html, 'Configure Sessions');
+}
+
+// =========================================================
+// TEAMS ATTENDANCE (stage C) -- PARSER AND NORMALIZED MODEL
+// =========================================================
+//
+// docs/ADHOC_SESSIONS_ATTENDANCE_DESIGN.md §9-§11. Reads the attendance
+// report Microsoft Teams exports for one meeting and returns a normalized
+// model. Everything here is pure: no Google service, no property, no
+// document, and no log line -- the input is personal data.
+//
+// Only the sections "Summary" and "Participants" are read. Reading stops at
+// the section that follows them, so the content of "In-Meeting Activities"
+// and "Meeting Engagement" is never looked at.
+//
+// The model (parseTeamsAttendanceReport_().attendance):
+//
+//   schemaVersion  1
+//   source         { type: 'teams-attendance', delimiter: 'tab' | 'comma',
+//                    dateOrder: 'month-first' | 'day-first' | null }
+//
+//   summary        WHAT TEAMS STATES. Never replaced by a calculated value.
+//     meetingTitle             white space collapsed, otherwise as written
+//     attendanceRecords        Teams' "Attended participants" (number)
+//     start, end               'YYYY-MM-DDTHH:mm:ss', wall-clock time as
+//                              exported; the export has no time zone and
+//                              none is assumed
+//     durationSeconds          Teams' "Meeting duration"
+//     averageAttendanceSeconds Teams' "Average attendance time"
+//     raw                      the five values above exactly as written
+//     A value Teams did not supply, or that cannot be read, is null.
+//
+//   participants   NORMALIZED. One entry per attendee, in order of first
+//                  appearance; records of the same attendee are merged.
+//     name               display name without Teams' own markers
+//     company            from a leading "[Company] Name" only, else ''
+//     email              the explicit Email value when valid, else ''
+//     firstJoin, lastLeave   like summary.start, or null
+//     durationSeconds    sum of the merged records' durations, or null
+//     records            how many participant rows this entry stands for
+//
+//   diagnostics    DERIVED. For checking and for the import preview only.
+//     counts       participantRows, rowsWithJoinTime, attendees,
+//                  mergedRecords, shortRows, external, unverified, dialIn,
+//                  withoutEmail
+//     calculated   totalDurationSeconds, rowsWithDuration,
+//                  meanDurationSeconds, spanSeconds (end minus start)
+//     notes        [{ level: 'info' | 'warning', code, message, rows? }];
+//                  `rows` are row numbers within the Participants section
+//
+// Never part of the model: the Participant ID (UPN) column, which is not
+// read at all; a telephone number used as a display name; the role; the
+// engagement columns; any raw line.
+
+const TEAMS_ATTENDANCE_SCHEMA_VERSION_ = 1;
+const TEAMS_ATTENDANCE_MAX_CHARS_ = 2000000;
+const TEAMS_ATTENDANCE_MAX_ROWS_ = 5000;
+const TEAMS_DIAL_IN_NAME_ = 'Dial-in participant';
+
+/**
+ * Decodes the bytes of an export into text. The real export is UTF-16 LE
+ * with a byte-order mark; UTF-16 BE and UTF-8 are accepted, and without a
+ * mark UTF-16 is recognized by its zero bytes. `bytes` may be signed (Apps
+ * Script) or unsigned. Returns { text, encoding }.
+ */
+function decodeTeamsAttendanceBytes_(bytes) {
+  const n = bytes ? bytes.length : 0;
+  const at = function (i) { return bytes[i] & 0xFF; };
+  let encoding = 'utf-8';
+  let start = 0;
+  if (n >= 2 && at(0) === 0xFF && at(1) === 0xFE) {
+    encoding = 'utf-16le'; start = 2;
+  } else if (n >= 2 && at(0) === 0xFE && at(1) === 0xFF) {
+    encoding = 'utf-16be'; start = 2;
+  } else if (n >= 3 && at(0) === 0xEF && at(1) === 0xBB && at(2) === 0xBF) {
+    start = 3;
+  } else {
+    const pairs = Math.floor(Math.min(n, 1024) / 2);
+    let lowFirst = 0;
+    let highFirst = 0;
+    for (let p = 0; p < pairs; p++) {
+      if (at(2 * p + 1) === 0 && at(2 * p) !== 0) lowFirst++;
+      if (at(2 * p) === 0 && at(2 * p + 1) !== 0) highFirst++;
+    }
+    if (pairs >= 2 && lowFirst > pairs / 2) encoding = 'utf-16le';
+    else if (pairs >= 2 && highFirst > pairs / 2) encoding = 'utf-16be';
+  }
+
+  const units = [];
+  if (encoding === 'utf-8') {
+    let i = start;
+    while (i < n) {
+      const b0 = at(i);
+      let cp = 0xFFFD;
+      let len = 1;
+      const cont = function (k) { return i + k < n && (at(i + k) & 0xC0) === 0x80; };
+      if (b0 < 0x80) {
+        cp = b0;
+      } else if (b0 >= 0xC2 && b0 <= 0xDF && cont(1)) {
+        cp = ((b0 & 0x1F) << 6) | (at(i + 1) & 0x3F); len = 2;
+      } else if (b0 >= 0xE0 && b0 <= 0xEF && cont(1) && cont(2)) {
+        cp = ((b0 & 0x0F) << 12) | ((at(i + 1) & 0x3F) << 6) | (at(i + 2) & 0x3F); len = 3;
+      } else if (b0 >= 0xF0 && b0 <= 0xF4 && cont(1) && cont(2) && cont(3)) {
+        cp = ((b0 & 0x07) << 18) | ((at(i + 1) & 0x3F) << 12) | ((at(i + 2) & 0x3F) << 6) | (at(i + 3) & 0x3F); len = 4;
+      }
+      if (cp > 0xFFFF) {
+        cp -= 0x10000;
+        units.push(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+      } else {
+        units.push(cp);
+      }
+      i += len;
+    }
+  } else {
+    const low = encoding === 'utf-16le' ? 0 : 1;
+    for (let i = start; i + 1 < n; i += 2) units.push(at(i + low) | (at(i + 1 - low) << 8));
+  }
+
+  let text = '';
+  for (let i = 0; i < units.length; i += 8192) text += String.fromCharCode.apply(null, units.slice(i, i + 8192));
+  return { text: text, encoding: encoding };
+}
+
+/**
+ * Reads delimited text row by row and calls onRow(cells) for each row. A
+ * field that begins with a double quote is quoted: it may contain the
+ * delimiter and line breaks, and "" stands for one quote; after its closing
+ * quote the cell must end. A quote elsewhere is an ordinary character.
+ * onRow may return false to stop reading.
+ * Returns false when the quoting is broken -- the text ends inside a quoted
+ * field, or something follows a closing quote -- else true. Broken quoting
+ * is never read leniently: a cell would swallow the rows that follow it.
+ */
+function scanDelimitedRows_(text, delimiter, onRow) {
+  const src = String(text);
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  let atFieldStart = true;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch !== '"') {
+        field += ch;
+      } else if (src[i + 1] === '"') {
+        field += '"'; i++;
+      } else {
+        inQuotes = false;
+        const next = src[i + 1];
+        if (next !== undefined && next !== delimiter && next !== '\n' && next !== '\r') return false;
+      }
+    } else if (ch === '"' && atFieldStart) {
+      inQuotes = true;
+      atFieldStart = false;
+    } else if (ch === delimiter) {
+      row.push(field); field = ''; atFieldStart = true;
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && src[i + 1] === '\n') i++;
+      row.push(field);
+      if (onRow(row) === false) return true;
+      row = []; field = ''; atFieldStart = true;
+    } else {
+      field += ch;
+      atFieldStart = false;
+    }
+  }
+  if (inQuotes) return false;
+  if (field !== '' || row.length > 0) { row.push(field); onRow(row); }
+  return true;
+}
+
+/** All rows of a delimited text, or null when its quoting is broken. */
+function splitDelimitedRows_(text, delimiter) {
+  const rows = [];
+  return scanDelimitedRows_(text, delimiter, function (row) { rows.push(row); }) ? rows : null;
+}
+
+function teamsTwoDigits_(v) { return (v < 10 ? '0' : '') + v; }
+
+/** "3h 23m 20s", "1h 7s", "45m" -> seconds; null for anything else. */
+function parseTeamsDuration_(value) {
+  const s = String(value === null || value === undefined ? '' : value).trim();
+  const m = s.match(/^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?$/i);
+  if (!s || !m || (m[1] === undefined && m[2] === undefined && m[3] === undefined)) return null;
+  return (parseInt(m[1] || '0', 10) * 3600) + (parseInt(m[2] || '0', 10) * 60) + parseInt(m[3] || '0', 10);
+}
+
+/** 12200 -> "3:23:20". */
+function formatTeamsDuration_(seconds) {
+  if (typeof seconds !== 'number' || !isFinite(seconds) || seconds < 0) return '';
+  const total = Math.round(seconds);
+  return Math.floor(total / 3600) + ':' + teamsTwoDigits_(Math.floor((total % 3600) / 60)) + ':' + teamsTwoDigits_(total % 60);
+}
+
+/**
+ * The parts of a date and time as Teams writes it, without deciding what
+ * they mean: { form: 'slash' | 'dot' | 'iso', a, b, year, time }, or null.
+ * 'slash' ("9/22/26, 2:48:05 PM") is month-first or day-first depending on
+ * the language of the Teams client; 'dot' is day-first; 'iso' is year-first.
+ */
+function readTeamsDateTimeParts_(value) {
+  const s = String(value === null || value === undefined ? '' : value).replace(/[\s\u00a0\u2009\u202f]+/g, ' ').trim();
+  const clock = '(\\d{1,2}):(\\d{2})(?::(\\d{2}))?(?: ?([AaPp])\\.?[Mm]\\.?)?';
+  let form = 'slash';
+  let m = s.match(new RegExp('^(\\d{1,2})/(\\d{1,2})/(\\d{2}|\\d{4}),? ' + clock + '$'));
+  if (!m) { form = 'dot'; m = s.match(new RegExp('^(\\d{1,2})\\.(\\d{1,2})\\.(\\d{2}|\\d{4}),? ' + clock + '$')); }
+  if (!m) {
+    form = 'iso';
+    const iso = s.match(new RegExp('^(\\d{4})-(\\d{2})-(\\d{2})[T, ]+' + clock + '$'));
+    if (iso) m = [iso[0], iso[2], iso[3], iso[1], iso[4], iso[5], iso[6], iso[7]];
+  }
+  if (!m) return null;
+
+  let hour = parseInt(m[4], 10);
+  const minute = parseInt(m[5], 10);
+  const second = parseInt(m[6] || '0', 10);
+  if (m[7]) {
+    if (hour < 1 || hour > 12) return null;
+    hour = (hour % 12) + (m[7].toLowerCase() === 'p' ? 12 : 0);
+  }
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  return {
+    form: form, a: parseInt(m[1], 10), b: parseInt(m[2], 10),
+    year: m[3].length === 2 ? 2000 + parseInt(m[3], 10) : parseInt(m[3], 10),
+    time: teamsTwoDigits_(hour) + ':' + teamsTwoDigits_(minute) + ':' + teamsTwoDigits_(second)
+  };
+}
+
+/** 'YYYY-MM-DDTHH:mm:ss' for parts read under `order`, or null when that is not a date. */
+function teamsDateTimeFromParts_(parts, order) {
+  if (!parts) return null;
+  let month = parts.a;
+  let day = parts.b;
+  if (parts.form === 'dot' || (parts.form === 'slash' && order === 'day-first')) { month = parts.b; day = parts.a; }
+  const date = parts.year + '-' + teamsTwoDigits_(month) + '-' + teamsTwoDigits_(day);
+  return isValidAdhocSessionDate_(date) ? date + 'T' + parts.time : null;
+}
+
+/**
+ * Decides how the slash-form dates of one export are to be read.
+ * `values` are all its date cells, the Summary start time first;
+ * `expectedDate` (YYYY-MM-DD, optional) is the date of the session the
+ * export is meant for.
+ *
+ * With an expected date, the reading under which the start is that date is
+ * taken; if there is none, the export is not for that session. Without one,
+ * a reading is taken only if it is the only one under which every value is
+ * a date. Nothing is guessed: two possible readings are an error.
+ * Returns { order, error }; order is null when no value needs one.
+ */
+function resolveTeamsDateOrder_(values, expectedDate, expectedEndDate) {
+  // The session the export is meant for: one day, or every day from expectedDate to expectedEndDate.
+  const inSession = function (date) { return expectedEndDate ? (date >= expectedDate && date <= expectedEndDate) : date === expectedDate; };
+  const parts = values.map(readTeamsDateTimeParts_);
+  const start = parts[0];
+  const slash = parts.filter(function (p) { return p && p.form === 'slash'; });
+  const other = function (order) { return order === 'month-first' ? 'day-first' : 'month-first'; };
+  // A reading is ruled out by a value that is a date only under the other one.
+  const ruledOut = function (order) {
+    return slash.some(function (p) { return teamsDateTimeFromParts_(p, order) === null && teamsDateTimeFromParts_(p, other(order)) !== null; });
+  };
+  const sameUnderBoth = slash.every(function (p) { return p.a === p.b; });
+  const mismatch = function (dates) {
+    return { order: null, error: { code: 'SESSION_DATE_MISMATCH',
+      message: 'This attendance export is for ' + dates.join(' or ') + ', not for the session ' + (expectedEndDate ? 'of ' + expectedDate + ' to ' + expectedEndDate : 'on ' + expectedDate) + '.' } };
+  };
+  const decide = function (orders) {
+    const left = orders.filter(function (order) { return !ruledOut(order); });
+    if (left.length === 1) return { order: left[0], error: null };
+    if (left.length === 2 && sameUnderBoth) return { order: 'month-first', error: null };
+    return { order: null, error: { code: 'AMBIGUOUS_DATE',
+      message: 'The dates of this export can be read month-first or day-first, and nothing in it decides which. Import it for a session with a date.' } };
+  };
+
+  if (!start || start.form !== 'slash') {
+    // The start is written unambiguously (or cannot be read at all, which the caller reports).
+    const at = teamsDateTimeFromParts_(start, null);
+    if (expectedDate && at && !inSession(at.slice(0, 10))) return mismatch([at.slice(0, 10)]);
+    return slash.length ? decide(['month-first', 'day-first']) : { order: null, error: null };
+  }
+
+  const readings = ['month-first', 'day-first']
+    .map(function (order) { return { order: order, at: teamsDateTimeFromParts_(start, order) }; })
+    .filter(function (r) { return r.at !== null; });
+  if (!expectedDate) return decide(readings.map(function (r) { return r.order; }));
+
+  const matching = readings.filter(function (r) { return inSession(r.at.slice(0, 10)); });
+  if (matching.length === 0) {
+    return mismatch(readings.map(function (r) { return r.at.slice(0, 10); }).filter(function (d, i, list) { return list.indexOf(d) === i; }));
+  }
+  if (matching.length === 1) return { order: matching[0].order, error: null };
+  return decide(matching.map(function (r) { return r.order; }));
+}
+
+/** Seconds between two 'YYYY-MM-DDTHH:mm:ss' values (b minus a), or null. */
+function teamsSecondsBetween_(a, b) {
+  const at = function (v) {
+    const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
+    return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) / 1000 : null;
+  };
+  const x = at(a);
+  const y = at(b);
+  return x === null || y === null ? null : y - x;
+}
+
+/**
+ * A Teams display name, conservatively normalized. Removed: surrounding
+ * white space, runs of white space, and Teams' own trailing "(External)" /
+ * "(Unverified)". A leading "[Company] Name" gives the company and the name.
+ * A name that is only a telephone number becomes "Dial-in participant" and
+ * the number is dropped here. Everything else stays as the person wrote it:
+ * commas, apostrophes, hyphens, other scripts, and any other brackets.
+ * Returns { name, company, external, unverified, dialIn }.
+ */
+function normalizeTeamsDisplayName_(value) {
+  let name = String(value === null || value === undefined ? '' : value).replace(/[\s\u00a0\u2009\u202f]+/g, ' ').trim();
+  if (name.normalize) name = name.normalize('NFC');
+  const result = { name: '', company: '', external: false, unverified: false, dialIn: false };
+  let marker;
+  while ((marker = name.match(/\s*\((External|Unverified)\)$/i)) !== null) {
+    if (marker[1].toLowerCase() === 'external') result.external = true; else result.unverified = true;
+    name = name.slice(0, marker.index).trim();
+  }
+  if (/^\+?[\d\s().*-]+$/.test(name) && (name.match(/\d/g) || []).length >= 5) {
+    result.name = TEAMS_DIAL_IN_NAME_;
+    result.dialIn = true;
+    return result;
+  }
+  const prefixed = name.match(/^\[([^\[\]]*[^\[\]\s][^\[\]]*)\]\s*(\S.*)$/);
+  if (prefixed) {
+    result.company = prefixed[1].trim();
+    name = prefixed[2].trim();
+  }
+  result.name = name;
+  return result;
+}
+
+/** The explicit Email value when it is one usable address, else ''. */
+function normalizeTeamsEmail_(value) {
+  const s = String(value === null || value === undefined ? '' : value).trim();
+  return /^[^\s@<>()\[\],;:"\\]+@[^\s@<>()\[\],;:"\\]+\.[A-Za-z0-9-]{2,}$/.test(s) && s.indexOf('..') === -1 ? s : '';
+}
+
+/**
+ * What identifies an attendee across records and sessions: the e-mail when
+ * there is one, else the name (with the company, when the name carried one).
+ * Not part of the model; computed from an entry when it is needed.
+ */
+function teamsAttendeeKey_(participant) {
+  if (participant.email) return 'email:' + participant.email.toLowerCase();
+  return 'name:' + participant.name.toLowerCase() + '|' + String(participant.company || '').toLowerCase();
+}
+
+/**
+ * Parses the text of a Teams attendance export.
+ * options.expectedDate: the date (YYYY-MM-DD) of the session it is meant for.
+ * options.expectedEndDate: the last day of that session when it spans several
+ * days; the export may then be of any day from expectedDate to it.
+ * Returns { ok, error, attendance }: on a fatal problem ok is false, error
+ * is { code, message } and attendance is null. Everything that is not fatal
+ * is a note in attendance.diagnostics. Throws nothing, logs nothing.
+ */
+function parseTeamsAttendanceReport_(text, options) {
+  const fatal = function (code, message) { return { ok: false, error: { code: code, message: message }, attendance: null }; };
+  const expectedDate = options && options.expectedDate ? String(options.expectedDate).trim() : '';
+  if (expectedDate && !isValidAdhocSessionDate_(expectedDate)) return fatal('INVALID_EXPECTED_DATE', 'The session date is not a date (YYYY-MM-DD).');
+  let expectedEndDate = options && options.expectedEndDate ? String(options.expectedEndDate).trim() : '';
+  if (expectedEndDate && (!expectedDate || !isValidAdhocSessionDate_(expectedEndDate) || expectedEndDate < expectedDate)) {
+    return fatal('INVALID_EXPECTED_DATE', 'The end date of the session is not a date on or after its first day (YYYY-MM-DD).');
+  }
+  if (expectedEndDate === expectedDate) expectedEndDate = '';
+  if (typeof text !== 'string' || text.trim() === '') return fatal('NOT_A_TEAMS_EXPORT', 'The file is empty.');
+  if (text.length > TEAMS_ATTENDANCE_MAX_CHARS_) return fatal('TOO_LARGE', 'The file is too large to be a Teams attendance export.');
+  const src = text.replace(/^\uFEFF/, '');
+  const trimmed = function (v) { return String(v === null || v === undefined ? '' : v).trim(); };
+
+  // ---- rows of the two sections that are read
+  const nameColumn = src.match(/^Name(\t|,)/m);
+  const delimiter = nameColumn ? nameColumn[1] : (src.indexOf('\t') !== -1 ? '\t' : ',');
+  const summaryRows = [];
+  const participantRows = [];
+  const seen = { summary: false, participants: false };
+  let section = null;
+  let rowCount = 0;
+  let tooMany = false;
+  const closed = scanDelimitedRows_(src, delimiter, function (row) {
+    if (row.every(function (cell) { return cell.trim() === ''; })) return true;
+    const title = row[0].trim().match(/^\d+\.\s+(\S.*)$/);
+    if (title && row.slice(1).every(function (cell) { return cell.trim() === ''; })) {
+      const name = title[1].trim().toLowerCase();
+      if (seen.summary && seen.participants) return false;
+      section = name === 'summary' || name === 'participants' ? name : 'other';
+      if (section !== 'other') seen[section] = true;
+      return true;
+    }
+    if (++rowCount > TEAMS_ATTENDANCE_MAX_ROWS_) { tooMany = true; return false; }
+    if (section === 'summary') summaryRows.push(row);
+    else if (section === 'participants') participantRows.push(row);
+    return true;
+  });
+  if (tooMany) return fatal('TOO_LARGE', 'The file has too many rows to be a Teams attendance export.');
+  if (!seen.summary && !seen.participants) {
+    return fatal(closed ? 'NOT_A_TEAMS_EXPORT' : 'MALFORMED_QUOTING',
+      closed ? 'This is not a Teams attendance export: it has no "Summary" and no "Participants" section.'
+        : 'The file cannot be read: its quoting is broken.');
+  }
+  if (!closed) return fatal('MALFORMED_QUOTING', 'The file cannot be read: its quoting is broken.');
+  if (!seen.summary) return fatal('SUMMARY_MISSING', 'The export has no "Summary" section.');
+  if (!seen.participants) return fatal('PARTICIPANTS_MISSING', 'The export has no "Participants" section.');
+
+  // ---- columns
+  const header = (participantRows[0] || []).map(function (cell) { return cell.trim().toLowerCase(); });
+  const column = function (name) { return header.indexOf(name); };
+  const col = { name: column('name'), join: column('first join'), leave: column('last leave'), duration: column('in-meeting duration'), email: column('email') };
+  if (col.name === -1) return fatal('HEADERS_UNUSABLE', 'The "Participants" section has no "Name" column.');
+  const dataRows = participantRows.slice(1);
+
+  // ---- summary values, as written
+  const stated = {};
+  summaryRows.forEach(function (row) {
+    const label = trimmed(row[0]).toLowerCase();
+    if (label && !Object.prototype.hasOwnProperty.call(stated, label)) stated[label] = trimmed(row[1]);
+  });
+  const raw = {
+    attendedParticipants: stated['attended participants'] || '',
+    startTime: stated['start time'] || '',
+    endTime: stated['end time'] || '',
+    meetingDuration: stated['meeting duration'] || '',
+    averageAttendanceTime: stated['average attendance time'] || ''
+  };
+  if (!raw.startTime) return fatal('SUMMARY_START_MISSING', 'The "Summary" section has no start time.');
+  if (!readTeamsDateTimeParts_(raw.startTime)) return fatal('SUMMARY_START_UNREADABLE', 'The start time in the "Summary" section is not written in a form this import reads.');
+
+  // ---- how dates are to be read
+  const cell = function (row, index) { return index === -1 || index >= row.length ? '' : trimmed(row[index]); };
+  const dateCells = [raw.startTime, raw.endTime];
+  dataRows.forEach(function (row) { dateCells.push(cell(row, col.join), cell(row, col.leave)); });
+  const resolved = resolveTeamsDateOrder_(dateCells.filter(function (v, i) { return i === 0 || v !== ''; }), expectedDate, expectedEndDate);
+  if (resolved.error) return { ok: false, error: resolved.error, attendance: null };
+  const readTime = function (value) { return teamsDateTimeFromParts_(readTeamsDateTimeParts_(value), resolved.order); };
+
+  const notes = [];
+  const note = function (level, code, message, rows) {
+    const entry = { level: level, code: code, message: message };
+    if (rows && rows.length) entry.rows = rows;
+    notes.push(entry);
+  };
+  const plural = function (n, one, many) { return n + ' ' + (n === 1 ? one : many); };
+
+  // ---- summary
+  const summary = {
+    meetingTitle: (stated['meeting title'] || '').replace(/\s+/g, ' ').trim(),
+    attendanceRecords: /^\d+$/.test(raw.attendedParticipants) ? parseInt(raw.attendedParticipants, 10) : null,
+    start: readTime(raw.startTime),
+    end: raw.endTime ? readTime(raw.endTime) : null,
+    durationSeconds: parseTeamsDuration_(raw.meetingDuration),
+    averageAttendanceSeconds: parseTeamsDuration_(raw.averageAttendanceTime),
+    raw: raw
+  };
+  if (!summary.start) return fatal('SUMMARY_START_UNREADABLE', 'The start time in the "Summary" section is not a date and time.');
+  [['attendanceRecords', 'Attended participants'], ['end', 'End time'], ['durationSeconds', 'Meeting duration'], ['averageAttendanceSeconds', 'Average attendance time']]
+    .forEach(function (pair) {
+      if (summary[pair[0]] === null) note('warning', 'SUMMARY_VALUE_MISSING', 'The Summary has no readable "' + pair[1] + '".');
+    });
+  if (!summary.meetingTitle) note('warning', 'SUMMARY_VALUE_MISSING', 'The Summary has no "Meeting title".');
+  [['join', 'First Join'], ['leave', 'Last Leave'], ['duration', 'In-Meeting Duration'], ['email', 'Email']].forEach(function (pair) {
+    if (col[pair[0]] === -1) note('warning', 'MISSING_COLUMN', 'The Participants section has no "' + pair[1] + '" column.');
+  });
+
+  // ---- participant records
+  const counts = { participantRows: dataRows.length, rowsWithJoinTime: 0, attendees: 0, mergedRecords: 0, shortRows: 0, external: 0, unverified: 0, dialIn: 0, withoutEmail: 0 };
+  const flagged = { nameless: [], invalidEmail: [], unreadableTime: [], unreadableDuration: [], incompleteTimes: [] };
+  let totalDuration = 0;
+  let rowsWithDuration = 0;
+  const records = [];
+  dataRows.forEach(function (row, index) {
+    const rowNumber = index + 1;
+    if (row.length < header.length) counts.shortRows++;
+    const who = normalizeTeamsDisplayName_(cell(row, col.name));
+    if (!who.name) { flagged.nameless.push(rowNumber); return; }
+    if (who.external) counts.external++;
+    if (who.unverified) counts.unverified++;
+    if (who.dialIn) counts.dialIn++;
+
+    const emailCell = cell(row, col.email);
+    const email = normalizeTeamsEmail_(emailCell);
+    if (emailCell && !email) flagged.invalidEmail.push(rowNumber);
+
+    const joinCell = cell(row, col.join);
+    const leaveCell = cell(row, col.leave);
+    const join = joinCell ? readTime(joinCell) : null;
+    const leave = leaveCell ? readTime(leaveCell) : null;
+    if ((joinCell && !join) || (leaveCell && !leave)) flagged.unreadableTime.push(rowNumber);
+    if (!join || !leave) flagged.incompleteTimes.push(rowNumber);
+    if (join) counts.rowsWithJoinTime++;
+
+    const durationCell = cell(row, col.duration);
+    const duration = durationCell ? parseTeamsDuration_(durationCell) : null;
+    if (durationCell && duration === null) flagged.unreadableDuration.push(rowNumber);
+    if (duration !== null) { totalDuration += duration; rowsWithDuration++; }
+
+    records.push({ row: rowNumber, name: who.name, company: who.company, email: email, join: join, leave: leave, duration: duration, dialIn: who.dialIn });
+  });
+
+  // ---- attendees: records of the same person are merged, conservatively.
+  // The same e-mail is the same person. Without an e-mail, records are the
+  // same person only when the name (and company) are the same, both have
+  // their times, and they were never present at the same time -- a guest who
+  // left and joined again. Anything less certain stays separate and is noted.
+  const groups = [];
+  const overlaps = function (a, b) { return a.join < b.leave && b.join < a.leave; };
+  records.forEach(function (record) {
+    const key = teamsAttendeeKey_(record);
+    let target = null;
+    if (record.email) {
+      target = groups.filter(function (g) { return g.key === key; })[0] || null;
+    } else if (!record.dialIn && record.join && record.leave) {
+      target = groups.filter(function (g) {
+        return g.key === key && g.members.every(function (m) { return m.join && m.leave && !overlaps(m, record); });
+      })[0] || null;
+    }
+    if (target) target.members.push(record);
+    else groups.push({ key: key, nameKey: record.name.toLowerCase(), members: [record] });
+  });
+
+  const participants = groups.map(function (g) {
+    const first = g.members[0];
+    const joins = g.members.map(function (m) { return m.join; }).filter(Boolean).sort();
+    const leaves = g.members.map(function (m) { return m.leave; }).filter(Boolean).sort();
+    const durations = g.members.map(function (m) { return m.duration; }).filter(function (d) { return d !== null; });
+    return {
+      name: first.name,
+      company: first.company,
+      email: first.email,
+      firstJoin: joins.length ? joins[0] : null,
+      lastLeave: leaves.length ? leaves[leaves.length - 1] : null,
+      durationSeconds: durations.length ? durations.reduce(function (sum, d) { return sum + d; }, 0) : null,
+      records: g.members.length
+    };
+  });
+  counts.attendees = participants.length;
+  counts.mergedRecords = records.length - participants.length;
+  counts.withoutEmail = participants.filter(function (p) { return !p.email; }).length;
+
+  // ---- notes
+  const rowsOf = function (g) { return g.members.map(function (m) { return m.row; }); };
+  groups.filter(function (g) { return g.members.length > 1; }).forEach(function (g) {
+    note('info', 'RECORDS_MERGED', plural(g.members.length, 'record', 'records') + ' of one attendee were merged.', rowsOf(g));
+  });
+  const byName = {};
+  groups.forEach(function (g) {
+    if (g.members[0].dialIn) return;
+    (byName[g.nameKey] = byName[g.nameKey] || []).push(g);
+  });
+  Object.keys(byName).forEach(function (nameKey) {
+    if (byName[nameKey].length < 2) return;
+    note('warning', 'DUPLICATE_CANDIDATE', 'Records with the same name were kept as separate attendees: nothing in the export shows that they are one person.',
+      byName[nameKey].reduce(function (all, g) { return all.concat(rowsOf(g)); }, []).sort(function (a, b) { return a - b; }));
+  });
+  if (flagged.nameless.length) note('warning', 'ROW_WITHOUT_NAME', plural(flagged.nameless.length, 'participant row has', 'participant rows have') + ' no name and ' + (flagged.nameless.length === 1 ? 'was' : 'were') + ' left out.', flagged.nameless);
+  if (flagged.invalidEmail.length) note('warning', 'INVALID_EMAIL', plural(flagged.invalidEmail.length, 'e-mail value is', 'e-mail values are') + ' not a usable address and ' + (flagged.invalidEmail.length === 1 ? 'was' : 'were') + ' left empty.', flagged.invalidEmail);
+  if (flagged.unreadableTime.length) note('warning', 'UNREADABLE_TIME', plural(flagged.unreadableTime.length, 'record has', 'records have') + ' a join or leave time that cannot be read.', flagged.unreadableTime);
+  if (flagged.unreadableDuration.length) note('warning', 'UNREADABLE_DURATION', plural(flagged.unreadableDuration.length, 'record has', 'records have') + ' a duration that cannot be read.', flagged.unreadableDuration);
+  if (flagged.incompleteTimes.length) note('info', 'INCOMPLETE_TIMES', plural(flagged.incompleteTimes.length, 'record has', 'records have') + ' no complete join and leave time; ' + (flagged.incompleteTimes.length === 1 ? 'it is' : 'they are') + ' kept.', flagged.incompleteTimes);
+  if (counts.shortRows) note('info', 'SHORT_ROWS', plural(counts.shortRows, 'participant row has', 'participant rows have') + ' fewer cells than the header.');
+
+  const calculated = {
+    totalDurationSeconds: totalDuration,
+    rowsWithDuration: rowsWithDuration,
+    meanDurationSeconds: rowsWithDuration ? Math.round(totalDuration / rowsWithDuration) : null,
+    spanSeconds: teamsSecondsBetween_(summary.start, summary.end)
+  };
+  if (summary.attendanceRecords !== null && summary.attendanceRecords !== counts.participantRows) {
+    note('warning', 'RECORD_COUNT_DIFFERS', 'Teams states ' + plural(summary.attendanceRecords, 'attended participant', 'attended participants') + '; the Participants section has ' + plural(counts.participantRows, 'row', 'rows') + '.');
+  }
+  if (summary.averageAttendanceSeconds !== null && calculated.meanDurationSeconds !== null && summary.averageAttendanceSeconds !== calculated.meanDurationSeconds) {
+    note('info', 'AVERAGE_DIFFERS', 'Teams states an average attendance of ' + formatTeamsDuration_(summary.averageAttendanceSeconds) + '; the mean of the listed durations is ' + formatTeamsDuration_(calculated.meanDurationSeconds) + '. The value Teams states is used.');
+  }
+  if (summary.durationSeconds !== null && calculated.spanSeconds !== null && summary.durationSeconds !== calculated.spanSeconds) {
+    note('info', 'DURATION_DIFFERS', 'Teams states a meeting duration of ' + formatTeamsDuration_(summary.durationSeconds) + '; end minus start is ' + formatTeamsDuration_(calculated.spanSeconds) + '. The value Teams states is used.');
+  }
+
+  return {
+    ok: true,
+    error: null,
+    attendance: {
+      schemaVersion: TEAMS_ATTENDANCE_SCHEMA_VERSION_,
+      source: { type: 'teams-attendance', delimiter: delimiter === '\t' ? 'tab' : 'comma', dateOrder: resolved.order },
+      summary: summary,
+      participants: participants,
+      diagnostics: { counts: counts, calculated: calculated, notes: notes }
+    }
+  };
+}
+
+// =========================================================
+// AD-HOC ATTENDANCE (stage D) -- IMPORT, PERSISTENCE, RENDERING
+// =========================================================
+//
+// docs/ADHOC_SESSIONS_ATTENDANCE_DESIGN.md §4, §12, §18. For an ad-hoc
+// report with configured sessions, a Teams attendance export can be imported
+// for one session; the report then shows, at the end of its closing section,
+// one generated "Attendance" container with a statistics block and an
+// attendee table per imported session.
+//
+// STORED (Document Properties of the report, nowhere else):
+//
+//   ADHOC_SESSION_ATTENDANCE            the index:
+//       { v: 1, gen: <counter>, entries: { <id>: { g, n, len, hash } } }
+//     <id> is a session id, or "companies" for the manual Company values.
+//   ADHOC_SESSION_ATTENDANCE_<id>_<g>_<i>   chunk i of n of generation g
+//
+//   A value is split because one property holds at most 9 KB; a chunk has at
+//   most ADHOC_ATTENDANCE_CHUNK_CHARS_ characters (at most 3 bytes each).
+//   A new value is written as a NEW generation: chunks first, then the
+//   index, then the old chunks are deleted. Until the index is written the
+//   old value stays valid; a value whose chunks do not add up to the length
+//   and hash in the index is never used.
+//
+//   Per session, only what the report is generated from:
+//       { t: title, n: records, s: start, e: end, d: duration, a: average,
+//         p: [[name, company, email], ...] }
+//   -- the Summary values as Teams states them and the normalized attendees
+//   of the parser above. Not stored: join / leave times, per-person
+//   durations, diagnostics, the file, its name, or anything the parser does
+//   not return (Participant ID, telephone number, role, engagement).
+//
+// Background updates never read any of this, so none of it is an adoption
+// key: it stays in the document's own properties.
+
+const ADHOC_ATTENDANCE_KEY_ = 'ADHOC_SESSION_ATTENDANCE';
+const ADHOC_ATTENDANCE_SCHEMA_VERSION_ = 1;
+const ADHOC_ATTENDANCE_CHUNK_CHARS_ = 2500;
+const ADHOC_ATTENDANCE_COMPANIES_ID_ = 'companies';
+const ADHOC_ATTENDANCE_HEADING_ = 'Attendance';
+const ADHOC_ATTENDEE_TABLE_HEADER_ = ['Name', 'Company', 'Email'];
+// The share of the page width each column of an attendee table gets, and the header shading every table of a report has (removeRowHeightAndSpacing()).
+const ADHOC_ATTENDEE_TABLE_WIDTHS_ = [0.34, 0.26, 0.40];
+const ADHOC_TABLE_HEADER_BACKGROUND_ = '#D9EAF7';
+const ADHOC_ATTENDANCE_COMPANY_MAX_LENGTH_ = 200;
+const ADHOC_ATTENDANCE_MAX_BASE64_CHARS_ = 4000000;
+const ADHOC_ATTENDANCE_REFRESH_HINT_ = 'SA4 Report > Sessions and Attendance > Refresh Attendance Section';
+
+/** Attendance always lives in the document's own properties (see above). */
+function adhocAttendanceStore_() {
+  return PropertiesService.getDocumentProperties();
+}
+
+/** FNV-1a (32 bit) of a text, as 8 hex digits. An integrity check, not a secret. */
+function adhocTextHash_(text) {
+  let h = 0x811c9dc5;
+  const s = String(text);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return ('0000000' + h.toString(16)).slice(-8);
+}
+
+/** Splits a text into chunks of at most `size` characters, never between the two halves of one character. */
+function splitAdhocAttendanceChunks_(text, size) {
+  const chunks = [];
+  let at = 0;
+  while (at < text.length) {
+    let end = Math.min(text.length, at + size);
+    const last = text.charCodeAt(end - 1);
+    if (end < text.length && last >= 0xD800 && last <= 0xDBFF && end - at > 1) end--;
+    chunks.push(text.slice(at, end));
+    at = end;
+  }
+  return chunks;
+}
+
+function adhocAttendanceChunkKey_(id, generation, index) {
+  return ADHOC_ATTENDANCE_KEY_ + '_' + id + '_' + generation + '_' + index;
+}
+
+/**
+ * The index: { status: 'absent' | 'ok' | 'unsupported' | 'invalid', index,
+ * error }. Never throws.
+ */
+function readAdhocAttendanceIndex_(store) {
+  const raw = store.getProperty(ADHOC_ATTENDANCE_KEY_);
+  if (raw === null || raw === undefined || String(raw).trim() === '') return { status: 'absent', index: null, error: null };
+  let data;
+  try { data = JSON.parse(String(raw)); } catch (e) { data = null; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { status: 'invalid', index: null, error: 'The stored attendance index cannot be read.' };
+  }
+  if (data.v !== ADHOC_ATTENDANCE_SCHEMA_VERSION_) {
+    return { status: 'unsupported', index: null, error: 'The stored attendance has version ' + JSON.stringify(data.v) +
+      '; this release reads version ' + ADHOC_ATTENDANCE_SCHEMA_VERSION_ + '.' };
+  }
+  const entries = {};
+  const whole = function (v) { return typeof v === 'number' && Math.floor(v) === v && v >= 0; };
+  const source = data.entries && typeof data.entries === 'object' && !Array.isArray(data.entries) ? data.entries : null;
+  if (!source || !whole(data.gen)) return { status: 'invalid', index: null, error: 'The stored attendance index cannot be read.' };
+  const ids = Object.keys(source);
+  for (let i = 0; i < ids.length; i++) {
+    const e = source[ids[i]];
+    if (!/^(s[1-9]\d*(d\d{8})?|companies)$/.test(ids[i]) || !e || !whole(e.g) || !whole(e.n) || !whole(e.len) || typeof e.hash !== 'string' || e.g > data.gen) {
+      return { status: 'invalid', index: null, error: 'The stored attendance index cannot be read.' };
+    }
+    entries[ids[i]] = { g: e.g, n: e.n, len: e.len, hash: e.hash };
+  }
+  return { status: 'ok', index: { v: ADHOC_ATTENDANCE_SCHEMA_VERSION_, gen: data.gen, entries: entries }, error: null };
+}
+
+/** One stored value: { status: 'absent' | 'ok' | 'corrupt', text }. */
+function readAdhocAttendanceValue_(store, index, id) {
+  const entry = index && index.entries[id];
+  if (!entry) return { status: 'absent', text: null };
+  let text = '';
+  for (let i = 0; i < entry.n; i++) {
+    const chunk = store.getProperty(adhocAttendanceChunkKey_(id, entry.g, i));
+    if (chunk === null || chunk === undefined) return { status: 'corrupt', text: null };
+    text += chunk;
+  }
+  if (text.length !== entry.len || adhocTextHash_(text) !== entry.hash) return { status: 'corrupt', text: null };
+  return { status: 'ok', text: text };
+}
+
+/**
+ * Stores `text` under `id`, or removes the value when `text` is null.
+ * Writes nothing when the stored value already is `text`. Order: new chunks,
+ * then the index, then the old chunks -- see the section comment. When the
+ * last value is removed, the index and every chunk go too.
+ * Returns { changed }. Throws when the stored attendance cannot be extended
+ * safely (a newer schema version).
+ */
+function writeAdhocAttendanceValue_(store, id, text) {
+  const read = readAdhocAttendanceIndex_(store);
+  if (read.status === 'unsupported') throw new Error(read.error + ' It was written by a newer release and is not changed here.');
+  // An index that cannot be read holds nothing usable; a new one replaces it.
+  // Its generation counter starts above every chunk that is still stored.
+  let index = read.status === 'ok' ? read.index : null;
+  const prefix = ADHOC_ATTENDANCE_KEY_ + '_';
+  if (!index) {
+    let highest = 0;
+    store.getKeys().forEach(function (key) {
+      const m = key.indexOf(prefix) === 0 ? key.slice(prefix.length).match(/^[a-z0-9]+_(\d+)_\d+$/) : null;
+      if (m) highest = Math.max(highest, parseInt(m[1], 10));
+    });
+    index = { v: ADHOC_ATTENDANCE_SCHEMA_VERSION_, gen: highest, entries: {} };
+  }
+
+  const current = readAdhocAttendanceValue_(store, index, id);
+  if (text === null ? (current.status === 'absent' && read.status !== 'invalid') : (current.status === 'ok' && current.text === text)) return { changed: false };
+
+  const next = { v: index.v, gen: index.gen, entries: Object.assign({}, index.entries) };
+  if (text === null) {
+    delete next.entries[id];
+  } else {
+    const chunks = splitAdhocAttendanceChunks_(text, ADHOC_ATTENDANCE_CHUNK_CHARS_);
+    next.gen = index.gen + 1;
+    chunks.forEach(function (chunk, i) { store.setProperty(adhocAttendanceChunkKey_(id, next.gen, i), chunk); });
+    next.entries[id] = { g: next.gen, n: chunks.length, len: text.length, hash: adhocTextHash_(text) };
+  }
+
+  const empty = Object.keys(next.entries).length === 0;
+  if (empty) store.deleteProperty(ADHOC_ATTENDANCE_KEY_);
+  else store.setProperty(ADHOC_ATTENDANCE_KEY_, JSON.stringify(next));
+
+  // Chunks the index no longer names: the replaced generation, and anything
+  // an interrupted earlier write left behind.
+  const live = {};
+  Object.keys(next.entries).forEach(function (entryId) {
+    for (let i = 0; i < next.entries[entryId].n; i++) live[adhocAttendanceChunkKey_(entryId, next.entries[entryId].g, i)] = true;
+  });
+  store.getKeys().forEach(function (key) {
+    if (key.indexOf(prefix) === 0 && !live[key]) store.deleteProperty(key);
+  });
+  return { changed: true };
+}
+
+/** The stored form of one session's attendance: what the report is generated from, and nothing else. */
+function compactAdhocAttendance_(attendance) {
+  const s = attendance.summary;
+  return JSON.stringify({
+    t: s.meetingTitle, n: s.attendanceRecords, s: s.start, e: s.end, d: s.durationSeconds, a: s.averageAttendanceSeconds,
+    p: attendance.participants.map(function (p) { return [p.name, p.company, p.email]; })
+  });
+}
+
+/** The reverse of compactAdhocAttendance_(); null for anything that is not that form. */
+function expandAdhocAttendance_(text) {
+  let d;
+  try { d = JSON.parse(text); } catch (e) { return null; }
+  const numberOrNull = function (v) { return v === null || (typeof v === 'number' && isFinite(v)); };
+  const time = function (v) { return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(v); };
+  if (!d || typeof d !== 'object' || typeof d.t !== 'string' || !time(d.s) || !(d.e === null || time(d.e)) ||
+      !numberOrNull(d.n) || !numberOrNull(d.d) || !numberOrNull(d.a) || !Array.isArray(d.p)) return null;
+  const attendees = [];
+  for (let i = 0; i < d.p.length; i++) {
+    const row = d.p[i];
+    if (!Array.isArray(row) || row.length !== 3 || typeof row[0] !== 'string' || typeof row[1] !== 'string' || typeof row[2] !== 'string') return null;
+    attendees.push({ name: row[0], company: row[1], email: row[2] });
+  }
+  return { meetingTitle: d.t, attendanceRecords: d.n, start: d.s, end: d.e, durationSeconds: d.d, averageAttendanceSeconds: d.a, attendees: attendees };
+}
+
+// ---------------------------------------------------------------
+// Attendance records
+// ---------------------------------------------------------------
+//
+// A session may span several days, and Teams exports one attendance report
+// per meeting. So a session has attendance RECORDS, one per day: the day is
+// the date of the Teams start time of the export. Each record is stored
+// under its own key:
+//   <session id>               the record of a session of one day -- the
+//                              only form there was before sessions could
+//                              span several days, and still what a session
+//                              of one day writes;
+//   <session id>d<YYYYMMDD>    a day of a session of several days.
+// A record stored under the plain key belongs to the day its own Teams
+// start time says. Importing a day again replaces that day's record only.
+
+/** 's2' -> { sessionId: 's2', day: '' }; 's2d20261027' -> { sessionId: 's2', day: '2026-10-27' }; null for anything else. */
+function adhocAttendanceRecordParts_(key) {
+  const m = String(key).match(/^(s[1-9]\d*)(?:d(\d{4})(\d{2})(\d{2}))?$/);
+  if (!m) return null;
+  return { sessionId: m[1], day: m[2] ? m[2] + '-' + m[3] + '-' + m[4] : '' };
+}
+
+/** The key of the record of one day of a session of several days. */
+function adhocAttendanceRecordKey_(sessionId, day) {
+  return sessionId + 'd' + String(day).replace(/-/g, '');
+}
+
+/**
+ * The records of one session in a readAdhocAttendance_() result, by day:
+ * [{ key, day, model }]. `model` is null for a record that cannot be read;
+ * `day` is then the one its key names ('' when the key names none).
+ */
+function adhocAttendanceRecordsOf_(state, sessionId) {
+  const records = [];
+  Object.keys(state.sessions).concat(state.problems).forEach(function (key) {
+    const parts = adhocAttendanceRecordParts_(key);
+    if (!parts || parts.sessionId !== sessionId) return;
+    const model = state.sessions[key] || null;
+    records.push({ key: key, day: model ? model.start.slice(0, 10) : parts.day, model: model });
+  });
+  return records.sort(function (a, b) { return a.day !== b.day ? (a.day < b.day ? -1 : 1) : (a.key < b.key ? -1 : (a.key > b.key ? 1 : 0)); });
+}
+
+/** The session ids that have stored attendance; null when that cannot be told (a newer schema version). */
+function adhocAttendanceSessionIds_(store) {
+  const read = readAdhocAttendanceIndex_(store);
+  if (read.status === 'unsupported') return null;
+  if (read.status !== 'ok') return [];
+  const ids = [];
+  Object.keys(read.index.entries).forEach(function (key) {
+    const parts = adhocAttendanceRecordParts_(key);
+    if (parts && ids.indexOf(parts.sessionId) === -1) ids.push(parts.sessionId);
+  });
+  return ids;
+}
+
+/**
+ * Everything stored: { status, error, sessions: { <record key>: model },
+ * raw: { <record key>: text }, problems: [<record key>], companies: { <key>:
+ * company } }. A record key is a session id (the record of a session of one
+ * day) or <session id>d<YYYYMMDD> (see "Attendance records");
+ * adhocAttendanceRecordsOf_() gives the records of one session. `problems`
+ * are records whose stored value cannot be used. Never throws.
+ */
+function readAdhocAttendance_(store) {
+  const result = { status: 'ok', error: null, sessions: {}, raw: {}, problems: [], companies: {} };
+  const read = readAdhocAttendanceIndex_(store);
+  if (read.status !== 'ok') {
+    result.status = read.status;
+    result.error = read.error;
+    return result;
+  }
+  Object.keys(read.index.entries).forEach(function (id) {
+    const value = readAdhocAttendanceValue_(store, read.index, id);
+    if (id === ADHOC_ATTENDANCE_COMPANIES_ID_) {
+      let map = null;
+      try { map = value.status === 'ok' ? JSON.parse(value.text) : null; } catch (e) { map = null; }
+      if (map && typeof map === 'object' && !Array.isArray(map)) {
+        Object.keys(map).forEach(function (key) { if (typeof map[key] === 'string' && map[key]) result.companies[key] = map[key]; });
+      }
+      return;
+    }
+    const model = value.status === 'ok' ? expandAdhocAttendance_(value.text) : null;
+    if (!model) { result.problems.push(id); return; }
+    result.sessions[id] = model;
+    result.raw[id] = value.text;
+  });
+  return result;
+}
+
+// ---------------------------------------------------------------
+// Manual Company values
+// ---------------------------------------------------------------
+//
+// Teams supplies no company, so the Company cells of the attendee tables are
+// completed by hand. Before the container is generated again, those cells
+// are read back and kept as corrections, per attendee:
+//   - an attendee with an e-mail is identified by it;
+//   - an attendee without one is identified by the exact name, and only
+//     where that name stands for one such attendee -- a value is never
+//     carried over between two people who merely share a name.
+// A correction applies to that attendee in every session. A non-empty cell
+// wins over the company the parser found. An empty cell removes a manual
+// value, but never the company the parser found in a "[Company] Name".
+
+/** 'email:<address>' or 'name:<name>', both in lower case. */
+function adhocAttendeeCompanyKey_(name, email) {
+  return email ? 'email:' + String(email).toLowerCase() : 'name:' + String(name).toLowerCase();
+}
+
+/** The names that stand for more than one attendee without an e-mail (lower case -> true). */
+function ambiguousAdhocAttendeeNames_(attendees) {
+  const seen = {};
+  const twice = {};
+  attendees.forEach(function (a) {
+    if (a.email) return;
+    const key = String(a.name).toLowerCase();
+    if (seen[key]) twice[key] = true;
+    seen[key] = true;
+  });
+  return twice;
+}
+
+/** The attendees of one session as they are shown: with the manual Company values applied. */
+function effectiveAdhocAttendees_(model, companies) {
+  const ambiguous = ambiguousAdhocAttendeeNames_(model.attendees);
+  return model.attendees.map(function (a) {
+    const usable = a.email || !ambiguous[String(a.name).toLowerCase()];
+    const manual = usable ? companies[adhocAttendeeCompanyKey_(a.name, a.email)] : '';
+    return { name: a.name, company: manual || a.company, email: a.email };
+  });
+}
+
+function isAdhocAttendeeTable_(table) {
+  try {
+    const row = table.getRow(0);
+    return row.getNumCells() === ADHOC_ATTENDEE_TABLE_HEADER_.length &&
+      ADHOC_ATTENDEE_TABLE_HEADER_.every(function (label, i) { return row.getCell(i).getText().trim() === label; });
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The attendee tables whose Company cells are read back: the ones of the
+ * generated Attendance section. A table of the same shape anywhere else in
+ * the report is somebody's own -- an attendance list made before this
+ * feature, for instance -- and is not read once the section exists: its
+ * values would otherwise override, at every refresh, what is typed into the
+ * generated table. Only while the report has no generated section yet (the
+ * first import) are such tables read, once, so that companies entered by
+ * hand before are not lost.
+ */
+function adhocAttendeeTablesToHarvest_(body) {
+  const container = findAdhocAttendanceContainer_(body);
+  const tables = [];
+  if (!container) {
+    body.getTables().forEach(function (table) { if (isAdhocAttendeeTable_(table)) tables.push(table); });
+    return tables;
+  }
+  for (let i = container.start; i < container.end; i++) {
+    const child = body.getChild(i);
+    if (child.getType() === DocumentApp.ElementType.TABLE && isAdhocAttendeeTable_(child.asTable())) tables.push(child.asTable());
+  }
+  return tables;
+}
+
+/** How many tables shaped like an attendee table the report has outside the generated Attendance section. Never throws. */
+function countAdhocAttendeeTablesElsewhere_(body) {
+  try {
+    const container = findAdhocAttendanceContainer_(body);
+    let count = 0;
+    for (let i = 0; i < body.getNumChildren(); i++) {
+      if (container && i >= container.start && i < container.end) continue;
+      const child = body.getChild(i);
+      if (child.getType() === DocumentApp.ElementType.TABLE && isAdhocAttendeeTable_(child.asTable())) count++;
+    }
+    return count;
+  } catch (e) {
+    return 0;
+  }
+}
+
+/** The Company cells of the attendee tables that are read back (adhocAttendeeTablesToHarvest_()): [{ key, company }], ambiguous rows left out. */
+function harvestAdhocAttendeeCompanies_(body) {
+  const rows = [];
+  adhocAttendeeTablesToHarvest_(body).forEach(function (table) {
+    const found = [];
+    for (let r = 1; r < table.getNumRows(); r++) {
+      const row = table.getRow(r);
+      if (row.getNumCells() < 3) continue;
+      const name = row.getCell(0).getText().replace(/\s+/g, ' ').trim();
+      const email = normalizeTeamsEmail_(row.getCell(2).getText());
+      if (!name && !email) continue;
+      found.push({ name: name, email: email, company: row.getCell(1).getText().replace(/\s+/g, ' ').trim().slice(0, ADHOC_ATTENDANCE_COMPANY_MAX_LENGTH_) });
+    }
+    const ambiguous = ambiguousAdhocAttendeeNames_(found);
+    found.forEach(function (f) {
+      if (!f.email && ambiguous[f.name.toLowerCase()]) return;
+      rows.push({ key: adhocAttendeeCompanyKey_(f.name, f.email), company: f.company });
+    });
+  });
+  return rows;
+}
+
+/**
+ * Pure: the corrections after the document was read. `stored` are the
+ * corrections so far, `sessions` the stored attendance, `harvested` the
+ * rows of harvestAdhocAttendeeCompanies_(). Corrections of people who are
+ * in no stored session are dropped.
+ */
+function mergeAdhocCompanyCorrections_(stored, sessions, harvested) {
+  const parsed = {};   // key -> the companies the parser found for that attendee
+  Object.keys(sessions).forEach(function (id) {
+    const ambiguous = ambiguousAdhocAttendeeNames_(sessions[id].attendees);
+    sessions[id].attendees.forEach(function (a) {
+      if (!a.email && ambiguous[String(a.name).toLowerCase()]) return;
+      const key = adhocAttendeeCompanyKey_(a.name, a.email);
+      parsed[key] = parsed[key] || [];
+      if (parsed[key].indexOf(a.company) === -1) parsed[key].push(a.company);
+    });
+  });
+
+  const cells = {};
+  harvested.forEach(function (row) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, row.key)) return;
+    cells[row.key] = cells[row.key] || [];
+    if (cells[row.key].indexOf(row.company) === -1) cells[row.key].push(row.company);
+  });
+
+  const result = {};
+  Object.keys(parsed).forEach(function (key) {
+    const before = stored[key] || '';
+    if (!cells[key]) { if (before) result[key] = before; return; }
+    const filled = cells[key].filter(function (v) { return v !== ''; });
+    let chosen = before;
+    if (filled.length === 0) {
+      chosen = '';
+    } else if (filled.length === 1) {
+      chosen = filled[0];
+    } else {
+      // The same attendee in several tables with different values: the one
+      // that was typed is the one that is neither the stored value nor what
+      // the parser found. Two different typed values decide nothing.
+      const typed = filled.filter(function (v) { return v !== before && parsed[key].indexOf(v) === -1; });
+      if (typed.length === 1) chosen = typed[0];
+    }
+    if (chosen && !(parsed[key].length === 1 && parsed[key][0] === chosen)) result[key] = chosen;
+  });
+  return result;
+}
+
+// ---------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------
+
+/** "September 22, 2026" for 2026-09-22; '' for anything else. */
+function adhocLongDate_(date) {
+  const text = String(date || '').slice(0, 10);
+  return isValidAdhocSessionDate_(text) ? (computeMeetingDateFromStartDate_(text) || '') : '';
+}
+
+/**
+ * Pure: what is rendered -- one block per attendance record, in the
+ * chronological order of the sessions and, within a session, of the days.
+ * Statistics are the values Teams states; a value Teams did not state is
+ * left out, never calculated. Every block names its session with its days;
+ * a block of a session that spans several days (or has several records)
+ * also says which day it is.
+ * Returns [{ sessionId, key, day, statistics: [[label, value]], attendees }].
+ */
+function buildAdhocAttendanceBlocks_(sessions, state) {
+  const blocks = [];
+  sessions.forEach(function (session) {
+    const records = adhocAttendanceRecordsOf_(state, session.id).filter(function (r) { return !!r.model; });
+    const dates = adhocSessionDatesText_(session);
+    records.forEach(function (record) { blocks.push(block(session, record, dates, isAdhocMultiDaySession_(session) || records.length > 1)); });
+  });
+  return blocks;
+
+  function block(session, record, dates, sayDay) {
+    const model = record.model;
+    const statistics = [];
+    const add = function (label, value) { if (value !== null && value !== undefined && value !== '') statistics.push([label, String(value)]); };
+    add('Meeting', model.meetingTitle);
+    add('Session', session.label ? session.label + ', ' + dates : dates);
+    if (sayDay) add('Date', adhocLongDate_(record.day));
+    add('Start', model.start.slice(11));
+    if (model.end) add('End', model.end.slice(0, 10) === model.start.slice(0, 10) ? model.end.slice(11) : model.end.replace('T', ' '));
+    if (model.durationSeconds !== null) add('Duration', formatTeamsDuration_(model.durationSeconds));
+    add('Attendance records', model.attendanceRecords);
+    if (model.averageAttendanceSeconds !== null) add('Average attendance', formatTeamsDuration_(model.averageAttendanceSeconds));
+    return { sessionId: session.id, key: record.key, day: record.day, statistics: statistics, attendees: effectiveAdhocAttendees_(model, state.companies) };
+  }
+}
+
+/** The generated container: { start, end } (end exclusive), or null. It runs from its heading to the next heading. */
+function findAdhocAttendanceContainer_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  for (let i = 0; i < count; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (p.getHeading() === NORMAL || p.getText().trim() !== ADHOC_ATTENDANCE_HEADING_) continue;
+    let end = i + 1;
+    while (end < count) {
+      const next = body.getChild(end);
+      if (next.getType() === PARAGRAPH && next.asParagraph().getHeading() !== NORMAL) break;
+      // Stage E: a table that is not an attendee table is never part of the
+      // container. An update can put the table of a new TDoc after it (at the
+      // end of the document); that table must not be removed with it.
+      if (next.getType() === DocumentApp.ElementType.TABLE && !isAdhocAttendeeTable_(next.asTable())) break;
+      end++;
+    }
+    return { start: i, end: end };
+  }
+  return null;
+}
+
+/**
+ * Where a new container goes: the end of the closing section -- before the
+ * heading that follows the last "Close of ..." heading, or at the end of the
+ * document. Without such a heading: the end of the document.
+ * Returns { index, inClosingSection }.
+ */
+function findAdhocAttendanceInsertIndex_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  let closing = -1;
+  for (let i = 0; i < count; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH || child.asParagraph().getHeading() === NORMAL) continue;
+    const text = child.asParagraph().getText().toLowerCase();
+    if (text.indexOf('close of') !== -1 || text.indexOf('closing') !== -1) closing = i;
+  }
+  if (closing === -1) return { index: count, inClosingSection: false };
+  let index = closing + 1;
+  while (index < count) {
+    const next = body.getChild(index);
+    if (next.getType() === PARAGRAPH && next.asParagraph().getHeading() !== NORMAL) break;
+    index++;
+  }
+  return { index: index, inClosingSection: true };
+}
+
+/**
+ * Removes one child of the body. A document must end with a paragraph, so
+ * the last paragraph is emptied instead of removed.
+ */
+function removeAdhocBodyChild_(body, child) {
+  const isLast = body.getChildIndex(child) === body.getNumChildren() - 1;
+  if (isLast && child.getType() === DocumentApp.ElementType.PARAGRAPH) {
+    child.asParagraph().setText('');
+    child.asParagraph().setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    return;
+  }
+  body.removeChild(child);
+}
+
+/**
+ * The look of a generated attendee table, set explicitly. A table that is
+ * inserted takes its text attributes from the paragraph before it -- here
+ * the bold "Attendees" line -- so without this the whole table is bold; and
+ * a table only gets the report's usual look (no extra row height, no
+ * paragraph spacing, a shaded header row) at the next formatting pass. So:
+ * header row bold and shaded, every other cell not bold, rows as low as
+ * their text, and column widths that give the e-mail addresses room.
+ */
+function formatAdhocAttendeeTable_(table) {
+  let page = 468;
+  try { page = parseInt(getConfig_().TDOC_PAGE_USABLE_WIDTH || '468', 10) || 468; } catch (e) { page = 468; }
+  const widths = ADHOC_ATTENDEE_TABLE_WIDTHS_.map(function (share) { return Math.round(page * share); });
+  for (let r = 0; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    row.setMinimumHeight(0);
+    for (let c = 0; c < row.getNumCells(); c++) {
+      const cell = row.getCell(c);
+      cell.editAsText().setBold(r === 0);
+      if (r === 0) cell.setBackgroundColor(ADHOC_TABLE_HEADER_BACKGROUND_);
+      if (c < widths.length) cell.setWidth(widths[c]);
+      for (let k = 0; k < cell.getNumChildren(); k++) {
+        const child = cell.getChild(k);
+        if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+        child.asParagraph().setSpacingBefore(0);
+        child.asParagraph().setSpacingAfter(0);
+      }
+    }
+  }
+}
+
+/**
+ * Writes the container for `blocks` and nothing else. An existing container
+ * is replaced as a whole (its heading stays where it is); without blocks it
+ * is removed. Text outside the container is never touched.
+ * Returns { container: 'created' | 'replaced' | 'removed' | 'none', sessions, inClosingSection }.
+ */
+function renderAdhocAttendanceSection_(body, blocks) {
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const existing = findAdhocAttendanceContainer_(body);
+  if (blocks.length === 0) {
+    if (!existing) return { container: 'none', sessions: 0, inClosingSection: true };
+    for (let i = existing.end - 1; i >= existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    return { container: 'removed', sessions: 0, inClosingSection: true };
+  }
+
+  let at;
+  let inClosingSection = true;
+  if (existing) {
+    for (let i = existing.end - 1; i > existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    at = existing.start + 1;
+  } else {
+    const where = findAdhocAttendanceInsertIndex_(body);
+    inClosingSection = where.inClosingSection;
+    const heading = where.index >= body.getNumChildren() ? body.appendParagraph(ADHOC_ATTENDANCE_HEADING_) : body.insertParagraph(where.index, ADHOC_ATTENDANCE_HEADING_);
+    heading.setHeading(DocumentApp.ParagraphHeading.HEADING3);
+    at = where.index + 1;
+  }
+
+  const paragraph = function (text, bold) {
+    const p = at >= body.getNumChildren() ? body.appendParagraph(text) : body.insertParagraph(at, text);
+    p.setHeading(NORMAL);
+    p.editAsText().setBold(bold);
+    at++;
+  };
+  blocks.forEach(function (block) {
+    paragraph('Statistics', true);
+    block.statistics.forEach(function (line) { paragraph(line[0] + ': ' + line[1], false); });
+    paragraph('Attendees', true);
+    const cells = [ADHOC_ATTENDEE_TABLE_HEADER_.slice()].concat(block.attendees.map(function (a) { return [a.name, a.company, a.email]; }));
+    const table = at >= body.getNumChildren() ? body.appendTable(cells) : body.insertTable(at, cells);
+    at++;
+    // The look never decides whether an import succeeds.
+    try {
+      formatAdhocAttendeeTable_(table);
+    } catch (e) {
+      Logger.log('Attendance: the attendee table could not be formatted: ' + e.message);
+    }
+    block.attendees.forEach(function (a, i) {
+      // The parser accepts only a plain address, so "mailto:" + address is the whole link.
+      if (a.email) table.getRow(i + 1).getCell(2).editAsText().setLinkUrl(0, a.email.length - 1, 'mailto:' + a.email);
+    });
+  });
+  return { container: existing ? 'replaced' : 'created', sessions: blocks.length, inClosingSection: inClosingSection };
+}
+
+/**
+ * Brings the Attendance container up to date with what is stored: reads the
+ * Company cells back, keeps them, and writes the container again.
+ * options.afterRebuild: the document was just rebuilt, so there is nothing
+ * to read back and sessions whose stored attendance is unusable are skipped
+ * (they are named in the result) instead of stopping the render.
+ * Returns { container, sessions, inClosingSection, problems }.
+ */
+function refreshAdhocAttendanceSection_(body, options) {
+  const afterRebuild = !!(options && options.afterRebuild);
+  const sessions = getAdhocSessions_();
+  if (sessions.length === 0) throw new Error('Attendance needs configured sessions. Use Configure Sessions first.');
+  const store = adhocAttendanceStore_();
+  let state = readAdhocAttendance_(store);
+  if (state.status === 'unsupported' || state.status === 'invalid') throw new Error(state.error);
+  // A record that cannot be read is named by its session, and by its day when its key says which.
+  const labelOf = function (key) {
+    const parts = adhocAttendanceRecordParts_(key) || { sessionId: key, day: '' };
+    const s = sessions.filter(function (x) { return x.id === parts.sessionId; })[0];
+    return (s ? s.displayLabel : parts.sessionId) + (parts.day ? ' (' + adhocLongDate_(parts.day) + ')' : '');
+  };
+  if (state.problems.length && !afterRebuild) {
+    throw new Error('The stored attendance of ' + state.problems.map(labelOf).join(', ') + ' cannot be read. Import it again or remove it; the report was not changed.');
+  }
+
+  if (!afterRebuild) {
+    const merged = mergeAdhocCompanyCorrections_(state.companies, state.sessions, harvestAdhocAttendeeCompanies_(body));
+    writeAdhocAttendanceValue_(store, ADHOC_ATTENDANCE_COMPANIES_ID_, Object.keys(merged).length ? JSON.stringify(merged) : null);
+    state.companies = merged;
+  }
+  const rendered = renderAdhocAttendanceSection_(body, buildAdhocAttendanceBlocks_(sessions, state));
+  rendered.problems = state.problems.map(labelOf);
+  return rendered;
+}
+
+/**
+ * Build from Scratch, before the document is cleared: keeps the Company
+ * cells of the attendee tables that are about to disappear. null -- and
+ * nothing read or written -- unless this is an ad-hoc report with sessions
+ * and stored attendance.
+ */
+function beginAdhocAttendanceRebuild_() {
+  if (!adhocSessionsEnabled_()) return null;
+  try {
+    const store = adhocAttendanceStore_();
+    const state = readAdhocAttendance_(store);
+    if (state.status !== 'ok' || (Object.keys(state.sessions).length === 0 && state.problems.length === 0)) return null;
+    const merged = mergeAdhocCompanyCorrections_(state.companies, state.sessions, harvestAdhocAttendeeCompanies_(DocumentApp.getActiveDocument().getBody()));
+    writeAdhocAttendanceValue_(store, ADHOC_ATTENDANCE_COMPANIES_ID_, Object.keys(merged).length ? JSON.stringify(merged) : null);
+    return { active: true };
+  } catch (e) {
+    Logger.log('Attendance: the Company cells could not be kept before the rebuild: ' + e.message);
+    return { active: true };
+  }
+}
+
+/** Build from Scratch, at the end: writes the container again. Returns a note for the build result, '' when all is well. */
+function finishAdhocAttendanceRebuild_(body, rebuild) {
+  if (!rebuild) return '';
+  try {
+    const result = refreshAdhocAttendanceSection_(body, { afterRebuild: true });
+    return result.problems.length
+      ? '\n\n⚠️ The stored attendance of ' + result.problems.join(', ') + ' cannot be read and was left out. Import it again.'
+      : '';
+  } catch (e) {
+    Logger.log('Attendance: the section could not be written after the rebuild: ' + e.message);
+    return '\n\n⚠️ The Attendance section could not be written (' + e.message + '). Use ' + ADHOC_ATTENDANCE_REFRESH_HINT_ + '.';
+  }
+}
+
+// ---------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------
+
+/**
+ * What an import of `text` for session `sessionId` would do. Reads only;
+ * writes nothing. Returns { ok, error, plan }: plan = { session, key, day,
+ * payload, token, unchanged, replaces, preview }. The export must be of a
+ * day of the session; `day` is that day and `key` the record it is stored
+ * as -- the record of that day when there is one, so that importing a day
+ * again replaces that day and no other.
+ */
+function planTeamsAttendanceImport_(sessionId, text) {
+  const refuse = function (message) { return { ok: false, error: message, plan: null }; };
+  if (!isAdhocMeetingForSessions_()) return refuse('Attendance is available for ad-hoc reports only.');
+  const sessions = getAdhocSessions_();
+  if (sessions.length === 0) return refuse('Attendance needs configured sessions. Use Configure Sessions first.');
+  const session = sessions.filter(function (s) { return s.id === sessionId; })[0];
+  if (!session) return refuse('This session is no longer configured. Close the dialog and open it again.');
+
+  const state = readAdhocAttendance_(adhocAttendanceStore_());
+  if (state.status === 'unsupported') return refuse(state.error + ' It was written by a newer release and is not changed here.');
+
+  const multiDay = isAdhocMultiDaySession_(session);
+  const parsed = parseTeamsAttendanceReport_(text, multiDay ? { expectedDate: session.date, expectedEndDate: session.endDate } : { expectedDate: session.date });
+  if (!parsed.ok) return refuse(parsed.error.message);
+  const attendance = parsed.attendance;
+  const payload = compactAdhocAttendance_(attendance);
+  if (!expandAdhocAttendance_(payload)) return refuse('The attendance could not be prepared for storing.');
+
+  const s = attendance.summary;
+  const day = s.start.slice(0, 10);
+  const records = adhocAttendanceRecordsOf_(state, sessionId);
+  // The record this import is: the one of that day; for a session of one day also its record that cannot be read.
+  const same = records.filter(function (r) { return r.day === day; })[0] || (multiDay ? null : records.filter(function (r) { return r.key === sessionId; })[0]) || null;
+  const key = same ? same.key : (multiDay ? adhocAttendanceRecordKey_(sessionId, day) : sessionId);
+  const stored = Object.prototype.hasOwnProperty.call(state.raw, key) ? state.raw[key] : null;
+  const existing = stored !== null ? state.sessions[key] : null;
+  const unreadable = state.problems.indexOf(key) !== -1;
+  const dates = adhocSessionDatesText_(session);
+  const others = records.filter(function (r) { return r.key !== key; }).map(function (r) { return r.day ? adhocLongDate_(r.day) : 'a record that cannot be read'; });
+  const what = multiDay ? adhocLongDate_(day) + ' of this session' : 'this session';
+  const messages = function (level) {
+    return attendance.diagnostics.notes.filter(function (n) { return n.level === level; }).map(function (n) {
+      return n.message + (n.rows ? ' (row' + (n.rows.length === 1 ? ' ' : 's ') + n.rows.join(', ') + ')' : '');
+    });
+  };
+  return { ok: true, error: null, plan: {
+    session: session,
+    key: key,
+    day: day,
+    payload: payload,
+    token: adhocTextHash_(sessionId + '\n' + payload),
+    unchanged: stored === payload,
+    replaces: (stored !== null && stored !== payload) || unreadable,
+    preview: {
+      session: session.label ? session.label + ', ' + dates : dates,
+      meetingTitle: s.meetingTitle,
+      date: adhocLongDate_(s.start),
+      start: s.start.slice(11),
+      end: s.end ? (s.end.slice(0, 10) === s.start.slice(0, 10) ? s.end.slice(11) : s.end.replace('T', ' ')) : '',
+      duration: s.durationSeconds !== null ? formatTeamsDuration_(s.durationSeconds) : '',
+      attendanceRecords: s.attendanceRecords,
+      attendees: attendance.participants.length,
+      averageAttendance: s.averageAttendanceSeconds !== null ? formatTeamsDuration_(s.averageAttendanceSeconds) : '',
+      warnings: messages('warning'),
+      notes: messages('info'),
+      replaces: stored === payload ? ''
+        : (existing ? 'This replaces the attendance already imported for ' + what + ' (' + existing.attendees.length + ' attendees, "' + existing.meetingTitle + '").'
+          : (unreadable ? 'This replaces the attendance stored for ' + what + ', which cannot be read.' : '')),
+      // The other days of the session that have attendance: they are not touched by this import.
+      otherDays: others.join('; '),
+      unchanged: stored === payload
+    }
+  } };
+}
+
+/** The text of an uploaded file. Returns { ok, error, text }. */
+function teamsAttendanceTextFromBase64_(base64) {
+  if (typeof base64 !== 'string' || base64 === '') return { ok: false, error: 'No file was received.', text: null };
+  if (base64.length > ADHOC_ATTENDANCE_MAX_BASE64_CHARS_) return { ok: false, error: 'The file is too large to be a Teams attendance export.', text: null };
+  try {
+    return { ok: true, error: null, text: decodeTeamsAttendanceBytes_(Utilities.base64Decode(base64)).text };
+  } catch (e) {
+    return { ok: false, error: 'The file could not be read.', text: null };
+  }
+}
+
+/** Runs fn while holding the document lock the updates use; a busy lock is an error result. */
+function withAdhocAttendanceLock_(fn) {
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) return { ok: false, error: 'Nothing was changed: an update of this report is running right now. Try again in a minute.' };
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Renders after a change that is already stored; a failure is reported, the stored data stays. */
+function renderAfterAdhocAttendanceChange_(done) {
+  try {
+    const body = DocumentApp.getActiveDocument().getBody();
+    const rendered = refreshAdhocAttendanceSection_(body);
+    // An attendance list the report had before (made by hand, or by another tool) is never changed or removed here: it is only pointed out.
+    const elsewhere = rendered.container === 'removed' || rendered.container === 'none' ? 0 : countAdhocAttendeeTablesElsewhere_(body);
+    const older = elsewhere === 0 ? '' : ' This report also has ' + (elsewhere === 1 ? 'another Name / Company / Email table' : elsewhere + ' other Name / Company / Email tables') +
+      ' outside the generated Attendance section -- an attendance list made earlier. ' + (elsewhere === 1 ? 'It was' : 'They were') + ' not changed' +
+      (rendered.container === 'created' ? '; the companies entered there were taken over' : '') + '. If ' + (elsewhere === 1 ? 'it shows' : 'they show') + ' the same attendance, remove ' + (elsewhere === 1 ? 'it' : 'them') + ' by hand.';
+    return { ok: true, error: null, changed: true, rendered: true,
+      message: done + (rendered.container === 'created' && !rendered.inClosingSection ? ' No closing section was found; the Attendance section is at the end of the document.' : '') + older };
+  } catch (e) {
+    Logger.log('Attendance: stored, but the section could not be written: ' + e.message);
+    return { ok: true, error: null, changed: true, rendered: false,
+      message: done + ' It is stored, but the Attendance section could not be written (' + e.message + '). Use ' + ADHOC_ATTENDANCE_REFRESH_HINT_ + '.' };
+  }
+}
+
+/** RPC of the import dialog: the preview. Changes nothing. */
+function previewTeamsAttendanceImport(sessionId, base64) {
+  assertNotTemplateMaster_();
+  const file = teamsAttendanceTextFromBase64_(base64);
+  if (!file.ok) return { ok: false, error: file.error };
+  const planned = planTeamsAttendanceImport_(String(sessionId || ''), file.text);
+  if (!planned.ok) return { ok: false, error: planned.error };
+  return { ok: true, error: null, token: planned.plan.token, preview: planned.plan.preview };
+}
+
+/**
+ * RPC of the import dialog: the import, after the preview was confirmed.
+ * `token` is the preview's; the file is parsed again and must give the same
+ * result, so what is stored is what was shown.
+ */
+function confirmTeamsAttendanceImport(sessionId, base64, token) {
+  assertNotTemplateMaster_();
+  const file = teamsAttendanceTextFromBase64_(base64);
+  if (!file.ok) return { ok: false, error: file.error };
+  return withAdhocAttendanceLock_(function () {
+    const planned = planTeamsAttendanceImport_(String(sessionId || ''), file.text);
+    if (!planned.ok) return { ok: false, error: planned.error };
+    const plan = planned.plan;
+    // A session of several days is named with the day the attendance is of.
+    const whose = plan.session.displayLabel + (isAdhocMultiDaySession_(plan.session) ? ' (' + adhocLongDate_(plan.day) + ')' : '');
+    if (plan.token !== token) return { ok: false, error: 'Nothing was imported: the file or the session is not the one that was previewed. Preview again.' };
+
+    if (plan.unchanged) {
+      if (findAdhocAttendanceContainer_(DocumentApp.getActiveDocument().getBody())) {
+        return { ok: true, error: null, changed: false, rendered: false, message: 'This attendance is already imported for ' + whose + '. Nothing was changed.' };
+      }
+      const restored = renderAfterAdhocAttendanceChange_('This attendance was already imported for ' + whose + '; the Attendance section was written again.');
+      restored.changed = false;
+      return restored;
+    }
+    try {
+      writeAdhocAttendanceValue_(adhocAttendanceStore_(), plan.key, plan.payload);
+    } catch (e) {
+      return { ok: false, error: 'Nothing was imported: the attendance could not be stored (' + e.message + ').' };
+    }
+    return renderAfterAdhocAttendanceChange_('The attendance of ' + whose + ' was imported (' + plan.preview.attendees + ' attendees).');
+  });
+}
+
+/**
+ * RPC of the import dialog: removes ONE attendance record. The dialog asks
+ * first. `day` (YYYY-MM-DD) says which record of the session; it can be
+ * left out when the session has one record. The other days of the session
+ * are not touched.
+ */
+function removeTeamsAttendanceImport(sessionId, day) {
+  assertNotTemplateMaster_();
+  const id = String(sessionId || '');
+  const wanted = String(day === null || day === undefined ? '' : day).trim();
+  if (!isAdhocMeetingForSessions_()) return { ok: false, error: 'Attendance is available for ad-hoc reports only.' };
+  return withAdhocAttendanceLock_(function () {
+    const store = adhocAttendanceStore_();
+    const ids = adhocAttendanceSessionIds_(store);
+    if (ids === null) return { ok: false, error: 'The stored attendance was written by a newer release and is not changed here.' };
+    if (ids.indexOf(id) === -1) return { ok: false, error: 'This session has no imported attendance.' };
+    const session = getAdhocSessions_().filter(function (s) { return s.id === id; })[0];
+    const records = adhocAttendanceRecordsOf_(readAdhocAttendance_(store), id);
+    let record = null;
+    if (wanted) {
+      record = records.filter(function (r) { return r.day === wanted; })[0] || null;
+      if (!record) return { ok: false, error: 'This session has no imported attendance for that day.' };
+    } else if (records.length === 1) {
+      record = records[0];
+    } else {
+      // Several records and no day named: only a record whose day is not known (one that cannot be read) is meant.
+      const unknown = records.filter(function (r) { return !r.day; });
+      if (unknown.length !== 1) return { ok: false, error: 'This session has attendance for several days. Choose the day to remove.' };
+      record = unknown[0];
+    }
+    try {
+      writeAdhocAttendanceValue_(store, record.key, null);
+    } catch (e) {
+      return { ok: false, error: 'Nothing was removed (' + e.message + ').' };
+    }
+    if (getAdhocSessions_().length === 0) return { ok: true, error: null, changed: true, rendered: false, message: 'The attendance was removed.' };
+    return renderAfterAdhocAttendanceChange_('The attendance of ' + (session ? session.displayLabel : id) + (records.length > 1 && record.day ? ' (' + adhocLongDate_(record.day) + ')' : '') + ' was removed.');
+  });
+}
+
+/**
+ * Menu: Sessions and Attendance > Refresh Attendance Section. Writes the
+ * container again from what is stored, keeping the Company cells. Like
+ * Update Report Now: no message when it worked, an error when it did not.
+ */
+function refreshAdhocAttendanceSection() {
+  assertNotTemplateMaster_();
+  if (!adhocSessionsEnabled_()) throw new Error('Attendance needs an ad-hoc report with configured sessions. Use Configure Sessions first.');
+  const result = withAdhocAttendanceLock_(function () {
+    return { ok: true, rendered: refreshAdhocAttendanceSection_(DocumentApp.getActiveDocument().getBody()) };
+  });
+  if (!result.ok) throw new Error(result.error);
+  return result.rendered;
+}
+
+/** What the import dialog shows (reads only). */
+function buildTeamsAttendanceDialogModel_() {
+  const state = readAdhocAttendance_(adhocAttendanceStore_());
+  return {
+    notice: state.status === 'unsupported' || state.status === 'invalid' ? state.error : '',
+    readOnly: state.status === 'unsupported',
+    sessions: getAdhocSessions_().map(function (s) {
+      const dates = adhocSessionDatesText_(s);
+      const records = adhocAttendanceRecordsOf_(state, s.id).map(function (r) {
+        return { day: r.day, label: r.day ? adhocLongDate_(r.day) : 'a record that cannot be read',
+          text: r.model ? r.model.attendees.length + ' attendees, "' + r.model.meetingTitle + '"' : 'stored, but it cannot be read' };
+      });
+      // One record of a session of one day is described as it always was; several are listed by their day.
+      const plain = records.length === 1 && !isAdhocMultiDaySession_(s);
+      return {
+        id: s.id,
+        label: s.label ? s.label + ', ' + dates : dates,
+        imported: records.length === 0 ? '' : (plain ? records[0].text : records.map(function (r) { return r.label + ': ' + r.text; }).join('; ')),
+        records: records
+      };
+    })
+  };
+}
+
+/** Menu (ad-hoc template report): Sessions and Attendance > Import Teams Attendance… */
+function importTeamsAttendance() {
+  assertNotTemplateMaster_();
+  const ui = DocumentApp.getUi();
+  if (!isAdhocMeetingForSessions_()) {
+    ui.alert('Import Teams Attendance', 'Attendance is available for ad-hoc reports only.', ui.ButtonSet.OK);
+    return;
+  }
+  if (!adhocSessionsEnabled_()) {
+    ui.alert('Import Teams Attendance', 'Attendance is imported for a session. Configure the sessions of this report first:\n\nSA4 Report > Sessions and Attendance > Configure Sessions…', ui.ButtonSet.OK);
+    return;
+  }
+  // "<" is written as an escape so that no stored text can end the script element.
+  const modelJson = JSON.stringify(buildTeamsAttendanceDialogModel_()).replace(/</g, '\\u003c');
+
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; font-size: 13px; }
+      label { display: block; margin-top: 14px; font-weight: bold; }
+      select, input[type=file] { margin-top: 5px; padding: 6px; box-sizing: border-box; width: 100%; }
+      button { margin-top: 16px; padding: 9px 18px; background: #4285f4; color: white; border: none; cursor: pointer; }
+      button:hover { background: #357ae8; }
+      button:disabled { background: #999; cursor: default; }
+      button.grey { background: #666; }
+      button.danger { background: #b3261e; }
+      table { border-collapse: collapse; margin-top: 10px; }
+      td { padding: 2px 12px 2px 0; vertical-align: top; }
+      td.k { color: #555; white-space: nowrap; }
+      .hint { font-size: 11px; color: #666; margin-top: 4px; }
+      .box { margin-top: 10px; padding: 8px; background: #fff6e0; border-left: 3px solid #c77c00; display: none; white-space: pre-wrap; }
+      #status { margin-top: 12px; white-space: pre-wrap; }
+      #status.error { color: #a94442; }
+      #status.done { color: #2d7d2d; }
+      #infoNotes { color: #555; margin-top: 8px; white-space: pre-wrap; font-size: 12px; }
+    </style>
+
+    <h2>Import Teams Attendance</h2>
+    <div id="notice" class="box"></div>
+
+    <label>Session</label>
+    <select id="session" onchange="sessionChanged()"></select>
+    <div id="existing" class="hint"></div>
+    <div id="removeRow" style="display:none">
+      <select id="removeDay" style="display:none; width:auto" onchange="cancelRemove()"></select>
+      <button type="button" class="danger" id="removeBtn" onclick="askRemove()">Remove attendance…</button>
+      <span id="removeConfirm" style="display:none">
+        <span id="removeQuestion"></span>
+        <button type="button" class="danger" id="removeYes" onclick="removeAttendance()">Yes, remove</button>
+        <button type="button" class="grey" id="removeNo" onclick="cancelRemove()">No</button>
+      </span>
+    </div>
+
+    <label>Teams attendance report (.csv)</label>
+    <input type="file" id="file" accept=".csv,text/csv" onchange="fileChanged()">
+    <div class="hint">The file is read here and checked before anything is changed. Only the Summary and the Participants are used. For a session of several days, import the report of each day: each is kept as its own day of the session.</div>
+    <button type="button" id="previewBtn" onclick="previewImport()" disabled>Preview</button>
+
+    <div id="replaces" class="box"></div>
+    <table id="preview"></table>
+    <div id="warnings" class="box"></div>
+    <div id="infoNotes"></div>
+
+    <div id="status"></div>
+    <div>
+      <button type="button" id="importBtn" onclick="confirmImport()" style="display:none">Import</button>
+      <button type="button" class="grey" id="closeBtn" onclick="google.script.host.close()">Cancel</button>
+    </div>
+
+    <script>
+      var MODEL = ${modelJson};
+      var NL = String.fromCharCode(10);
+      var MAX_FILE_BYTES = 3000000;
+      var pending = null;   // { sessionId, base64, token } of the preview that is shown
+      function el(id) { return document.getElementById(id); }
+      function show(id, visible, display) { el(id).style.display = visible ? (display || 'block') : 'none'; }
+      function selectedSession() {
+        var id = el('session').value;
+        for (var i = 0; i < MODEL.sessions.length; i++) if (MODEL.sessions[i].id === id) return MODEL.sessions[i];
+        return null;
+      }
+      function setStatus(text, kind) { el('status').textContent = text || ''; el('status').className = kind || ''; }
+      function clearPreview() {
+        pending = null;
+        while (el('preview').firstChild) el('preview').removeChild(el('preview').firstChild);
+        el('warnings').textContent = ''; show('warnings', false);
+        el('replaces').textContent = ''; show('replaces', false);
+        el('infoNotes').textContent = '';
+        show('importBtn', false);
+        setStatus('');
+      }
+      function sessionChanged() {
+        clearPreview();
+        cancelRemove();
+        var s = selectedSession();
+        el('existing').textContent = s && s.imported ? 'Imported: ' + s.imported : (s ? 'No attendance is imported for this session yet.' : '');
+        show('removeRow', !!(s && s.imported) && !MODEL.readOnly);
+        // A session with attendance for several days: the day to remove is chosen.
+        while (el('removeDay').firstChild) el('removeDay').removeChild(el('removeDay').firstChild);
+        var several = !!(s && s.records && s.records.length > 1);
+        if (several) s.records.forEach(function (r) {
+          var option = document.createElement('option');
+          option.value = r.day;
+          option.textContent = r.label;
+          el('removeDay').appendChild(option);
+        });
+        show('removeDay', several, 'inline-block');
+        updatePreviewButton();
+      }
+      function fileChanged() { clearPreview(); updatePreviewButton(); }
+      function updatePreviewButton() {
+        el('previewBtn').disabled = MODEL.readOnly || !selectedSession() || !(el('file').files && el('file').files.length);
+      }
+      function toBase64(buffer) {
+        var bytes = new Uint8Array(buffer);
+        var binary = '';
+        for (var i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        return btoa(binary);
+      }
+      function previewRow(label, value) {
+        if (value === null || value === undefined || value === '') return;
+        var tr = document.createElement('tr');
+        var k = document.createElement('td');
+        k.className = 'k';
+        k.textContent = label;
+        var v = document.createElement('td');
+        v.textContent = String(value);
+        tr.appendChild(k);
+        tr.appendChild(v);
+        el('preview').appendChild(tr);
+      }
+      function busy(on) {
+        el('previewBtn').disabled = on || MODEL.readOnly || !(el('file').files && el('file').files.length);
+        el('importBtn').disabled = on;
+        el('session').disabled = on;
+        el('file').disabled = on;
+      }
+      function failed(error) { busy(false); setStatus(error && error.message ? error.message : String(error), 'error'); }
+      function previewImport() {
+        clearPreview();
+        var session = selectedSession();
+        var file = el('file').files && el('file').files[0];
+        if (!session || !file) return;
+        if (file.size > MAX_FILE_BYTES) { setStatus('The file is too large to be a Teams attendance export.', 'error'); return; }
+        busy(true);
+        setStatus('Reading the file...');
+        var reader = new FileReader();
+        reader.onerror = function () { failed('The file could not be read.'); };
+        reader.onload = function () {
+          var base64 = toBase64(reader.result);
+          google.script.run
+            .withSuccessHandler(function (result) { showPreview(session.id, base64, result); })
+            .withFailureHandler(failed)
+            .previewTeamsAttendanceImport(session.id, base64);
+        };
+        reader.readAsArrayBuffer(file);
+      }
+      function showPreview(sessionId, base64, result) {
+        busy(false);
+        if (!result || !result.ok) { setStatus((result && result.error) || 'The file could not be checked.', 'error'); return; }
+        var p = result.preview;
+        setStatus('');
+        previewRow('Session', p.session);
+        previewRow('Teams meeting', p.meetingTitle);
+        previewRow('Date', p.date);
+        previewRow('Other days already imported', p.otherDays);
+        previewRow('Start', p.start);
+        previewRow('End', p.end);
+        previewRow('Duration', p.duration);
+        previewRow('Attendance records (Teams)', p.attendanceRecords);
+        previewRow('Attendees in the table', p.attendees);
+        previewRow('Average attendance', p.averageAttendance);
+        previewRow('Warnings', p.warnings.length);
+        if (p.warnings.length) { el('warnings').textContent = p.warnings.join(NL); show('warnings', true); }
+        if (p.notes.length) el('infoNotes').textContent = p.notes.join(NL);
+        if (p.unchanged) {
+          setStatus('This attendance is already imported for this session. Nothing needs to be done.', 'done');
+          return;
+        }
+        if (p.replaces) { el('replaces').textContent = p.replaces; show('replaces', true); }
+        pending = { sessionId: sessionId, base64: base64, token: result.token };
+        el('importBtn').textContent = p.replaces ? 'Replace the imported attendance' : 'Import';
+        show('importBtn', true, 'inline-block');
+      }
+      function finished(result) {
+        if (!result || !result.ok) { failed((result && result.error) || 'Nothing was changed.'); return; }
+        // The report was changed: this dialog is finished.
+        pending = null;
+        ['previewBtn', 'importBtn', 'session', 'file', 'removeBtn', 'removeYes', 'removeNo', 'removeDay'].forEach(function (id) { el(id).disabled = true; });
+        show('importBtn', false);
+        show('removeRow', false);
+        el('closeBtn').textContent = 'Close';
+        setStatus(result.message, result.rendered === false && result.changed ? 'error' : 'done');
+      }
+      function confirmImport() {
+        if (!pending) return;
+        busy(true);
+        setStatus('Importing...');
+        google.script.run.withSuccessHandler(finished).withFailureHandler(failed)
+          .confirmTeamsAttendanceImport(pending.sessionId, pending.base64, pending.token);
+      }
+      function askRemove() {
+        var s = selectedSession();
+        if (!s) return;
+        var which = s.records && s.records.length > 1 ? ' for ' + el('removeDay').options[el('removeDay').selectedIndex].textContent : '';
+        el('removeQuestion').textContent = 'Remove the imported attendance of ' + s.label + which + ' from the report?';
+        show('removeBtn', false);
+        show('removeConfirm', true, 'inline');
+      }
+      function cancelRemove() { show('removeConfirm', false); show('removeBtn', true, 'inline-block'); }
+      function removeAttendance() {
+        var s = selectedSession();
+        if (!s) return;
+        busy(true);
+        setStatus('Removing...');
+        if (s.records && s.records.length > 1) {
+          google.script.run.withSuccessHandler(finished).withFailureHandler(failed).removeTeamsAttendanceImport(s.id, el('removeDay').value);
+        } else {
+          google.script.run.withSuccessHandler(finished).withFailureHandler(failed).removeTeamsAttendanceImport(s.id);
+        }
+      }
+      MODEL.sessions.forEach(function (s) {
+        var option = document.createElement('option');
+        option.value = s.id;
+        option.textContent = s.label + (s.imported ? ' (attendance imported)' : '');
+        el('session').appendChild(option);
+      });
+      if (MODEL.notice) { el('notice').textContent = MODEL.notice; show('notice', true); }
+      sessionChanged();
+    </script>
+  `)
+  .setWidth(640)
+  .setHeight(620);
+
+  ui.showModalDialog(html, 'Import Teams Attendance');
+}
+
+// =========================================================
+// AD-HOC TDOC SESSIONS (stage B) -- ASSIGNMENT AND THE SESSION COLUMN
+// =========================================================
+//
+// docs/ADHOC_SESSIONS_ATTENDANCE_DESIGN.md §6-§8, §12.1. In an ad-hoc report
+// with configured sessions every registered TDoc has the sessions it belongs
+// to; the registration table can show them in a fifth column, "Session".
+//
+// AUTOMATIC: from the "Uploaded" column of the TDoc list -- the upload date
+// and time the Portal exports for each TDoc (verified on real lists: a
+// date-time cell, per TDoc number, empty while a TDoc is only reserved). A
+// TDoc belongs to the first session whose cut-off is not before its upload;
+// the cut-off is the planned end of the session, or the end of its day. At
+// most one session; none after the last cut-off, and none without a
+// readable upload time. Nothing else is ever used to place a TDoc: not its
+// number, its row, its revisions, or when an update first saw it.
+//
+// THE CLOCK. The list gives its times without a time zone. They are UTC:
+// checked against the public file server, where the HTTP Last-Modified time
+// (GMT) of a TDoc's file is its "Uploaded" value to within seconds or a few
+// minutes -- for meetings in February, May, August and September, held in
+// India, Montreal and online, and never an hour or more apart. Each time is
+// therefore converted to the report's time zone by Apps Script's own
+// time-zone rules ("utc") before it is compared with the session times.
+// For a list from another source whose times are already on the sessions'
+// clock, a report can say so ("session"); that choice is stored with the
+// assignments, and a stored choice is never reinterpreted.
+//
+// MANUAL, per TDoc number, by stable session id:
+//   add  the automatic session and these as well (a TDoc that was taken up
+//        again in a later session without a new revision);
+//   set  these and no others; an empty list means "no session".
+// A TDoc without an entry is automatic.
+//
+// STORED: one property, ADHOC_TDOC_SESSIONS, read by the update as well:
+//   { v: 1, clock: 'session' | 'utc',
+//     add: { '<ids>': [TDoc, ...] }, set: { '<ids>': [TDoc, ...] } }
+// where <ids> are session ids joined by "+", in ascending order ('' in "set"
+// is "no session"). TDocs are grouped by their sessions so that hundreds of
+// manual entries stay far below the 9 KB of one property; a save that would
+// not fit is refused. Labels and dates are never stored here.
+//
+// THE COLUMN is opt-in: a report gets it when it is built from scratch with
+// sessions configured, or through the explicit action below -- never by an
+// update. A report that has it is kept up to date by every update. A release
+// before this one does not recognize a five-column registration table.
+
+const ADHOC_TDOC_SESSIONS_KEY_ = 'ADHOC_TDOC_SESSIONS';
+const ADHOC_TDOC_SESSIONS_SCHEMA_VERSION_ = 1;
+const ADHOC_TDOC_SESSIONS_MAX_CHARS_ = 8000;
+const ADHOC_SESSION_COLUMN_HEADER_ = 'Session';
+const ADHOC_NO_SESSION_TEXT_ = '–';
+const REGISTRATION_TABLE_HEADER_ = ['TDoc', 'Title', 'Source', 'Agenda Item'];
+// The share of the page width each column of the registration table gets once it has the Session column
+// (TDoc, Title, Source, Agenda Item, Session). The four-column table of every release is left as it is.
+// The Session column holds codes ("A01"), so it is narrow and the titles get the room. The TDoc column is wide
+// enough for a TDoc number ("S4aP260067") on one line: with 15 % of the page it broke before its last digit.
+const ADHOC_REGISTRATION_TABLE_WIDTHS_ = [0.19, 0.42, 0.19, 0.12, 0.08];
+
+/**
+ * 'YYYY-MM-DDTHH:mm:ss': the latest upload time that still belongs to the
+ * session -- its planned end on its LAST day, or the end of that day.
+ */
+function adhocSessionCutoff_(session) {
+  return adhocSessionLastDay_(session) + 'T' + (session.end ? session.end + ':00' : '23:59:59');
+}
+
+/**
+ * One value of the "Uploaded" column as a wall-clock time.
+ * `display` is the cell as the sheet shows it, `raw` its value, and
+ * `formatDate(date)` writes a Date as 'YYYY-MM-DDTHH:mm:ss' in the time zone
+ * of the sheet -- used only when the shown text is not in that form.
+ * Returns { at, dateOnly, unreadable }: `at` is a date and time; `dateOnly`
+ * is set instead when the cell holds a date without a time; an empty cell is
+ * all null / false; `unreadable` is true for anything else.
+ */
+function normalizeTdocUploadValue_(display, raw, formatDate) {
+  const read = function (value) {
+    const m = String(value === null || value === undefined ? '' : value).trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/);
+    if (!m || !isValidAdhocSessionDate_(m[1] + '-' + m[2] + '-' + m[3])) return null;
+    if (m[4] === undefined) return { at: null, dateOnly: m[1] + '-' + m[2] + '-' + m[3], unreadable: false };
+    if (+m[4] > 23 || +m[5] > 59 || +(m[6] || '0') > 59) return null;
+    return { at: m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + (m[6] || '00'), dateOnly: null, unreadable: false };
+  };
+  const shown = read(display);
+  if (shown) return shown;
+  const isDate = Object.prototype.toString.call(raw) === '[object Date]';
+  if (isDate && !isNaN(raw.getTime())) {
+    let text = '';
+    try { text = formatDate ? formatDate(raw) : ''; } catch (e) { text = ''; }
+    return read(text) || { at: null, dateOnly: null, unreadable: true };
+  }
+  const blank = function (v) { return v === null || v === undefined || String(v).trim() === ''; };
+  if (blank(display) && blank(raw)) return { at: null, dateOnly: null, unreadable: false };
+  return (!isDate && read(raw)) || { at: null, dateOnly: null, unreadable: true };
+}
+
+/**
+ * The upload times of a downloaded TDoc list, one per row of `data` (the
+ * header row included), or null. null -- and nothing read -- unless the
+ * report is ad-hoc with sessions and the list has an "Uploaded" column.
+ * Never throws: a list whose times cannot be read gives null.
+ */
+function readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, context) {
+  try {
+    if (!adhocSessionsEnabled_(context)) return null;
+    const col = headers.indexOf('Uploaded');
+    if (col === -1) return null;
+    // What the sheet shows is the wall-clock time as the list has it; a Date
+    // value would first have to be read back in the sheet's own time zone.
+    let shown = null;
+    try { shown = sheet.getRange(1, col + 1, data.length, 1).getDisplayValues(); } catch (e) { shown = null; }
+    let zone = '';
+    try { zone = spreadsheet.getSpreadsheetTimeZone() || ''; } catch (e) { zone = ''; }
+    const formatDate = function (date) { return zone ? Utilities.formatDate(date, zone, "yyyy-MM-dd'T'HH:mm:ss") : ''; };
+    return data.map(function (row, i) {
+      return normalizeTdocUploadValue_(shown && shown[i] ? shown[i][0] : '', row[col], formatDate);
+    });
+  } catch (e) {
+    Logger.log('TDoc sessions: the upload times of the TDoc list could not be read: ' + e.message);
+    return null;
+  }
+}
+
+/** A wall-clock time meant as UTC, as the wall-clock time of the report's time zone; '' when that cannot be done. */
+function convertUtcWallClockToReportZone_(at) {
+  const m = String(at || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return '';
+  const text = Utilities.formatDate(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(String(text)) ? String(text) : '';
+}
+
+/**
+ * Pure: the automatic session of one upload time.
+ * `upload` is { at, dateOnly, unreadable } already on the sessions' clock
+ * (or undefined when the list has no upload column); `sessions` are the
+ * configured sessions in any order.
+ * Returns { sessionId, reason }: reason is 'assigned', 'not-uploaded',
+ * 'unreadable', 'no-upload-time', 'date-only' or 'after-last'.
+ * A date without a time gets a session only when the whole day lies in one
+ * session's window -- otherwise it is not known which side of a cut-off the
+ * upload was on.
+ */
+function assignAdhocSession_(upload, sessions) {
+  if (!upload) return { sessionId: null, reason: 'no-upload-time' };
+  if (upload.unreadable) return { sessionId: null, reason: 'unreadable' };
+  if (!upload.at && !upload.dateOnly) return { sessionId: null, reason: 'not-uploaded' };
+  const ordered = sortAdhocSessions_(sessions);
+  const first = function (at) {
+    for (let i = 0; i < ordered.length; i++) if (at <= adhocSessionCutoff_(ordered[i])) return ordered[i].id;
+    return null;
+  };
+  if (upload.at) {
+    const id = first(upload.at);
+    return { sessionId: id, reason: id ? 'assigned' : 'after-last' };
+  }
+  const morning = first(upload.dateOnly + 'T00:00:00');
+  const night = first(upload.dateOnly + 'T23:59:59');
+  if (morning !== night) return { sessionId: null, reason: 'date-only' };
+  return { sessionId: morning, reason: morning ? 'assigned' : 'after-last' };
+}
+
+/**
+ * Pure: the sessions of a TDoc, in the chronological order of the sessions.
+ * `override` is { mode: 'add' | 'set', sessions: [ids] } or undefined; ids
+ * of sessions that are not configured are left out.
+ */
+function effectiveAdhocTdocSessions_(automaticId, override, sessions) {
+  let wanted = automaticId ? [automaticId] : [];
+  if (override && override.mode === 'set') wanted = override.sessions.slice();
+  else if (override && override.mode === 'add') wanted = wanted.concat(override.sessions);
+  return sortAdhocSessions_(sessions).map(function (s) { return s.id; }).filter(function (id) { return wanted.indexOf(id) !== -1; });
+}
+
+/** Pure: what the Session cell shows for these session ids: the codes of the sessions ("A01", "A01, A02"), which the Session administration section explains. */
+function adhocTdocSessionCellText_(ids, sessions) {
+  const codes = adhocSessionCodes_(sessions);
+  const shown = sortAdhocSessions_(sessions).filter(function (s) { return ids.indexOf(s.id) !== -1; }).map(function (s) { return codes[s.id]; });
+  return shown.length ? shown.join(', ') : ADHOC_NO_SESSION_TEXT_;
+}
+
+/** "s2+s10" for ['s10', 's2']; '' for none. */
+function adhocSessionIdsKey_(ids) {
+  return ids.slice().sort(function (a, b) { return parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10); }).join('+');
+}
+
+/**
+ * Pure: checks and normalizes manual assignments.
+ * `tdocs` is { <TDoc>: { mode, sessions } }. Returns { errors, tdocs }: TDoc
+ * numbers in their canonical spelling, session ids unique and ascending.
+ * An "add" without sessions is the same as no entry and is left out.
+ */
+function normalizeAdhocTdocOverrides_(tdocs) {
+  const errors = [];
+  const result = {};
+  if (!tdocs || typeof tdocs !== 'object' || Array.isArray(tdocs)) return { errors: ['The manual assignments are missing.'], tdocs: {} };
+  Object.keys(tdocs).forEach(function (key) {
+    const parsed = parseExactSA4DocumentId_(String(key).trim());
+    const entry = tdocs[key];
+    if (!parsed.isValid) { errors.push('"' + String(key).slice(0, 40) + '" is not a TDoc number.'); return; }
+    if (!entry || (entry.mode !== 'add' && entry.mode !== 'set') || !Array.isArray(entry.sessions) ||
+        !entry.sessions.every(function (id) { return typeof id === 'string' && /^s[1-9]\d*$/.test(id); })) {
+      errors.push(parsed.raw + ': the manual assignment cannot be read.');
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(result, parsed.raw)) { errors.push(parsed.raw + ' is assigned twice.'); return; }
+    const ids = adhocSessionIdsKey_(entry.sessions.filter(function (id, i, list) { return list.indexOf(id) === i; }));
+    if (entry.mode === 'add' && ids === '') return;
+    result[parsed.raw] = { mode: entry.mode, sessions: ids ? ids.split('+') : [] };
+  });
+  return { errors: errors, tdocs: errors.length ? {} : result };
+}
+
+/** The one stored form: fixed key order, groups and TDocs in ascending order. */
+function serializeAdhocTdocSessions_(model) {
+  const groups = { add: {}, set: {} };
+  Object.keys(model.tdocs).sort().forEach(function (tdoc) {
+    const entry = model.tdocs[tdoc];
+    const key = adhocSessionIdsKey_(entry.sessions);
+    (groups[entry.mode][key] = groups[entry.mode][key] || []).push(tdoc);
+  });
+  const ordered = function (group) {
+    const out = {};
+    Object.keys(group).sort().forEach(function (key) { out[key] = group[key]; });
+    return out;
+  };
+  return JSON.stringify({ v: ADHOC_TDOC_SESSIONS_SCHEMA_VERSION_, clock: model.clock, add: ordered(groups.add), set: ordered(groups.set) });
+}
+
+/**
+ * Reads an ADHOC_TDOC_SESSIONS value: { status: 'absent' | 'ok' |
+ * 'unsupported' | 'invalid', model: { clock, tdocs }, error }. For every
+ * status but 'ok' the model is the automatic one: the Portal's clock (UTC)
+ * and no manual assignment. Never throws.
+ */
+function parseAdhocTdocSessionsProperty_(raw) {
+  const automatic = function (status, error) { return { status: status, model: { clock: 'utc', tdocs: {} }, error: error || null }; };
+  if (raw === null || raw === undefined || String(raw).trim() === '') return automatic('absent');
+  let data;
+  try { data = JSON.parse(String(raw)); } catch (e) { data = null; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return automatic('invalid', 'The stored manual TDoc session assignments cannot be read.');
+  if (data.v !== ADHOC_TDOC_SESSIONS_SCHEMA_VERSION_) {
+    return automatic('unsupported', 'The stored manual TDoc session assignments have version ' + JSON.stringify(data.v) + '; this release reads version ' + ADHOC_TDOC_SESSIONS_SCHEMA_VERSION_ + '.');
+  }
+  const invalid = automatic('invalid', 'The stored manual TDoc session assignments cannot be read.');
+  if (data.clock !== 'session' && data.clock !== 'utc') return invalid;
+  const tdocs = {};
+  const modes = ['add', 'set'];
+  for (let m = 0; m < modes.length; m++) {
+    const group = data[modes[m]];
+    if (!group || typeof group !== 'object' || Array.isArray(group)) return invalid;
+    const keys = Object.keys(group);
+    for (let k = 0; k < keys.length; k++) {
+      if (!Array.isArray(group[keys[k]]) || !/^(s[1-9]\d*(\+s[1-9]\d*)*)?$/.test(keys[k])) return invalid;
+      for (let t = 0; t < group[keys[k]].length; t++) {
+        const tdoc = group[keys[k]][t];
+        if (typeof tdoc !== 'string' || Object.prototype.hasOwnProperty.call(tdocs, tdoc)) return invalid;
+        tdocs[tdoc] = { mode: modes[m], sessions: keys[k] ? keys[k].split('+') : [] };
+      }
+    }
+  }
+  const checked = normalizeAdhocTdocOverrides_(tdocs);
+  if (checked.errors.length || Object.keys(checked.tdocs).length !== Object.keys(tdocs).length) return invalid;
+  return { status: 'ok', model: { clock: data.clock, tdocs: checked.tdocs }, error: null };
+}
+
+/** The session ids that manual assignments name; null when that cannot be told (a newer schema version). */
+function adhocTdocSessionReferences_(raw) {
+  const stored = parseAdhocTdocSessionsProperty_(raw);
+  if (stored.status === 'unsupported') return null;
+  const used = {};
+  Object.keys(stored.model.tdocs).forEach(function (tdoc) {
+    stored.model.tdocs[tdoc].sessions.forEach(function (id) { (used[id] = used[id] || []).push(tdoc); });
+  });
+  return used;
+}
+
+/**
+ * Saves the manual assignments and the clock into `store`. Everything is
+ * validated first; a refused save writes nothing, and so does saving what is
+ * stored already (or "nothing manual, the Portal's clock" where nothing is
+ * stored). `sessionIds` are the configured sessions.
+ * Returns { ok, errors, changed }.
+ */
+function saveAdhocTdocSessionsWith_(store, sessionIds, input) {
+  const raw = store.getProperty(ADHOC_TDOC_SESSIONS_KEY_);
+  const stored = parseAdhocTdocSessionsProperty_(raw);
+  if (stored.status === 'unsupported') return { ok: false, errors: [stored.error + ' They were written by a newer release and are not changed here.'], changed: false };
+  const clock = input && input.clock;
+  if (clock !== 'session' && clock !== 'utc') return { ok: false, errors: ['The clock of the upload times is missing. Close the dialog and open it again.'], changed: false };
+  const checked = normalizeAdhocTdocOverrides_(input.tdocs);
+  const errors = checked.errors.slice();
+  Object.keys(checked.tdocs).forEach(function (tdoc) {
+    checked.tdocs[tdoc].sessions.forEach(function (id) {
+      if (sessionIds.indexOf(id) === -1) errors.push(tdoc + ' is assigned to a session that is not configured. Close the dialog and open it again.');
+    });
+  });
+  if (errors.length) return { ok: false, errors: errors.filter(function (e, i) { return errors.indexOf(e) === i; }), changed: false };
+
+  const serialized = serializeAdhocTdocSessions_({ clock: clock, tdocs: checked.tdocs });
+  if (serialized.length > ADHOC_TDOC_SESSIONS_MAX_CHARS_) return { ok: false, errors: ['There are too many manual assignments to store.'], changed: false };
+  const nothingToStore = (raw === null || raw === undefined) && clock === 'utc' && Object.keys(checked.tdocs).length === 0;
+  const changed = !nothingToStore && serialized !== raw;
+  if (changed) store.setProperty(ADHOC_TDOC_SESSIONS_KEY_, serialized);
+  return { ok: true, errors: [], changed: changed };
+}
+
+/**
+ * Everything the Session column is computed from, or null when the report is
+ * not an ad-hoc report with sessions. For one TDoc of the downloaded list:
+ *   uploaded(td)  -> the upload time on the clock of the sessions (for the
+ *                    Assign TDoc Sessions dialog only: it is never stored)
+ *   automatic(td) -> { sessionId, reason }
+ *   effective(td) -> [session ids]
+ *   cell(td)      -> the text of the Session cell
+ * Manual assignments that cannot be read are ignored (status says so); the
+ * automatic result is still given.
+ */
+function makeAdhocTdocSessionResolver_(context) {
+  const sessions = getAdhocSessions_(context);
+  if (sessions.length === 0) return null;
+  const stored = parseAdhocTdocSessionsProperty_(getReportStateStore_(context).getProperty(ADHOC_TDOC_SESSIONS_KEY_));
+  const model = stored.model;
+  const onSessionClock = function (upload) {
+    if (!upload || model.clock !== 'utc' || upload.unreadable || !upload.at) return upload;
+    const at = convertUtcWallClockToReportZone_(upload.at);
+    return at ? { at: at, dateOnly: null, unreadable: false } : { at: null, dateOnly: null, unreadable: true };
+  };
+  // The upload time of a TDoc on the clock of the sessions: THE value the automatic session is decided from.
+  const uploaded = function (td) { return onSessionClock(td.uploaded); };
+  const automatic = function (td) { return assignAdhocSession_(uploaded(td), sessions); };
+  const effective = function (td) { return effectiveAdhocTdocSessions_(automatic(td).sessionId, model.tdocs[tdocNumberOf_(td)], sessions); };
+  return {
+    sessions: sessions, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,
+    uploaded: uploaded, automatic: automatic, effective: effective,
+    cell: function (td) { return adhocTdocSessionCellText_(effective(td), sessions); }
+  };
+}
+
+/** The resolver for a build or an update: null, and a log line, when it cannot be made. Never throws. */
+function makeAdhocTdocSessionResolverSafely_(context) {
+  try {
+    const resolver = makeAdhocTdocSessionResolver_(context);
+    if (resolver && resolver.error) Logger.log('TDoc sessions: ' + resolver.error + ' Only the automatic sessions are used.');
+    return resolver;
+  } catch (e) {
+    Logger.log('TDoc sessions: not available for this run: ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * 4 for the registration table as every release writes it (TDoc | Title |
+ * Source | Agenda Item), 5 for the same with a Session column, 0 for any
+ * other table.
+ */
+function registrationTableColumns_(table) {
+  try {
+    if (table.getNumRows() < 1) return 0;
+    const row = table.getRow(0);
+    const n = row.getNumCells();
+    if (n !== 4 && n !== 5) return 0;
+    for (let i = 0; i < 4; i++) if (row.getCell(i).getText().trim() !== REGISTRATION_TABLE_HEADER_[i]) return 0;
+    if (n === 5 && row.getCell(4).getText().trim() !== ADHOC_SESSION_COLUMN_HEADER_) return 0;
+    return n;
+  } catch (e) {
+    return 0;
+  }
+}
+
+/**
+ * The column widths of a registration table that has the Session column.
+ * Without them Google Docs gives five columns a fifth of the page each,
+ * which leaves the titles far too little room. Only cells whose width
+ * differs are written, so doing it again changes nothing; a table that is
+ * not the five-column registration table is not touched. A problem is
+ * logged and never thrown: the widths are looks, not content.
+ * Returns the number of cells whose width was set.
+ */
+function applyRegistrationTableWidths_(table) {
+  try {
+    if (registrationTableColumns_(table) !== 5) return 0;
+    let page = 468;
+    try { page = parseInt(getConfig_().TDOC_PAGE_USABLE_WIDTH || '468', 10) || 468; } catch (e) { page = 468; }
+    const widths = ADHOC_REGISTRATION_TABLE_WIDTHS_.map(function (share) { return Math.round(page * share); });
+    let set = 0;
+    for (let r = 0; r < table.getNumRows(); r++) {
+      const row = table.getRow(r);
+      if (row.getNumCells() !== widths.length) continue;
+      for (let c = 0; c < widths.length; c++) {
+        const cell = row.getCell(c);
+        if (cell.getWidth() !== widths[c]) { cell.setWidth(widths[c]); set++; }
+      }
+    }
+    return set;
+  } catch (e) {
+    Logger.log('TDoc sessions: the column widths of the registration table could not be set: ' + e.message);
+    return 0;
+  }
+}
+
+/** The registration table of the report: { table, columns }, or null. */
+function findRegistrationTable_(body) {
+  const tables = body.getTables();
+  for (let i = 0; i < tables.length; i++) {
+    const columns = registrationTableColumns_(tables[i]);
+    if (columns) return { table: tables[i], columns: columns };
+  }
+  return null;
+}
+
+/**
+ * Brings the Session cells of a five-column registration table up to date;
+ * only cells whose text differs are written. A row whose TDoc is not in the
+ * list keeps its cell. Does nothing for a four-column table.
+ * Returns { rows, changed }.
+ */
+function refreshRegistrationSessionColumn_(body, allTdocs, resolver) {
+  const found = findRegistrationTable_(body);
+  if (!found || found.columns !== 5 || !resolver) return { rows: 0, changed: 0 };
+  const byNumber = {};
+  allTdocs.forEach(function (td) { byNumber[String(td.row[td.tdocCol] || '').trim()] = td; });
+  let changed = 0;
+  const table = found.table;
+  for (let r = 1; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    if (row.getNumCells() < 5) continue;
+    const td = byNumber[row.getCell(0).getText().trim()];
+    if (!td) continue;
+    const text = resolver.cell(td);
+    if (row.getCell(4).getText() !== text) { row.getCell(4).setText(text); changed++; }
+  }
+  // The widths of the five columns, for a table that was made before they were set or whose rows are new.
+  applyRegistrationTableWidths_(table);
+  return { rows: table.getNumRows() - 1, changed: changed };
+}
+
+/** The same for an update: a problem is returned as { step, error } and never thrown; null when all is well. */
+function refreshRegistrationSessionColumnSafely_(body, allTdocs, resolver) {
+  if (!resolver) return null;
+  try {
+    refreshRegistrationSessionColumn_(body, allTdocs, resolver);
+    return null;
+  } catch (e) {
+    Logger.log('TDoc sessions: the Session column could not be updated: ' + e.message);
+    return { step: 'Session column', error: e.message };
+  }
+}
+
+/** Every TDoc of a downloaded list, once, in the order of the TDoc numbers. */
+function flattenTdocGroups_(tdocGroups) {
+  const seen = {};
+  const all = [];
+  Object.keys(tdocGroups).forEach(function (key) {
+    tdocGroups[key].tdocs.forEach(function (td) {
+      const number = tdocNumberOf_(td);
+      if (!number || seen[number]) return;
+      seen[number] = true;
+      all.push(Object.assign({}, td, { agendaItem: key }));
+    });
+  });
+  return all.sort(function (a, b) { return tdocNumberOf_(a) < tdocNumberOf_(b) ? -1 : 1; });
+}
+
+/**
+ * Pure: an upload time as the Assign TDoc Sessions dialog shows it, so that
+ * it can be seen why a TDoc has its automatic session. `upload` is what the
+ * resolver decides from ({ at, dateOnly, unreadable } on the clock of the
+ * sessions). "22 Sep 15:42"; a date without a time "22 Sep"; the neutral
+ * sign for a TDoc that is not uploaded or whose time cannot be read.
+ *   withYear     the year is added ("22 Sep 2026 15:42"): asked for when the
+ *                times and sessions of the dialog are not all of one year
+ *   withSeconds  the seconds are shown ("22 Sep 18:00:01"): asked for when
+ *                the minute is that of a session's cut-off, where they decide
+ * This text is for the dialog only: it is never stored and never written
+ * into the report, the status or the statistics.
+ */
+function adhocUploadedDisplayText_(upload, withYear, withSeconds) {
+  if (!upload || upload.unreadable) return ADHOC_NO_SESSION_TEXT_;
+  const value = upload.at || upload.dateOnly || '';
+  const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2}))?$/);
+  if (!m) return ADHOC_NO_SESSION_TEXT_;
+  const day = String(parseInt(m[3], 10)) + ' ' + ADHOC_SESSION_MONTHS_[parseInt(m[2], 10) - 1] + (withYear ? ' ' + m[1] : '');
+  if (m[4] === undefined) return day;
+  return day + ' ' + m[4] + ':' + m[5] + (withSeconds ? ':' + m[6] : '');
+}
+
+/** What the Assign TDoc Sessions dialog shows (reads only; `tdocGroups` is a downloaded list). */
+function buildAdhocTdocSessionsDialogModel_(resolver, tdocGroups, registrationColumns) {
+  const REASONS = {
+    'not-uploaded': 'not uploaded yet', 'unreadable': 'upload time cannot be read', 'no-upload-time': 'the TDoc list has no upload times',
+    'date-only': 'upload date without a time, on the day of a cut-off', 'after-last': 'uploaded after the last session'
+  };
+  const listed = {};
+  const all = flattenTdocGroups_(tdocGroups);
+  // The upload times, on the clock of the sessions -- exactly what the automatic session is decided from.
+  const uploads = all.map(function (td) { return resolver.uploaded(td); });
+  const valueOf = function (u) { return u && !u.unreadable ? (u.at || u.dateOnly || '') : ''; };
+  // The year is shown only when the upload times and the sessions are not all of one year.
+  const years = {};
+  uploads.forEach(function (u) { if (valueOf(u)) years[valueOf(u).slice(0, 4)] = true; });
+  resolver.sessions.forEach(function (s) { years[String(s.date).slice(0, 4)] = true; years[adhocSessionLastDay_(s).slice(0, 4)] = true; });
+  const withYear = Object.keys(years).length > 1;
+  // The seconds are shown only in the minute of a session's cut-off, where they decide the session.
+  const cutoffMinutes = {};
+  resolver.sessions.forEach(function (s) { cutoffMinutes[adhocSessionCutoff_(s).slice(0, 16)] = true; });
+  const tdocs = all.map(function (td, i) {
+    const number = tdocNumberOf_(td);
+    const auto = resolver.automatic(td);
+    const manual = resolver.overrides[number];
+    const upload = uploads[i];
+    listed[number] = true;
+    return {
+      id: number,
+      title: String(td.titleCol >= 0 ? td.row[td.titleCol] || '' : '').replace(/\s+/g, ' ').trim().slice(0, 90),
+      uploaded: adhocUploadedDisplayText_(upload, withYear, !!(upload && upload.at && cutoffMinutes[upload.at.slice(0, 16)])),
+      auto: auto.sessionId || '',
+      why: auto.sessionId ? '' : (REASONS[auto.reason] || ''),
+      mode: manual ? manual.mode : 'auto',
+      sessions: manual ? manual.sessions.slice() : []
+    };
+  });
+  // A manual assignment of a TDoc that is not in the list now is kept, and shown, so that a save does not drop it.
+  Object.keys(resolver.overrides).sort().forEach(function (number) {
+    if (listed[number]) return;
+    tdocs.push({ id: number, title: '(not in the TDoc list now)', uploaded: ADHOC_NO_SESSION_TEXT_, auto: '', why: 'not in the TDoc list', mode: resolver.overrides[number].mode, sessions: resolver.overrides[number].sessions.slice() });
+  });
+  return {
+    sessions: resolver.sessions.map(function (s) { return { id: s.id, label: s.displayLabel }; }),
+    clock: resolver.clock,
+    // What the Uploaded column shows: the time zone the upload times are converted to, or '' when they are shown as the list has them.
+    uploadedZone: resolver.clock === 'utc' ? String(Session.getScriptTimeZone() || '') : '',
+    notice: resolver.error ? resolver.error + ' They are not used; saving replaces them.' : '',
+    readOnly: resolver.status === 'unsupported',
+    column: registrationColumns,
+    none: ADHOC_NO_SESSION_TEXT_,
+    tdocs: tdocs
+  };
+}
+
+/** The checks every TDoc-session action starts with; '' when the report can have TDoc sessions. */
+function adhocTdocSessionsUnavailable_() {
+  if (!isAdhocMeetingForSessions_()) return 'TDoc sessions are available for ad-hoc reports only.';
+  if (!adhocSessionsEnabled_()) return 'TDoc sessions need configured sessions. Use Configure Sessions first.';
+  return '';
+}
+
+/** Downloads the TDoc list and brings the Session column up to date. Returns { ok, error, changed }; never throws. */
+function refreshSessionColumnFromList_(body) {
+  try {
+    const resolver = makeAdhocTdocSessionResolver_();
+    const found = findRegistrationTable_(body);
+    if (!resolver || !found || found.columns !== 5) return { ok: true, error: null, changed: 0 };
+    const all = flattenTdocGroups_(downloadAndGroupTdocs_(getReportConfig_()));
+    return { ok: true, error: null, changed: refreshRegistrationSessionColumn_(body, all, resolver).changed };
+  } catch (e) {
+    return { ok: false, error: e.message, changed: 0 };
+  }
+}
+
+/** RPC of the Assign TDoc Sessions dialog: Save. `input` is { clock, tdocs: { <TDoc>: { mode, sessions } } }. */
+function saveAdhocTdocSessions(input) {
+  assertNotTemplateMaster_();
+  const unavailable = adhocTdocSessionsUnavailable_();
+  if (unavailable) return { ok: false, errors: [unavailable], changed: false };
+  const result = saveAdhocTdocSessionsWith_(getReportStateStore_(), getAdhocSessions_().map(function (s) { return s.id; }), input);
+  if (!result.ok || !result.changed) return result;
+
+  // The assignments are saved. A report that has the Session column shows them at once.
+  const body = DocumentApp.getActiveDocument().getBody();
+  const found = findRegistrationTable_(body);
+  if (found && found.columns === 5) {
+    const refreshed = withAdhocAttendanceLock_(function () { return refreshSessionColumnFromList_(body); });
+    if (!refreshed.ok) result.notice = 'The assignments were saved. The Session column could not be updated now (' + refreshed.error + '); the next update of the report does it.';
+  }
+  return result;
+}
+
+/**
+ * RPC of the Assign TDoc Sessions dialog: adds the Session column to the
+ * registration table of a report that was built without it. The dialog asks
+ * first. Doing it again changes nothing.
+ */
+function enableAdhocSessionColumn() {
+  assertNotTemplateMaster_();
+  const unavailable = adhocTdocSessionsUnavailable_();
+  if (unavailable) return { ok: false, error: unavailable };
+  return withAdhocAttendanceLock_(function () {
+    const body = DocumentApp.getActiveDocument().getBody();
+    const found = findRegistrationTable_(body);
+    if (!found) return { ok: false, error: 'This report has no registration table yet. Build the report first; a report built with sessions gets the Session column.' };
+    if (found.columns === 5) return { ok: true, error: null, changed: false, message: 'This report already has the Session column.' };
+    let resolver;
+    let all;
+    try {
+      resolver = makeAdhocTdocSessionResolver_();
+      all = flattenTdocGroups_(downloadAndGroupTdocs_(getReportConfig_()));
+    } catch (e) {
+      return { ok: false, error: 'Nothing was changed: the TDoc list could not be read (' + e.message + ').' };
+    }
+    const byNumber = {};
+    all.forEach(function (td) { byNumber[String(td.row[td.tdocCol] || '').trim()] = td; });
+    const table = found.table;
+    // Every cell text is worked out before the first cell is added.
+    const texts = [ADHOC_SESSION_COLUMN_HEADER_];
+    for (let r = 1; r < table.getNumRows(); r++) {
+      const td = byNumber[table.getRow(r).getCell(0).getText().trim()];
+      texts.push(td ? resolver.cell(td) : ADHOC_NO_SESSION_TEXT_);
+    }
+    for (let r = 0; r < table.getNumRows(); r++) table.getRow(r).appendTableCell(texts[r]);
+    applyRegistrationTableWidths_(table);
+    return { ok: true, error: null, changed: true, message: 'The Session column was added to the registration table (' + (texts.length - 1) + ' TDocs).' };
+  });
+}
+
+/** Menu (ad-hoc template report): Sessions and Attendance > Assign TDoc Sessions… */
+function assignAdhocTdocSessions() {
+  assertNotTemplateMaster_();
+  const ui = DocumentApp.getUi();
+  const unavailable = adhocTdocSessionsUnavailable_();
+  if (unavailable) {
+    ui.alert('Assign TDoc Sessions', unavailable === 'TDoc sessions are available for ad-hoc reports only.' ? unavailable
+      : 'Sessions are assigned to TDocs once the sessions of this report are configured:\n\nSA4 Report > Sessions and Attendance > Configure Sessions…', ui.ButtonSet.OK);
+    return;
+  }
+  let model;
+  try {
+    const resolver = makeAdhocTdocSessionResolver_();
+    const found = findRegistrationTable_(DocumentApp.getActiveDocument().getBody());
+    model = buildAdhocTdocSessionsDialogModel_(resolver, downloadAndGroupTdocs_(getReportConfig_()), found ? found.columns : 0);
+  } catch (e) {
+    ui.alert('Assign TDoc Sessions', 'The TDoc list could not be read:\n\n' + e.message, ui.ButtonSet.OK);
+    return;
+  }
+  // "<" is written as an escape so that no title can end the script element.
+  const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');
+
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 16px; font-size: 13px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+      th { text-align: left; font-size: 12px; padding: 4px 8px 4px 0; border-bottom: 1px solid #ccc; }
+      td { padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid #eee; }
+      td.title { color: #555; font-size: 12px; max-width: 250px; }
+      td.auto { white-space: nowrap; }
+      td.up { white-space: nowrap; color: #555; font-size: 12px; }
+      label.box { white-space: nowrap; margin-right: 8px; font-weight: normal; }
+      select, input[type=text] { padding: 5px; box-sizing: border-box; }
+      button { margin-top: 14px; padding: 9px 18px; background: #4285f4; color: white; border: none; cursor: pointer; }
+      button:hover { background: #357ae8; }
+      button:disabled { background: #999; cursor: default; }
+      button.grey { background: #666; }
+      .hint { font-size: 11px; color: #666; margin-top: 4px; }
+      .box-note { margin-top: 8px; padding: 8px; background: #fff6e0; border-left: 3px solid #c77c00; display: none; white-space: pre-wrap; }
+      #rowsWrap { max-height: 330px; overflow-y: auto; border: 1px solid #ddd; margin-top: 8px; padding: 0 6px; }
+      #errors { color: #a94442; margin-top: 10px; white-space: pre-wrap; }
+      #status { margin-top: 10px; white-space: pre-wrap; }
+      .manual { font-weight: bold; }
+    </style>
+
+    <h2>TDoc Sessions</h2>
+    <div class="hint">Each TDoc belongs automatically to the first session that was not over when it was uploaded. Change a TDoc only where that is not what happened.</div>
+    <div class="hint" id="uploadedHint"></div>
+    <div id="notice" class="box-note"></div>
+    <div id="clockNote" class="box-note"></div>
+
+    <div style="margin-top: 10px">
+      <input type="text" id="filter" placeholder="Filter by TDoc number or title" style="width: 60%" oninput="applyFilter()">
+      <span id="counts" class="hint"></span>
+    </div>
+    <div id="rowsWrap">
+      <table>
+        <thead><tr><th>TDoc</th><th>Title</th><th>Uploaded</th><th>Automatic</th><th>Assignment</th><th>Sessions</th><th>Result</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div id="columnRow" style="margin-top: 12px">
+      <span id="columnState"></span>
+      <button type="button" class="grey" id="enableBtn" onclick="askEnable()" style="display:none">Add the Session column…</button>
+      <span id="enableConfirm" style="display:none">
+        <span>Add a Session column to the registration table of this report? A report with this column needs this release or a later one.</span>
+        <button type="button" id="enableYes" onclick="enableColumn()">Yes, add it</button>
+        <button type="button" class="grey" id="enableNo" onclick="cancelEnable()">No</button>
+      </span>
+    </div>
+
+    <details style="margin-top: 12px">
+      <summary class="hint" style="cursor: pointer">Advanced</summary>
+      <div style="margin-top: 6px">
+        Upload times in the TDoc list are
+        <select id="clock">
+          <option value="utc">in UTC, as the 3GPP Portal records them (normal)</option>
+          <option value="session">already on the same clock as the session times</option>
+        </select>
+        <div class="hint">The Portal records upload times in UTC; they are converted to the time zone of this report automatically. Change this only for a TDoc list that does not come from the Portal. A change takes effect when you save.</div>
+      </div>
+    </details>
+
+    <div id="errors"></div>
+    <div id="status"></div>
+    <div>
+      <button type="button" id="saveBtn" onclick="saveAssignments()">Save</button>
+      <button type="button" class="grey" id="closeBtn" onclick="google.script.host.close()">Cancel</button>
+    </div>
+
+    <script>
+      var MODEL = ${modelJson};
+      var NL = String.fromCharCode(10);
+      var rows = [];
+      function el(id) { return document.getElementById(id); }
+      function show(id, visible, display) { el(id).style.display = visible ? (display || 'block') : 'none'; }
+      function labelOf(id) {
+        for (var i = 0; i < MODEL.sessions.length; i++) if (MODEL.sessions[i].id === id) return MODEL.sessions[i].label;
+        return '';
+      }
+      function chosen(row) {
+        var ids = [];
+        for (var i = 0; i < MODEL.sessions.length; i++) if (row.boxes[i].checked) ids.push(MODEL.sessions[i].id);
+        return ids;
+      }
+      // The sessions a row results in: automatic, automatic and the ticked ones, or only the ticked ones.
+      function effective(row) {
+        var mode = row.mode.value;
+        var ticked = mode === 'auto' ? [] : chosen(row);
+        var ids = [];
+        for (var i = 0; i < MODEL.sessions.length; i++) {
+          var id = MODEL.sessions[i].id;
+          var automatic = mode !== 'set' && row.data.auto === id;
+          if (automatic || ticked.indexOf(id) !== -1) ids.push(id);
+        }
+        return ids;
+      }
+      function refreshRow(row) {
+        var mode = row.mode.value;
+        for (var i = 0; i < row.boxes.length; i++) row.boxes[i].disabled = MODEL.readOnly || mode === 'auto';
+        var ids = effective(row);
+        var labels = [];
+        for (var k = 0; k < ids.length; k++) labels.push(labelOf(ids[k]));
+        row.result.textContent = labels.length ? labels.join(', ') : MODEL.none;
+        row.result.className = mode === 'auto' ? '' : 'manual';
+        refreshCounts();
+      }
+      function refreshCounts() {
+        var manual = 0;
+        var none = 0;
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].mode.value !== 'auto') manual++;
+          if (effective(rows[i]).length === 0) none++;
+        }
+        el('counts').textContent = rows.length + ' TDocs, ' + manual + ' assigned by hand, ' + none + ' without a session';
+      }
+      function addRow(data) {
+        var tr = document.createElement('tr');
+        var cell = function (text, className) {
+          var td = document.createElement('td');
+          if (className) td.className = className;
+          td.textContent = text;
+          tr.appendChild(td);
+          return td;
+        };
+        cell(data.id);
+        cell(data.title, 'title');
+        // Read-only, and not part of what is saved: when the TDoc was uploaded, which is what the automatic session comes from.
+        cell(data.uploaded, 'up');
+        cell(data.auto ? labelOf(data.auto) : MODEL.none + (data.why ? ' (' + data.why + ')' : ''), 'auto');
+        var mode = document.createElement('select');
+        [['auto', 'Automatic'], ['add', 'Automatic, and also'], ['set', 'Only these']].forEach(function (pair) {
+          var option = document.createElement('option');
+          option.value = pair[0];
+          option.textContent = pair[1];
+          mode.appendChild(option);
+        });
+        mode.value = data.mode;
+        mode.disabled = MODEL.readOnly;
+        var modeCell = cell('');
+        modeCell.appendChild(mode);
+        var boxCell = cell('');
+        var boxes = [];
+        MODEL.sessions.forEach(function (s) {
+          var label = document.createElement('label');
+          label.className = 'box';
+          var box = document.createElement('input');
+          box.type = 'checkbox';
+          box.checked = data.sessions.indexOf(s.id) !== -1;
+          label.appendChild(box);
+          var text = document.createElement('span');
+          text.textContent = ' ' + s.label;
+          label.appendChild(text);
+          boxCell.appendChild(label);
+          boxes.push(box);
+        });
+        var row = { data: data, tr: tr, mode: mode, boxes: boxes, result: cell('') };
+        mode.onchange = function () { refreshRow(row); };
+        boxes.forEach(function (box) { box.onchange = function () { refreshRow(row); }; });
+        el('rows').appendChild(tr);
+        rows.push(row);
+        refreshRow(row);
+      }
+      function applyFilter() {
+        var wanted = el('filter').value.toLowerCase();
+        for (var i = 0; i < rows.length; i++) {
+          var text = (rows[i].data.id + ' ' + rows[i].data.title).toLowerCase();
+          rows[i].tr.style.display = !wanted || text.indexOf(wanted) !== -1 ? '' : 'none';
+        }
+      }
+      // Only the TDocs that are not automatic are sent.
+      function collect() {
+        var tdocs = {};
+        for (var i = 0; i < rows.length; i++) {
+          var mode = rows[i].mode.value;
+          if (mode === 'auto') continue;
+          var ids = chosen(rows[i]);
+          if (mode === 'add' && ids.length === 0) continue;
+          tdocs[rows[i].data.id] = { mode: mode, sessions: ids };
+        }
+        return { clock: el('clock').value, tdocs: tdocs };
+      }
+      function showErrors(list) { el('errors').textContent = list.join(NL); }
+      function failed(error) { el('saveBtn').disabled = MODEL.readOnly; showErrors([error && error.message ? error.message : String(error)]); }
+      function saveAssignments() {
+        el('saveBtn').disabled = true;
+        showErrors([]);
+        google.script.run
+          .withSuccessHandler(function (result) {
+            if (result && result.ok) {
+              if (result.notice) alert(result.notice);
+              google.script.host.close();
+              return;
+            }
+            el('saveBtn').disabled = false;
+            showErrors((result && result.errors) || ['The assignments were not saved.']);
+          })
+          .withFailureHandler(failed)
+          .saveAdhocTdocSessions(collect());
+      }
+      function showColumnState() {
+        el('columnState').textContent = MODEL.column === 5 ? 'This report has the Session column.'
+          : (MODEL.column === 4 ? 'This report has no Session column: assignments are stored, but not shown. ' : 'This report has no registration table yet. ');
+        show('enableBtn', MODEL.column === 4 && !MODEL.readOnly, 'inline-block');
+        show('enableConfirm', false);
+      }
+      function askEnable() { show('enableBtn', false); show('enableConfirm', true, 'inline'); }
+      function cancelEnable() { show('enableConfirm', false); show('enableBtn', true, 'inline-block'); }
+      function enableColumn() {
+        el('enableYes').disabled = true;
+        google.script.run
+          .withSuccessHandler(function (result) {
+            el('enableYes').disabled = false;
+            if (!result || !result.ok) { show('enableConfirm', false); show('enableBtn', true, 'inline-block'); showErrors([(result && result.error) || 'The column was not added.']); return; }
+            MODEL.column = 5;
+            showColumnState();
+            el('status').textContent = result.message;
+          })
+          .withFailureHandler(function (error) { el('enableYes').disabled = false; failed(error); })
+          .enableAdhocSessionColumn();
+      }
+      el('uploadedHint').textContent = MODEL.uploadedZone
+        ? 'Uploaded is the upload time on the 3GPP Portal, shown in the time zone of this report (' + MODEL.uploadedZone + '). It is shown here only and is not stored.'
+        : 'Uploaded is the upload time as the TDoc list has it. It is shown here only and is not stored.';
+      el('clock').value = MODEL.clock;
+      el('clock').disabled = MODEL.readOnly;
+      if (MODEL.clock === 'session') {
+        el('clockNote').textContent = 'This report compares the upload times as they stand, without converting them from UTC (see Advanced).';
+        show('clockNote', true);
+      }
+      MODEL.tdocs.forEach(addRow);
+      refreshCounts();
+      showColumnState();
+      if (MODEL.notice) { el('notice').textContent = MODEL.notice; show('notice', true); }
+      if (MODEL.readOnly) el('saveBtn').disabled = true;
+    </script>
+  `)
+  .setWidth(940)
+  .setHeight(640);
+
+  ui.showModalDialog(html, 'Assign TDoc Sessions');
+}
+
+// =========================================================
+// AD-HOC OPENING (stage E) -- SESSION ADMINISTRATION
+// =========================================================
+//
+// For an ad-hoc report with configured sessions: who chaired each session,
+// who took the minutes, and an optional administrative note. These are
+// facts the rapporteur types in; nothing here is inferred, summarized or
+// matched against the attendance.
+//
+// STORED (Document Properties of the report), by stable session id:
+//   ADHOC_SESSION_OPENING
+//     { v: 1, sessions: { <id>: { chair, minuteTakers, note } } }
+//   Empty fields and empty sessions are left out; with nothing to store the
+//   property is removed. The label, date and times of a session are NOT
+//   stored here: they are always taken from the session configuration.
+//   Background updates never read this, so it is not an adoption key.
+//
+// RENDERED as one generated container in the opening part of the report: a
+// heading "Session administration" and, per session in chronological order,
+// one line saying when it is, then Chair, Minute taker(s) and the note --
+// each only when it has a value. The container goes at the end of the
+// "Opening of the session" sub-section, before "Registration of Documents",
+// and runs to the next heading or table. It is replaced as a whole, so the
+// place to change it is the dialog; prose above it is never touched.
+//
+// The container is written by Build Report from Scratch, by saving the
+// dialog, and -- where it exists already or details are stored -- by saving
+// the sessions. An update of the report never writes it.
+
+const ADHOC_OPENING_KEY_ = 'ADHOC_SESSION_OPENING';
+const ADHOC_OPENING_SCHEMA_VERSION_ = 1;
+const ADHOC_OPENING_HEADING_ = 'Session administration';
+const ADHOC_OPENING_FIELDS_ = [
+  { key: 'chair', label: 'Chair', max: 200, multiline: false },
+  { key: 'minuteTakers', label: 'Minute taker(s)', max: 500, multiline: false },
+  { key: 'note', label: 'Administrative note', max: 2000, multiline: true }
+];
+// One property value holds at most 9 KB; free text can take three bytes a character.
+const ADHOC_OPENING_MAX_BYTES_ = 8500;
+
+/** Opening details always live in the document's own properties. */
+function adhocOpeningStore_() {
+  return PropertiesService.getDocumentProperties();
+}
+
+/** The number of bytes a text takes when stored as UTF-8. */
+function utf8ByteLength_(text) {
+  let bytes = 0;
+  const s = String(text);
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) { bytes += 4; i++; }
+    else bytes += 3;
+  }
+  return bytes;
+}
+
+/**
+ * One session's details as they are stored: line ends normalized, outer
+ * white space removed, and nothing else changed. A single-line field has
+ * its line breaks turned into spaces. Returns { chair, minuteTakers, note }.
+ */
+function normalizeAdhocOpeningEntry_(entry) {
+  const out = {};
+  ADHOC_OPENING_FIELDS_.forEach(function (field) {
+    const raw = entry && typeof entry[field.key] === 'string' ? entry[field.key] : '';
+    const text = raw.replace(/\r\n?/g, '\n');
+    out[field.key] = (field.multiline ? text : text.replace(/\n+/g, ' ')).trim();
+  });
+  return out;
+}
+
+/** The one stored form, or '' when there is nothing to store. Sessions in ascending order, fields in a fixed order. */
+function serializeAdhocOpening_(sessions) {
+  const kept = {};
+  Object.keys(sessions).sort(function (a, b) { return parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10); }).forEach(function (id) {
+    const entry = {};
+    ADHOC_OPENING_FIELDS_.forEach(function (field) { if (sessions[id][field.key]) entry[field.key] = sessions[id][field.key]; });
+    if (Object.keys(entry).length) kept[id] = entry;
+  });
+  return Object.keys(kept).length ? JSON.stringify({ v: ADHOC_OPENING_SCHEMA_VERSION_, sessions: kept }) : '';
+}
+
+/**
+ * Reads an ADHOC_SESSION_OPENING value: { status: 'absent' | 'ok' |
+ * 'unsupported' | 'invalid', sessions: { <id>: { chair, minuteTakers, note
+ * } }, error }. For every status but 'ok' there are no details. Never throws.
+ */
+function parseAdhocOpeningProperty_(raw) {
+  const none = function (status, error) { return { status: status, sessions: {}, error: error || null }; };
+  if (raw === null || raw === undefined || String(raw).trim() === '') return none('absent');
+  let data;
+  try { data = JSON.parse(String(raw)); } catch (e) { data = null; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return none('invalid', 'The stored opening details cannot be read.');
+  if (data.v !== ADHOC_OPENING_SCHEMA_VERSION_) {
+    return none('unsupported', 'The stored opening details have version ' + JSON.stringify(data.v) + '; this release reads version ' + ADHOC_OPENING_SCHEMA_VERSION_ + '.');
+  }
+  if (!data.sessions || typeof data.sessions !== 'object' || Array.isArray(data.sessions)) return none('invalid', 'The stored opening details cannot be read.');
+  const sessions = {};
+  const ids = Object.keys(data.sessions);
+  for (let i = 0; i < ids.length; i++) {
+    const entry = data.sessions[ids[i]];
+    if (!/^s[1-9]\d*$/.test(ids[i]) || !entry || typeof entry !== 'object' || Array.isArray(entry)) return none('invalid', 'The stored opening details cannot be read.');
+    for (let f = 0; f < ADHOC_OPENING_FIELDS_.length; f++) {
+      const value = entry[ADHOC_OPENING_FIELDS_[f].key];
+      if (value !== undefined && typeof value !== 'string') return none('invalid', 'The stored opening details cannot be read.');
+    }
+    const normalized = normalizeAdhocOpeningEntry_(entry);
+    if (ADHOC_OPENING_FIELDS_.some(function (field) { return normalized[field.key]; })) sessions[ids[i]] = normalized;
+  }
+  return { status: 'ok', sessions: sessions, error: null };
+}
+
+/** The sessions that have opening details; null when that cannot be told (a newer schema version). */
+function adhocOpeningSessionIds_(raw) {
+  const stored = parseAdhocOpeningProperty_(raw);
+  return stored.status === 'unsupported' ? null : Object.keys(stored.sessions);
+}
+
+/**
+ * Saves the dialog's details into `store`. `sessions` are the configured
+ * sessions; `input` is { <session id>: { chair, minuteTakers, note } }.
+ * Everything is validated first; a refused save writes nothing, and so does
+ * saving what is stored already. With nothing left to store the property is
+ * removed. Messages name a session and a field, never what was typed.
+ * Returns { ok, errors, changed }.
+ */
+function saveAdhocOpeningWith_(store, sessions, input) {
+  const raw = store.getProperty(ADHOC_OPENING_KEY_);
+  const stored = parseAdhocOpeningProperty_(raw);
+  if (stored.status === 'unsupported') return { ok: false, errors: [stored.error + ' They were written by a newer release and are not changed here.'], changed: false };
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, errors: ['The opening details are missing.'], changed: false };
+
+  const errors = [];
+  const details = {};
+  Object.keys(input).forEach(function (id) {
+    const session = sessions.filter(function (s) { return s.id === id; })[0];
+    if (!session) { errors.push('A session of this dialog is no longer configured. Close the dialog and open it again.'); return; }
+    const entry = normalizeAdhocOpeningEntry_(input[id]);
+    ADHOC_OPENING_FIELDS_.forEach(function (field) {
+      if (entry[field.key].length > field.max) errors.push(adhocSessionLabel_(session) + ': ' + field.label + ' is longer than ' + field.max + ' characters.');
+    });
+    details[id] = entry;
+  });
+  if (errors.length) return { ok: false, errors: errors.filter(function (e, i) { return errors.indexOf(e) === i; }), changed: false };
+
+  const serialized = serializeAdhocOpening_(details);
+  if (utf8ByteLength_(serialized) > ADHOC_OPENING_MAX_BYTES_) return { ok: false, errors: ['The opening details are too long to store together. Shorten the notes.'], changed: false };
+  const absent = raw === null || raw === undefined;
+  if (serialized === '') {
+    if (absent) return { ok: true, errors: [], changed: false };
+    store.deleteProperty(ADHOC_OPENING_KEY_);
+    return { ok: true, errors: [], changed: true };
+  }
+  if (serialized === raw) return { ok: true, errors: [], changed: false };
+  store.setProperty(ADHOC_OPENING_KEY_, serialized);
+  return { ok: true, errors: [], changed: true };
+}
+
+/**
+ * "Kick-off, September 22, 2026, 15:00–18:00": when a session is, from its
+ * configuration. A session of several days reads "AHG 2, October 26–28,
+ * 2026 (from 09:00 on the first day, until 17:00 on the last day)": its
+ * times are never written as if they were on one day.
+ */
+function adhocSessionWhenText_(session) {
+  const prefix = session.label ? session.label + ', ' : '';
+  if (isAdhocMultiDaySession_(session)) {
+    const parts = [];
+    if (session.start) parts.push('from ' + session.start + ' on the first day');
+    if (session.end) parts.push('until ' + session.end + ' on the last day');
+    return prefix + adhocSessionDatesText_(session) + (parts.length ? ' (' + parts.join(', ') + ')' : '');
+  }
+  const date = adhocLongDate_(session.date);
+  const time = session.start && session.end ? ', ' + session.start + '–' + session.end
+    : (session.start ? ', ' + session.start : (session.end ? ', until ' + session.end : ''));
+  return prefix + date + time;
+}
+
+/**
+ * Pure: the paragraphs of the container, below its heading -- [{ text, bold
+ * }]. Per session, in the order given: its code and when it is ("A01:
+ * Kick-off, September 22, 2026, 15:00–18:00" -- the code is what the
+ * Session column of the registration table shows); then Chair, Minute
+ * taker(s) and the lines of the note, each only when it has a value.
+ */
+function buildAdhocOpeningLines_(sessions, details) {
+  const lines = [];
+  const codes = adhocSessionCodes_(sessions);
+  sessions.forEach(function (session) {
+    const entry = details[session.id] || {};
+    lines.push({ text: codes[session.id] + ': ' + adhocSessionWhenText_(session), bold: true });
+    if (entry.chair) lines.push({ text: 'Chair: ' + entry.chair, bold: false });
+    if (entry.minuteTakers) lines.push({ text: 'Minute taker(s): ' + entry.minuteTakers, bold: false });
+    String(entry.note || '').split('\n').forEach(function (line) {
+      if (line.trim()) lines.push({ text: line.trim(), bold: false });
+    });
+  });
+  return lines;
+}
+
+/**
+ * The generated container: { start, end } (end exclusive), or null. It runs
+ * from its heading to the next heading or table -- a table is never part of
+ * it, so none can be removed with it.
+ */
+function findAdhocOpeningContainer_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  for (let i = 0; i < count; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (p.getHeading() === NORMAL || p.getText().trim() !== ADHOC_OPENING_HEADING_) continue;
+    let end = i + 1;
+    while (end < count) {
+      const next = body.getChild(end);
+      if (next.getType() !== PARAGRAPH || next.asParagraph().getHeading() !== NORMAL) break;
+      end++;
+    }
+    return { start: i, end: end };
+  }
+  return null;
+}
+
+/**
+ * Where a new container goes: directly before the "<number> Registration of
+ * Documents" heading the build writes, i.e. at the end of the opening
+ * sub-section. Without that heading: the end of the "Opening of the session"
+ * sub-section, else of the section of the first "Opening ..." heading. -1
+ * when the report has none of them.
+ */
+function findAdhocOpeningInsertIndex_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  const headingAt = function (i) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH || child.asParagraph().getHeading() === NORMAL) return null;
+    return child.asParagraph().getText().trim();
+  };
+  let opening = -1;
+  let openingOfSession = -1;
+  for (let i = 0; i < count; i++) {
+    const text = headingAt(i);
+    if (text === null) continue;
+    if (/^\d+(?:\.\d+)*\s+Registration of Documents\b/.test(text)) return i;
+    if (opening === -1 && /^(?:\d+(?:\.\d+)*\s+)?opening\b/i.test(text)) opening = i;
+    if (openingOfSession === -1 && /^(?:\d+(?:\.\d+)*\s+)?opening of the session\s*$/i.test(text)) openingOfSession = i;
+  }
+  // The sub-section the build writes ("<number> Opening of the session") is
+  // preferred over the agenda item above it, whose title may start alike.
+  if (openingOfSession !== -1) opening = openingOfSession;
+  if (opening === -1) return -1;
+  let index = opening + 1;
+  while (index < count && headingAt(index) === null) index++;
+  return index;
+}
+
+/**
+ * Writes the container for `lines` and nothing else. A container that
+ * already says exactly this is left alone; otherwise it is replaced as a
+ * whole (its heading stays where it is). Without lines it is removed.
+ * Returns { container: 'created' | 'replaced' | 'unchanged' | 'removed' |
+ * 'none' | 'no-place' }.
+ */
+function renderAdhocOpeningSection_(body, lines) {
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const existing = findAdhocOpeningContainer_(body);
+  if (lines.length === 0) {
+    if (!existing) return { container: 'none' };
+    for (let i = existing.end - 1; i >= existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    return { container: 'removed' };
+  }
+
+  let at;
+  if (existing) {
+    const shown = [];
+    for (let i = existing.start + 1; i < existing.end; i++) shown.push(body.getChild(i).asParagraph().getText());
+    if (shown.length === lines.length && shown.every(function (text, i) { return text === lines[i].text; })) return { container: 'unchanged' };
+    for (let i = existing.end - 1; i > existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    at = existing.start + 1;
+  } else {
+    const index = findAdhocOpeningInsertIndex_(body);
+    if (index === -1) return { container: 'no-place' };
+    const heading = index >= body.getNumChildren() ? body.appendParagraph(ADHOC_OPENING_HEADING_) : body.insertParagraph(index, ADHOC_OPENING_HEADING_);
+    heading.setHeading(DocumentApp.ParagraphHeading.HEADING3);
+    at = index + 1;
+  }
+  lines.forEach(function (line) {
+    // The text is passed as text: nothing in it is interpreted.
+    const p = at >= body.getNumChildren() ? body.appendParagraph(line.text) : body.insertParagraph(at, line.text);
+    p.setHeading(NORMAL);
+    p.editAsText().setBold(line.bold);
+    at++;
+  });
+  return { container: existing ? 'replaced' : 'created' };
+}
+
+// --- Online information: what the report says about the meeting as a whole.
+//
+// A main-meeting report copies its opening from the report template, where
+// such a block is ordinary text. The opening of an ad-hoc report is
+// generated, and until now it said nothing about the meeting. With sessions
+// configured, Build Report from Scratch writes this block above the Session
+// administration section, from what the report is configured with: nothing
+// is looked up, and a value the report does not have is left out. Like the
+// Session administration section it is a generated container (its heading,
+// then plain paragraphs), replaced as a whole. Only a build creates it;
+// later changes of the sessions keep an existing one up to date.
+const ADHOC_MEETING_INFO_HEADING_ = 'Online information';
+// The labels of its lines, in the order they are written. A line of the block is a paragraph that begins with one of them.
+const ADHOC_MEETING_INFO_LABELS_ = ['Meeting name', 'Start Date', 'End Date', 'Portal meeting URL', 'TDoc List URL', 'Excel Docs URL', 'Docs Folder', 'Drafts Folder'];
+
+/**
+ * Pure: the lines of the block -- [{ text, link }], `link` the URL the
+ * value of the line is linked to, or ''. `source` is { meetingName,
+ * meetingId, tdocListUrl, docsFolder, draftsFolder }: values of the
+ * report's configuration, '' when it has none. [] without sessions.
+ */
+function buildAdhocMeetingInformationLines_(sessions, source) {
+  if (!sessions || sessions.length === 0) return [];
+  const text = function (v) { return String(v === null || v === undefined ? '' : v).replace(/\s+/g, ' ').trim(); };
+  const url = function (v) { const u = text(v); return /^https?:\/\/\S+$/i.test(u) ? u : ''; };
+  const lines = [];
+  const add = function (label, value, link) { if (value) lines.push({ text: label + ': ' + value, link: link ? value : '' }); };
+  const ordered = sortAdhocSessions_(sessions);
+  let last = '';
+  ordered.forEach(function (session) { const day = adhocSessionLastDay_(session); if (day > last) last = day; });
+  const id = /^\d+$/.test(text(source && source.meetingId)) ? text(source.meetingId) : '';
+  const L = ADHOC_MEETING_INFO_LABELS_;
+  add(L[0], text(source && source.meetingName), false);
+  add(L[1], adhocLongDate_(ordered[0].date), false);
+  add(L[2], adhocLongDate_(last), false);
+  add(L[3], id ? 'https://portal.3gpp.org/Home.aspx#/meeting?MtgId=' + id : '', true);
+  add(L[4], id ? 'https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=' + id : '', true);
+  add(L[5], url(source && source.tdocListUrl), true);
+  add(L[6], url(source && source.docsFolder), true);
+  add(L[7], url(source && source.draftsFolder), true);
+  return lines;
+}
+
+/**
+ * What the block is written from: the report's own configuration, as it is
+ * stored -- no default of a main meeting stands in for a missing value. The
+ * meeting id is the one the configured TDoc list URL of the Portal names
+ * ("...?meetingId=85916"); with another kind of list URL the two Portal
+ * links are left out.
+ */
+function adhocMeetingInformationSource_() {
+  const identity = getMeetingIdentityConfig_();
+  const named = String(identity.TDOC_LIST_URL || '').match(/^https:\/\/portal\.3gpp\.org\/[^?#\s]*\?(?:[^#\s]*&)?meetingId=(\d+)(?:&|$)/i);
+  return { meetingName: identity.MEETING_NAME, meetingId: named ? named[1] : '', tdocListUrl: identity.TDOC_LIST_URL, docsFolder: identity.FTP_BASE, draftsFolder: identity.REVISIONS_URL };
+}
+
+/**
+ * The generated block: { start, end } (end exclusive), or null. It is its
+ * heading and the lines directly below it that begin with one of its labels.
+ * It ends at the first paragraph that does not: text typed below the block
+ * -- between it and the Session administration section, where the opening
+ * of a meeting is minuted -- is not part of it and is never replaced.
+ */
+function findAdhocMeetingInformationContainer_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  for (let i = 0; i < count; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (p.getHeading() === NORMAL || p.getText().trim() !== ADHOC_MEETING_INFO_HEADING_) continue;
+    let end = i + 1;
+    while (end < count) {
+      const next = body.getChild(end);
+      if (next.getType() !== PARAGRAPH || next.asParagraph().getHeading() !== NORMAL) break;
+      const line = next.asParagraph().getText();
+      if (!ADHOC_MEETING_INFO_LABELS_.some(function (label) { return line.indexOf(label + ': ') === 0; })) break;
+      end++;
+    }
+    return { start: i, end: end };
+  }
+  return null;
+}
+
+/**
+ * Writes the block for `lines` and nothing else. One that already says
+ * exactly this is left alone; otherwise it is replaced as a whole. Without
+ * lines it is removed. A new one is written only when `mayCreate` is set
+ * (a build): directly above the Session administration section, else where
+ * that section would go. Returns { container: 'created' | 'replaced' |
+ * 'unchanged' | 'removed' | 'none' | 'absent' | 'no-place' }.
+ */
+function renderAdhocMeetingInformation_(body, lines, mayCreate) {
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const existing = findAdhocMeetingInformationContainer_(body);
+  if (lines.length === 0) {
+    if (!existing) return { container: 'none' };
+    for (let i = existing.end - 1; i >= existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    return { container: 'removed' };
+  }
+  let at;
+  if (existing) {
+    const shown = [];
+    for (let i = existing.start + 1; i < existing.end; i++) shown.push(body.getChild(i).asParagraph().getText());
+    if (shown.length === lines.length && shown.every(function (text, i) { return text === lines[i].text; })) return { container: 'unchanged' };
+    for (let i = existing.end - 1; i > existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    at = existing.start + 1;
+  } else {
+    if (!mayCreate) return { container: 'absent' };
+    const administration = findAdhocOpeningContainer_(body);
+    const index = administration ? administration.start : findAdhocOpeningInsertIndex_(body);
+    if (index === -1) return { container: 'no-place' };
+    const heading = index >= body.getNumChildren() ? body.appendParagraph(ADHOC_MEETING_INFO_HEADING_) : body.insertParagraph(index, ADHOC_MEETING_INFO_HEADING_);
+    heading.setHeading(DocumentApp.ParagraphHeading.HEADING3);
+    at = index + 1;
+  }
+  lines.forEach(function (line) {
+    // The text is passed as text: nothing in it is interpreted.
+    const p = at >= body.getNumChildren() ? body.appendParagraph(line.text) : body.insertParagraph(at, line.text);
+    p.setHeading(NORMAL);
+    const t = p.editAsText();
+    t.setBold(false);
+    if (line.link) t.setLinkUrl(line.text.length - line.link.length, line.text.length - 1, line.link);
+    at++;
+  });
+  return { container: existing ? 'replaced' : 'created' };
+}
+
+/** The same, from the report's sessions and configuration. A problem is logged and never thrown: the block is no reason to fail a build or a save. */
+function refreshAdhocMeetingInformationSafely_(body, sessions, mayCreate) {
+  try {
+    return renderAdhocMeetingInformation_(body, buildAdhocMeetingInformationLines_(sessions, adhocMeetingInformationSource_()), mayCreate);
+  } catch (e) {
+    Logger.log('Opening details: the Online information block could not be written: ' + e.message);
+    return { container: 'failed' };
+  }
+}
+
+/**
+ * Brings the container up to date with the sessions and the stored details.
+ * Stored details that cannot be used (unreadable, or of a newer version)
+ * leave an existing report alone -- { container: 'skipped' } -- so that what
+ * it shows is not replaced by less; after a rebuild (options.afterRebuild)
+ * the sessions are written without details instead.
+ */
+function refreshAdhocOpeningSection_(body, options) {
+  const sessions = getAdhocSessions_();
+  // The report-level block above it: written by a build, kept up to date afterwards.
+  refreshAdhocMeetingInformationSafely_(body, sessions, !!(options && options.afterRebuild));
+  const stored = parseAdhocOpeningProperty_(adhocOpeningStore_().getProperty(ADHOC_OPENING_KEY_));
+  if ((stored.status === 'unsupported' || stored.status === 'invalid') && !(options && options.afterRebuild)) return { container: 'skipped', error: stored.error };
+  return renderAdhocOpeningSection_(body, buildAdhocOpeningLines_(sessions, stored.sessions));
+}
+
+/** Build from Scratch, at the end: writes the container again. Returns a note for the build result, '' when all is well. */
+function finishAdhocOpeningRebuild_(body) {
+  if (!adhocSessionsEnabled_()) return '';
+  try {
+    refreshAdhocOpeningSection_(body, { afterRebuild: true });
+    return '';
+  } catch (e) {
+    Logger.log('Opening details: the section could not be written after the rebuild: ' + e.message);
+    return '\n\n⚠️ The Session administration section could not be written (' + e.message + '). Save Edit Opening Details… again to write it.';
+  }
+}
+
+/** The check every opening action starts with; '' when the report can have opening details. */
+function adhocOpeningUnavailable_() {
+  if (!isAdhocMeetingForSessions_()) return 'Opening details are available for ad-hoc reports only.';
+  if (!adhocSessionsEnabled_()) return 'Opening details are entered per session. Use Configure Sessions first.';
+  return '';
+}
+
+/** Renders after a change that is already stored. Returns '' or a notice saying how to write the section later. */
+function renderAdhocOpeningAfterChange_(saved) {
+  const outcome = withAdhocAttendanceLock_(function () {
+    try {
+      return { ok: true, rendered: refreshAdhocOpeningSection_(DocumentApp.getActiveDocument().getBody()) };
+    } catch (e) {
+      Logger.log('Opening details: stored, but the section could not be written: ' + e.message);
+      return { ok: false, error: e.message };
+    }
+  });
+  if (!outcome.ok) return saved + ' The Session administration section could not be written (' + outcome.error + '). Save Edit Opening Details… again to write it.';
+  if (outcome.rendered.container === 'no-place') return saved + ' This report has no opening section to put them in; they are written when the report is built.';
+  if (outcome.rendered.container === 'skipped') return saved + ' The Session administration section was left as it is (' + outcome.rendered.error + ').';
+  return '';
+}
+
+/** RPC of the Edit Opening Details dialog: Save. `input` is { <session id>: { chair, minuteTakers, note } }. */
+function saveAdhocOpeningDetails(input) {
+  assertNotTemplateMaster_();
+  const unavailable = adhocOpeningUnavailable_();
+  if (unavailable) return { ok: false, errors: [unavailable], changed: false };
+  let result;
+  try {
+    result = saveAdhocOpeningWith_(adhocOpeningStore_(), getAdhocSessions_(), input);
+  } catch (e) {
+    return { ok: false, errors: ['Nothing was saved: the opening details could not be stored (' + e.message + ').'], changed: false };
+  }
+  if (!result.ok) return result;
+  // Saved (or already as stored): the section is brought in line; one that says the same already is not touched.
+  const notice = renderAdhocOpeningAfterChange_('The opening details were saved.');
+  if (notice) result.notice = notice;
+  return result;
+}
+
+/** What the Edit Opening Details dialog shows (reads only). */
+function buildAdhocOpeningDialogModel_() {
+  const stored = parseAdhocOpeningProperty_(adhocOpeningStore_().getProperty(ADHOC_OPENING_KEY_));
+  return {
+    notice: stored.status === 'unsupported' ? stored.error + ' They were written by a newer release and cannot be changed here.'
+      : (stored.status === 'invalid' ? stored.error + ' They are not used; saving replaces them.' : ''),
+    readOnly: stored.status === 'unsupported',
+    fields: ADHOC_OPENING_FIELDS_.map(function (f) { return { key: f.key, label: f.label, max: f.max, multiline: f.multiline }; }),
+    sessions: getAdhocSessions_().map(function (s) {
+      const entry = stored.sessions[s.id] || {};
+      return { id: s.id, when: adhocSessionWhenText_(s), chair: entry.chair || '', minuteTakers: entry.minuteTakers || '', note: entry.note || '' };
+    })
+  };
+}
+
+/** Menu (ad-hoc template report): Sessions and Attendance > Edit Opening Details… */
+function editAdhocOpeningDetails() {
+  assertNotTemplateMaster_();
+  const ui = DocumentApp.getUi();
+  const unavailable = adhocOpeningUnavailable_();
+  if (unavailable) {
+    ui.alert('Edit Opening Details', unavailable === 'Opening details are available for ad-hoc reports only.' ? unavailable
+      : 'Opening details are entered per session. Configure the sessions of this report first:\n\nSA4 Report > Sessions and Attendance > Configure Sessions…', ui.ButtonSet.OK);
+    return;
+  }
+  // "<" is written as an escape so that no stored text can end the script element.
+  const modelJson = JSON.stringify(buildAdhocOpeningDialogModel_()).replace(/</g, '\\u003c');
+
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; font-size: 13px; }
+      label { display: block; margin-top: 8px; font-weight: bold; }
+      input[type=text], textarea { width: 100%; padding: 6px; margin-top: 3px; box-sizing: border-box; font-family: Arial, sans-serif; font-size: 13px; }
+      textarea { min-height: 54px; }
+      button { margin-top: 16px; padding: 9px 18px; background: #4285f4; color: white; border: none; cursor: pointer; }
+      button:hover { background: #357ae8; }
+      button:disabled { background: #999; cursor: default; }
+      button.grey { background: #666; }
+      .hint { font-size: 11px; color: #666; margin-top: 4px; }
+      .session { margin-top: 14px; padding: 10px; background: #f5f5f5; border-left: 3px solid #4285f4; }
+      .when { font-weight: bold; }
+      #notice { margin-top: 10px; padding: 8px; background: #fff6e0; border-left: 3px solid #c77c00; display: none; }
+      #errors { color: #a94442; margin-top: 12px; white-space: pre-wrap; }
+    </style>
+
+    <h2>Opening Details</h2>
+    <div class="hint">Who chaired each session and who took the minutes. The section "Session administration" of the report is written from these fields and from the sessions; change it here, because text typed into that section is replaced.</div>
+    <div id="notice"></div>
+    <div id="sessions"></div>
+
+    <div id="errors"></div>
+    <div>
+      <button type="button" id="saveBtn" onclick="saveDetails()">Save</button>
+      <button type="button" class="grey" id="closeBtn" onclick="google.script.host.close()">Cancel</button>
+    </div>
+
+    <script>
+      var MODEL = ${modelJson};
+      var NL = String.fromCharCode(10);
+      var blocks = [];
+      function el(id) { return document.getElementById(id); }
+      function addSession(session) {
+        var box = document.createElement('div');
+        box.className = 'session';
+        var when = document.createElement('div');
+        when.className = 'when';
+        when.textContent = session.when;
+        box.appendChild(when);
+        var inputs = {};
+        MODEL.fields.forEach(function (field) {
+          var label = document.createElement('label');
+          label.textContent = field.label;
+          box.appendChild(label);
+          var input = document.createElement(field.multiline ? 'textarea' : 'input');
+          if (!field.multiline) input.type = 'text';
+          input.maxLength = field.max;
+          input.value = session[field.key] || '';
+          input.disabled = MODEL.readOnly;
+          box.appendChild(input);
+          inputs[field.key] = input;
+        });
+        el('sessions').appendChild(box);
+        blocks.push({ id: session.id, inputs: inputs });
+      }
+      function collect() {
+        var out = {};
+        blocks.forEach(function (block) {
+          var entry = {};
+          MODEL.fields.forEach(function (field) { entry[field.key] = block.inputs[field.key].value; });
+          out[block.id] = entry;
+        });
+        return out;
+      }
+      function showErrors(list) { el('errors').textContent = list.join(NL); }
+      function saveDetails() {
+        el('saveBtn').disabled = true;
+        showErrors([]);
+        google.script.run
+          .withSuccessHandler(function (result) {
+            if (result && result.ok) {
+              if (result.notice) alert(result.notice);
+              google.script.host.close();
+              return;
+            }
+            el('saveBtn').disabled = false;
+            showErrors((result && result.errors) || ['The opening details were not saved.']);
+          })
+          .withFailureHandler(function (error) {
+            el('saveBtn').disabled = false;
+            showErrors([error && error.message ? error.message : String(error)]);
+          })
+          .saveAdhocOpeningDetails(collect());
+      }
+      MODEL.sessions.forEach(addSession);
+      if (MODEL.notice) { el('notice').textContent = MODEL.notice; el('notice').style.display = 'block'; }
+      if (MODEL.readOnly) el('saveBtn').disabled = true;
+    </script>
+  `)
+  .setWidth(620)
+  .setHeight(640);
+
+  ui.showModalDialog(html, 'Edit Opening Details');
+}
+
+// =========================================================
+// AD-HOC STATUS (stage F) -- STATUS SUMMARY AND STATISTICS
+// =========================================================
+//
+// For an ad-hoc report with configured sessions: what is there and what is
+// still missing -- the sessions, their opening details, the imported
+// attendance and the sessions of the TDocs. One model, two read-only views:
+//
+//   - Report Status Summary gets a short "Sessions and attendance" block;
+//   - Sessions and Attendance > Post-meeting Statistics… shows the same and
+//     the figures of each session.
+//
+// Everything is derived when it is asked for, from ADHOC_SESSIONS,
+// ADHOC_SESSION_OPENING, the stored attendance, ADHOC_TDOC_SESSIONS and the
+// current TDoc list. Nothing is stored for it and nothing is written --
+// neither a property nor the document.
+//
+// Only counts and the summary values Teams states are shown: no attendee, no
+// Chair or minute taker, no note, no upload time. A value Teams did not
+// state is left out; none is calculated. Each part is read on its own, so
+// one that cannot be read does not hide the others. Something that is merely
+// not there yet is a remark ("info"); only data that cannot be used is a
+// warning.
+
+/** "September 22, 2026", or "September 22–24, 2026": from the first day of the first session to the last day of the last. */
+function adhocSessionDateRangeText_(sessions) {
+  if (sessions.length === 0) return '';
+  const first = sessions.map(function (s) { return s.date; }).sort()[0];
+  const last = sessions.map(adhocSessionLastDay_).sort()[sessions.length - 1];
+  return adhocDateRangeText_(first, last);
+}
+
+/**
+ * Pure: the session counts of the TDocs of a downloaded list. `resolver` is
+ * the one the Session column is computed from (stage B) -- nothing is
+ * assigned here a second way. Every TDoc of the list is one row; a revision
+ * is a TDoc of its own.
+ *
+ *   total, withSession, severalSessions, none, explicitNone
+ *   automatic            no manual assignment, a session by upload time
+ *   manualAdd, manualSet TDocs with a manual assignment
+ *   noneByReason         why the others have no session
+ *   staleReferences      manual assignments naming a session that is not configured
+ *   notInList            manual assignments of TDocs the list does not have now
+ *   perSession[id]       { assigned, automatic, manual }: a TDoc counts in
+ *                        every session it is in; `automatic` when it is there
+ *                        by its upload time, `manual` when a manual
+ *                        assignment put it there.
+ */
+function summarizeAdhocTdocSessions_(resolver, allTdocs) {
+  const configured = {};
+  const perSession = {};
+  resolver.sessions.forEach(function (s) { configured[s.id] = true; perSession[s.id] = { assigned: 0, automatic: 0, manual: 0 }; });
+  const out = {
+    total: allTdocs.length, withSession: 0, severalSessions: 0, none: 0, explicitNone: 0, automatic: 0, manualAdd: 0, manualSet: 0,
+    noneByReason: { 'after-last': 0, 'not-uploaded': 0, 'unreadable': 0, 'no-upload-time': 0, 'date-only': 0, 'stale': 0 },
+    staleReferences: 0, notInList: 0, perSession: perSession
+  };
+  const listed = {};
+  allTdocs.forEach(function (td) {
+    const number = tdocNumberOf_(td);
+    listed[number] = true;
+    const auto = resolver.automatic(td);
+    const manual = resolver.overrides[number];
+    const effective = resolver.effective(td);
+    if (manual) out[manual.mode === 'set' ? 'manualSet' : 'manualAdd']++;
+    else if (auto.sessionId) out.automatic++;
+
+    if (effective.length === 0) {
+      out.none++;
+      if (manual && manual.mode === 'set' && manual.sessions.length === 0) out.explicitNone++;
+      else if (manual && manual.mode === 'set') out.noneByReason.stale++;
+      else if (Object.prototype.hasOwnProperty.call(out.noneByReason, auto.reason)) out.noneByReason[auto.reason]++;
+      return;
+    }
+    out.withSession++;
+    if (effective.length > 1) out.severalSessions++;
+    effective.forEach(function (id) {
+      const byUploadTime = auto.sessionId === id && (!manual || manual.mode === 'add');
+      perSession[id].assigned++;
+      perSession[id][byUploadTime ? 'automatic' : 'manual']++;
+    });
+  });
+  Object.keys(resolver.overrides).forEach(function (number) {
+    if (!listed[number]) out.notInList++;
+    if (resolver.overrides[number].sessions.some(function (id) { return !configured[id]; })) out.staleReferences++;
+  });
+  return out;
+}
+
+/**
+ * Pure: the status of the sessions, for both views.
+ *   sessions    the configured sessions, chronological
+ *   opening     a parseAdhocOpeningProperty_() result
+ *   attendance  a readAdhocAttendance_() result
+ *   tdocs       { available, reason, column, clock, storedStatus, storedError, summary }
+ *               column: 5 with a Session column, 4 without, 0 no
+ *               registration table, -1 unknown
+ * Returns { count, range, overview: [[label, value]], notes: [{ level:
+ * 'info' | 'warning', text }], sessions: [{ id, when, groups: [{ title,
+ * rows: [[label, value]] }] }], opening, attendance, tdocs } -- the last
+ * three hold the counts. No name, note or upload time gets in here.
+ */
+function buildAdhocSessionStatusModel_(sessions, opening, attendance, tdocs) {
+  const total = sessions.length;
+  const notes = [];
+  const note = function (level, text) { notes.push({ level: level, text: text }); };
+  const labels = function (list) { return list.map(function (s) { return s.displayLabel; }).join(', '); };
+  const configured = {};
+  sessions.forEach(function (s) { configured[s.id] = true; });
+  const count = function (n, one, many) { return n + ' ' + (n === 1 ? one : many); };
+
+  // --- sessions
+  const incomplete = sessions.filter(function (s) { return !s.start || !s.end; });
+  if (incomplete.length) {
+    note('info', 'Planned times incomplete: ' + incomplete.map(function (s) {
+      return s.displayLabel + ' (' + (!s.start && !s.end ? 'no start, no end' : (!s.start ? 'no start' : 'no end')) + ')';
+    }).join(', ') + '. A session without an end takes the TDocs uploaded until the end of its day.');
+  }
+
+  // --- opening details: whether a field is filled in, never what it says
+  const openingKnown = opening.status === 'ok' || opening.status === 'absent';
+  const openingOf = function (s) {
+    const entry = opening.sessions[s.id] || {};
+    return { chair: !!entry.chair, minuteTakers: !!entry.minuteTakers, note: !!entry.note };
+  };
+  const openingFacts = { known: openingKnown, withDetails: 0, noChair: 0, noMinuteTakers: 0, stale: 0 };
+  if (openingKnown) {
+    const noChair = sessions.filter(function (s) { return !openingOf(s).chair; });
+    const noMinuteTakers = sessions.filter(function (s) { return !openingOf(s).minuteTakers; });
+    openingFacts.withDetails = sessions.filter(function (s) { const o = openingOf(s); return o.chair || o.minuteTakers || o.note; }).length;
+    openingFacts.noChair = noChair.length;
+    openingFacts.noMinuteTakers = noMinuteTakers.length;
+    openingFacts.stale = Object.keys(opening.sessions).filter(function (id) { return !configured[id]; }).length;
+    if (noChair.length) note('info', 'Chair not entered: ' + labels(noChair) + '.');
+    if (noMinuteTakers.length) note('info', 'Minute taker(s) not entered: ' + labels(noMinuteTakers) + '.');
+    if (openingFacts.stale) note('warning', 'Opening details are stored for ' + count(openingFacts.stale, 'session that is', 'sessions that are') + ' not configured.');
+  } else {
+    note('warning', (opening.error || 'The stored opening details cannot be read.') + ' The status of the opening details is not available.');
+  }
+
+  // --- attendance: the values Teams states, and how many attendees are listed
+  const attendanceKnown = attendance.status === 'ok' || attendance.status === 'absent';
+  // A session can have several attendance records, one per day ("Attendance records").
+  const blocks = {};
+  if (attendance.status === 'ok') {
+    buildAdhocAttendanceBlocks_(sessions, attendance).forEach(function (block) {
+      (blocks[block.sessionId] = blocks[block.sessionId] || []).push({ values: block.statistics.filter(function (line) { return line[0] !== 'Session'; }), attendees: block.attendees.length });
+    });
+  }
+  const sessionOf = function (key) { const parts = adhocAttendanceRecordParts_(key); return parts ? parts.sessionId : String(key); };
+  const damagedIds = attendance.status === 'ok' ? attendance.problems.map(sessionOf) : [];
+  const unreadable = function (s) { return damagedIds.filter(function (id) { return id === s.id; }).length; };
+  const attendanceState = function (s) {
+    if (!attendanceKnown) return 'unknown';
+    if (blocks[s.id]) return 'imported';
+    return unreadable(s) ? 'damaged' : 'none';
+  };
+  // The rows of a session's attendance: the values of each record, one after the other, each with its number of attendees.
+  const attendanceRows = function (s) {
+    let rows = [];
+    blocks[s.id].forEach(function (b) { rows = rows.concat(b.values, [['Attendees listed', String(b.attendees)]]); });
+    return unreadable(s) ? rows.concat([['Records that cannot be read', String(unreadable(s))]]) : rows;
+  };
+  const attendanceFacts = { known: attendanceKnown, imported: 0, missing: 0, damaged: 0, stale: 0, records: 0 };
+  if (attendanceKnown) {
+    const missing = sessions.filter(function (s) { return attendanceState(s) === 'none'; });
+    const damaged = sessions.filter(function (s) { return unreadable(s) > 0; });
+    attendanceFacts.imported = Object.keys(blocks).length;
+    Object.keys(blocks).forEach(function (id) { attendanceFacts.records += blocks[id].length; });
+    attendanceFacts.missing = missing.length;
+    attendanceFacts.damaged = damaged.length;
+    attendanceFacts.stale = attendance.status === 'ok'
+      ? Object.keys(attendance.sessions).concat(attendance.problems).filter(function (key) { return !configured[sessionOf(key)]; }).length : 0;
+    if (missing.length) note('info', 'Attendance not imported: ' + labels(missing) + '.');
+    sessions.forEach(function (s) {
+      const days = adhocSessionDayCount_(s);
+      if (blocks[s.id] && blocks[s.id].length < days) note('info', 'Attendance of ' + s.displayLabel + ' is imported for ' + blocks[s.id].length + ' of its ' + days + ' days.');
+    });
+    if (damaged.length) note('warning', 'The stored attendance of ' + labels(damaged) + ' cannot be read. Import it again or remove it.');
+    if (attendanceFacts.stale) note('warning', 'Attendance is stored for ' + count(attendanceFacts.stale, 'session that is', 'sessions that are') + ' not configured.');
+  } else {
+    note('warning', (attendance.error || 'The stored attendance cannot be read.') + ' The status of the attendance is not available.');
+  }
+
+  // --- TDoc sessions
+  const t = tdocs.available ? tdocs.summary : null;
+  const columnText = tdocs.column === 5 ? 'in the registration table'
+    : (tdocs.column === 4 ? 'not enabled (Assign TDoc Sessions… can add it)' : (tdocs.column === 0 ? 'the report has no registration table yet' : 'not known'));
+  if (t) {
+    if (tdocs.storedStatus === 'invalid' || tdocs.storedStatus === 'unsupported') {
+      note('warning', (tdocs.storedError || 'The stored manual TDoc session assignments cannot be read.') + ' Only the sessions by upload time are counted.');
+    }
+    const r = t.noneByReason;
+    if (r['after-last']) note('warning', count(r['after-last'], 'TDoc was', 'TDocs were') + ' uploaded after the end of the last session and ' + (r['after-last'] === 1 ? 'has' : 'have') + ' no session.');
+    if (r['unreadable']) note('warning', 'The upload time of ' + count(r['unreadable'], 'TDoc', 'TDocs') + ' cannot be read; no session.');
+    if (r['no-upload-time']) note('warning', 'The TDoc list has no upload times: ' + count(r['no-upload-time'], 'TDoc', 'TDocs') + ' without a session.');
+    if (r['stale'] || t.staleReferences) note('warning', count(t.staleReferences, 'manual assignment names', 'manual assignments name') + ' a session that is not configured.');
+    if (r['not-uploaded']) note('info', count(r['not-uploaded'], 'TDoc is', 'TDocs are') + ' not uploaded yet and ' + (r['not-uploaded'] === 1 ? 'has' : 'have') + ' no session.');
+    if (r['date-only']) note('info', count(r['date-only'], 'TDoc has', 'TDocs have') + ' an upload date without a time, on the day of a cut-off; no session.');
+    if (t.notInList) note('info', count(t.notInList, 'manual assignment is', 'manual assignments are') + ' for a TDoc that is not in the TDoc list now.');
+    if (tdocs.clock === 'session') note('info', 'The upload times are read on the clock of the sessions, not as UTC (compatibility setting of Assign TDoc Sessions…).');
+  } else {
+    note('warning', 'The TDoc sessions are not available: the TDoc list could not be read (' + (tdocs.reason || 'unknown reason') + ').');
+  }
+
+  const overview = [['Sessions', total + ' (' + adhocSessionDateRangeText_(sessions) + ')']];
+  overview.push(['Opening details', openingKnown ? openingFacts.withDetails + ' of ' + total + ' sessions' : 'not available']);
+  overview.push(['Attendance imported', attendanceKnown ? attendanceFacts.imported + ' of ' + total + ' sessions' +
+    (attendanceFacts.records > attendanceFacts.imported ? ' (' + attendanceFacts.records + ' attendance records)' : '') : 'not available']);
+  if (t) {
+    overview.push(['TDocs with a session', t.withSession + ' of ' + t.total]);
+    overview.push(['– by upload time', String(t.automatic)]);
+    overview.push(['– with a manual assignment', (t.manualAdd + t.manualSet) + ' (' + t.manualAdd + ' added, ' + t.manualSet + ' set)']);
+    overview.push(['– in more than one session', String(t.severalSessions)]);
+    overview.push(['TDocs without a session', String(t.none)]);
+    overview.push(['– set to no session', String(t.explicitNone)]);
+  } else {
+    overview.push(['TDoc sessions', 'not available']);
+  }
+  overview.push(['Session column', columnText]);
+
+  return {
+    count: total,
+    range: adhocSessionDateRangeText_(sessions),
+    overview: overview,
+    notes: notes,
+    sessions: sessions.map(function (s) {
+      const groups = [{ title: 'Planned', rows: isAdhocMultiDaySession_(s)
+        ? [['Dates', adhocSessionDatesText_(s)], ['Start (first day)', s.start || 'not planned'], ['End (last day)', s.end || 'not planned']]
+        : [['Date', adhocLongDate_(s.date)], ['Start', s.start || 'not planned'], ['End', s.end || 'not planned']] }];
+      const o = openingOf(s);
+      groups.push({ title: 'Opening', rows: openingKnown
+        ? [['Chair', o.chair ? 'entered' : 'not entered'], ['Minute taker(s)', o.minuteTakers ? 'entered' : 'not entered'], ['Administrative note', o.note ? 'entered' : 'none']]
+        : [['Opening details', 'not available']] });
+      const state = attendanceState(s);
+      groups.push({ title: 'Attendance (Microsoft Teams)', rows: state === 'imported'
+        ? attendanceRows(s)
+        : [['Attendance', state === 'none' ? 'not imported' : (state === 'damaged' ? 'stored, but cannot be read' : 'not available')]] });
+      groups.push({ title: 'TDocs', rows: t
+        ? [['In this session', String(t.perSession[s.id].assigned)], ['– by upload time', String(t.perSession[s.id].automatic)], ['– by manual assignment', String(t.perSession[s.id].manual)]]
+        : [['TDoc sessions', 'not available']] });
+      return { id: s.id, when: adhocSessionWhenText_(s), groups: groups };
+    }),
+    opening: openingFacts,
+    attendance: attendanceFacts,
+    tdocs: t
+  };
+}
+
+/**
+ * Reads everything the status is made of -- and writes nothing. null unless
+ * this is an ad-hoc report with sessions. A part that cannot be read is
+ * reported as such in the model; the TDoc list is the only download, and a
+ * failed one leaves the rest of the status as it is.
+ */
+function collectAdhocSessionStatus_() {
+  const sessions = getAdhocSessions_();
+  if (sessions.length === 0) return null;
+
+  let opening;
+  try {
+    opening = parseAdhocOpeningProperty_(adhocOpeningStore_().getProperty(ADHOC_OPENING_KEY_));
+  } catch (e) {
+    opening = { status: 'invalid', sessions: {}, error: 'The opening details could not be read (' + e.message + ').' };
+  }
+  let attendance;
+  try {
+    attendance = readAdhocAttendance_(adhocAttendanceStore_());
+  } catch (e) {
+    attendance = { status: 'invalid', error: 'The attendance could not be read (' + e.message + ').', sessions: {}, raw: {}, problems: [], companies: {} };
+  }
+
+  const tdocs = { available: false, reason: '', column: -1, clock: 'utc', storedStatus: 'absent', storedError: null, summary: null };
+  try {
+    const found = findRegistrationTable_(DocumentApp.getActiveDocument().getBody());
+    tdocs.column = found ? found.columns : 0;
+  } catch (e) {
+    tdocs.column = -1;
+  }
+  try {
+    const resolver = makeAdhocTdocSessionResolver_();
+    const cfg = getReportConfig_();
+    if (!cfg.TDOC_LIST_URL) throw new Error('no TDoc list is configured');
+    tdocs.summary = summarizeAdhocTdocSessions_(resolver, flattenTdocGroups_(downloadAndGroupTdocs_(cfg)));
+    tdocs.clock = resolver.clock;
+    tdocs.storedStatus = resolver.status;
+    tdocs.storedError = resolver.error;
+    tdocs.available = true;
+  } catch (e) {
+    tdocs.reason = e.message;
+    Logger.log('Session status: the TDoc sessions are not available: ' + e.message);
+  }
+  return buildAdhocSessionStatusModel_(sessions, opening, attendance, tdocs);
+}
+
+/** Pure: the block of the Report Status Summary, in its style. */
+function formatAdhocSessionStatusLines_(model) {
+  const lines = ['\n\n🗓 SESSIONS AND ATTENDANCE\n'];
+  model.overview.forEach(function (row) { lines.push('   ' + row[0] + ': ' + row[1]); });
+  const warnings = model.notes.filter(function (n) { return n.level === 'warning'; });
+  const remarks = model.notes.filter(function (n) { return n.level !== 'warning'; });
+  if (warnings.length) lines.push('');
+  warnings.forEach(function (n) { lines.push('   ⚠️  ' + n.text); });
+  if (remarks.length) lines.push('');
+  remarks.forEach(function (n) { lines.push('   ℹ️  ' + n.text); });
+  lines.push('\n   Per session: Sessions and Attendance > Post-meeting Statistics…');
+  return lines;
+}
+
+/**
+ * The lines Report Status Summary adds: none -- and nothing read beyond the
+ * sessions -- unless this is an ad-hoc report with sessions. Never throws.
+ */
+function adhocSessionStatusLines_() {
+  let enabled = false;
+  try { enabled = adhocSessionsEnabled_(); } catch (e) { enabled = false; }
+  if (!enabled) return [];
+  try {
+    return formatAdhocSessionStatusLines_(collectAdhocSessionStatus_());
+  } catch (e) {
+    Logger.log('Session status: not available: ' + e.message);
+    return ['\n\n🗓 SESSIONS AND ATTENDANCE\n', '   ⚠️  The status of the sessions is not available (' + e.message + ').'];
+  }
+}
+
+/** Menu (ad-hoc template report): Sessions and Attendance > Post-meeting Statistics… -- a read-only view. */
+function showAdhocSessionStatistics() {
+  assertNotTemplateMaster_();
+  const ui = DocumentApp.getUi();
+  if (!isAdhocMeetingForSessions_()) {
+    ui.alert('Post-meeting Statistics', 'The statistics of the sessions are available for ad-hoc reports only.', ui.ButtonSet.OK);
+    return;
+  }
+  const model = collectAdhocSessionStatus_();
+  if (!model) {
+    ui.alert('Post-meeting Statistics', 'The statistics are per session. Configure the sessions of this report first:\n\nSA4 Report > Sessions and Attendance > Configure Sessions…', ui.ButtonSet.OK);
+    return;
+  }
+  // "<" is written as an escape so that no stored text can end the script element.
+  const modelJson = JSON.stringify({ overview: model.overview, notes: model.notes, sessions: model.sessions }).replace(/</g, '\\u003c');
+
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; font-size: 13px; }
+      h3 { margin: 16px 0 4px 0; font-size: 13px; }
+      button { margin-top: 16px; padding: 9px 18px; background: #666; color: white; border: none; cursor: pointer; }
+      table { border-collapse: collapse; width: 100%; }
+      td { padding: 2px 8px 2px 0; vertical-align: top; }
+      td.label { width: 45%; color: #444; }
+      .hint { font-size: 11px; color: #666; margin-top: 4px; }
+      .session { margin-top: 14px; padding: 10px; background: #f5f5f5; border-left: 3px solid #4285f4; }
+      .when { font-weight: bold; }
+      .group { margin-top: 8px; font-weight: bold; color: #444; }
+      .note { margin-top: 6px; padding: 6px 8px; border-left: 3px solid #999; background: #f5f5f5; }
+      .note.warning { border-left-color: #c77c00; background: #fff6e0; }
+    </style>
+
+    <h2>Post-meeting Statistics</h2>
+    <div class="hint">Counted from the sessions, the opening details, the imported attendance and the TDoc list as they are now. Nothing is stored or changed by opening this. The attendance values are the ones Microsoft Teams states.</div>
+    <h3>All sessions</h3>
+    <div id="overview"></div>
+    <div id="notes"></div>
+    <div id="sessions"></div>
+    <div><button type="button" id="closeBtn" onclick="google.script.host.close()">Close</button></div>
+
+    <script>
+      var MODEL = ${modelJson};
+      function el(id) { return document.getElementById(id); }
+      function addRows(parent, rows) {
+        var table = document.createElement('table');
+        rows.forEach(function (row) {
+          var tr = document.createElement('tr');
+          var label = document.createElement('td');
+          label.className = 'label';
+          label.textContent = row[0];
+          var value = document.createElement('td');
+          value.textContent = row[1];
+          tr.appendChild(label);
+          tr.appendChild(value);
+          table.appendChild(tr);
+        });
+        parent.appendChild(table);
+      }
+      addRows(el('overview'), MODEL.overview);
+      MODEL.notes.forEach(function (note) {
+        var box = document.createElement('div');
+        box.className = note.level === 'warning' ? 'note warning' : 'note';
+        box.textContent = note.text;
+        el('notes').appendChild(box);
+      });
+      MODEL.sessions.forEach(function (session) {
+        var box = document.createElement('div');
+        box.className = 'session';
+        var when = document.createElement('div');
+        when.className = 'when';
+        when.textContent = session.when;
+        box.appendChild(when);
+        session.groups.forEach(function (group) {
+          var title = document.createElement('div');
+          title.className = 'group';
+          title.textContent = group.title;
+          box.appendChild(title);
+          addRows(box, group.rows);
+        });
+        el('sessions').appendChild(box);
+      });
+    </script>
+  `)
+  .setWidth(640)
+  .setHeight(680);
+
+  ui.showModalDialog(html, 'Post-meeting Statistics');
 }
 
 // =========================================================

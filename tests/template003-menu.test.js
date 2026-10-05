@@ -154,6 +154,14 @@ const REPORT_TREE_AFTER_SETUP = [
   '    Clear Collection Caches… -> clearAllCaches',
   '  ℹ️ About This Report -> showTemplateInfo'
 ];
+// Ad-hoc sessions (stage A): an ad-hoc report has one more submenu, after
+// Document Reallocation. A report that is not ad-hoc keeps the tree above.
+const SESSIONS_SUBMENU = ['  🗓 Sessions and Attendance', '    Configure Sessions… -> configureAdhocSessions',
+  '    Import Teams Attendance… -> importTeamsAttendance', '    Refresh Attendance Section -> refreshAdhocAttendanceSection',
+  '    Assign TDoc Sessions… -> assignAdhocTdocSessions', '    Edit Opening Details… -> editAdhocOpeningDetails', '    Post-meeting Statistics… -> showAdhocSessionStatistics'];
+const REALLOCATION_END = REPORT_TREE_AFTER_SETUP.indexOf('    Remove All Reallocations… -> clearAllReallocations') + 1;
+const REPORT_TREE_ADHOC = REPORT_TREE_AFTER_SETUP.slice(0, REALLOCATION_END).concat(SESSIONS_SUBMENU, REPORT_TREE_AFTER_SETUP.slice(REALLOCATION_END));
+const SET_UP_MAIN = { SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main', MEETING_ID: '60777', REPORT_SUFFIX: '6G' };
 const REPORT_TREE_BEFORE_SETUP = [REPORT_TREE_AFTER_SETUP[0], '  🚀 Finish Report Setup -> finishReportSetup', '  ---'].concat(REPORT_TREE_AFTER_SETUP.slice(1));
 
 /** Operations that left the template report menu and must stay in the code. */
@@ -184,7 +192,7 @@ console.log('1. report menu after setup');
   r.s.onOpen();
   const t = tree(r.ui);
   reportTargets = targets(r.ui);
-  check('exact tree', t, REPORT_TREE_AFTER_SETUP);
+  check('exact tree (ad-hoc report: with the Sessions and Attendance submenu)', t, REPORT_TREE_ADHOC);
   check('the menu is not called Scripts', [r.ui.menus[0].name, t.some((l) => /Scripts/.test(l))], ['SA4 Report', false]);
   check('no LEGACY submenu and no Legacy item', t.filter((l) => /legacy/i.test(l)), []);
   check('none of the hidden operations is offered', HIDDEN.filter((f) => reportTargets.indexOf(f) !== -1), []);
@@ -192,7 +200,12 @@ console.log('1. report menu after setup');
   check('every item calls an existing public function (a menu cannot call a private one)',
     reportTargets.filter((f) => typeof r.s[f] !== 'function' || /_$/.test(f)), []);
   check('no label is used twice', t.filter((l, i) => / -> /.test(l) && t.indexOf(l) !== i), []);
-  check('19 items after setup, 3 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+  check('ad-hoc report: 25 items after setup, 4 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [25, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
+  const main = runtime({ docId: REPORT_ID, props: SET_UP_MAIN });
+  main.s.onOpen();
+  check('main-meeting report: exact tree, without the Sessions and Attendance submenu', tree(main.ui), REPORT_TREE_AFTER_SETUP);
+  check('main-meeting report: 19 items after setup, 3 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
     [19, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
   check('a document configured by hand (state "manual") gets the same menu',
     (() => { const m = runtime({ docId: REPORT_ID, props: { SA4_BOOTSTRAP_STATE: 'manual' } }); m.s.onOpen(); return tree(m.ui); })(), REPORT_TREE_AFTER_SETUP);
@@ -227,9 +240,58 @@ console.log('2. hidden operations are still in the code');
     const before = functionNames(OLD_CODE).concat(functionNames(OLD_CREATOR));
     const now = functionNames(CODE).concat(functionNames(CREATOR));
     check('no function of T-2026.10.3 was removed', before.filter((f) => now.indexOf(f) === -1), []);
-    check('the new functions are exactly these, all in ReportCreator.js',
-      [now.filter((f) => before.indexOf(f) === -1).sort(), functionNames(CODE).filter((f) => functionNames(OLD_CODE).indexOf(f) === -1)],
-      [['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_', 'describeUpdateReportNowFailure_', 'updateReportNow'], []]);
+    // TEMPLATE-003 added four functions, all in ReportCreator.js. The ad-hoc
+    // session configuration (stage A) added its own, listed here by name.
+    const SESSION_FUNCTIONS_CODE = ['adhocSessionLabel_', 'adhocSessionsEnabled_', 'applyAdhocSessionsEdit_', 'buildAdhocSessionsDialogModel_',
+      'compareAdhocSessions_', 'configureAdhocSessions', 'defaultAdhocSessionLabel_', 'getAdhocSessions_', 'isAdhocMeetingForSessions_',
+      'isValidAdhocSessionDate_', 'isValidAdhocSessionTime_', 'parseAdhocSessionsProperty_', 'salvageAdhocSessionNextId_',
+      'saveAdhocSessionsConfiguration', 'saveAdhocSessionsWith_', 'serializeAdhocSessions_', 'sortAdhocSessions_', 'validateAdhocSessions_'];
+    const SESSION_FUNCTIONS_CREATOR = ['isAdhocReportForMenu_'];
+    // The Teams attendance parser (stage C): pure functions, called by nothing yet.
+    const TEAMS_PARSER_FUNCTIONS_CODE = ['decodeTeamsAttendanceBytes_', 'formatTeamsDuration_', 'normalizeTeamsDisplayName_', 'normalizeTeamsEmail_',
+      'parseTeamsAttendanceReport_', 'parseTeamsDuration_', 'readTeamsDateTimeParts_', 'resolveTeamsDateOrder_', 'scanDelimitedRows_', 'splitDelimitedRows_',
+      'teamsAttendeeKey_', 'teamsDateTimeFromParts_', 'teamsSecondsBetween_', 'teamsTwoDigits_'];
+    // Attendance import, persistence and rendering (stage D).
+    const ATTENDANCE_FUNCTIONS_CODE = ['adhocAttendanceChunkKey_', 'adhocAttendanceSessionIds_', 'adhocAttendanceStore_', 'adhocAttendeeCompanyKey_', 'adhocAttendeeTablesToHarvest_', 'countAdhocAttendeeTablesElsewhere_', 'formatAdhocAttendeeTable_', 'adhocLongDate_',
+      'adhocTextHash_', 'ambiguousAdhocAttendeeNames_', 'beginAdhocAttendanceRebuild_', 'buildAdhocAttendanceBlocks_', 'buildTeamsAttendanceDialogModel_',
+      'compactAdhocAttendance_', 'confirmTeamsAttendanceImport', 'effectiveAdhocAttendees_', 'expandAdhocAttendance_', 'findAdhocAttendanceContainer_',
+      'findAdhocAttendanceInsertIndex_', 'finishAdhocAttendanceRebuild_', 'harvestAdhocAttendeeCompanies_', 'importTeamsAttendance', 'isAdhocAttendeeTable_',
+      'mergeAdhocCompanyCorrections_', 'planTeamsAttendanceImport_', 'previewTeamsAttendanceImport', 'readAdhocAttendanceIndex_', 'readAdhocAttendanceValue_',
+      'readAdhocAttendance_', 'refreshAdhocAttendanceSection', 'refreshAdhocAttendanceSection_', 'removeAdhocBodyChild_', 'removeTeamsAttendanceImport',
+      'renderAdhocAttendanceSection_', 'renderAfterAdhocAttendanceChange_', 'splitAdhocAttendanceChunks_', 'teamsAttendanceTextFromBase64_',
+      'withAdhocAttendanceLock_', 'writeAdhocAttendanceValue_'];
+    // TDoc session assignment and the Session column (stage B).
+    const TDOC_SESSION_FUNCTIONS_CODE = ['adhocSessionCutoff_', 'adhocSessionIdsKey_', 'adhocTdocSessionCellText_', 'adhocTdocSessionReferences_', 'adhocTdocSessionsUnavailable_',
+      'assignAdhocSession_', 'assignAdhocTdocSessions', 'buildAdhocTdocSessionsDialogModel_', 'convertUtcWallClockToReportZone_', 'effectiveAdhocTdocSessions_',
+      'enableAdhocSessionColumn', 'findRegistrationTable_', 'flattenTdocGroups_', 'makeAdhocTdocSessionResolverSafely_', 'makeAdhocTdocSessionResolver_',
+      'normalizeAdhocTdocOverrides_', 'normalizeTdocUploadValue_', 'parseAdhocTdocSessionsProperty_', 'readTdocUploadTimesForSessions_',
+      'refreshRegistrationSessionColumnSafely_', 'refreshRegistrationSessionColumn_', 'refreshSessionColumnFromList_', 'registrationTableColumns_',
+      'saveAdhocTdocSessions', 'saveAdhocTdocSessionsWith_', 'serializeAdhocTdocSessions_'];
+    // Opening details of the sessions (stage E).
+    const OPENING_FUNCTIONS_CODE = ['adhocOpeningSessionIds_', 'adhocOpeningStore_', 'adhocOpeningUnavailable_', 'adhocSessionWhenText_', 'buildAdhocOpeningDialogModel_',
+      'buildAdhocOpeningLines_', 'editAdhocOpeningDetails', 'findAdhocOpeningContainer_', 'findAdhocOpeningInsertIndex_', 'finishAdhocOpeningRebuild_',
+      'normalizeAdhocOpeningEntry_', 'parseAdhocOpeningProperty_', 'refreshAdhocOpeningSection_', 'renderAdhocOpeningAfterChange_', 'renderAdhocOpeningSection_',
+      'saveAdhocOpeningDetails', 'saveAdhocOpeningWith_', 'serializeAdhocOpening_', 'utf8ByteLength_'];
+    // Sessions of several days: date ranges and attendance records per day.
+    const MULTIDAY_FUNCTIONS_CODE = ['adhocAttendanceRecordKey_', 'adhocAttendanceRecordParts_', 'adhocAttendanceRecordsOf_', 'adhocDateRangeText_', 'adhocSessionDatesText_',
+      'adhocSessionDayCount_', 'adhocSessionLastDay_', 'adhocSessionRecord_', 'isAdhocMultiDaySession_',
+      // Range integrity: a session's days keep its imported attendance inside.
+      'adhocAttendanceDaysBySession_', 'adhocSessionsLeavingAttendanceOutside_',
+      // Assign TDoc Sessions shows the upload time (display only).
+      'adhocUploadedDisplayText_',
+      // The registration table with the Session column gets explicit column widths.
+      'applyRegistrationTableWidths_',
+      // The codes of the sessions (A01, A02, ...) for the Session column, and the Online information block of the opening.
+      'adhocSessionCode_', 'adhocSessionCodes_', 'adhocMeetingInformationSource_', 'buildAdhocMeetingInformationLines_', 'findAdhocMeetingInformationContainer_',
+      'refreshAdhocMeetingInformationSafely_', 'renderAdhocMeetingInformation_'];
+    // Status summary and statistics of the sessions (stage F).
+    const STATUS_FUNCTIONS_CODE = ['adhocSessionDateRangeText_', 'adhocSessionStatusLines_', 'buildAdhocSessionStatusModel_', 'collectAdhocSessionStatus_',
+      'formatAdhocSessionStatusLines_', 'showAdhocSessionStatistics', 'summarizeAdhocTdocSessions_'];
+    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js) and the ad-hoc sessions and attendance',
+      [now.filter((f) => before.indexOf(f) === -1).sort(), functionNames(CODE).filter((f) => functionNames(OLD_CODE).indexOf(f) === -1).sort()],
+      [['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_', 'describeUpdateReportNowFailure_', 'updateReportNow']
+        .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE).sort(),
+        SESSION_FUNCTIONS_CODE.concat(TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE).sort()]);
   }
 }
 
@@ -565,7 +627,11 @@ console.log('6. the partial updates and Automatic Updates call their existing fu
       [functionSource(CODE, 'manageTriggers') === functionSource(OLD_CODE, 'manageTriggers'), functionSource(CODE, 'manageTriggers').replace(NEW_HINT, OLD_HINT) === functionSource(OLD_CODE, 'manageTriggers')], [false, true]);
   }
   if (haveBaseline) {
-    ['collectEmailDiscussionOnly', 'collectRevisionsOnly', 'addAbstractsOnly', 'analyzeReportStatus', 'prepareTdocDiscussionEmails', 'configureMeetingSettings',
+    const STATUS_HOOK = '\n  // Ad-hoc sessions (stage F): sessions, opening details, attendance and\n  // TDoc sessions. No lines -- and nothing read -- unless this is an ad-hoc\n' +
+      '  // report with sessions.\n  adhocSessionStatusLines_().forEach(line => lines.push(line));\n';
+    check('analyzeReportStatus() differs from T-2026.10.3 in the one call that adds the block of an ad-hoc report with sessions (stage F)',
+      [functionSource(CODE, 'analyzeReportStatus') === functionSource(OLD_CODE, 'analyzeReportStatus'), functionSource(CODE, 'analyzeReportStatus').replace(STATUS_HOOK, '') === functionSource(OLD_CODE, 'analyzeReportStatus')], [false, true]);
+    ['collectEmailDiscussionOnly', 'collectRevisionsOnly', 'addAbstractsOnly', 'prepareTdocDiscussionEmails', 'configureMeetingSettings',
       'addDocumentReallocation', 'viewAllReallocations', 'applyDocumentReallocations', 'clearAllReallocations', 'testAllConnections', 'removeRowHeightAndSpacing',
       'removeDuplicateEmailEntries', 'cleanUpWrongEmailDiscussions', 'clearAllCaches', 'runFullReportBuildCore_']
       .forEach((name) => check(`${name}() is byte-for-byte the T-2026.10.3 function`, functionSource(CODE, name) === functionSource(OLD_CODE, name), true));
