@@ -1,10 +1,12 @@
-# Status dropdowns (release candidate)
+# Status dropdowns (T-2026.10.7)
 
-2026-10-05. Branch `feature/status-dropdown` on master `3399cf3` (T-2026.10.6, `Code.js` 2.18.1).
+Developed 2026-10-05 on branch `feature/status-dropdown`, on master `3399cf3` (T-2026.10.6,
+`Code.js` 2.18.1). This document was written as the release candidate; §8 records the release.
 
-**Status: RELEASE CANDIDATE, SMOKE TEST PASSED (2026-10-05, §7). `Code.js` 2.19.0, proposed
-template release T-2026.10.7. Not tagged, not pushed, not deployed: each of those is a separate,
-explicitly authorized step. T-2026.10.5 and T-2026.10.6 are not changed.**
+**Status: RELEASED AND DEPLOYED. Template release T-2026.10.7, `Code.js` 2.19.0, release commit
+`cc28bf4ab808a2f30a66cfb8ca5392491f25509c`, tag `template-release/T-2026.10.7`. Published on
+2026-10-05; deployed to the master template on 2026-10-06 (§8). T-2026.10.5 and T-2026.10.6 were
+not changed. Existing reports were not updated.**
 
 The Status of a TDoc table can be a native Google Docs dropdown, "Document Status", instead of
 text: a decision is set in the Minutes with one click and shows in the colour of its option.
@@ -172,3 +174,52 @@ push of the manifest, with no further enablement; a dropdown inserted where colo
 stood looks as it should; the save at the end of a build and of an update, followed by the API
 calls, works in a real report.
 
+## 8. Release: complete
+
+Each step was authorized on its own and verified before the next.
+
+| Step | Result |
+|---|---|
+| Automated tests and mutation checks, on the release commit | **Pass.** Status dropdowns 190 checks; mutations 99 of 99 caught; the full suite 94 files, 6,320 checks |
+| Smoke test in a real Google document (§7) | **Pass** |
+| Release commit, tag, publication | **Complete.** One squashed commit on master, `cc28bf4ab808a2f30a66cfb8ca5392491f25509c`, with T-2026.10.6 as its only parent and the tree of the accepted branch; the lightweight tag `template-release/T-2026.10.7` on it; master and the tag pushed together, without force |
+| The release bundle | Built by the release tool from the tagged commit: the seven production files. Its six source files are byte-identical to the candidate of the smoke test; `Release.js` names the release commit and the tag |
+| "Document Status" definition in the master template document | **Pass** (see below) |
+| Deployment to the master template's script project | **Pass.** The project held T-2026.10.6 before. One normal `clasp push`; clasp asked whether to push and overwrite the changed manifest, which was answered with yes by hand; seven files pushed; no `--force` |
+| Read-back after the deployment | **Pass.** Seven files, each byte-identical to the release bundle; `Release.js` says T-2026.10.7, template, 2.19.0, the release commit and the tag; the manifest has Europe/Berlin, V8, Drive v3, Docs v1 and the six OAuth scopes it had |
+
+### The definition in the master template
+
+New reports read the definition from the master template document (decision 1), so it had to be
+there before the deployment. It was not: the document had no dropdown definition at all.
+
+It was created with one `createDropdownDefinition` request of the Docs API, from the accepted
+definition of the document that was the source in the smoke test — the same request the released
+code sends when it builds a report. No dropdown was inserted into the template's text. The
+request was tied to the revision of the template that had just been read.
+
+Verified afterwards, by a read through the API: exactly one definition titled "Document Status";
+fourteen options, in this order and spelling — available, noted, agreed, revised, parked, merged,
+approved, reserved, endorsed, withdrawn, other, replied, Plenary, postponed; the foreground and
+background colour of every option equal to the source; no dropdown visible in the template; and
+the rest of the document unchanged.
+
+**A first attempt was stopped and undone by its own check, wrongly.** The one-off helper that
+did the seeding compared what the API returned with `JSON.stringify()`, for which the order of
+an object's keys counts; the API returns the keys of a colour (red, green, blue), and of other
+objects, in no fixed order. It therefore reported fourteen colour differences and a changed
+document, removed the definition it had created, and stopped. No colour value differed: all
+fourteen foreground and background colours were numerically identical. The second version of the
+helper compares a colour as its three numbers and the document serialized with its keys sorted;
+with it the same seeding passed every check.
+
+This was a fault of that diagnostic helper only. The released code never compares or hashes what
+the API returns — it passes the colours on as it reads them — and was not changed.
+
+### What is live
+
+- The master template: T-2026.10.7. Reports created from it from now on get status dropdowns
+  with their first Build Report from Scratch.
+- Reports that existed before keep the release they have and their text statuses. None was
+  updated as part of this release; updating one is a separate step for that report.
+- CENTRAL and Legacy were not deployed and do not use the feature.
