@@ -1059,7 +1059,7 @@ console.log('11. menu, adoption, and nothing else changed');
   check('the section writes one property, in one place', (code.match(/\.setProperty\(/g) || []).length, 1);
   check('it logs fixed texts and error messages only', (code.match(/Logger\.log\((.*)\);/g) || []).filter((line) => !/^Logger\.log\('TDoc sessions: [^']*' \+ (e\.message|resolver\.error \+ ' Only the automatic sessions are used\.')\);$/.test(line)), []);
   check('an update reads the TDoc list once, as before, and the assignments once', (() => { const x = report(); x.build(); const n = x.downloads; x.update(); return x.downloads - n; })(), 1);
-  check('Code.js is version 2.18.0, the release that adds the ad-hoc sessions', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.18.0');
+  check('Code.js is version 2.18.1 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.18.1');
   check('ReportCreator.js: one more menu item, nothing else', (CREATOR.match(/TDoc Sessions|assignAdhocTdocSessions/g) || []).length, 2);
 }
 

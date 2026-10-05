@@ -567,24 +567,30 @@ console.log('10. nothing else changed');
     // Stage D added two lines to the build (the attendance hooks) and one sentence to its question. Stage B
     // added the Session column: the upload time in the TDoc list, the optional fifth column of the
     // registration table where it is created and where rows are appended, and its refresh in the update.
-    check('Code.js: every function of T-2026.10.4 is byte-for-byte what it was, but these six', changed(CODE, OLD_CODE),
-      ['continuousUpdateCore_', 'updateRegisteredDocumentsTable_', 'createSummaryTable_', 'analyzeReportStatus', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_']);
+    // The TDoc upload completion (after T-2026.10.5) added its call to the update and, to the abstract sweep,
+    // the TDocs the update tells it to leave out; tests/tdoc-upload-completion.test.js compares both with T-2026.10.5.
+    check('Code.js: every function of T-2026.10.4 is byte-for-byte what it was, but these seven', changed(CODE, OLD_CODE),
+      ['continuousUpdateCore_', 'updateRegisteredDocumentsTable_', 'createSummaryTable_', 'analyzeReportStatus', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_', 'addAbstractsForTables_']);
     check('ReportCreator.js: only the report menu and the build question changed', changed(CREATOR, OLD_CREATOR), ['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_']);
     // Outside the functions: constants and comments. Without the ad-hoc sections and the two adoption keys they are unchanged.
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
     const start = CODE.indexOf('// AD-HOC SESSIONS (stage A) -- SESSION MODEL AND CONFIGURATION\n');
     const end = CODE.indexOf('// ARCH-009 -- MEETING-ID RESOLVER CORE\n');
-    const withoutSections = (CODE.slice(0, start) + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
-    // The header: the version line and the changelog entry of 2.18.0 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSections.replace(/ \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.18.0 (2026-10-02)\n', ' * Version: 2.17.4 (2026-10-01)\n');
-    check('Code.js outside its functions, without the ad-hoc sections, the two adoption keys, the version line and the changelog entry of 2.18.0, is the T-2026.10.4 file outside its functions',
+    // The upload-completion section stands directly before the ad-hoc sections (its banner ends where theirs begins).
+    const BAR = '// =========================================================\n';
+    const uploadStart = CODE.indexOf(BAR + '// TDOC UPLOAD COMPLETION -- what an existing TDoc gets once it is uploaded\n');
+    check('the TDoc upload completion is one section, directly before the ad-hoc sections', [uploadStart !== -1, uploadStart < start, CODE.slice(start - BAR.length, start)], [true, true, BAR]);
+    const withoutSections = (CODE.slice(0, uploadStart) + BAR + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
+    // The header: the version line and the changelog entries of 2.18.0 and 2.18.1 are new; the rest of it is unchanged.
+    const withoutRelease = withoutSections.replace(/ \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.18.1 (2026-10-05)\n', ' * Version: 2.17.4 (2026-10-01)\n');
+    check('Code.js outside its functions, without the ad-hoc sections, the upload-completion section, the two adoption keys, the version line and the changelog entries of 2.18.0 and 2.18.1, is the T-2026.10.4 file outside its functions',
       [outsideFunctions(withoutRelease) === outsideFunctions(OLD_CODE), withoutRelease === withoutSections], [true, false]);
   }
 
   const featureSections = CODE.slice(CODE.indexOf('// AD-HOC SESSIONS (stage A)'), CODE.indexOf('// ARCH-009 -- MEETING-ID RESOLVER CORE'));
   const sessionSection = CODE.slice(CODE.indexOf('// AD-HOC SESSIONS (stage A)'), CODE.indexOf('// TEAMS ATTENDANCE (stage C)'));
   // The changelog entry of 2.18.0 in the header names the feature; it is not code.
-  const outside = CODE.replace(featureSections, '').replace(/ \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n');
+  const outside = CODE.replace(featureSections, '').replace(/ \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n');
   check('outside the ad-hoc sections, Code.js names sessions only in the adoption key list, where the status summary adds its block (stage F) and where the build leaves out its "<Chair> opens ..." line (E1)',
     (outside.match(/ADHOC_SESSIONS|adhocSession[A-Za-z_]*(?:\([a-z]*\))?|AdhocSession/g) || []), ['ADHOC_SESSIONS', 'adhocSessionStatusLines_()', 'adhocSessionsEnabled_(context)']);
   check('the session section writes a property in one place only', (sessionSection.match(/\.setProperty\(/g) || []).length, 1);

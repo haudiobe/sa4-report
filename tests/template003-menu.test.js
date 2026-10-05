@@ -287,11 +287,14 @@ console.log('2. hidden operations are still in the code');
     // Status summary and statistics of the sessions (stage F).
     const STATUS_FUNCTIONS_CODE = ['adhocSessionDateRangeText_', 'adhocSessionStatusLines_', 'buildAdhocSessionStatusModel_', 'collectAdhocSessionStatus_',
       'formatAdhocSessionStatusLines_', 'showAdhocSessionStatistics', 'summarizeAdhocTdocSessions_'];
-    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js) and the ad-hoc sessions and attendance',
+    // TDoc upload completion: an existing TDoc gets its link and one attempt at its abstract once it is uploaded.
+    const UPLOAD_COMPLETION_FUNCTIONS_CODE = ['addMissingTdocLink_', 'completeInsertedUploadedTdoc_', 'refreshRegistrationTableLinks_', 'refreshUploadedTdocMetadata_', 'tdocListLinkIsKnown_',
+      'tdocListLinkUrl_', 'tdocsNotUploadedYet_'];
+    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js), the ad-hoc sessions and attendance, and the TDoc upload completion',
       [now.filter((f) => before.indexOf(f) === -1).sort(), functionNames(CODE).filter((f) => functionNames(OLD_CODE).indexOf(f) === -1).sort()],
       [['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_', 'describeUpdateReportNowFailure_', 'updateReportNow']
-        .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE).sort(),
-        SESSION_FUNCTIONS_CODE.concat(TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE).sort()]);
+        .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE).sort(),
+        SESSION_FUNCTIONS_CODE.concat(TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE).sort()]);
   }
 }
 

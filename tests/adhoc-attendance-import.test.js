@@ -1244,7 +1244,7 @@ console.log('13. privacy, and nothing else changed');
       const at = CODE.indexOf('\nfunction ' + name + '(');
       return /ttendance/.test(CODE.slice(at, CODE.indexOf('\n}\n', at)));
     }), []);
-  check('Code.js is version 2.18.0, the release that adds the ad-hoc sessions', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.18.0');
+  check('Code.js is version 2.18.1 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.18.1');
   check('ReportCreator.js mentions attendance only in the menu and in the build question', (CREATOR.match(/^.*ttendance.*$/gm) || []).length, 6);
 }
 

@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.18.0 (2026-10-02)
+ * Version: 2.18.1 (2026-10-05)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,27 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.18.1 (2026-10-05)
+ *   - Fixed: a TDoc that entered the report while it was only reserved
+ *     never got the hyperlink of its TDoc number, in its table or in the
+ *     registration table: the update wrote it only when it inserted the
+ *     table. The update now adds a missing link once the TDoc list has
+ *     one. A link that is already there is never replaced.
+ *   - Fixed: such a TDoc did not get its abstract either. The Reviewer's
+ *     "no summary" answer from before the upload blocked it for 24 hours,
+ *     and with abstracts on update switched off it was never asked for.
+ *     When a TDoc comes to be in the report as uploaded -- an existing
+ *     table gets its link, or a table is inserted with one -- the update
+ *     now asks the Reviewer for its abstract once, whatever that setting
+ *     is; before that, for an existing table, the answer from before the
+ *     upload is forgotten. "No summary" is cached as always, and no later
+ *     update asks again on account of the upload.
+ *   - Changed: the abstract sweep of an update (abstracts on update
+ *     switched on) leaves out TDocs the list shows as not uploaded yet,
+ *     and those already asked for in the same update. "Update Abstracts"
+ *     and Full Build ask for every table without an abstract, as before.
+ *   - Unchanged: the status rules, Minutes, Disposition, Title, Source,
+ *     Contact, Type/For, Agenda Item and existing abstracts.
  * 2.18.0 (2026-10-02)
  *   - Added (ad-hoc reports only): sessions. An ad-hoc report can describe
  *     the meetings of its series as sessions in "Configure Sessions…". A
@@ -1026,6 +1047,11 @@ function continuousUpdateCore_(context) {
     // Add new TDOCs and update status
     let newTdocsAdded = 0;
     let statusUpdated = 0;
+    let linksAdded = 0;
+    let uploadAbstractAttempts = 0;
+    // TDocs whose abstract was asked for in this run on account of their
+    // upload; the abstract sweep below does not ask for them again.
+    const abstractAskedThisRun = {};
 
     allTdocs.forEach(tdocData => {
       const row = tdocData.row;
@@ -1042,14 +1068,31 @@ function continuousUpdateCore_(context) {
         // in-place update instead.
         existingTdocs.add(tdocNumber);
         newTdocsAdded++;
+        // A TDoc that is uploaded when it is inserted has its link from the
+        // insertion; its abstract is asked for once, here.
+        if (perfTimedAccum_('upload completion (completeInsertedUploadedTdoc_, accumulated)', () => completeInsertedUploadedTdoc_(body, tdocNumber, tdocData, tdocTableIndex, context))) {
+          uploadAbstractAttempts++;
+          abstractAskedThisRun[tdocNumber] = true;
+        }
       } else {
         if (perfTimedAccum_('status updates (updateTdocStatus_, accumulated)', () => updateTdocStatus_(body, tdocNumber, tdocData, tdocTableIndex))) {
           statusUpdated++;
+        }
+        // A TDoc that was inserted before it was uploaded is completed once
+        // the list shows the upload: its link and one attempt at its
+        // abstract. Independent of the status and of the abstracts setting.
+        const completed = perfTimedAccum_('upload completion (refreshUploadedTdocMetadata_, accumulated)', () => refreshUploadedTdocMetadata_(body, tdocNumber, tdocData, tdocTableIndex, context));
+        if (completed.linkAdded) linksAdded++;
+        if (completed.abstractAttempted) {
+          uploadAbstractAttempts++;
+          abstractAskedThisRun[tdocNumber] = true;
         }
       }
     });
 
     Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);
+    const registrationLinksAdded = refreshRegistrationTableLinks_(body, allTdocs);
+    Logger.log(`Upload completion: ${linksAdded} TDoc link(s) added, ${uploadAbstractAttempts} abstract attempt(s), ${registrationLinksAdded} registration-table link(s) added`);
 
     // Update summary table
     // Ad-hoc sessions (stage B): null unless this is an ad-hoc report with
@@ -1075,7 +1118,11 @@ function continuousUpdateCore_(context) {
       // bare count -- "candidate tables processed" is NOT the same as
       // "Reviewer requests actually made" (a candidate can resolve via a
       // negative-cache skip with zero fetches). See its own header comment.
-      const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body, context));
+      // A TDoc the list shows as not uploaded yet is left out: the Reviewer
+      // has nothing for it, and asking would block it for a day (its "no
+      // summary" answer is cached) just when the upload arrives. So is a
+      // TDoc that was asked for above, in this run.
+      const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body, context, Object.assign(tdocsNotUploadedYet_(allTdocs), abstractAskedThisRun)));
       Logger.log(`Abstracts: ${abstractsResult.candidatesProcessed} candidate table(s) processed, ${abstractsResult.requestsMade} Reviewer request(s) made, ${abstractsResult.cacheSkips} negative-cache skip(s), ${abstractsResult.rowsInserted} abstract row(s) inserted`);
     } else {
       Logger.log('Abstract fetching is disabled (trigger configuration)');
@@ -11050,9 +11097,13 @@ function collectRevisionsOnly() {
  * brand-new TDoc table) is correctly excluded from this function's own
  * delta.
  */
-function addAbstractsForTables_(body, context) {
+function addAbstractsForTables_(body, context, leaveOut) {
   body = body || getActiveDocumentBodyCounted_('addAbstractsForTables_', context);
   let candidatesProcessed = 0;
+  // Only the update passes `leaveOut`, { number: true }: TDocs that are not
+  // uploaded yet (tdocsNotUploadedYet_()) or were asked for earlier in the
+  // same run. Without it every table is a candidate, as before (Full Build,
+  // "Update Abstracts").
 
   const requestsBefore = perfCounterValue_('Reviewer API requests');
   const cacheSkipsBefore = perfCounterValue_('Reviewer negative-cache hits');
@@ -11070,6 +11121,7 @@ function addAbstractsForTables_(body, context) {
     const tdocNumber = String(safeCellText_(table, 0, 1) || '').trim();
     const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
     if (!parsedTdoc.isValid) return;
+    if (leaveOut && leaveOut[tdocNumber] === true) return;
 
     perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw, context));
     candidatesProcessed++;
@@ -11727,6 +11779,180 @@ function setTdocTableAgendaItem_(table, value) {
     }
   }
   return false;
+}
+
+// =========================================================
+// TDOC UPLOAD COMPLETION -- what an existing TDoc gets once it is uploaded
+// =========================================================
+//
+// A TDoc can enter the report while it is only reserved. The TDoc list has
+// no hyperlink for it then, and the Reviewer has no summary. Its table is
+// inserted without a link, its row of the registration table too, and no
+// abstract can be had. Everything else in the table comes from the
+// reservation and does not depend on the upload.
+//
+// A TDoc comes to be in the report as uploaded in one of two ways, and is
+// completed in both:
+//   A. its table exists and the list now shows the upload (the transition
+//      below): refreshUploadedTdocMetadata_();
+//   B. its table is inserted when the list already shows the upload: the
+//      insertion writes the link, completeInsertedUploadedTdoc_() asks for
+//      the abstract.
+//
+// The update completes an existing TDoc once the list shows the upload:
+//   - THE SIGN OF AN UPLOAD is the hyperlink the TDoc list has on the TDoc
+//     number (the Portal sets it when the file is there);
+//   - THE TRANSITION is: the list has that link and the TDoc number in the
+//     report has none. It is acted on once, because acting on it sets the
+//     link. Nothing is stored for it.
+// At the transition the link is added, a "no summary" answer the Reviewer
+// gave before the upload is forgotten, and the abstract is asked for once,
+// whatever the abstracts-on-update setting says. An answer "no summary" is cached
+// as always, and no later update asks again on account of the upload.
+//
+// Nothing else is touched: not the Status, not Minutes or Disposition, not
+// Title, Source, Contact, Type/For or Agenda Item, and never a link or an
+// abstract that is already there.
+
+/** Whether the TDoc list tells if this TDoc has a hyperlink (it does not when its rich text was not read). */
+function tdocListLinkIsKnown_(tdocData) {
+  const richText = tdocData && tdocData.richTextRow && tdocData.richTextRow[tdocData.tdocCol];
+  return !!(richText && typeof richText.getLinkUrl === 'function');
+}
+
+/**
+ * The hyperlink the TDoc list has on a TDoc's number, or '' when it has
+ * none (a TDoc that is not uploaded yet). The same reading of the list
+ * cell that insertTDocTableAtIndex_() uses for a new table.
+ */
+function tdocListLinkUrl_(tdocData) {
+  return tdocListLinkIsKnown_(tdocData) ? (tdocData.richTextRow[tdocData.tdocCol].getLinkUrl() || '') : '';
+}
+
+/**
+ * The TDocs the list shows as not uploaded yet: { number: true }. A TDoc
+ * is only in it when the list is known to have no link for it; a list
+ * whose links cannot be read names none.
+ */
+function tdocsNotUploadedYet_(allTdocs) {
+  const out = {};
+  (allTdocs || []).forEach(function (td) {
+    const number = String(td.row[td.tdocCol] || '').trim();
+    if (!number) return;
+    if (tdocListLinkIsKnown_(td) && !tdocListLinkUrl_(td)) out[number] = true;
+    else delete out[number];
+  });
+  return out;
+}
+
+/**
+ * Sets `url` on the TDoc number in `cell` when the cell has no link at all.
+ * A cell with a link anywhere in its text -- whichever link -- is left as
+ * it is. Only the link is set: the text and its other formatting stay.
+ * Returns true when the link was set.
+ */
+function addMissingTdocLink_(cell, tdocNumber, url) {
+  const cellText = cell.getText();
+  const start = cellText.indexOf(tdocNumber);
+  if (!url || !tdocNumber || start === -1 || cellText.trim() !== tdocNumber) return false;
+
+  const text = cell.editAsText();
+  for (let i = 0; i < cellText.length; i++) {
+    if (text.getLinkUrl(i)) return false;
+  }
+  text.setLinkUrl(start, start + tdocNumber.length - 1, url);
+  return true;
+}
+
+/**
+ * Completes an EXISTING TDoc table at its upload transition (see the
+ * section comment): adds the link of the TDoc list to the TDoc number,
+ * forgets a "no summary" answer from before the upload, and -- when the
+ * table has no Abstract -- asks the Reviewer once, through
+ * fetchAndAddAbstract_() and whatever the abstracts setting is.
+ *
+ * Does nothing when the list has no link or the report already has one.
+ * Returns { linkAdded, abstractAttempted }. Never throws: what cannot be
+ * done is logged and does not stop the update.
+ */
+function refreshUploadedTdocMetadata_(body, tdocNumber, tdocData, index, context) {
+  const done = { linkAdded: false, abstractAttempted: false };
+  try {
+    const url = tdocListLinkUrl_(tdocData);
+    if (!url || !tdocNumber) return done;
+
+    const table = findTdocTable_(body, tdocNumber, index);
+    if (!table || safeCellText_(table, 0, 1).trim() !== tdocNumber) return done;
+
+    // The link first: it is what marks the transition as acted on, so the
+    // Reviewer is asked on account of this upload at most once.
+    if (!addMissingTdocLink_(table.getRow(0).getCell(1), tdocNumber, url)) return done;
+    done.linkAdded = true;
+    Logger.log(`Upload of ${tdocNumber}: link added (${url})`);
+
+    const parsed = parseExactSA4DocumentId_(tdocNumber);
+    if (!parsed.isValid) return done;
+    clearReviewerNoSummaryCache_(parsed.raw, context);
+    if (findCellText_(table, 'Abstract')) return done;
+    done.abstractAttempted = true;
+    fetchAndAddAbstract_(table, parsed.raw, context);
+  } catch (e) {
+    Logger.log(`Upload of ${tdocNumber}: could not be completed: ${e.message}`);
+  }
+  return done;
+}
+
+/**
+ * Asks the Reviewer once for the abstract of a TDoc table that was just
+ * INSERTED for a TDoc the list shows as uploaded (way B of the section
+ * comment), through fetchAndAddAbstract_() and whatever the abstracts
+ * setting is. A "no summary" answer that is cached is respected. Nothing
+ * is asked for a TDoc that is not uploaded. Returns true when the abstract
+ * was asked for. Never throws.
+ */
+function completeInsertedUploadedTdoc_(body, tdocNumber, tdocData, index, context) {
+  try {
+    if (!tdocNumber || !tdocListLinkUrl_(tdocData)) return false;
+    const parsed = parseExactSA4DocumentId_(tdocNumber);
+    if (!parsed.isValid) return false;
+
+    const table = findTdocTable_(body, tdocNumber, index);
+    if (!table || safeCellText_(table, 0, 1).trim() !== tdocNumber) return false;
+    if (findCellText_(table, 'Abstract')) return false;
+    fetchAndAddAbstract_(table, parsed.raw, context);
+    return true;
+  } catch (e) {
+    Logger.log(`Upload of ${tdocNumber}: its abstract could not be asked for: ${e.message}`);
+    return false;
+  }
+}
+
+/**
+ * Adds the link of the TDoc list to the rows of the registration table
+ * whose TDoc number has none. No row is added, removed or moved, and no
+ * other cell is touched. Returns the number of links added; never throws.
+ */
+function refreshRegistrationTableLinks_(body, allTdocs) {
+  let added = 0;
+  try {
+    const found = findRegistrationTable_(body);
+    if (!found) return 0;
+    const urls = {};
+    (allTdocs || []).forEach(function (td) {
+      const url = tdocListLinkUrl_(td);
+      if (url) urls[String(td.row[td.tdocCol] || '').trim()] = url;
+    });
+    const table = found.table;
+    for (let r = 1; r < table.getNumRows(); r++) {
+      const cell = table.getRow(r).getCell(0);
+      const tdocNumber = cell.getText().trim();
+      if (!tdocNumber || !urls[tdocNumber]) continue;
+      if (addMissingTdocLink_(cell, tdocNumber, urls[tdocNumber])) added++;
+    }
+  } catch (e) {
+    Logger.log('Registration table: its links could not be completed: ' + e.message);
+  }
+  return added;
 }
 
 // =========================================================

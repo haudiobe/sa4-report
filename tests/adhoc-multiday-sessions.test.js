@@ -613,7 +613,7 @@ console.log('8. a session of one day is exactly what it was');
     const at = CODE.indexOf('\nfunction renderAdhocAttendanceSection_('); const src = CODE.slice(at, CODE.indexOf('\n}\n', at));
     return [/5\.11|Close of|HEADING[124]|setText\(/.test(src.replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, '')), (src.match(/removeAdhocBodyChild_\(body, body\.getChild\(i\)\)/g) || []).length];
   })(), [false, 2]);
-  check('Code.js is still version 2.18.0', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.18.0');
+  check('Code.js is version 2.18.1 (2.18.0 with the TDoc upload completion)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.18.1');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll multi-day session checks passed.');
