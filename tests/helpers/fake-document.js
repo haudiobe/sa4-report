@@ -21,6 +21,15 @@
  * that is inserted or appended with cell texts TAKES ITS TEXT ATTRIBUTES
  * FROM THE PARAGRAPH BEFORE IT: its cells start bold when that paragraph is
  * bold. (That inheritance is what made the generated attendee table bold.)
+ *
+ * Status dropdowns (T-2026.10.7), additions only. A cell can hold a native
+ * dropdown (_dropdown: { dropdownId, definitionId, optionId }), which only
+ * the fake Docs API (fake-docs-api.js) creates and sets. As in Google Docs:
+ * DocumentApp sees it as an UNSUPPORTED child of the cell's paragraph and
+ * not in getText(); setText() on such a cell writes text and leaves the
+ * dropdown; a copy of a table carries its dropdowns, each with a NEW id.
+ * The body knows whether it has unsaved changes (_dirty) and, once the test
+ * says the document was saved and closed (_closed), refuses every change.
  */
 
 function makeFakeDocumentBody(sandbox) {
@@ -28,6 +37,10 @@ function makeFakeDocumentBody(sandbox) {
   const TABLE = sandbox.DocumentApp.ElementType.TABLE;
   const NORMAL = sandbox.DocumentApp.ParagraphHeading.NORMAL;
   const children = [];
+  // Unsaved changes, and the state after saveAndClose(): see the header.
+  const state = { dirty: false, closed: false, nextDropdown: 0 };
+  // onFirstTouch: called before the first unsaved change, so that the fake Docs API can keep what the saved document says.
+  const touch = () => { if (state.closed) throw new Error('The document is closed: it was saved and closed earlier in this execution.'); if (!state.dirty && state.onFirstTouch) state.onFirstTouch(); state.dirty = true; };
 
   function makeParagraph(text, heading) {
     const p = {
@@ -47,11 +60,14 @@ function makeFakeDocumentBody(sandbox) {
   function makeTable(rowsData, inheritedBold) {
     const rows = [];
     function makeCell(text) {
-      const c = { _t: String(text), _links: [], _bold: !!inheritedBold, _background: null, _width: null, _spacing: [null, null],
-        getText: () => c._t, setText: (v) => { c._t = String(v); return c; },
+      const c = { _t: String(text), _links: [], _bold: !!inheritedBold, _background: null, _width: null, _spacing: [null, null], _dropdown: null,
+        getText: () => c._t, setText: (v) => { touch(); c._t = String(v); return c; },
         setBackgroundColor: (v) => { c._background = v; return c; }, setWidth: (v) => { c._width = v; return c; }, getWidth: () => c._width };
       const para = { getType: () => PARAGRAPH, asParagraph: () => para, getText: () => c._t,
-        setSpacingBefore: (v) => { c._spacing[0] = v; return para; }, setSpacingAfter: (v) => { c._spacing[1] = v; return para; } };
+        setSpacingBefore: (v) => { c._spacing[0] = v; return para; }, setSpacingAfter: (v) => { c._spacing[1] = v; return para; },
+        // The children of the paragraph: its text, then a dropdown -- which DocumentApp knows as UNSUPPORTED only.
+        getNumChildren: () => (c._t ? 1 : 0) + (c._dropdown ? 1 : 0),
+        getChild: (k) => ({ getType: () => (c._t && k === 0 ? 'TEXT' : 'UNSUPPORTED') }) };
       c.getNumChildren = () => 1;
       c.getChild = () => para;
       // ADDON-008A2: a minimal Text element over the cell's text (the e-mail
@@ -69,7 +85,7 @@ function makeFakeDocumentBody(sandbox) {
       const row = {
         _minHeight: null, setMinimumHeight: (v) => { row._minHeight = v; return row; },
         getNumCells: () => cells.length, getCell: (i) => cells[i],
-        appendTableCell: (t) => { const c = makeCell(t); cells.push(c); return c; }
+        appendTableCell: (t) => { touch(); const c = makeCell(t); cells.push(c); return c; }
       };
       return row;
     }
@@ -78,12 +94,17 @@ function makeFakeDocumentBody(sandbox) {
       getType: () => TABLE, asTable: () => t,
       getNumRows: () => rows.length, getRow: (i) => rows[i],
       getCell: (r, c) => rows[r].getCell(c),
-      appendTableRow: () => { const r = makeRow([]); rows.push(r); return r; },
+      appendTableRow: () => { touch(); const r = makeRow([]); rows.push(r); return r; },
       insertTableRow: (i) => { const r = makeRow([]); rows.splice(i, 0, r); return r; },
       removeRow: (i) => { rows.splice(i, 1); },
       getParent: () => (children.indexOf(t) !== -1 ? body : null),
-      removeFromParent: () => { const i = children.indexOf(t); if (i !== -1) children.splice(i, 1); return t; },
-      copy: () => makeTable(rows.map(r => { const out = []; for (let i = 0; i < r.getNumCells(); i++) out.push(r.getCell(i).getText()); return out; }))
+      removeFromParent: () => { touch(); const i = children.indexOf(t); if (i !== -1) children.splice(i, 1); return t; },
+      copy: () => {
+        const made = makeTable(rows.map(r => { const out = []; for (let i = 0; i < r.getNumCells(); i++) out.push(r.getCell(i).getText()); return out; }));
+        // A copy within the document keeps a working dropdown; it is a new dropdown with its own id.
+        rows.forEach((r, ri) => { for (let i = 0; i < r.getNumCells(); i++) { const d = r.getCell(i)._dropdown; if (d) made.getRow(ri).getCell(i)._dropdown = { dropdownId: 'kix.copy' + (++state.nextDropdown), definitionId: d.definitionId, optionId: d.optionId }; } });
+        return made;
+      }
     };
     return t;
   }
@@ -96,18 +117,19 @@ function makeFakeDocumentBody(sandbox) {
     getType: () => 'BODY_SECTION',
     asTable: () => { throw new Error("BODY_SECTION can't be cast to TABLE."); },
     asParagraph: () => { throw new Error("BODY_SECTION can't be cast to PARAGRAPH."); },
-    removeChild: (c) => { const i = children.indexOf(c); if (i === -1) throw new Error('Element is not a child of this body.'); children.splice(i, 1); return body; },
-    clear: () => { children.length = 0; return body; },
+    removeChild: (c) => { touch(); const i = children.indexOf(c); if (i === -1) throw new Error('Element is not a child of this body.'); children.splice(i, 1); return body; },
+    clear: () => { touch(); children.length = 0; return body; },
     getNumChildren: () => children.length,
     getChild: (i) => children[i],
     getChildIndex: (c) => children.indexOf(c),
     getTables: () => children.filter(c => c.getType() === TABLE),
     getParagraphs: () => children.filter(c => c.getType() === PARAGRAPH),
-    appendParagraph: (text) => { const p = makeParagraph(text); children.push(p); return p; },
-    appendListItem: (text) => { const p = makeParagraph(text); children.push(p); return p; },
-    appendTable: (data) => { const t = makeTable(Array.isArray(data) ? data : [], boldBefore(children.length)); children.push(t); return t; },
-    insertParagraph: (idx, text) => { const p = makeParagraph(text); children.splice(idx, 0, p); return p; },
+    appendParagraph: (text) => { touch(); const p = makeParagraph(text); children.push(p); return p; },
+    appendListItem: (text) => { touch(); const p = makeParagraph(text); children.push(p); return p; },
+    appendTable: (data) => { touch(); const t = makeTable(Array.isArray(data) ? data : [], boldBefore(children.length)); children.push(t); return t; },
+    insertParagraph: (idx, text) => { touch(); const p = makeParagraph(text); children.splice(idx, 0, p); return p; },
     insertTable: (idx, data) => {
+      touch();
       let t;
       if (data && typeof data.getType === 'function') {
         if (children.indexOf(data) !== -1) throw new Error('Element must be detached.');
@@ -119,6 +141,7 @@ function makeFakeDocumentBody(sandbox) {
       return t;
     }
   };
+  body._state = state;
   body._headingTexts = () => children.filter(c => c.getType() === PARAGRAPH && c.getHeading() !== NORMAL).map(c => c.getText());
   return body;
 }

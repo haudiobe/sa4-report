@@ -569,8 +569,12 @@ console.log('10. nothing else changed');
     // registration table where it is created and where rows are appended, and its refresh in the update.
     // The TDoc upload completion (after T-2026.10.5) added its call to the update and, to the abstract sweep,
     // the TDocs the update tells it to leave out; tests/tdoc-upload-completion.test.js compares both with T-2026.10.5.
-    check('Code.js: every function of T-2026.10.4 is byte-for-byte what it was, but these seven', changed(CODE, OLD_CODE),
-      ['continuousUpdateCore_', 'updateRegisteredDocumentsTable_', 'createSummaryTable_', 'analyzeReportStatus', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_', 'addAbstractsForTables_']);
+    // The status dropdowns (T-2026.10.7) added, in existing functions: the note of a new TDoc in the four paths that create a
+    // TDoc table, the dropdown branch of the status sync and its guard in the old sheet path, the status read in the readers,
+    // and the last step of a build and of a revision collection; tests/status-dropdown.test.js covers them.
+    check('Code.js: every function of T-2026.10.4 is byte-for-byte what it was, but the seven of the releases since and nine more for the status dropdowns', changed(CODE, OLD_CODE),
+      ['continuousUpdateCore_', 'insertNewTdoc_', 'applyTdocStatusUpdate_', 'updateRegisteredDocumentsTable_', 'createSummaryTable_', 'updateStatusWithStrictRules_', 'insertRevisedDocTablesAfter_', 'analyzeReportStatus',
+        'runFullReportBuildCore_', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_', 'appendTdocDetailTable_', 'collectRevisionsOnly', 'addAbstractsForTables_', 'detectTdocTablesInDocument_', 'generateTdocDiscussionEmails']);
     check('ReportCreator.js: only the report menu and the build question changed', changed(CREATOR, OLD_CREATOR), ['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_']);
     // Outside the functions: constants and comments. Without the ad-hoc sections and the two adoption keys they are unchanged.
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
@@ -580,10 +584,13 @@ console.log('10. nothing else changed');
     const BAR = '// =========================================================\n';
     const uploadStart = CODE.indexOf(BAR + '// TDOC UPLOAD COMPLETION -- what an existing TDoc gets once it is uploaded\n');
     check('the TDoc upload completion is one section, directly before the ad-hoc sections', [uploadStart !== -1, uploadStart < start, CODE.slice(start - BAR.length, start)], [true, true, BAR]);
-    const withoutSections = (CODE.slice(0, uploadStart) + BAR + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
+    // The section of the status dropdowns (T-2026.10.7) stands directly before the upload-completion section.
+    const dropdownStart = CODE.indexOf(BAR + '// TDOC STATUS DROPDOWNS (T-2026.10.7)\n');
+    check('the status dropdowns are one section, directly before the upload completion', [dropdownStart !== -1, dropdownStart < uploadStart, CODE.slice(uploadStart - 1, uploadStart)], [true, true, '\n']);
+    const withoutSections = (CODE.slice(0, dropdownStart) + BAR + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
     // The header: the version line and the changelog entries of 2.18.0 and 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSections.replace(/ \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.18.1 (2026-10-05)\n', ' * Version: 2.17.4 (2026-10-01)\n');
-    check('Code.js outside its functions, without the ad-hoc sections, the upload-completion section, the two adoption keys, the version line and the changelog entries of 2.18.0 and 2.18.1, is the T-2026.10.4 file outside its functions',
+    const withoutRelease = withoutSections.replace(/ \* 2\.19\.0 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.19.0 (2026-10-05)\n', ' * Version: 2.17.4 (2026-10-01)\n');
+    check('Code.js outside its functions, without the ad-hoc, upload-completion and status-dropdown sections, the two adoption keys, the version line and the changelog entries of 2.18.0, 2.18.1 and 2.19.0, is the T-2026.10.4 file outside its functions',
       [outsideFunctions(withoutRelease) === outsideFunctions(OLD_CODE), withoutRelease === withoutSections], [true, false]);
   }
 

@@ -620,7 +620,7 @@ console.log('13. pure and deterministic');
   check('the parser is called by the attendance import only',
     [(importSection.match(/parseTeamsAttendanceReport_\(|decodeTeamsAttendanceBytes_\(/g) || []).sort(), (outsideFeature.match(/parseTeamsAttendanceReport_|decodeTeamsAttendanceBytes_/g) || [])],
     [['decodeTeamsAttendanceBytes_(', 'parseTeamsAttendanceReport_('], []]);
-  check('Code.js is version 2.18.1 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion)', (source.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.18.1');
+  check('Code.js is version 2.19.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns)', (source.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.19.0');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll Teams attendance parser checks passed.');

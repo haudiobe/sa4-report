@@ -290,11 +290,16 @@ console.log('2. hidden operations are still in the code');
     // TDoc upload completion: an existing TDoc gets its link and one attempt at its abstract once it is uploaded.
     const UPLOAD_COMPLETION_FUNCTIONS_CODE = ['addMissingTdocLink_', 'completeInsertedUploadedTdoc_', 'refreshRegistrationTableLinks_', 'refreshUploadedTdocMetadata_', 'tdocListLinkIsKnown_',
       'tdocListLinkUrl_', 'tdocsNotUploadedYet_'];
-    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js), the ad-hoc sessions and attendance, and the TDoc upload completion',
+    // The Status of a TDoc table as a native dropdown (T-2026.10.7).
+    const STATUS_DROPDOWN_FUNCTIONS_CODE = ['captureStatusDropdownValuesForRebuild_', 'statusDropdownHealCandidates_', 'statusDropdownOptionByName_', 'statusDropdownRebuildChoice_',
+      'applyTdocStatusUpdateToDropdown_', 'buildStatusDocsIndex_', 'createStatusDropdownDefinition_', 'finalizeStatusDropdowns_', 'mapPortalStatusToDropdownOption_',
+      'noteStatusDropdownCandidate_', 'planStatusDropdownRequests_', 'readStatusDropdownSourceDefinition_', 'readTdocStatus_', 'resetStatusDropdownRun_', 'statusCellHoldsDropdown_', 'statusDocsCellEntry_',
+      'statusDocsCellText_', 'statusDocsGet_', 'statusDropdownDefinitionRequest_', 'statusDropdownEntryOfTable_', 'statusDropdownIndex_', 'statusDropdownLabel_', 'statusDropdownRun_', 'statusDropdownsAvailable_'];
+    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js), the ad-hoc sessions and attendance, the TDoc upload completion, and the status dropdowns',
       [now.filter((f) => before.indexOf(f) === -1).sort(), functionNames(CODE).filter((f) => functionNames(OLD_CODE).indexOf(f) === -1).sort()],
       [['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_', 'describeUpdateReportNowFailure_', 'updateReportNow']
-        .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE).sort(),
-        SESSION_FUNCTIONS_CODE.concat(TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE).sort()]);
+        .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE, STATUS_DROPDOWN_FUNCTIONS_CODE).sort(),
+        SESSION_FUNCTIONS_CODE.concat(TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE, STATUS_DROPDOWN_FUNCTIONS_CODE).sort()]);
   }
 }
 
@@ -632,11 +637,21 @@ console.log('6. the partial updates and Automatic Updates call their existing fu
   if (haveBaseline) {
     const STATUS_HOOK = '\n  // Ad-hoc sessions (stage F): sessions, opening details, attendance and\n  // TDoc sessions. No lines -- and nothing read -- unless this is an ad-hoc\n' +
       '  // report with sessions.\n  adhocSessionStatusLines_().forEach(line => lines.push(line));\n';
-    check('analyzeReportStatus() differs from T-2026.10.3 in the one call that adds the block of an ad-hoc report with sessions (stage F)',
-      [functionSource(CODE, 'analyzeReportStatus') === functionSource(OLD_CODE, 'analyzeReportStatus'), functionSource(CODE, 'analyzeReportStatus').replace(STATUS_HOOK, '') === functionSource(OLD_CODE, 'analyzeReportStatus')], [false, true]);
-    ['collectEmailDiscussionOnly', 'collectRevisionsOnly', 'addAbstractsOnly', 'prepareTdocDiscussionEmails', 'configureMeetingSettings',
+    // T-2026.10.7: the status of a table is read through readTdocStatus_(), which adds the value of a dropdown to the text read as before.
+    const STATUS_READ = "    // T-2026.10.7: the text of the Status cell as always, else the value selected in its dropdown.\n    const status = readTdocStatus_(t, findStatusText_(t));\n";
+    check('analyzeReportStatus() differs from T-2026.10.3 in the one call that adds the block of an ad-hoc report with sessions (stage F) and in how it reads a status (T-2026.10.7)',
+      [functionSource(CODE, 'analyzeReportStatus') === functionSource(OLD_CODE, 'analyzeReportStatus'),
+        functionSource(CODE, 'analyzeReportStatus').replace(STATUS_HOOK, '').replace(STATUS_READ, '    const status = findStatusText_(t);\n') === functionSource(OLD_CODE, 'analyzeReportStatus')], [false, true]);
+    // T-2026.10.7: the two functions that end with the status-dropdown step.
+    check('collectRevisionsOnly() differs from T-2026.10.3 in the status-dropdown step around the collection only',
+      [functionSource(CODE, 'collectRevisionsOnly') === functionSource(OLD_CODE, 'collectRevisionsOnly'),
+        functionSource(CODE, 'collectRevisionsOnly').replace('  resetStatusDropdownRun_();\n', '').replace("  // T-2026.10.7: revision tables added by this run get their dropdown (see finalizeStatusDropdowns_()).\n  finalizeStatusDropdowns_('update');\n", '') === functionSource(OLD_CODE, 'collectRevisionsOnly')], [false, true]);
+    check('runFullReportBuildCore_() differs from T-2026.10.3 in the status-dropdown phase at its end only',
+      [functionSource(CODE, 'runFullReportBuildCore_') === functionSource(OLD_CODE, 'runFullReportBuildCore_'),
+        functionSource(CODE, 'runFullReportBuildCore_').replace('  resetStatusDropdownRun_();\n', '').replace(/  \/\/ T-2026\.10\.7: the last thing that touches the document\.[\s\S]*?\n  if \(statusDropdownsAvailable_\(\)\) \{\n[\s\S]*?\n    \}\);\n  \}\n/, '') === functionSource(OLD_CODE, 'runFullReportBuildCore_')], [false, true]);
+    ['collectEmailDiscussionOnly', 'addAbstractsOnly', 'prepareTdocDiscussionEmails', 'configureMeetingSettings',
       'addDocumentReallocation', 'viewAllReallocations', 'applyDocumentReallocations', 'clearAllReallocations', 'testAllConnections', 'removeRowHeightAndSpacing',
-      'removeDuplicateEmailEntries', 'cleanUpWrongEmailDiscussions', 'clearAllCaches', 'runFullReportBuildCore_']
+      'removeDuplicateEmailEntries', 'cleanUpWrongEmailDiscussions', 'clearAllCaches']
       .forEach((name) => check(`${name}() is byte-for-byte the T-2026.10.3 function`, functionSource(CODE, name) === functionSource(OLD_CODE, name), true));
   }
 }

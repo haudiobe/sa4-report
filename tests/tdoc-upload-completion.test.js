@@ -533,30 +533,40 @@ console.log('10. source: where the completion happens, and what was left alone')
     [(core.match(/completeInsertedUploadedTdoc_\(/g) || []).length, (withoutComments(CODE).match(/completeInsertedUploadedTdoc_\(/g) || []).length,
       /insertNewTdoc_\(body, tdocData, cfg, tdocTableIndex, context\)\);[\s\S]{0,700}?newTdocsAdded\+\+;[\s\S]{0,400}?completeInsertedUploadedTdoc_\(body, tdocNumber, tdocData, tdocTableIndex, context\)\)\) \{[\s\S]{0,160}?\} else \{/.test(core)], [1, 2, true]);
   check('nothing else calls it, and the registration links are completed once per update', [(withoutComments(CODE).match(/refreshUploadedTdocMetadata_\(/g) || []).length, (withoutComments(CODE).match(/refreshRegistrationTableLinks_\(/g) || []).length], [2, 2]);
-  check('Code.js is version 2.18.1, and its changelog has the entry', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), / \* CHANGELOG\n \* 2\.18\.1 \(2026-10-05\)\n/.test(CODE)], [['2.18.1', '2026-10-05'], true]);
+  check('the changelog has the entry of 2.18.1, the release of the upload completion (Code.js is 2.19.0 now)', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), /\n \* 2\.18\.1 \(2026-10-05\)\n \*   - Fixed: a TDoc that entered the report while it was only reserved\n/.test(CODE)], [['2.19.0', '2026-10-05'], true]);
+  // The status dropdowns (T-2026.10.7) came after the upload completion. What they added to released functions, taken out again:
+  const DROPDOWN_HOOKS = [
+    "  // T-2026.10.7: a Status that is a dropdown is never written as text; the same rule is applied to its selected value.\n  if (statusCellHoldsDropdown_(statusInfo.cell)) return applyTdocStatusUpdateToDropdown_(table, tdocNumber, newStatus);\n",
+    "  // T-2026.10.7: its Status is text now; the end of the update makes it a dropdown where the report has them.\n  noteStatusDropdownCandidate_(row[tdocData.tdocCol], tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '');\n",
+    "      // T-2026.10.7: in a report with status dropdowns this text becomes one at the end of the run, if it has an option.\n      noteStatusDropdownCandidate_(tdocNumber, newStatus);\n"];
+  const withoutDropdownHooks = (source) => DROPDOWN_HOOKS.reduce((text, hook) => (text === null ? text : text.replace(hook, '')), source);
   // The release this hotfix is made on: T-2026.10.5, Code.js 2.18.0.
   const RELEASED = gitShow('template-release/T-2026.10.5:Code.js');
   if (!RELEASED) {
     console.log('  note: template-release/T-2026.10.5 is not available in this checkout; the comparisons with it are skipped.');
   } else {
-    const same = (names) => names.filter((name) => functionSource(CODE, name) === null || functionSource(CODE, name) !== functionSource(RELEASED, name));
-    check('the status logic is the released one, byte for byte',
+    const same = (names) => names.filter((name) => functionSource(CODE, name) === null || withoutDropdownHooks(functionSource(CODE, name)) !== functionSource(RELEASED, name));
+    check('the status logic is the released one, byte for byte (but for the dropdown branch of T-2026.10.7)',
       same(['applyTdocStatusUpdate_', 'updateTdocStatus_', 'normalizeStatus_', 'findStatusInDocTable_', 'styleStatusCell_']), []);
     check('so are the Reviewer request, its parsing, the Abstract row and the "no summary" cache',
       same(['fetchAndAddAbstract_', 'findAbstractInsertIndex_', 'isReviewerNoSummaryCached_', 'markReviewerNoSummary_', 'clearReviewerNoSummaryCache_', 'getFetchAbstractsSetting_']), []);
-    check('and the insertion of a new TDoc, the registration table and the revision placement',
+    check('and the insertion of a new TDoc (but for the note of T-2026.10.7), the registration table and the revision placement',
       same(['insertNewTdoc_', 'insertTDocTableAtIndex_', 'updateRegisteredDocumentsTable_', 'findRegistrationTable_', 'rearrangeRevisionTables_', 'setDispositionRevisedTo_', 'collectorUpdate_']), []);
     const released = functionNames(RELEASED);
-    check('of the released functions, exactly two changed: the update and the abstract sweep',
-      released.filter((name, i, list) => list.indexOf(name) === i && functionSource(CODE, name) !== functionSource(RELEASED, name)), ['continuousUpdateCore_', 'addAbstractsForTables_']);
+    // The eleven other functions are those the status dropdowns changed (tests/status-dropdown.test.js, tests/adhoc-sessions-config.test.js).
+    const DROPDOWN_FUNCTIONS = ['insertNewTdoc_', 'applyTdocStatusUpdate_', 'updateStatusWithStrictRules_', 'insertRevisedDocTablesAfter_', 'analyzeReportStatus', 'runFullReportBuildCore_', 'buildSkeletonWithTdocTables',
+      'appendTdocDetailTable_', 'collectRevisionsOnly', 'detectTdocTablesInDocument_', 'generateTdocDiscussionEmails'];
+    check('of the released functions, the upload completion changed exactly two: the update and the abstract sweep',
+      released.filter((name, i, list) => list.indexOf(name) === i && functionSource(CODE, name) !== functionSource(RELEASED, name) && DROPDOWN_FUNCTIONS.indexOf(name) === -1), ['continuousUpdateCore_', 'addAbstractsForTables_']);
     check('the new functions are the seven of the upload completion; none was removed',
-      [functionNames(CODE).filter((name) => released.indexOf(name) === -1).sort(), released.filter((name) => functionNames(CODE).indexOf(name) === -1)],
+      [functionNames(CODE).filter((name) => released.indexOf(name) === -1 && !/[sS]tatusD(ropdown|ocs)|^readTdocStatus_$|^statusCellHoldsDropdown_$|^mapPortalStatusToDropdownOption_$|^applyTdocStatusUpdateToDropdown_$/.test(name)).sort(), released.filter((name) => functionNames(CODE).indexOf(name) === -1)],
       [['addMissingTdocLink_', 'completeInsertedUploadedTdoc_', 'refreshRegistrationTableLinks_', 'refreshUploadedTdocMetadata_', 'tdocListLinkIsKnown_', 'tdocListLinkUrl_', 'tdocsNotUploadedYet_'].sort(), []]);
-    const withoutSection = CODE.replace(CODE.slice(CODE.indexOf('// =========================================================\n// TDOC UPLOAD COMPLETION'), CODE.indexOf('// =========================================================\n// AD-HOC SESSIONS (stage A)')), '');
+    // The section of the status dropdowns stands directly before the upload-completion section; both are left out.
+    const withoutSection = CODE.replace(CODE.slice(CODE.indexOf('// =========================================================\n// TDOC STATUS DROPDOWNS'), CODE.indexOf('// =========================================================\n// AD-HOC SESSIONS (stage A)')), '');
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
     // The header: the version line and the changelog entry of 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSection.replace(/ \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.18.1 (2026-10-05)\n', ' * Version: 2.18.0 (2026-10-02)\n');
-    check('outside its functions, the upload-completion section, the version line and the changelog entry of 2.18.1, Code.js is the released file',
+    const withoutRelease = withoutSection.replace(/ \* 2\.19\.0 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.19.0 (2026-10-05)\n', ' * Version: 2.18.0 (2026-10-02)\n');
+    check('outside its functions, the upload-completion and status-dropdown sections, the version line and the changelog entries of 2.18.1 and 2.19.0, Code.js is the released file',
       [outsideFunctions(withoutRelease) === outsideFunctions(RELEASED), withoutRelease === withoutSection], [true, false]);
   }
   const section = CODE.slice(CODE.indexOf('// TDOC UPLOAD COMPLETION'), CODE.indexOf('// AD-HOC SESSIONS (stage A)'));

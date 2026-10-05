@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.18.1 (2026-10-05)
+ * Version: 2.19.0 (2026-10-05)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,33 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.19.0 (2026-10-05)
+ *   - Added (template reports): the Status of a TDoc table as a native
+ *     Google Docs dropdown, "Document Status". Its definition -- option
+ *     names, their order and their colours -- is read from the master
+ *     template through the Google Docs API and created in the report by
+ *     Build Report from Scratch; nothing of it is in this code. Every path
+ *     that creates a TDoc table writes the Status as text, as before; at
+ *     the end of a build or an update the document is saved and each new
+ *     TDoc whose Portal status has an option gets a dropdown in place of
+ *     that text (finalizeStatusDropdowns_()). A Portal status without an
+ *     option stays as text; nothing is mapped to "other"; parked, Plenary
+ *     and other are never selected automatically.
+ *   - The status summary, the discussion e-mails and the Portal sync read
+ *     the value selected in a dropdown (readTdocStatus_()). The sync keeps
+ *     its rule: a status moves on only from reserved or available, or to
+ *     "revised"; a decision set in the Minutes is kept. A Portal status
+ *     that has no option changes nothing and is reported.
+ *   - In a report with status dropdowns, a Status that is still text
+ *     although it has an option (a call failed when its TDoc was added)
+ *     becomes a dropdown at a later update. Build Report from Scratch keeps
+ *     what was selected in a dropdown, by the rule of the sync.
+ *   - Unchanged: a report built before this release keeps its text
+ *     statuses and makes no Docs API call; nothing converts it. Without
+ *     the Docs API service, without a definition in the template, or when
+ *     a call fails, statuses are text as before. CENTRAL and Legacy do not
+ *     use the feature.
+ *   - appsscript.json: the Google Docs API advanced service. No new scope.
  * 2.18.1 (2026-10-05)
  *   - Fixed: a TDoc that entered the report while it was only reserved
  *     never got the hyperlink of its TDoc number, in its table or in the
@@ -1166,6 +1193,14 @@ function continuousUpdateCore_(context) {
       Logger.log('[PERF] formatting skipped: no structural change this run (no new/moved/inserted tables)');
     }
 
+    // T-2026.10.7: the last thing that touches the document -- dropdowns for the TDocs added by this run, and the
+    // dropdowns the status sync moved on. Not in a background run: it has no active document to save.
+    if (!context) {
+      const unmapped = statusDropdownRun_().unmapped.slice();
+      finalizeStatusDropdowns_('update');
+      if (unmapped.length) result.statusNotes = unmapped;
+    }
+
     Logger.log('=== COMPLETE ===');
 
   } catch (e) {
@@ -2036,6 +2071,8 @@ function insertNewTdoc_(body, tdocData, cfg, index, context) {
 
   const newTable = insertTDocTableAtIndex_(body, insertIdx, tempData, tdocData.richTextRow, tdocData.tdocCol);
   Logger.log(`Inserted ${row[tdocData.tdocCol]}`);
+  // T-2026.10.7: its Status is text now; the end of the update makes it a dropdown where the report has them.
+  noteStatusDropdownCandidate_(row[tdocData.tdocCol], tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '');
 
   if (index) {
     const parsed = parseExactSA4DocumentId_(String(row[tdocData.tdocCol] || '').trim());
@@ -2072,6 +2109,8 @@ function findParentRevisedToTable_(body, tdocNumber, index, context) {
 function applyTdocStatusUpdate_(table, tdocNumber, newStatus) {
   const statusInfo = findStatusInDocTable_(table);
   if (!statusInfo) return false;
+  // T-2026.10.7: a Status that is a dropdown is never written as text; the same rule is applied to its selected value.
+  if (statusCellHoldsDropdown_(statusInfo.cell)) return applyTdocStatusUpdateToDropdown_(table, tdocNumber, newStatus);
 
   const currentStatus = statusInfo.value.trim();
 
@@ -2083,6 +2122,8 @@ function applyTdocStatusUpdate_(table, tdocNumber, newStatus) {
     if (docStatus === 'reserved' || docStatus === 'available' || isRevised) {
       statusInfo.cell.setText(newStatus);
       styleStatusCell_(table);
+      // T-2026.10.7: in a report with status dropdowns this text becomes one at the end of the run, if it has an option.
+      noteStatusDropdownCandidate_(tdocNumber, newStatus);
       Logger.log(`Updated ${tdocNumber}: ${currentStatus} → ${newStatus}`);
       return true;
     }
@@ -4721,6 +4762,8 @@ function updateStatusWithStrictRules_(sheet, table) {
 
   var d = findStatusInDocTable_(table);
   if (!d) return;
+  // T-2026.10.7: this sheet-based path never writes into a Status cell that holds a dropdown.
+  if (statusCellHoldsDropdown_(d.cell)) return;
 
   var docStatus = normalizeStatus_(d.value);      // normalized: reserved/available/other
   var sheetStatusRaw = String(s.value || '').trim().toLowerCase();
@@ -5413,6 +5456,8 @@ function insertRevisedDocTablesAfter_(body, parentTable, revisions, cfg) {
     }
 
     styleStatusCell_(revTable);
+    // T-2026.10.7: see insertNewTdoc_().
+    noteStatusDropdownCandidate_(revTdoc, 'Available');
     insertAfter++;
     Logger.log(`Inserted revision table for ${revTdoc} after parent`);
   });
@@ -8746,7 +8791,8 @@ function analyzeReportStatus() {
     stats.total++;
     
     const tdoc = safeCellText_(t, 0, 1);
-    const status = findStatusText_(t);
+    // T-2026.10.7: the text of the Status cell as always, else the value selected in its dropdown.
+    const status = readTdocStatus_(t, findStatusText_(t));
     const minutes = findCellText_(t, 'Minutes');
     const disposition = findCellText_(t, 'Disposition');
     const email = findCellText_(t, 'E-mail Discussion') || findCellText_(t, 'Email discussion');
@@ -9810,6 +9856,7 @@ function runFullReportBuildCore_() {
   }
 
   resetReviewerTokenRunState_();
+  resetStatusDropdownRun_();
 
   phase('skeleton', function () {
     SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = true;
@@ -9831,6 +9878,14 @@ function runFullReportBuildCore_() {
   phase('formatting', function () {
     removeRowHeightAndSpacing();
   });
+  // T-2026.10.7: the last thing that touches the document. Only where a report can have status dropdowns at all;
+  // every other runtime has the phases it always had.
+  if (statusDropdownsAvailable_()) {
+    phase('status dropdowns', function () {
+      const done = finalizeStatusDropdowns_('build');
+      return done.ran ? { detail: done.inserted + ' dropdown(s) inserted' + (done.reason ? ' -- ' + done.reason : '') } : { skipped: true, detail: done.reason };
+    });
+  }
 
   const totalMs = Date.now() - totalStart;
   Logger.log('[FULLBUILD] total: ' + totalMs + ' ms -- ' + phases.map(function (p) { return p.name + ' ' + p.status + ' ' + p.ms + ' ms'; }).join(', '));
@@ -9984,6 +10039,10 @@ function buildSkeletonWithTdocTables(options) {
   // Ad-hoc sessions (stage B): what the Session column is computed from; null
   // unless this ad-hoc report has sessions.
   const tdocSessions = makeAdhocTdocSessionResolverSafely_();
+
+  // T-2026.10.7: what the status dropdowns say now is kept for the end of this build (nothing is read unless the
+  // report has status dropdowns).
+  captureStatusDropdownValuesForRebuild_();
 
   // Step 2: Clear document, set title
   const body = DocumentApp.getActiveDocument().getBody().clear();
@@ -10310,6 +10369,8 @@ function buildSkeletonWithTdocTables(options) {
             }
           }
           styleStatusCell_(table);
+          // T-2026.10.7: see insertNewTdoc_().
+          noteStatusDropdownCandidate_(row[tdocData.tdocCol], tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '');
         });
       }
     }
@@ -10969,6 +11030,8 @@ function appendTdocDetailTable_(body, tdocData, agendaItemLabel) {
     }
   }
   styleStatusCell_(table);
+  // T-2026.10.7: see insertNewTdoc_().
+  noteStatusDropdownCandidate_(row[tdocData.tdocCol], tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '');
 }
 
 /**
@@ -11068,7 +11131,10 @@ function collectRevisionsCore_() {
 }
 
 function collectRevisionsOnly() {
+  resetStatusDropdownRun_();
   collectRevisionsCore_();
+  // T-2026.10.7: revision tables added by this run get their dropdown (see finalizeStatusDropdowns_()).
+  finalizeStatusDropdowns_('update');
   DocumentApp.getUi().alert('Success', 'Revision collection completed.', DocumentApp.getUi().ButtonSet.OK);
 }
 
@@ -11779,6 +11845,604 @@ function setTdocTableAgendaItem_(table, value) {
     }
   }
   return false;
+}
+
+// =========================================================
+// TDOC STATUS DROPDOWNS (T-2026.10.7)
+// =========================================================
+//
+// The Status cell of a TDoc table can be a native Google Docs dropdown
+// ("Document Status") instead of text, so that a decision is set in the
+// Minutes with one click and shows in the colour of its option.
+//
+// DocumentApp cannot create, read or set a dropdown: it sees one as an
+// UNSUPPORTED element and its text as ''. The Google Docs API can do all
+// three. A dropdown also does not survive a copy of its document or a copy
+// into another document, so nothing is copied: the DEFINITION (title,
+// options, their order and their two colours) is read from the master
+// template through the API and created in the report, once.
+//
+// How it works:
+//   - Every path that creates a TDoc table writes the Status as TEXT, as
+//     every release did, and notes the TDoc as a candidate.
+//   - At the very end of a build or an update -- after the last change
+//     DocumentApp makes -- the document is saved, read once through the
+//     API, and each candidate whose Portal status maps to an option gets a
+//     dropdown in place of its text (finalizeStatusDropdowns_()). Positions
+//     are taken from that one read, never from before it.
+//   - Whatever fails, the Status cells stay as the text already written.
+//   - Readers (status summary, discussion e-mails) and the Portal sync get
+//     the selected value of a dropdown from the API, by TDoc number
+//     (readTdocStatus_(), applyTdocStatusUpdateToDropdown_()).
+//
+// Which reports: template-runtime reports only, and only once a Build
+// Report from Scratch of this release has created the definition (document
+// property STATUS_DROPDOWNS). A report that was built before stays on text
+// statuses: nothing converts it, and no API call is made for it.
+// A report keeps the definition it was built with.
+//
+// In a report that is so marked:
+//   - a Status that is still text although it has an option -- because a
+//     call failed when its TDoc was added -- becomes a dropdown at the end
+//     of a later update (statusDropdownHealCandidates_());
+//   - Build Report from Scratch keeps what was selected in a dropdown: the
+//     values are read before the document is cleared and, for a TDoc that
+//     is in the report again, decided by the rule of the sync
+//     (statusDropdownRebuildChoice_()).
+//
+// The Portal status is never guessed into an option: see
+// mapPortalStatusToDropdownOption_().
+
+const STATUS_DROPDOWN_TITLE_ = 'Document Status';
+// Document property: '1' once a build created or found the definition in this report.
+const STATUS_DROPDOWN_ENABLED_KEY_ = 'STATUS_DROPDOWNS';
+// Document property (optional): the document the definition is read from, instead of the master template.
+const STATUS_DROPDOWN_SOURCE_KEY_ = 'STATUS_DROPDOWN_SOURCE_DOC_ID';
+// Portal wordings that mean an option of another name.
+const STATUS_DROPDOWN_ALIASES_ = { 'replied to': 'replied' };
+// Options that are decisions of the meeting: never selected from a Portal status.
+const STATUS_DROPDOWN_MANUAL_ONLY_ = ['parked', 'plenary', 'other'];
+// Dropdowns inserted per batchUpdate (two requests each).
+const STATUS_DROPDOWN_BATCH_ = 50;
+const STATUS_DOCS_REPORT_FIELDS_ = 'revisionId,tabs(tabProperties(tabId),documentTab(dropdownDefinitions,body(content(startIndex,endIndex,table(tableRows(tableCells(content(paragraph(elements(startIndex,endIndex,textRun(content),dropdown(dropdownId,dropdownProperties)))))))))))';
+const STATUS_DOCS_SOURCE_FIELDS_ = 'tabs(documentTab(dropdownDefinitions),childTabs(documentTab(dropdownDefinitions)))';
+
+// What one execution knows: the statuses read through the API (undefined until asked), and what is to be written at its end.
+let STATUS_DROPDOWN_RUN_ = null;
+
+function resetStatusDropdownRun_() {
+  STATUS_DROPDOWN_RUN_ = null;
+}
+
+function statusDropdownRun_() {
+  // previous: what the dropdowns of the report said before a build cleared it ({ <TDoc number>: value }), or null.
+  if (!STATUS_DROPDOWN_RUN_) STATUS_DROPDOWN_RUN_ = { index: undefined, inserts: {}, updates: {}, unmapped: [], previous: null };
+  return STATUS_DROPDOWN_RUN_;
+}
+
+/** Whether this runtime can have status dropdowns at all: a template report with the Google Docs API service. Never throws. */
+function statusDropdownsAvailable_() {
+  try {
+    return !!templateRuntimeRelease_() && typeof Docs !== 'undefined' && !!Docs && !!Docs.Documents;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Pure: a status as it is compared -- trimmed, lower case, inner whitespace as one space. */
+function statusDropdownLabel_(status) {
+  return String(status === null || status === undefined ? '' : status).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Pure: the option of `options` that a Portal status selects, or null.
+ *   - the status and the option name are equal, case and outer whitespace
+ *     aside ("Agreed" -> agreed);
+ *   - "replied to" -> replied;
+ *   - parked, Plenary and other are never selected: they are decisions made
+ *     in the meeting, not Portal states;
+ *   - anything else, and an empty status, selects nothing: the caller keeps
+ *     the Portal's own wording as text. Nothing is ever mapped to "other".
+ */
+function mapPortalStatusToDropdownOption_(portalStatus, options) {
+  let label = statusDropdownLabel_(portalStatus);
+  if (!label) return null;
+  if (Object.prototype.hasOwnProperty.call(STATUS_DROPDOWN_ALIASES_, label)) label = STATUS_DROPDOWN_ALIASES_[label];
+  if (STATUS_DROPDOWN_MANUAL_ONLY_.indexOf(label) !== -1) return null;
+  const list = options || [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] && list[i].optionId && statusDropdownLabel_(list[i].displayValue) === label) return list[i];
+  }
+  return null;
+}
+
+/** Whether a Status cell holds a dropdown, as far as DocumentApp can tell: an UNSUPPORTED element in one of its paragraphs. Never throws. */
+function statusCellHoldsDropdown_(cell) {
+  try {
+    const UNSUPPORTED = DocumentApp.ElementType.UNSUPPORTED;
+    if (!UNSUPPORTED) return false;
+    for (let i = 0; i < cell.getNumChildren(); i++) {
+      const child = cell.getChild(i);
+      if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+      const paragraph = child.asParagraph();
+      if (typeof paragraph.getNumChildren !== 'function') continue;
+      for (let k = 0; k < paragraph.getNumChildren(); k++) if (paragraph.getChild(k).getType() === UNSUPPORTED) return true;
+    }
+  } catch (e) {
+    return false;
+  }
+  return false;
+}
+
+/** Pure: the text of a table cell of a Docs API document, without line ends. */
+function statusDocsCellText_(cell) {
+  let text = '';
+  ((cell && cell.content) || []).forEach(function (block) {
+    ((block.paragraph && block.paragraph.elements) || []).forEach(function (el) { if (el.textRun) text += String(el.textRun.content || ''); });
+  });
+  return text.replace(/\n/g, '');
+}
+
+/**
+ * Pure: what the Status cell of a Docs API document holds.
+ *   { kind: 'dropdown', dropdownId, definitionId, selectedOptionId, displayValue, text }
+ *   { kind: 'text', text, insertable, start, end, at }  -- insertable when
+ *     the cell is one paragraph of plain text: [start, end) is that text
+ *     without its line end, and a dropdown can take its place. `at` is
+ *     where that one paragraph begins, also when it is empty (null when the
+ *     cell is anything else).
+ */
+function statusDocsCellEntry_(cell) {
+  const blocks = (cell && cell.content) || [];
+  let raw = '';
+  let start = null;
+  let plain = blocks.length === 1 && !!blocks[0].paragraph;
+  const dropdowns = [];
+  blocks.forEach(function (block) {
+    ((block.paragraph && block.paragraph.elements) || []).forEach(function (el) {
+      if (el.textRun) {
+        if (start === null) start = el.startIndex;
+        raw += String(el.textRun.content || '');
+      } else if (el.dropdown) {
+        dropdowns.push(el.dropdown);
+      } else {
+        plain = false;
+      }
+    });
+  });
+  const text = raw.replace(/\n/g, '');
+  if (dropdowns.length) {
+    const props = dropdowns[0].dropdownProperties || {};
+    return { kind: 'dropdown', dropdownId: dropdowns[0].dropdownId, definitionId: props.dropdownDefinitionId, selectedOptionId: props.selectedOptionId,
+      displayValue: String(props.displayValue === null || props.displayValue === undefined ? '' : props.displayValue), text: text };
+  }
+  const single = plain && typeof start === 'number' && raw === text + '\n';
+  const insertable = single && text.length > 0;
+  return { kind: 'text', text: text, insertable: insertable, start: insertable ? start : null, end: insertable ? start + text.length : null, at: single ? start : null };
+}
+
+/**
+ * Pure: the statuses of a report, from one Docs API read of it.
+ * { tabId, definitions, definition, tables: { <TDoc number>: entry }, duplicates: { <TDoc number>: true } }
+ * A TDoc table is a table whose first cell reads "TDoc"; its number is the
+ * cell beside it; its Status cell is beside the label "Status" or "TDoc
+ * Status" -- the same structure the rest of this file reads. `definition`
+ * is the "Document Status" definition of the report ({ id, title, options })
+ * or null. A number that occurs twice is listed in `duplicates`: it is read
+ * from its first table and never written. null without a readable tab.
+ */
+function buildStatusDocsIndex_(document) {
+  const tab = ((document && document.tabs) || [])[0];
+  if (!tab || !tab.documentTab) return null;
+  const dt = tab.documentTab;
+  const definitions = dt.dropdownDefinitions || {};
+  let definition = null;
+  Object.keys(definitions).sort().forEach(function (id) {
+    const props = definitions[id].dropdownDefinitionProperties || {};
+    if (!definition && props.title === STATUS_DROPDOWN_TITLE_ && (props.options || []).length) definition = { id: id, title: props.title, options: props.options };
+  });
+  const tables = {};
+  const duplicates = {};
+  ((dt.body && dt.body.content) || []).forEach(function (element) {
+    if (!element.table) return;
+    const rows = element.table.tableRows || [];
+    if (!rows.length) return;
+    const head = rows[0].tableCells || [];
+    if (head.length < 2 || statusDocsCellText_(head[0]).trim() !== 'TDoc') return;
+    const number = statusDocsCellText_(head[1]).trim();
+    if (!number) return;
+    let entry = null;
+    for (let r = 0; r < rows.length && !entry; r++) {
+      const cells = rows[r].tableCells || [];
+      if (cells.length < 2) continue;
+      const key = statusDocsCellText_(cells[0]).trim().toLowerCase();
+      if (key === 'tdoc status' || key === 'status') entry = statusDocsCellEntry_(cells[1]);
+    }
+    if (!entry) return;
+    if (tables[number]) { duplicates[number] = true; return; }
+    tables[number] = entry;
+  });
+  return { tabId: tab.tabProperties ? tab.tabProperties.tabId : undefined, definitions: definitions, definition: definition, tables: tables, duplicates: duplicates };
+}
+
+/** One Docs API read, with a field mask; without it should the mask be refused. */
+function statusDocsGet_(documentId, fields) {
+  try {
+    return Docs.Documents.get(documentId, { includeTabsContent: true, fields: fields });
+  } catch (e) {
+    Logger.log('Status dropdowns: the read with a field mask failed (' + e.message + '); reading the document whole.');
+    return Docs.Documents.get(documentId, { includeTabsContent: true });
+  }
+}
+
+/**
+ * The statuses of the active report as the API has them, read at most once
+ * per execution; null when they cannot be read. It is asked for only when a
+ * Status cell holds a dropdown, so a report with text statuses costs no
+ * call. Never throws.
+ */
+function statusDropdownIndex_() {
+  const run = statusDropdownRun_();
+  if (run.index !== undefined) return run.index;
+  run.index = null;
+  if (!statusDropdownsAvailable_()) return null;
+  try {
+    run.index = buildStatusDocsIndex_(statusDocsGet_(DocumentApp.getActiveDocument().getId(), STATUS_DOCS_REPORT_FIELDS_));
+  } catch (e) {
+    Logger.log('Status dropdowns: the statuses could not be read (' + e.message + '). A status that is a dropdown counts as unknown in this run.');
+  }
+  return run.index;
+}
+
+/** The API's entry for the dropdown in the Status cell of a TDoc table, or null (text status, or not readable). Never throws. */
+function statusDropdownEntryOfTable_(table) {
+  try {
+    const info = findStatusInDocTable_(table);
+    if (!info || !statusCellHoldsDropdown_(info.cell)) return null;
+    const index = statusDropdownIndex_();
+    if (!index) return null;
+    const entry = index.tables[String(safeCellText_(table, 0, 1) || '').trim()];
+    return entry && entry.kind === 'dropdown' ? entry : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * THE way to read the status of a TDoc table. `legacyText` is the text of
+ * the Status cell as the caller has always read it: when it has any, that
+ * is the status, exactly as before. Otherwise, when the cell holds a
+ * dropdown, the value selected in it. '' when there is neither.
+ */
+function readTdocStatus_(table, legacyText) {
+  const text = String(legacyText === null || legacyText === undefined ? '' : legacyText).trim();
+  if (text) return text;
+  const entry = statusDropdownEntryOfTable_(table);
+  return entry ? entry.displayValue.trim() : '';
+}
+
+/** A creation path wrote the Status of a new TDoc table as text: remembered, to become a dropdown at the end of the execution. Never throws. */
+function noteStatusDropdownCandidate_(tdocNumber, portalStatus) {
+  try {
+    if (!statusDropdownsAvailable_()) return;
+    const number = String(tdocNumber === null || tdocNumber === undefined ? '' : tdocNumber).trim();
+    const status = String(portalStatus === null || portalStatus === undefined ? '' : portalStatus).trim();
+    if (number && status) statusDropdownRun_().inserts[number] = status;
+  } catch (e) {
+    // a candidate that is not noted keeps its text status
+  }
+}
+
+/**
+ * The Portal sync for a Status cell that holds a dropdown: the rule of
+ * applyTdocStatusUpdate_(), on the value selected in the dropdown. The
+ * status moves on only from reserved or available, or to a "revised"
+ * status -- so a decision set in the Minutes is not replaced. A Portal
+ * status that has no option changes nothing: the dropdown and its value
+ * stay, and the status is logged and reported. The change itself is written
+ * at the end of the execution. The cell is never written here.
+ */
+function applyTdocStatusUpdateToDropdown_(table, tdocNumber, newStatus) {
+  const entry = statusDropdownEntryOfTable_(table);
+  if (!entry) {
+    Logger.log('Status dropdowns: ' + tdocNumber + ' has a dropdown status that could not be read; it is left as it is.');
+    return false;
+  }
+  const run = statusDropdownRun_();
+  const definition = (run.index.definitions || {})[entry.definitionId];
+  const options = (definition && definition.dropdownDefinitionProperties && definition.dropdownDefinitionProperties.options) || [];
+  const option = mapPortalStatusToDropdownOption_(newStatus, options);
+  if (option && option.optionId === entry.selectedOptionId) return false;
+  if (!option && statusDropdownLabel_(newStatus) === statusDropdownLabel_(entry.displayValue)) return false;
+  const docStatus = normalizeStatus_(entry.displayValue);
+  const isRevised = String(newStatus).toLowerCase().includes('revised');
+  if (!(docStatus === 'reserved' || docStatus === 'available' || isRevised)) return false;
+  if (!option) {
+    const note = tdocNumber + ': the Portal status "' + newStatus + '" has no option in the Status dropdown; "' + entry.displayValue + '" is kept.';
+    if (run.unmapped.indexOf(note) === -1) run.unmapped.push(note);
+    Logger.log('Status dropdowns: ' + note);
+    return false;
+  }
+  run.updates[tdocNumber] = newStatus;
+  Logger.log(`Updated ${tdocNumber}: ${entry.displayValue} → ${option.displayValue} (dropdown)`);
+  entry.displayValue = String(option.displayValue);
+  entry.selectedOptionId = option.optionId;
+  return true;
+}
+
+/**
+ * The "Document Status" definition the report is given: read from the
+ * master template (or from the document the report names in
+ * STATUS_DROPDOWN_SOURCE_DOC_ID), exactly as it is there. Among several of
+ * that title, the one with the most options. null when there is none.
+ */
+function readStatusDropdownSourceDefinition_() {
+  const override = String(PropertiesService.getDocumentProperties().getProperty(STATUS_DROPDOWN_SOURCE_KEY_) || '').trim();
+  const release = templateRuntimeRelease_();
+  const sourceId = override || (release && release.templateDocumentId) || '';
+  if (!sourceId) return null;
+  const source = statusDocsGet_(sourceId, STATUS_DOCS_SOURCE_FIELDS_);
+  let found = null;
+  const walk = function (tabs) {
+    (tabs || []).forEach(function (tab) {
+      const defs = (tab.documentTab && tab.documentTab.dropdownDefinitions) || {};
+      Object.keys(defs).sort().forEach(function (id) {
+        const props = defs[id].dropdownDefinitionProperties || {};
+        if (props.title !== STATUS_DROPDOWN_TITLE_ || (props.options || []).length < 2) return;
+        if (!found || props.options.length > found.options.length) found = props;
+      });
+      walk(tab.childTabs);
+    });
+  };
+  walk(source.tabs);
+  return found;
+}
+
+/**
+ * Pure: the request that creates a definition equal to `properties` -- its
+ * title and, in their order, the name and the two colours of every option.
+ * Nothing else of an option exists for the request, and nothing is added.
+ */
+function statusDropdownDefinitionRequest_(properties, tabId) {
+  const options = (properties.options || []).map(function (option) {
+    const out = { displayValue: option.displayValue };
+    const style = {};
+    const ts = option.textStyle || {};
+    if (ts.foregroundColor) style.foregroundColor = ts.foregroundColor;
+    if (ts.backgroundColor) style.backgroundColor = ts.backgroundColor;
+    if (Object.keys(style).length) out.textStyle = style;
+    return out;
+  });
+  const request = { dropdownDefinition: { dropdownDefinitionProperties: { title: properties.title, options: options } } };
+  if (tabId) request.tabId = tabId;
+  return { createDropdownDefinition: request };
+}
+
+/** Creates the definition in the report. { id, title, options } with the option ids of the report, or null when the source has none. */
+function createStatusDropdownDefinition_(documentId, tabId) {
+  const properties = readStatusDropdownSourceDefinition_();
+  if (!properties) return null;
+  const reply = Docs.Documents.batchUpdate({ requests: [statusDropdownDefinitionRequest_(properties, tabId)] }, documentId);
+  const made = reply.replies[0].createDropdownDefinition.dropdownDefinition;
+  return { id: made.dropdownDefinitionId, title: made.dropdownDefinitionProperties.title, options: made.dropdownDefinitionProperties.options };
+}
+
+/** Pure: the option of that very name (case and outer whitespace aside), or null. No alias, and every option counts: this is for a value that was selected, not for a Portal status. */
+function statusDropdownOptionByName_(name, options) {
+  const label = statusDropdownLabel_(name);
+  if (!label) return null;
+  const list = options || [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] && list[i].optionId && statusDropdownLabel_(list[i].displayValue) === label) return list[i];
+  }
+  return null;
+}
+
+/**
+ * Pure: the text statuses of a dropdown report that should be dropdowns --
+ * { <TDoc number>: its text }. A Status cell qualifies when it belongs to a
+ * TDoc table that occurs once, is one paragraph of plain text, and that text
+ * is a Portal status with an option of `definition`. Everything else is
+ * left out: an unmapped or empty status, text beside something else, a cell
+ * that has a dropdown. This is what makes a failed insert heal itself.
+ */
+function statusDropdownHealCandidates_(index, definition) {
+  const out = {};
+  if (!index || !definition) return out;
+  Object.keys(index.tables).forEach(function (number) {
+    const entry = index.tables[number];
+    if (entry.kind !== 'text' || !entry.insertable || index.duplicates[number]) return;
+    if (mapPortalStatusToDropdownOption_(entry.text, definition.options)) out[number] = entry.text;
+  });
+  return out;
+}
+
+/**
+ * Pure: after a rebuild, the option a TDoc's dropdown is given INSTEAD of
+ * the one of its Portal status -- or null, for the normal result.
+ * `previousValue` is what its dropdown said before the rebuild. It is kept
+ * exactly when the sync would have kept it: it is an option of the
+ * definition, it is not reserved or available (those follow the Portal),
+ * and the Portal status is not a "revised" one (which always applies). A
+ * value that is no option of the definition is not kept and not guessed.
+ */
+function statusDropdownRebuildChoice_(previousValue, portalStatus, options) {
+  const option = statusDropdownOptionByName_(previousValue, options);
+  if (!option) return null;
+  const docStatus = normalizeStatus_(previousValue);
+  if (docStatus === 'reserved' || docStatus === 'available') return null;
+  if (String(portalStatus === null || portalStatus === undefined ? '' : portalStatus).toLowerCase().includes('revised')) return null;
+  return option;
+}
+
+/**
+ * Build Report from Scratch, before the document is cleared: what the
+ * dropdowns of a dropdown report say, by TDoc number, kept for the end of
+ * this build (finalizeStatusDropdowns_()). Nothing is read for a report
+ * that is not marked, and a text status is not kept: a rebuild writes text
+ * statuses from the Portal, as it always did. Never throws.
+ */
+function captureStatusDropdownValuesForRebuild_() {
+  try {
+    if (!statusDropdownsAvailable_()) return;
+    if (PropertiesService.getDocumentProperties().getProperty(STATUS_DROPDOWN_ENABLED_KEY_) !== '1') return;
+    const index = statusDropdownIndex_();
+    if (!index) return;
+    const previous = {};
+    Object.keys(index.tables).forEach(function (number) {
+      const entry = index.tables[number];
+      if (entry.kind === 'dropdown' && !index.duplicates[number] && entry.displayValue.trim()) previous[number] = entry.displayValue.trim();
+    });
+    statusDropdownRun_().previous = previous;
+  } catch (e) {
+    Logger.log('Status dropdowns: the selected values could not be read before the rebuild (' + e.message + '); the statuses come from the Portal.');
+  }
+}
+
+/**
+ * Pure: what is to be sent, from ONE read of the report (`index`).
+ *   updates  { <TDoc number>: Portal status }  dropdowns to set to the option
+ *            of that status;
+ *   inserts  { <TDoc number>: Portal status }  text statuses to replace by a
+ *            dropdown of `definition` (null: none);
+ *   forced   { <TDoc number>: option }  for these the dropdown gets this
+ *            option instead of the one of the status -- also where the
+ *            status has no option, and where the cell is empty.
+ * A TDoc is left alone when its Status cell is not what was expected: no
+ * table, a number that occurs twice, text other than the status that was
+ * written, a cell that is not one plain paragraph, a status without option.
+ * Returns { updateRequests, updated, insertPairs, left }: each insert pair
+ * is { number, start, requests: [deleteContentRange, insertDropdown] } (an
+ * empty cell: [insertDropdown]),
+ * from the END of the document to its beginning, so that a pair never
+ * moves the position of one that follows it in the list.
+ */
+function planStatusDropdownRequests_(index, definition, inserts, updates, forced) {
+  const out = { updateRequests: [], updated: [], insertPairs: [], left: [] };
+  const withTab = function (o) { if (index.tabId) o.tabId = index.tabId; return o; };
+  Object.keys(updates || {}).sort().forEach(function (number) {
+    const entry = index.tables[number];
+    if (!entry || entry.kind !== 'dropdown' || index.duplicates[number]) { out.left.push(number); return; }
+    const def = (index.definitions || {})[entry.definitionId];
+    const option = mapPortalStatusToDropdownOption_(updates[number], (def && def.dropdownDefinitionProperties && def.dropdownDefinitionProperties.options) || []);
+    if (!option) { out.left.push(number); return; }
+    if (option.optionId === entry.selectedOptionId) return;
+    out.updateRequests.push({ updateDropdownProperties: withTab({ dropdownId: entry.dropdownId, dropdownProperties: { selectedOptionId: option.optionId }, fields: 'selectedOptionId' }) });
+    out.updated.push(number);
+  });
+  if (definition) {
+    const wanted = {};
+    Object.keys(inserts || {}).forEach(function (number) { wanted[number] = inserts[number]; });
+    Object.keys(forced || {}).forEach(function (number) { if (!Object.prototype.hasOwnProperty.call(wanted, number)) wanted[number] = ''; });
+    Object.keys(wanted).forEach(function (number) {
+      const entry = index.tables[number];
+      const written = String(wanted[number]).trim();
+      if (!entry || entry.kind !== 'text' || index.duplicates[number]) { out.left.push(number); return; }
+      if (entry.text.trim() !== written) { out.left.push(number); return; }
+      const option = (forced && forced[number]) || mapPortalStatusToDropdownOption_(wanted[number], definition.options);
+      if (!option) return;                                    // no option for this status: its text is the status
+      const insert = function (at) { return { insertDropdown: { location: withTab({ index: at }), dropdownDefinitionId: definition.id, selectedOptionId: option.optionId } }; };
+      if (entry.insertable) {
+        out.insertPairs.push({ number: number, start: entry.start, requests: [{ deleteContentRange: { range: withTab({ startIndex: entry.start, endIndex: entry.end }) } }, insert(entry.start)] });
+      } else if (entry.text === '' && typeof entry.at === 'number') {
+        out.insertPairs.push({ number: number, start: entry.at, requests: [insert(entry.at)] });   // an empty cell: nothing to delete
+      } else {
+        out.left.push(number);
+      }
+    });
+  }
+  out.insertPairs.sort(function (a, b) { return b.start - a.start; });
+  return out;
+}
+
+/**
+ * The end of a build ('build') or of an update ('update'): THE LAST thing
+ * that touches the document in the execution. Saves the document, reads it
+ * once through the API, creates the definition if the report has none, and
+ * sends the dropdown changes in batches; each batch is applied as a whole
+ * or not at all, so no Status cell is ever left half written.
+ *   - a build makes dropdowns in any template report whose template has the
+ *     definition, and marks the report (STATUS_DROPDOWNS) as soon as it has
+ *     the definition; a TDoc whose dropdown had a value before the rebuild
+ *     gets it back where the sync would have kept it;
+ *   - an update makes them for new TDocs of a report that is so marked,
+ *     sets the dropdowns the Portal sync decided to move on, and makes a
+ *     dropdown of every text status that has an option -- so that an
+ *     insert that failed is made up for by a later update.
+ * Returns { ran, inserted, updated, reason }. Never throws: on any problem
+ * the statuses that were not converted stay as the text already written.
+ */
+function finalizeStatusDropdowns_(mode) {
+  const result = { ran: false, inserted: 0, updated: 0, reason: '' };
+  const run = statusDropdownRun_();
+  try {
+    if (!statusDropdownsAvailable_()) { result.reason = 'not available in this runtime'; return result; }
+    const props = PropertiesService.getDocumentProperties();
+    const marked = props.getProperty(STATUS_DROPDOWN_ENABLED_KEY_) === '1';
+    const previous = mode === 'build' && run.previous ? run.previous : {};
+    // A marked report: is a Status still text although it has an option? Seen in the read this update already made for
+    // its sync, or in one read made now. A report that is not marked is never read for this.
+    let heal = false;
+    if (mode === 'update' && marked) {
+      const seen = statusDropdownIndex_();
+      heal = !!seen && Object.keys(statusDropdownHealCandidates_(seen, seen.definition)).length > 0;
+    }
+    const wantInserts = Object.keys(run.inserts).length > 0 || Object.keys(previous).length > 0;
+    const wantUpdates = Object.keys(run.updates).length > 0;
+    if (!wantInserts && !wantUpdates && !heal) { result.reason = 'nothing to do'; return result; }
+    const mayInsert = (wantInserts || heal) && (mode === 'build' || marked);
+    if (!mayInsert && !wantUpdates) { result.reason = 'this report has text statuses'; return result; }
+
+    const doc = DocumentApp.getActiveDocument();
+    const documentId = doc.getId();
+    doc.saveAndClose();
+    result.ran = true;
+    const index = buildStatusDocsIndex_(statusDocsGet_(documentId, STATUS_DOCS_REPORT_FIELDS_));
+    if (!index) throw new Error('the document has no readable tab');
+    let definition = index.definition;
+    if (!definition && mayInsert) definition = createStatusDropdownDefinition_(documentId, index.tabId);
+    if (!definition && mayInsert) result.reason = 'no "' + STATUS_DROPDOWN_TITLE_ + '" dropdown is defined in the template';
+    // The report has its definition: from here on it is a dropdown report, whatever becomes of the inserts below.
+    if (definition && mode === 'build') props.setProperty(STATUS_DROPDOWN_ENABLED_KEY_, '1');
+
+    // What gets a dropdown: the TDocs this run wrote, and -- in a dropdown report -- every text status that has an option.
+    const inserts = {};
+    if (mayInsert && definition) {
+      const healing = statusDropdownHealCandidates_(index, definition);
+      Object.keys(healing).forEach(function (number) { inserts[number] = healing[number]; });
+    }
+    Object.keys(run.inserts).forEach(function (number) { inserts[number] = run.inserts[number]; });
+    // After a rebuild: the values the dropdowns had, where the sync would have kept them.
+    const forced = {};
+    if (definition) {
+      Object.keys(previous).forEach(function (number) {
+        if (!index.tables[number]) return;                    // the TDoc is not in the report any more
+        const portal = Object.prototype.hasOwnProperty.call(run.inserts, number) ? run.inserts[number] : '';
+        const kept = statusDropdownRebuildChoice_(previous[number], portal, definition.options);
+        if (kept) forced[number] = kept;
+      });
+    }
+
+    const plan = planStatusDropdownRequests_(index, mayInsert ? definition : null, inserts, run.updates, forced);
+    if (plan.updateRequests.length) {
+      Docs.Documents.batchUpdate({ requests: plan.updateRequests }, documentId);
+      result.updated = plan.updated.length;
+    }
+    for (let i = 0; i < plan.insertPairs.length; i += STATUS_DROPDOWN_BATCH_) {
+      const chunk = plan.insertPairs.slice(i, i + STATUS_DROPDOWN_BATCH_);
+      let requests = [];
+      chunk.forEach(function (pair) { requests = requests.concat(pair.requests); });
+      Docs.Documents.batchUpdate({ requests: requests }, documentId);
+      result.inserted += chunk.length;
+    }
+    Logger.log('Status dropdowns: ' + result.inserted + ' inserted, ' + result.updated + ' updated' + (plan.left.length ? ', ' + plan.left.length + ' left as they are' : '') + (result.reason ? ' (' + result.reason + ')' : '') + '.');
+  } catch (e) {
+    result.reason = e.message;
+    Logger.log('Status dropdowns: not completed (' + e.message + '). Statuses that were not converted stay as text.');
+  } finally {
+    resetStatusDropdownRun_();
+  }
+  return result;
 }
 
 // =========================================================
@@ -19207,7 +19871,8 @@ function detectTdocTablesInDocument_(body) {
     // never a third catch-all reason, since no other hard-exclusion rule
     // exists in this codebase (see isEmailExportReserved_()'s own header
     // comment for the codebase-wide check that confirmed this).
-    const status = findCellText_(t, 'Status').trim();
+    // T-2026.10.7: the text of the Status cell as always, else the value selected in its dropdown.
+    const status = readTdocStatus_(t, findCellText_(t, 'Status'));
     const approvedOrAgreed = isEmailExportStatusExcluded_(status);
     const reserved = !approvedOrAgreed && isEmailExportReserved_(status);
     found.push({
@@ -19950,7 +20615,7 @@ function generateTdocDiscussionEmails(selections, globalText) {
       // but this re-verifies against the table's CURRENT status regardless
       // of what the client actually sent, so an excluded TDoc can never
       // enter an export (single or grouped) through this RPC either.
-      const currentStatus = findCellText_(table, 'Status').trim();
+      const currentStatus = readTdocStatus_(table, findCellText_(table, 'Status'));
       if (isEmailExportReserved_(currentStatus)) {
         throw new Error(meta.tdoc + ' is reserved (no content submitted yet) and is excluded from discussion e-mail export.');
       }

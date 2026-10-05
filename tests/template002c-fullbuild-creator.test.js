@@ -144,7 +144,12 @@ console.log('1. the live failure (T-2026.10.2): a UI that fails once the documen
   const wrapper = CODE.slice(CODE.indexOf('function runFullReportBuild()'), CODE.indexOf('function runFullReportBuildCore_()')).replace(/^\s*\/\/.*$/gm, '');
   check('after runFullReportBuildCore_() the menu function makes no UI or document call (source)',
     /ui\.|getUi|DocumentApp|DriveApp|saveAndClose/.test(wrapper.slice(wrapper.indexOf('runFullReportBuildCore_()'))), false);
-  check('the build still never saves or flushes explicitly, and still runs in one execution', [/saveAndClose\s*\(|\.flush\s*\(/.test(CODE_ONLY), (CODE.match(/phase\('/g) || []).length], [false, 5]);
+  // T-2026.10.7: one save, in the step that ends a build or an update of a report with status dropdowns -- after the last
+  // change of the document, and never before a UI call. A runtime without the Google Docs API service has the five phases above.
+  const finalize = CODE_ONLY.slice(CODE_ONLY.indexOf('function finalizeStatusDropdowns_('), CODE_ONLY.indexOf('\n}\n', CODE_ONLY.indexOf('function finalizeStatusDropdowns_(')));
+  check('the build still never flushes, and saves in one place only: the status-dropdown step at its very end; it still runs in one execution',
+    [/\.flush\s*\(/.test(CODE_ONLY), (CODE_ONLY.match(/saveAndClose\s*\(/g) || []).length, (finalize.match(/saveAndClose\s*\(/g) || []).length, (CODE.match(/phase\('/g) || []).length,
+      /if \(statusDropdownsAvailable_\(\)\) \{\n    phase\('status dropdowns'/.test(CODE)], [false, 1, 1, 6, true]);
 }
 
 console.log('1. declining the confirmation runs nothing');
