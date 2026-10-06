@@ -572,10 +572,21 @@ console.log('10. nothing else changed');
     // The status dropdowns (T-2026.10.7) added, in existing functions: the note of a new TDoc in the four paths that create a
     // TDoc table, the dropdown branch of the status sync and its guard in the old sheet path, the status read in the readers,
     // and the last step of a build and of a revision collection; tests/status-dropdown.test.js covers them.
-    check('Code.js: every function of T-2026.10.4 is byte-for-byte what it was, but the seven of the releases since and nine more for the status dropdowns', changed(CODE, OLD_CODE),
-      ['continuousUpdateCore_', 'insertNewTdoc_', 'applyTdocStatusUpdate_', 'updateRegisteredDocumentsTable_', 'createSummaryTable_', 'updateStatusWithStrictRules_', 'insertRevisedDocTablesAfter_', 'analyzeReportStatus',
-        'runFullReportBuildCore_', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_', 'appendTdocDetailTable_', 'collectRevisionsOnly', 'addAbstractsForTables_', 'detectTdocTablesInDocument_', 'generateTdocDiscussionEmails']);
-    check('ReportCreator.js: only the report menu (the Sessions submenu, and the item that converts the Status fields of an existing report) and the build question changed', changed(CREATOR, OLD_CREATOR), ['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_']);
+    // After T-2026.10.8, five more: the guard of fetchAndAddAbstract_() (no abstract for a withdrawn TDoc), the start of the
+    // meeting in persistConfigurationSettings_(), the Portal's time zone in computeResolvedMeetingPreview_(), and Configure
+    // Meeting (configureMeetingSettings(), saveConfigurationSettings()), whose Save carries the start its Resolve found.
+    // And six for the personal Reviewer token: its readers, which now ask one resolver (tests/personal-reviewer-token.test.js). The update, the
+    // sweep and the build, which that work also touches, were in the list already. tests/after-10-8-ledger.test.js compares
+    // every one of them with T-2026.10.8.
+    check('Code.js: every function of T-2026.10.4 is byte-for-byte what it was, but the seven of the releases since, nine more for the status dropdowns and eleven more after T-2026.10.8', changed(CODE, OLD_CODE),
+      ['continuousUpdateCore_', 'insertNewTdoc_', 'applyTdocStatusUpdate_', 'updateRegisteredDocumentsTable_', 'getReportConfig_', 'createSummaryTable_', 'fetchAndAddAbstract_', 'updateStatusWithStrictRules_', 'insertRevisedDocTablesAfter_',
+        'configureMeetingSettings', 'saveConfigurationSettings', 'persistConfigurationSettings_', 'testAllConnections', 'analyzeReportStatus', 'testReviewerApi', 'validateConfiguration',
+        'runFullReportBuildCore_', 'getReviewerApiTokenForRun_', 'resetReviewerTokenRunState_', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_', 'appendTdocDetailTable_', 'collectRevisionsOnly', 'addAbstractsForTables_', 'computeResolvedMeetingPreview_', 'detectTdocTablesInDocument_', 'generateTdocDiscussionEmails']);
+    // After T-2026.10.8: the start of the meeting in the setup information (payload and its validation), and the drafts folder
+    // of a new ad-hoc report (the first run, what it reports, and About This Report).
+    check('ReportCreator.js: only the report menu (the Sessions submenu, and the item that converts the Status fields of an existing report), the build question and, after T-2026.10.8, the setup of a new report changed', changed(CREATOR, OLD_CREATOR),
+      ['buildReportBootstrapPayload_', 'validateBootstrapPayload_', 'finishReportSetupWith_', 'describeTemplateRuntime_', 'buildTemplateReportMenu_', 'liveTemplateDeps_', 'ensureReportBootstrapped_', 'finishReportSetup',
+        'confirmTemplateBuildFromScratch_', 'showTemplateInfo']);
     // Outside the functions: constants and comments. Without the ad-hoc sections and the two adoption keys they are unchanged.
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
     const start = CODE.indexOf('// AD-HOC SESSIONS (stage A) -- SESSION MODEL AND CONFIGURATION\n');
@@ -587,10 +598,13 @@ console.log('10. nothing else changed');
     // The section of the status dropdowns (T-2026.10.7) stands directly before the upload-completion section.
     const dropdownStart = CODE.indexOf(BAR + '// TDOC STATUS DROPDOWNS (T-2026.10.7)\n');
     check('the status dropdowns are one section, directly before the upload completion', [dropdownStart !== -1, dropdownStart < uploadStart, CODE.slice(uploadStart - 1, uploadStart)], [true, true, '\n']);
-    const withoutSections = (CODE.slice(0, dropdownStart) + BAR + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
+    // The section of the work after T-2026.10.8 stands directly before the section of the status dropdowns.
+    const after108Start = CODE.indexOf(BAR + '// AFTER T-2026.10.8 -- WITHDRAWN TDOCS AND ABSTRACTS; THE START OF AN AD-HOC MEETING\n');
+    check('the work after T-2026.10.8 is one section, directly before the status dropdowns', [after108Start !== -1, after108Start < dropdownStart, CODE.slice(dropdownStart - 1, dropdownStart)], [true, true, '\n']);
+    const withoutSections = (CODE.slice(0, after108Start) + BAR + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
     // The header: the version line and the changelog entries of 2.18.0 and 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSections.replace(/ \* 2\.20\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.20.0 (2026-10-06)\n', ' * Version: 2.17.4 (2026-10-01)\n');
-    check('Code.js outside its functions, without the ad-hoc, upload-completion and status-dropdown sections, the two adoption keys, the version line and the changelog entries since 2.17.4, is the T-2026.10.4 file outside its functions',
+    const withoutRelease = withoutSections.replace(/ \* 2\.21\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.21.0 (2026-10-06)\n', ' * Version: 2.17.4 (2026-10-01)\n');
+    check('Code.js outside its functions, without the ad-hoc, upload-completion, status-dropdown and after-T-2026.10.8 sections, the two adoption keys, the version line and the changelog entries since 2.17.4, is the T-2026.10.4 file outside its functions',
       [outsideFunctions(withoutRelease) === outsideFunctions(OLD_CODE), withoutRelease === withoutSections], [true, false]);
   }
 

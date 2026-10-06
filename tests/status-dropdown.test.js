@@ -626,7 +626,7 @@ console.log('\n11. reports with text statuses: unchanged, and no API call');
   check('the manifest: the Google Docs API service beside Drive, and no new scope', (() => { const m = JSON.parse(fs.readFileSync(require('path').join(__dirname, '..', 'appsscript.json'), 'utf8')); return [m.dependencies.enabledAdvancedServices, m.oauthScopes.length, m.oauthScopes.filter((x) => /documents$/.test(x)).length, m.timeZone, m.runtimeVersion]; })(),
     [[{ userSymbol: 'Drive', serviceId: 'drive', version: 'v3' }, { userSymbol: 'Docs', serviceId: 'docs', version: 'v1' }], 6, 1, 'Europe/Berlin', 'V8']);
   check('the feature stores one property of its own and reads one more (source)', [(CODE.match(/const STATUS_DROPDOWN_[A-Z_]*KEY_ = '[A-Z_]+';/g) || []).length, /STATUS_DROPDOWN/.test(JSON.stringify(S.ADDON003_ADOPTION_FIXED_KEYS_))], [2, false]);
-  check('Code.js is version 2.20.0', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.20.0');
+  check('Code.js is version 2.21.0 (the status dropdowns came with 2.19.0)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.0');
 }
 
 // ================================================================ 12. a dropdown that could not be made

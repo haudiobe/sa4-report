@@ -410,7 +410,9 @@ console.log('4. Email Collection Start Date: a normal Configure Meeting field in
   check('(1) Resolve proposes the meeting start date', startField(c).value, '2026-10-01');
   c.d.globals.saveConfig();
   check('(1) saved through the existing EMAIL_START_DATE property', c.docProps._store.EMAIL_START_DATE, '2026-10-01');
-  check('(1) no second property for the same thing', c.docProps.getKeys().filter((k) => /START/i.test(k)), ['EMAIL_START_DATE']);
+  // After T-2026.10.8 the same save also stores the start of the meeting (time of day and time zone), which is another thing.
+  check('(1) no second property for the same thing', c.docProps.getKeys().filter((k) => /START/i.test(k) && !/^MEETING_START_(TIME|BASIS)$/.test(k)), ['EMAIL_START_DATE']);
+  check('(1) the start of the meeting that Resolve found is stored by that save', ['MEETING_START_TIME', 'MEETING_TIME_ZONE', 'MEETING_START_BASIS'].map((k) => c.docProps.getProperty(k)), ['15:30', 'UTC+2', '86172|October 1, 2026']);
   check('(1) the collector uses it', c.s.getCollectorConfig_().EMAIL_START_DATE, '2026-10-01');
 }
 {

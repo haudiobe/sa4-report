@@ -548,7 +548,8 @@ console.log('6. Build from Scratch');
       HEADING, 'A01: September 22, 2026, 15:00–18:00', 'A02: Offline, September 23, 2026', 'A03: September 24, 2026, 15:00', '1.2 Registration of Documents']]);
   check('without details it says when the sessions are, and nothing was stored for it', [r.container().length, r.docProps.getProperty(KEY)], [4, null]);
   // E1: the section is the one place that says who chaired and when.
-  const LEGACY = '<Chair> opens the session on September 28, 2026 at <start> CEST.';
+  // After T-2026.10.8: no time zone is assumed ("CEST" was), and this report has no stored start (tests/meeting-start-opening.test.js).
+  const LEGACY = '<Chair> opens the session on September 28, 2026 at <start> <time zone>.';
   check('with sessions the build does not write the "<Chair> opens the session ..." line, and nothing in its place', [r.texts().filter((t) => /<Chair>|opens the session on|<start>|CEST/.test(t)), r.texts()[r.texts().indexOf(HEADING) - 1]], [[], 'Docs Folder: https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Audio/Docs/']);
   check('an ad-hoc report without sessions still gets that line, where it always was', [plain.texts().filter((t) => /opens the session on/.test(t)), plain.texts()[plain.texts().indexOf('1.1 Opening of the session') + 1], plain.texts()[plain.texts().indexOf('1.1 Opening of the session') + 2]],
     [[LEGACY], LEGACY, '1.2 Registration of Documents']);
@@ -557,7 +558,7 @@ console.log('6. Build from Scratch');
     const src = CODE.slice(CODE.indexOf('\nfunction buildSkeletonWithTdocTables('), CODE.indexOf('\nfunction downloadAndGroupTdocs_('));
     const adhocBranch = src.slice(src.indexOf("if (context.meeting.type === 'adhoc') {"), src.indexOf('// Opening section for SWG reports - copy X.1 content from template'));
     const main = loadCode({ documentProperties: { MEETING_TYPE: 'main', ADHOC_SESSIONS: sessionsProperty(SESSIONS) } }).sandbox;
-    return [(src.match(/opens the session on/g) || []).length, /if \(!adhocSessionsEnabled_\(context\)\) \{\n\s+body\.appendParagraph\(`<Chair> opens the session on \$\{meetingDateText\} at <start> CEST\.`\);\n\s+\}/.test(adhocBranch),
+    return [(src.match(/buildMeetingOpeningSentence_\(/g) || []).length, /if \(!adhocSessionsEnabled_\(context\)\) \{\n\s+const meetingStart = getMeetingStartForOpening_\(\);\n\s+body\.appendParagraph\(buildMeetingOpeningSentence_\(cfg\.MEETING_DATE, meetingStart\.time, meetingStart\.zone\)\);\n\s+\}/.test(adhocBranch),
       (src.match(/adhocSessionsEnabled_\(/g) || []).length, main.adhocSessionsEnabled_(),
       src.slice(src.indexOf('    } else {\n      // Opening section for SWG reports'), src.indexOf('    // Always ensure Registration of Documents section exists')).split('\n').map((line) => line.trim())];
   })(), [1, true, 1, false, ['} else {', '// Opening section for SWG reports - copy X.1 content from template', 'const openingHeader = findHeading_(sourceBody, /^X\\.1\\s+/);', 'if (openingHeader) {',
@@ -809,7 +810,7 @@ console.log('9. menu, adoption, privacy, and nothing else changed');
   });
   const section = CODE.slice(CODE.indexOf('// AD-HOC SESSIONS (stage A)'), CODE.indexOf('// ARCH-009 -- MEETING-ID RESOLVER CORE'));
   check('outside the ad-hoc sections (and the changelog), Code.js mentions the opening details in the one build hook only', (CODE.replace(section, '').replace(/ \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').match(/[A-Za-z_]*AdhocOpening[A-Za-z_]*|ADHOC_[A-Z_]*OPENING[A-Z_]*/g) || []), ['finishAdhocOpeningRebuild_']);
-  check('Code.js is version 2.20.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.20.0');
+  check('Code.js is version 2.21.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.0');
   check('ReportCreator.js: one more menu item and the build question, nothing else', (CREATOR.match(/Opening Details|editAdhocOpeningDetails|adhocOpening|ADHOC_OPENING/g) || []).length, 5);
 }
 

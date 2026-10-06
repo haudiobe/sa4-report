@@ -512,7 +512,7 @@ console.log('\n12. nothing happens because the code is installed');
     /buildSkeletonWithTdocTables|runFullReportBuild|downloadAndGroupTdocs_|continuousUpdate|\.setText\(|\.clear\(|appendTable|insertTable|appendParagraph|saveAndClose/.test(CODE.slice(CODE.indexOf('// --- An existing report: "Convert Status Fields to Dropdowns…"'), CODE.indexOf('// TDOC UPLOAD COMPLETION')).replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, '')), false);
   check('the only property it writes is the mark, in one place, after a complete run (source)', (CODE.slice(CODE.indexOf('// --- An existing report: "Convert Status Fields to Dropdowns…"'), CODE.indexOf('// TDOC UPLOAD COMPLETION')).match(/\.setProperty\([^)]*\)/g) || []), ["." + "setProperty(STATUS_DROPDOWN_ENABLED_KEY_, '1')"]);
   check('(nothing but the two statuses and the new table changed in this section)', typeof other, 'string');
-  check('Code.js is version 2.20.0', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.20.0');
+  check('Code.js is version 2.21.0 (the conversion came with 2.20.0)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.0');
 
   // What is compared to prove that nothing else changed.
   const docOf = (minutes, status) => ({ tabs: [{ tabProperties: { tabId: REPORT_TAB_ID }, documentTab: { body: { content: [

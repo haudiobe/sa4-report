@@ -298,11 +298,23 @@ console.log('2. hidden operations are still in the code');
       'applyTdocStatusUpdateToDropdown_', 'buildStatusDocsIndex_', 'createStatusDropdownDefinition_', 'finalizeStatusDropdowns_', 'mapPortalStatusToDropdownOption_',
       'noteStatusDropdownCandidate_', 'planStatusDropdownRequests_', 'readStatusDropdownSourceDefinition_', 'readTdocStatus_', 'resetStatusDropdownRun_', 'statusCellHoldsDropdown_', 'statusDocsCellEntry_',
       'statusDocsCellText_', 'statusDocsGet_', 'statusDropdownDefinitionRequest_', 'statusDropdownEntryOfTable_', 'statusDropdownIndex_', 'statusDropdownLabel_', 'statusDropdownRun_', 'statusDropdownsAvailable_'];
-    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js), the ad-hoc sessions and attendance, the TDoc upload completion, and the status dropdowns',
+    // After T-2026.10.8: no abstract for a withdrawn TDoc; the start time and time zone of an ad-hoc meeting in its opening
+    // sentence; the drafts folder of a new ad-hoc report, confirmed at setup (ReportCreator.js).
+    const AFTER_10_8_FUNCTIONS_CODE = ['abstractFetchBlockedBy_', 'isWithdrawnStatus_', 'tdocListStatus_', 'tdocListStatuses_',
+      'buildMeetingOpeningSentence_', 'computeMeetingStartTimeFromStartDate_', 'computeMeetingTimeZoneLabel_', 'getMeetingStartForOpening_', 'isValidMeetingStartTime_',
+      'isValidMeetingTimeZoneLabel_', 'meetingStartBasis_', 'meetingStartFromResolved_', 'storeMeetingStart_',
+      // the personal Reviewer API token: the one resolver
+      'resolveReviewerApiToken_'];
+    const AFTER_10_8_FUNCTIONS_CREATOR = ['confirmAdhocRevisionsFolderWith_', 'describeRevisionsFolderOutcome_', 'retryAdhocRevisionsFolderWith_', 'afterTemplateConfigurationSaved_', 'currentRevisionsCandidate_',
+      // the personal Reviewer API token: the private settings file in the user's Drive
+      'applyPersonalReviewerTokenPlanSafely_', 'applyPersonalReviewerTokenPlanWith_', 'beforeTemplateConfigurationSaved_', 'classifyUserSettingsFile_', 'clearPersonalReviewerTokenWith_', 'describeReviewerTokenStatus_',
+      'inspectPersonalReviewerSettingsWith_', 'isUsableReviewerTokenValue_', 'isVerifiedUserSettingsFile_', 'parseUserSettingsText_', 'personalTokenProblemForLog_', 'readPersonalReviewerTokenSafely_', 'serializeUserSettings_',
+      'templateReviewerTokenDialogParts_', 'userSettingsDrive_', 'writePersonalReviewerTokenWith_'];
+    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js), the ad-hoc sessions and attendance, the TDoc upload completion, the status dropdowns, and the work after T-2026.10.8',
       [now.filter((f) => before.indexOf(f) === -1).sort(), functionNames(CODE).filter((f) => functionNames(OLD_CODE).indexOf(f) === -1).sort()],
       [['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_', 'describeUpdateReportNowFailure_', 'updateReportNow']
-        .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE, STATUS_DROPDOWN_FUNCTIONS_CODE).sort(),
-        SESSION_FUNCTIONS_CODE.concat(TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE, STATUS_DROPDOWN_FUNCTIONS_CODE).sort()]);
+        .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE, STATUS_DROPDOWN_FUNCTIONS_CODE, AFTER_10_8_FUNCTIONS_CODE, AFTER_10_8_FUNCTIONS_CREATOR).sort(),
+        SESSION_FUNCTIONS_CODE.concat(TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE, STATUS_DROPDOWN_FUNCTIONS_CODE, AFTER_10_8_FUNCTIONS_CODE).sort()]);
   }
 }
 
@@ -652,8 +664,19 @@ console.log('6. the partial updates and Automatic Updates call their existing fu
     check('runFullReportBuildCore_() differs from T-2026.10.3 in the status-dropdown phase at its end only',
       [functionSource(CODE, 'runFullReportBuildCore_') === functionSource(OLD_CODE, 'runFullReportBuildCore_'),
         functionSource(CODE, 'runFullReportBuildCore_').replace('  resetStatusDropdownRun_();\n', '').replace(/  \/\/ T-2026\.10\.7: the last thing that touches the document\.[\s\S]*?\n  if \(statusDropdownsAvailable_\(\)\) \{\n[\s\S]*?\n    \}\);\n  \}\n/, '') === functionSource(OLD_CODE, 'runFullReportBuildCore_')], [false, true]);
-    ['collectEmailDiscussionOnly', 'addAbstractsOnly', 'prepareTdocDiscussionEmails', 'configureMeetingSettings',
-      'addDocumentReallocation', 'viewAllReallocations', 'applyDocumentReallocations', 'clearAllReallocations', 'testAllConnections', 'removeRowHeightAndSpacing',
+    // After T-2026.10.8 the Save of Configure Meeting carries the start its Resolve found: configureMeetingSettings() was the
+    // T-2026.10.3 function up to T-2026.10.8, and tests/after-10-8-ledger.test.js names every line that differs from that release.
+    const CODE_10_8 = gitShow('template-release/T-2026.10.8:Code.js');
+    if (CODE_10_8) {
+      check('configureMeetingSettings() was byte-for-byte the T-2026.10.3 function in T-2026.10.8, and differs from it now',
+        [functionSource(CODE_10_8, 'configureMeetingSettings') === functionSource(OLD_CODE, 'configureMeetingSettings'), functionSource(CODE, 'configureMeetingSettings') === functionSource(OLD_CODE, 'configureMeetingSettings')], [true, false]);
+    }
+    // "Check Connections" reads the Reviewer token through the one resolver now (the personal token): one line, and the rest is the T-2026.10.3 function.
+    check('testAllConnections() differs from T-2026.10.3 in the line that gets the Reviewer token only',
+      [functionSource(CODE, 'testAllConnections') === functionSource(OLD_CODE, 'testAllConnections'),
+        functionSource(CODE, 'testAllConnections').replace('    const token = resolveReviewerApiToken_().token;\n', "    const token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');\n") === functionSource(OLD_CODE, 'testAllConnections')], [false, true]);
+    ['collectEmailDiscussionOnly', 'addAbstractsOnly', 'prepareTdocDiscussionEmails',
+      'addDocumentReallocation', 'viewAllReallocations', 'applyDocumentReallocations', 'clearAllReallocations', 'removeRowHeightAndSpacing',
       'removeDuplicateEmailEntries', 'cleanUpWrongEmailDiscussions', 'clearAllCaches']
       .forEach((name) => check(`${name}() is byte-for-byte the T-2026.10.3 function`, functionSource(CODE, name) === functionSource(OLD_CODE, name), true));
   }

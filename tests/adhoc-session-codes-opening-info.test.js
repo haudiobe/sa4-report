@@ -361,7 +361,7 @@ console.log('\n8. reports without sessions and main-meeting reports are unchange
   plain.build();
   check('an ad-hoc report without sessions: the one opening line, four columns, no block, no section, no code',
     [plain.opening(), plain.registration()[0], plain.count(INFO), plain.count(ADMIN), /\bA0\d\b/.test(plain.texts().join('\n') + JSON.stringify(plain.registration()))],
-    [['1.1 Opening of the session', '<Chair> opens the session on September 22, 2026 at <start> CEST.', '1.2 Registration of Documents'], ['TDoc', 'Title', 'Source', 'Agenda Item'], 0, 0, false]);
+    [['1.1 Opening of the session', '<Chair> opens the session on September 22, 2026 at <start> <time zone>.', '1.2 Registration of Documents'], ['TDoc', 'Title', 'Source', 'Agenda Item'], 0, 0, false]);
   const snapshot = JSON.stringify(plain.texts()) + JSON.stringify(plain.registration());
   plain.update();
   plain.build();

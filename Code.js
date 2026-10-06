@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.20.0 (2026-10-06)
+ * Version: 2.21.0 (2026-10-06)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,59 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.21.0 (2026-10-06)
+ *   - Changed (ad-hoc reports without sessions): the opening sentence has
+ *     the start time and the time zone the Portal gives for the meeting
+ *     ("<Chair> opens the session on October 1, 2026 at 15:30 UTC+2.").
+ *     "CEST" is no longer written into the code. The chair stays the
+ *     placeholder "<Chair>"; a time or a zone the Portal does not give is
+ *     a placeholder too ("<start>", "<time zone>"); midnight counts as no
+ *     time. The values are stored with the meeting they belong to
+ *     (MEETING_START_TIME, MEETING_TIME_ZONE, MEETING_START_BASIS) -- by
+ *     the creator of a report, and by Configure Meeting from what its
+ *     Resolve found -- and are not used for another meeting id or date.
+ *   - Added (template reports, ad-hoc): the drafts folder. Finish Report
+ *     Setup asks once for the folder derived from the Portal's document
+ *     folder and stores it as REVISIONS_URL when the answer is a folder
+ *     listing; a Save of Configure Meeting asks again while none is
+ *     stored. A folder that is not confirmed is never stored by itself: it
+ *     is shown as a candidate, and the user can still save the suggested
+ *     folder in Configure Meeting. A stored folder is never asked for or
+ *     replaced. The lookup of a meeting, an update and a build ask nothing.
+ *   - Changed: no abstract is asked for a withdrawn TDoc -- withdrawn by
+ *     the Status in the report (text or dropdown) or by the Portal's TDoc
+ *     list. One rule (abstractFetchBlockedBy_()), enforced in
+ *     fetchAndAddAbstract_() for the sweep, "Update Abstracts", the
+ *     abstracts phase of a build and the upload completion. An abstract
+ *     that is in the report stays; nothing is cached for such a TDoc.
+ *   - Changed: Build Report from Scratch ends its table writing with the
+ *     revision placement an update uses, on the TDoc list it has already
+ *     downloaded, so a revision stands directly below the document it
+ *     revises also when the two are under different agenda items.
+ *   - Added (template reports): a personal Reviewer API token. A user can
+ *     keep the token once for all their template reports, in one private
+ *     JSON settings file in their own Google Drive, found by a Drive
+ *     custom file property among the files the user owns. The token of a
+ *     report (Script Property REVIEWER_API_TOKEN) is still used first;
+ *     nothing is copied from a report without the user asking. The file is
+ *     used only when it is owned by the user, shared with nobody, not in
+ *     the trash, application/json, at most 2 KB and exactly the schema;
+ *     with more than one such file none is used. Configure Meeting shows
+ *     which token is in use and takes a new one for all reports or for
+ *     this report; a stored token is never sent to the browser or logged.
+ *     An execution uses the tokens of the account it runs as -- for
+ *     automatic updates, the person who switched them on.
+ *   - Changed: the token is looked up by one function
+ *     (resolveReviewerApiToken_()), once per execution and only when the
+ *     Reviewer is asked. getReportConfig_() no longer looks it up for
+ *     every configuration; REVIEWER_API_TOKEN is still to be had from the
+ *     configuration by name, and is no longer part of a copy or a print
+ *     of it.
+ *   - Unchanged outside the template runtime (CENTRAL, Legacy): no
+ *     personal token is looked for, and the token part of Configure
+ *     Meeting is as it was. Main-meeting reports and ad-hoc reports with
+ *     sessions keep their opening. No existing report is changed because
+ *     this code is installed.
  * 2.20.0 (2026-10-06)
  *   - Added (template reports): "Convert Status Fields to Dropdowns…". An
  *     existing report gets its status dropdowns without being rebuilt: the
@@ -1167,8 +1220,9 @@ function continuousUpdateCore_(context) {
       // A TDoc the list shows as not uploaded yet is left out: the Reviewer
       // has nothing for it, and asking would block it for a day (its "no
       // summary" answer is cached) just when the upload arrives. So is a
-      // TDoc that was asked for above, in this run.
-      const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body, context, Object.assign(tdocsNotUploadedYet_(allTdocs), abstractAskedThisRun)));
+      // TDoc that was asked for above, in this run. A withdrawn TDoc is no
+      // candidate either (the list's statuses are passed for that).
+      const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body, context, Object.assign(tdocsNotUploadedYet_(allTdocs), abstractAskedThisRun), tdocListStatuses_(allTdocs)));
       Logger.log(`Abstracts: ${abstractsResult.candidatesProcessed} candidate table(s) processed, ${abstractsResult.requestsMade} Reviewer request(s) made, ${abstractsResult.cacheSkips} negative-cache skip(s), ${abstractsResult.rowsInserted} abstract row(s) inserted`);
     } else {
       Logger.log('Abstract fetching is disabled (trigger configuration)');
@@ -2854,10 +2908,9 @@ function getReportConfig_(context) {
   // ========================================
   // 7. API INTEGRATION (Optional)
   // ========================================
-  const REVIEWER_API_TOKEN = getReviewerApiTokenForRun_(); // TEMPLATE-002C: one read per execution
   const REVIEWER_API_BASE = 'https://reviewer.bouazizi.dev/api/v1';
   
-  return {
+  const reportConfig = {
     // Meeting identification
     MEETING_FOLDER,
     MEETING_NUMBER,
@@ -2884,13 +2937,17 @@ function getReportConfig_(context) {
     SHOW_PREVIEW_SNIPPET,
     
     // API
-    REVIEWER_API_TOKEN,
     REVIEWER_API_BASE,
     
     // RSS feeds
     RSS_URL_V2: `https://list.etsi.org/scripts/wa.exe?RSS&L=${LIST_NAME}&v=2.0&LIMIT=2000`,
     RSS_URL_V1: `https://list.etsi.org/scripts/wa.exe?RSS&L=${LIST_NAME}&v=1.0&LIMIT=2000`
   };
+  // The token in use is still to be had as REVIEWER_API_TOKEN, but it is no longer looked up for every configuration:
+  // only when it is asked for (resolveReviewerApiToken_()). It is not enumerable, so a copy or a print of the
+  // configuration neither looks it up nor contains it.
+  Object.defineProperty(reportConfig, 'REVIEWER_API_TOKEN', { enumerable: false, get: function () { return getReviewerApiTokenForRun_(); } });
+  return reportConfig;
 }
 
 // =========================================================
@@ -4499,7 +4556,18 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
  * Inserts Abstract row after Agenda Item, so the top rows remain:
  * TDoc, Title, Source, Contact, Agenda Item, Abstract.
  */
-function fetchAndAddAbstract_(table, tdocNumber, context) {
+function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus) {
+  // Nothing is asked for a withdrawn TDoc (abstractFetchBlockedBy_()): this
+  // is checked here, before the token, the "no summary" cache and the
+  // request, so that no caller can ask for one. `portalStatus` is the status
+  // of the TDoc in the TDoc list, from a caller that has it. Returns false
+  // when the TDoc is withdrawn and nothing was done -- and nothing otherwise.
+  const withdrawnBy = abstractFetchBlockedBy_(table, portalStatus);
+  if (withdrawnBy) {
+    perfCount_('abstracts not asked for: TDoc withdrawn');
+    Logger.log(`No abstract is asked for ${tdocNumber}: withdrawn (${withdrawnBy === 'portal' ? 'TDoc list' : 'Status in the report'})`);
+    return false;
+  }
   try {
     // TEMPLATE-002C: read once per execution; a missing token is logged once.
     const apiToken = getReviewerApiTokenForRun_();
@@ -7596,7 +7664,10 @@ function configureMeetingSettings() {
   const currentAgendaSourceDocId = props.getProperty('AGENDA_SOURCE_DOC_ID') || '';
   const currentTdocUrl = props.getProperty('TDOC_LIST_URL') || '';
   const currentShowPreview = props.getProperty('SHOW_PREVIEW_SNIPPET') !== 'false';
-  const tokenConfigured = Boolean(PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN'));
+  const tokenConfigured = Boolean(resolveReviewerApiToken_(true).token);
+  // A template report: the token of this report and the personal one (templateReviewerTokenDialogParts_(), ReportCreator.js).
+  // Words and controls only; no token goes into the dialog. Everywhere else the dialog is as it was.
+  const tokenUi = templateRuntimeRelease_() ? templateReviewerTokenDialogParts_() : null;
 
   // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date, in the
   // template runtime only. A stored value is shown as it is; without one the
@@ -7751,7 +7822,7 @@ function configureMeetingSettings() {
         <input type="checkbox" id="showPreview" ${currentShowPreview ? 'checked' : ''}>
         Show email preview snippets in report
       </label>
-      <div class="hint" id="tokenStatus">${tokenConfigured ? 'Reviewer API token configured' : 'No Reviewer API token configured'}</div>
+      <div class="hint" id="tokenStatus">${tokenUi ? esc(tokenUi.status) : (tokenConfigured ? 'Reviewer API token configured' : 'No Reviewer API token configured')}</div>
     </div>
 
     <details class="advanced">
@@ -7787,13 +7858,13 @@ function configureMeetingSettings() {
           <div class="hint">Meeting number used in the TDoc list filename of a main meeting.</div>
         </div>
 
-        <label>Replace Reviewer API Token:</label>
+        ${tokenUi ? tokenUi.fieldsHtml : `<label>Replace Reviewer API Token:</label>
         <input type="password" id="apiToken" value="" placeholder="Enter a new token to replace the current one" autocomplete="off">
         <label>
           <input type="checkbox" id="clearApiToken">
           Remove the saved Reviewer API token
         </label>
-        <div class="hint">Used to fetch AI summaries and abstracts. The saved token is never displayed.</div>
+        <div class="hint">Used to fetch AI summaries and abstracts. The saved token is never displayed.</div>`}
       </div>
     </details>
 
@@ -8078,6 +8149,9 @@ function configureMeetingSettings() {
       // Meeting ID field changes, so a stale enrichment can never be
       // merged against a different meeting's core result.
       let lastResolvedCore = null;
+      // The start of the meeting Resolve found, as the Portal gives it, and
+      // the meeting it is of. Sent with Save only for that same meeting id.
+      let resolvedMeetingStart = null;
 
       function resolveMeeting() {
         const meetingId = document.getElementById('meetingId').value;
@@ -8109,6 +8183,7 @@ function configureMeetingSettings() {
               return;
             }
             lastResolvedCore = result.resolved;
+            resolvedMeetingStart = { meetingId: String(result.resolved.id), startDate: result.preview.startDateRaw || '', timeZone: result.preview.startTimeZoneRaw || '' };
             applyPreview(result.preview);
             console.log('resolveMeeting(): client preview render completed (ok:true path)');
             if (result.resolved.warnings && result.resolved.warnings.length > 0) {
@@ -8174,10 +8249,14 @@ function configureMeetingSettings() {
 
       function saveConfig() {
         const newToken = document.getElementById('apiToken').value;
+        // A template report has controls for a personal token as well (see beforeTemplateConfigurationSaved_(),
+        // ReportCreator.js). Where they do not exist, nothing here is ticked and all is as it was.
+        const ticked = function (id) { const el = document.getElementById(id); return !!(el && el.checked); };
+        const tokenForAllReports = ticked('apiTokenTargetPersonal');
         let apiTokenAction = 'keep';
         if (document.getElementById('clearApiToken').checked) {
           apiTokenAction = 'clear';
-        } else if (newToken && newToken.trim()) {
+        } else if (newToken && newToken.trim() && !tokenForAllReports) {
           apiTokenAction = 'replace';
         }
         const config = {
@@ -8206,13 +8285,28 @@ function configureMeetingSettings() {
         if (startFieldToSave && typeof startFieldToSave.getAttribute === 'function') {
           config[startFieldToSave.getAttribute('data-config-key')] = startFieldToSave.value;
         }
+        // The personal token: one thing at a time -- a new one, the one of this report, or its removal.
+        const personalTokenWishes = [ticked('clearPersonalApiToken') ? 'clear' : '', ticked('promoteApiToken') ? 'promote' : '',
+          tokenForAllReports && newToken && newToken.trim() ? 'replace' : ''].filter(Boolean);
+        if (personalTokenWishes.length > 1) {
+          alert('Choose one thing for your personal token: a new token, the token of this report, or removing it.');
+          return;
+        }
+        if (personalTokenWishes.length === 1) {
+          config.personalTokenAction = personalTokenWishes[0];
+          if (personalTokenWishes[0] === 'replace') config.personalToken = newToken;
+        }
+        // The start Resolve found goes with the save of the meeting it was found for (see persistConfigurationSettings_()).
+        if (resolvedMeetingStart && resolvedMeetingStart.meetingId === String(config.meetingId || '').trim()) {
+          config.resolvedMeetingStart = resolvedMeetingStart;
+        }
         google.script.run
-          .withSuccessHandler(() => {
+          .withSuccessHandler((saved) => {
             // Saved is not the same as ready to build.
             const readiness = updateReadiness();
             alert('\\u2705 Configuration saved.' + (readiness && !readiness.ready
               ? '\\n\\n\\u26A0\\uFE0F It is not ready to build yet:\\n' + readiness.issues.map(function (issue) { return '\\u2022 ' + issue.message; }).join('\\n')
-              : ''));
+              : '') + (saved && saved.note ? '\\n\\n' + saved.note : ''));
             google.script.host.close();
           })
           .withFailureHandler((error) => {
@@ -8243,8 +8337,11 @@ function saveConfigurationSettings(config) {
   const registered = documentId ? getRegisteredReportDocument_(documentId) : null;
 
   if (!registered) {
-    persistConfigurationSettings_(config);
-    return;
+    // Template runtime only: what a save does besides (ReportCreator.js) -- the personal Reviewer token, taken out of
+    // the configuration before it is stored, and the drafts folder afterwards. Nothing elsewhere.
+    const templateSave = templateRuntimeRelease_() ? beforeTemplateConfigurationSaved_(config) : null;
+    persistConfigurationSettings_(templateSave ? templateSave.config : config);
+    return templateSave ? afterTemplateConfigurationSaved_(templateSave) : undefined;
   }
 
   withAddonScriptLock_(function () {
@@ -8414,6 +8511,24 @@ function persistConfigurationSettings_(config) {
   }
 
   if (emailStartDate) docProps.setProperty('EMAIL_START_DATE', emailStartDate);
+
+  // The start of the meeting (time of day, time zone), from the Portal. It
+  // comes with the configuration in one of two ways, and both store the
+  // same thing (storeMeetingStart_()):
+  //   - the creator of a report sends the two values (meetingStartTime,
+  //     meetingTimeZone);
+  //   - Configure Meeting sends what its Resolve got from the Portal for the
+  //     meeting that is saved (resolvedMeetingStart) -- the values are worked
+  //     out here, by the functions the creator uses.
+  // A save that carries neither leaves what is stored alone.
+  const meetingStartTime = String(config.meetingStartTime || '').trim();
+  const meetingTimeZone = String(config.meetingTimeZone || '').trim();
+  if (meetingStartTime || meetingTimeZone) {
+    storeMeetingStart_(docProps, meetingStartTime, meetingTimeZone);
+  } else {
+    const resolvedStart = meetingStartFromResolved_(config.resolvedMeetingStart, docProps.getProperty('MEETING_ID'), docProps.getProperty('MEETING_TYPE'), docProps.getProperty('MEETING_DATE'));
+    if (resolvedStart) storeMeetingStart_(docProps, resolvedStart.time, resolvedStart.zone);
+  }
 
   Logger.log('Configuration saved: ' + JSON.stringify(redactConfigForLog_(config)));
 }
@@ -8628,7 +8743,7 @@ function testAllConnections() {
   // document's abstract is available in Reviewer, ad-hoc or main.
   results.push('\n2️⃣ Reviewer API:');
   try {
-    const token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');
+    const token = resolveReviewerApiToken_().token;
     if (!token) {
       results.push('   ⚠️  Not configured (abstracts will be skipped)');
     } else {
@@ -8945,7 +9060,7 @@ function testTdocListUrl() {
 
 function testReviewerApi() {
   const ui = DocumentApp.getUi();
-  const token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN');
+  const token = resolveReviewerApiToken_().token;
 
   if (!token) {
     ui.alert('Error', 'Reviewer API token not configured.\n\nPlease configure it first using:\n⚙️ Configure Meeting Settings', ui.ButtonSet.OK);
@@ -9043,9 +9158,8 @@ function validateConfiguration() {
   if (!reportSuffix) warnings.push('⚠️  Report type not set (defaulting to 6G)');
   if (!tdocListUrl) issues.push('❌ TDOC List URL not configured');
   
-  // Check script properties
-  const scriptProps = PropertiesService.getScriptProperties();
-  const apiToken = scriptProps.getProperty('REVIEWER_API_TOKEN');
+  // The token in use (of this report, or -- in a template report -- the personal one)
+  const apiToken = resolveReviewerApiToken_().token;
   
   if (!apiToken) warnings.push('⚠️  Reviewer API token not set (abstracts will be skipped)');
   
@@ -9944,11 +10058,7 @@ var REVIEWER_TOKEN_RUN_STATE_ = { read: false, token: '', missingLogged: false }
 var SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = false;
 
 function getReviewerApiTokenForRun_() {
-  if (!REVIEWER_TOKEN_RUN_STATE_.read) {
-    REVIEWER_TOKEN_RUN_STATE_.token = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN') || '';
-    REVIEWER_TOKEN_RUN_STATE_.read = true;
-  }
-  return REVIEWER_TOKEN_RUN_STATE_.token;
+  return resolveReviewerApiToken_().token;
 }
 
 /** Forget the cached token: at the start of an operation, and when Configure Meeting changes it. */
@@ -9956,6 +10066,7 @@ function resetReviewerTokenRunState_() {
   REVIEWER_TOKEN_RUN_STATE_.read = false;
   REVIEWER_TOKEN_RUN_STATE_.token = '';
   REVIEWER_TOKEN_RUN_STATE_.missingLogged = false;
+  REVIEWER_TOKEN_RUN_STATE_.resolved = null;
 }
 
 /**
@@ -10193,19 +10304,21 @@ function buildSkeletonWithTdocTables(options) {
   const emitOpeningAdminBlock = () => {
     if (context.meeting.type === 'adhoc') {
       // SA4-PROD-007A: generated directly, not copied from the template.
-      // No CHAIR_NAME/START_TIME property is introduced -- those remain
-      // literal, editable placeholders for the chair to fill in by hand.
+      // The chair stays a literal, editable placeholder to fill in by hand.
       // MEETING_DATE is optional and generic (no meeting-ID-specific
       // value baked in here); when unset, "<meeting date>" is used
-      // instead of inventing or assuming any specific date.
+      // instead of inventing or assuming any specific date. The start time
+      // and the time zone are the ones the Portal gave when the report was
+      // created (getMeetingStartForOpening_()); without them the sentence
+      // has "<start>" and "<time zone>" -- no zone is assumed.
       const openingSubSection = anchors.openingSubSection;
       body.appendParagraph(`${openingSubSection} Opening of the session`).setHeading(DocumentApp.ParagraphHeading.HEADING3);
-      const meetingDateText = (cfg.MEETING_DATE || '').trim() || '<meeting date>';
       // Ad-hoc opening (stage E): with sessions configured the Session
       // administration section says who chaired and when, so this line is
       // not written as well. Every other report gets it as before.
       if (!adhocSessionsEnabled_(context)) {
-        body.appendParagraph(`<Chair> opens the session on ${meetingDateText} at <start> CEST.`);
+        const meetingStart = getMeetingStartForOpening_();
+        body.appendParagraph(buildMeetingOpeningSentence_(cfg.MEETING_DATE, meetingStart.time, meetingStart.zone));
       }
     } else {
       // Opening section for SWG reports - copy X.1 content from template
@@ -10436,10 +10549,25 @@ function buildSkeletonWithTdocTables(options) {
     }
   }
   
+  // Revision placement: the loops above put a revision below the document
+  // it revises only when both are under the same agenda item
+  // (orderTdocsByRevision_()). The pass an update ends with is run here too,
+  // on the TDoc list this build already downloaded, so a new report has
+  // every revision directly below its parent -- also across agenda items --
+  // and does not wait for its first update to get there.
+  let revisionPlacementNote = '';
+  try {
+    const placed = rearrangeRevisionTables_(cfg, { all: { tdocs: allTdocs } });
+    Logger.log(`Revisions: ${placed.moved} moved, ${placed.dispositions} disposition(s) filled`);
+  } catch (e) {
+    Logger.log('Revision placement failed: ' + e.message);
+    revisionPlacementNote = '\n\n⚠️ Revisions could not be placed below the documents they revise (' + e.message + '). The next update of the report places them.';
+  }
+
   // ADDON-008A1b: put the saved Document Reallocations back (the 6G branch
   // already wrote them into its own X.0.3 table above), through the same
   // table helpers the Add Document Reallocation dialog uses.
-  let reallocationRestoreNote = '';
+  let reallocationRestoreNote = revisionPlacementNote;
   if (!is6G && Object.keys(savedReallocations).length > 0) {
     try {
       Object.keys(savedReallocations).forEach(tdoc => {
@@ -11182,13 +11310,16 @@ function collectRevisionsOnly() {
  * brand-new TDoc table) is correctly excluded from this function's own
  * delta.
  */
-function addAbstractsForTables_(body, context, leaveOut) {
+function addAbstractsForTables_(body, context, leaveOut, portalStatuses) {
   body = body || getActiveDocumentBodyCounted_('addAbstractsForTables_', context);
   let candidatesProcessed = 0;
   // Only the update passes `leaveOut`, { number: true }: TDocs that are not
   // uploaded yet (tdocsNotUploadedYet_()) or were asked for earlier in the
   // same run. Without it every table is a candidate, as before (Full Build,
   // "Update Abstracts").
+  // `portalStatuses`, { number: status }, is the TDoc list of an update
+  // (tdocListStatuses_()). A withdrawn TDoc -- by the Status in the report,
+  // or by that list -- is no candidate: abstractFetchBlockedBy_().
 
   const requestsBefore = perfCounterValue_('Reviewer API requests');
   const cacheSkipsBefore = perfCounterValue_('Reviewer negative-cache hits');
@@ -11207,9 +11338,11 @@ function addAbstractsForTables_(body, context, leaveOut) {
     const parsedTdoc = parseExactSA4DocumentId_(tdocNumber);
     if (!parsedTdoc.isValid) return;
     if (leaveOut && leaveOut[tdocNumber] === true) return;
+    const portalStatus = portalStatuses && Object.prototype.hasOwnProperty.call(portalStatuses, tdocNumber) ? portalStatuses[tdocNumber] : '';
 
-    perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw, context));
-    candidatesProcessed++;
+    // false: the TDoc is withdrawn and nothing was asked -- no candidate.
+    const asked = perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw, context, portalStatus));
+    if (asked !== false) candidatesProcessed++;
   });
 
   // Callers log their own message from this breakdown (see
@@ -11864,6 +11997,252 @@ function setTdocTableAgendaItem_(table, value) {
     }
   }
   return false;
+}
+
+// =========================================================
+// AFTER T-2026.10.8 -- WITHDRAWN TDOCS AND ABSTRACTS; THE START OF AN AD-HOC MEETING
+// =========================================================
+//
+// Two small rules that the existing code calls, kept here together:
+//   - no abstract is asked for a withdrawn TDoc (abstractFetchBlockedBy_(),
+//     enforced in fetchAndAddAbstract_() for every caller);
+//   - the opening sentence of an ad-hoc report without sessions has the
+//     start time and the time zone the Portal gives, and placeholders for
+//     what it does not give (buildMeetingOpeningSentence_()).
+
+/** Pure: whether a status -- of the report or of the Portal -- says the TDoc is withdrawn. Compared as every status is: trimmed, lower case, "withdrawn" anywhere in it. */
+function isWithdrawnStatus_(status) {
+  return String(status === null || status === undefined ? '' : status).trim().toLowerCase().indexOf('withdrawn') !== -1;
+}
+
+/**
+ * THE rule for whether the abstract of a TDoc may be asked for. No abstract
+ * is asked for a withdrawn TDoc, and it is withdrawn when EITHER says so:
+ *   - the Status of its table in the report (text, or the value selected in
+ *     a status dropdown -- readTdocStatus_());
+ *   - the status the Portal's TDoc list has for it, where the caller has
+ *     the list at hand (`portalStatus`; left out otherwise).
+ * Returns 'report' or 'portal' -- which of the two says so -- or '' when the
+ * abstract may be asked for. A status that cannot be read (a dropdown the
+ * API did not return) counts as not withdrawn. Never throws.
+ *
+ * Only asking is ruled out. An abstract that is in the table stays there.
+ */
+function abstractFetchBlockedBy_(table, portalStatus) {
+  if (isWithdrawnStatus_(portalStatus)) return 'portal';
+  try {
+    const info = table ? findStatusInDocTable_(table) : null;
+    if (info && isWithdrawnStatus_(readTdocStatus_(table, info.value))) return 'report';
+  } catch (e) {
+    // a status that cannot be read is not a withdrawal
+  }
+  return '';
+}
+
+/** The status the TDoc list has for a TDoc, '' when the list has no status column. */
+function tdocListStatus_(tdocData) {
+  if (!tdocData || !tdocData.row || !(tdocData.statusCol >= 0)) return '';
+  return String(tdocData.row[tdocData.statusCol] || '').trim();
+}
+
+/** The status the TDoc list has for each of its TDocs: { number: status }. What the abstract sweep of an update is given. */
+function tdocListStatuses_(allTdocs) {
+  const out = {};
+  (allTdocs || []).forEach(function (td) {
+    const number = String(td.row[td.tdocCol] || '').trim();
+    if (number) out[number] = tdocListStatus_(td);
+  });
+  return out;
+}
+
+// --- The Reviewer API token in use.
+
+/**
+ * THE one place that says which Reviewer API token is in use, and the only
+ * one that reads the token of a report. Returns { token, source, problem }:
+ *   source 'report'  the token stored in this report (Script Property
+ *                    REVIEWER_API_TOKEN) -- always first, and when there is
+ *                    one, nothing else is looked at;
+ *          'user'    in a template report without one: the personal token of
+ *                    the account this execution runs as, from that account's
+ *                    private settings file in Google Drive
+ *                    (readPersonalReviewerTokenSafely_(), ReportCreator.js);
+ *          'none'    neither. `problem` then says, in fixed words, why a
+ *                    personal settings file was not used ('' when there is
+ *                    simply none).
+ * Looked up once per execution, and only when something asks: an operation
+ * that does not ask the Reviewer costs no lookup. Outside the template
+ * runtime (CENTRAL, Legacy) there is the token of the report and nothing
+ * else, as before. Never throws; the token is never logged.
+ *
+ * `reportOnly` (true): only the token of the report is wanted -- for what
+ * says or handles that token itself (Configure Meeting). Nothing personal is
+ * looked for then; without a token of the report the answer is 'none'.
+ */
+function resolveReviewerApiToken_(reportOnly) {
+  const state = REVIEWER_TOKEN_RUN_STATE_;
+  const none = { token: '', source: 'none', problem: '' };
+  if (state.read && state.resolved) return reportOnly && state.resolved.source !== 'report' ? none : state.resolved;
+  let resolved = none;
+  const local = PropertiesService.getScriptProperties().getProperty('REVIEWER_API_TOKEN') || '';
+  if (local) {
+    resolved = { token: local, source: 'report', problem: '' };
+  } else if (reportOnly) {
+    return none;                      // not remembered: the personal token was not looked for
+  } else if (templateRuntimeRelease_()) {
+    let personal;
+    try {
+      personal = readPersonalReviewerTokenSafely_();
+    } catch (e) {
+      personal = { token: '', problem: 'the personal settings could not be looked up' };
+    }
+    resolved = personal.token ? { token: personal.token, source: 'user', problem: '' } : { token: '', source: 'none', problem: personal.problem };
+    if (resolved.problem) Logger.log('The personal Reviewer token is not used: ' + resolved.problem + '.');
+  }
+  state.resolved = resolved;
+  state.token = resolved.token;
+  state.read = true;
+  return resolved;
+}
+
+// --- The start of the meeting, for the opening sentence of an ad-hoc report.
+//
+// The Portal gives a meeting a StartDate with a time of day ("2026-10-01
+// 15:30:00") and a StartTimeZone ("(GMT+02.00)  Brussels, Copenhagen,
+// Madrid, Paris"). Both are taken as the Portal states them: the time is the
+// meeting's own local time, and the zone is written as its offset from UTC
+// ("UTC+2") -- no zone name is derived from it, and none is assumed. A value
+// the Portal does not give stays unknown and shows as a placeholder.
+
+/**
+ * Pure: the time of day of a Portal StartDate as "HH:MM", or '' when it has
+ * none. Midnight is '' too: the Portal writes 00:00:00 for a meeting whose
+ * time was not entered, so it is not taken for a start time.
+ */
+function computeMeetingStartTimeFromStartDate_(startDate) {
+  const m = String(startDate === null || startDate === undefined ? '' : startDate).trim()
+    .match(/^\d{4}-\d{2}-\d{2}[ T](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/);
+  if (!m) return '';
+  const hours = parseInt(m[1], 10);
+  const minutes = parseInt(m[2], 10);
+  if (hours > 23 || minutes > 59) return '';
+  if (hours === 0 && minutes === 0) return '';
+  return m[1] + ':' + m[2];
+}
+
+/**
+ * Pure: a Portal time zone as its offset from UTC -- "(GMT+02.00)  Brussels,
+ * ..." and "(GMT+02:00) ..." -> "UTC+2", "(GMT-03:30) ..." -> "UTC-3:30",
+ * "(GMT) ..." -> "UTC". '' for anything else: nothing is read out of the
+ * city names.
+ */
+function computeMeetingTimeZoneLabel_(portalTimeZone) {
+  const m = String(portalTimeZone === null || portalTimeZone === undefined ? '' : portalTimeZone)
+    .match(/^\s*\(\s*(?:GMT|UTC)\s*(?:([+-])\s*(\d{1,2})[:.](\d{2}))?\s*\)/i);
+  if (!m) return '';
+  if (!m[1]) return 'UTC';
+  const hours = parseInt(m[2], 10);
+  const minutes = parseInt(m[3], 10);
+  if (hours > 14 || minutes > 59) return '';
+  if (hours === 0 && minutes === 0) return 'UTC';
+  return 'UTC' + m[1] + hours + (minutes ? ':' + m[3] : '');
+}
+
+/** Pure: a start time as it is stored ("HH:MM", never midnight). */
+function isValidMeetingStartTime_(value) {
+  const s = String(value === null || value === undefined ? '' : value);
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s) && s !== '00:00';
+}
+
+/** Pure: a time zone as it is stored ("UTC", "UTC+2", "UTC-3:30"). */
+function isValidMeetingTimeZoneLabel_(value) {
+  return /^UTC(?:[+-](?:\d|1[0-4])(?::[0-5]\d)?)?$/.test(String(value === null || value === undefined ? '' : value));
+}
+
+/**
+ * Pure: the opening sentence of an ad-hoc report without sessions. The
+ * chair is always the placeholder "<Chair>" -- it is filled in by hand. A
+ * date, a start time or a time zone that is not known (or is not in its
+ * stored form) is a placeholder as well; nothing is put in its place.
+ */
+function buildMeetingOpeningSentence_(meetingDateText, startTime, timeZoneLabel) {
+  const date = String(meetingDateText === null || meetingDateText === undefined ? '' : meetingDateText).trim() || '<meeting date>';
+  const time = isValidMeetingStartTime_(startTime) ? startTime : '<start>';
+  const zone = isValidMeetingTimeZoneLabel_(timeZoneLabel) ? timeZoneLabel : '<time zone>';
+  return '<Chair> opens the session on ' + date + ' at ' + time + ' ' + zone + '.';
+}
+
+// Document Properties: the start of the meeting as the Portal gave it when
+// the report was created, and the meeting they were given for.
+const MEETING_START_TIME_KEY_ = 'MEETING_START_TIME';
+const MEETING_TIME_ZONE_KEY_ = 'MEETING_TIME_ZONE';
+const MEETING_START_BASIS_KEY_ = 'MEETING_START_BASIS';
+
+/** Pure: what a stored start belongs to -- the meeting id and the meeting date it was stored with. */
+function meetingStartBasis_(meetingId, meetingDate) {
+  return String(meetingId === null || meetingId === undefined ? '' : meetingId).trim() + '|' +
+    String(meetingDate === null || meetingDate === undefined ? '' : meetingDate).trim();
+}
+
+/**
+ * Stores the start of the meeting the document is configured for: the time
+ * and the zone that are in their stored form, with the meeting they belong
+ * to. One that is not is removed; with neither, nothing is kept at all.
+ */
+function storeMeetingStart_(docProps, time, zone) {
+  const hasTime = isValidMeetingStartTime_(time);
+  const hasZone = isValidMeetingTimeZoneLabel_(zone);
+  if (hasTime) docProps.setProperty(MEETING_START_TIME_KEY_, time);
+  else docProps.deleteProperty(MEETING_START_TIME_KEY_);
+  if (hasZone) docProps.setProperty(MEETING_TIME_ZONE_KEY_, zone);
+  else docProps.deleteProperty(MEETING_TIME_ZONE_KEY_);
+  if (hasTime || hasZone) docProps.setProperty(MEETING_START_BASIS_KEY_, meetingStartBasis_(docProps.getProperty('MEETING_ID'), docProps.getProperty('MEETING_DATE')));
+  else docProps.deleteProperty(MEETING_START_BASIS_KEY_);
+}
+
+/**
+ * Pure: the start of the meeting from what Resolve of Configure Meeting got
+ * from the Portal -- `resolved` is { meetingId, startDate, timeZone }, the
+ * Portal's own StartDate and StartTimeZone -- for the meeting that is being
+ * saved. Returns { time, zone }, or null when there is nothing to store or
+ * to remove:
+ *   - null: nothing was resolved, or it was resolved for another meeting id
+ *     than the saved one, or the saved meeting is not an ad-hoc meeting (a
+ *     main-meeting report has no use for a start, as in the creator);
+ *   - { time: '', zone: '' }: the saved meeting date is not the date of the
+ *     Portal's StartDate (the date was typed by hand, or the Portal has no
+ *     start date): its time would be the time of another day;
+ *   - otherwise the values the creator would have put into the setup
+ *     information for the same Portal answer.
+ */
+function meetingStartFromResolved_(resolved, savedMeetingId, savedMeetingType, savedMeetingDate) {
+  if (!resolved || typeof resolved !== 'object') return null;
+  const id = String(resolved.meetingId === null || resolved.meetingId === undefined ? '' : resolved.meetingId).trim();
+  if (!id || id !== String(savedMeetingId === null || savedMeetingId === undefined ? '' : savedMeetingId).trim()) return null;
+  if (String(savedMeetingType || '').trim().toLowerCase() !== 'adhoc') return null;
+  const savedDate = String(savedMeetingDate === null || savedMeetingDate === undefined ? '' : savedMeetingDate).trim();
+  if (!savedDate || computeMeetingDateFromStartDate_(resolved.startDate) !== savedDate) return { time: '', zone: '' };
+  return { time: computeMeetingStartTimeFromStartDate_(resolved.startDate), zone: computeMeetingTimeZoneLabel_(resolved.timeZone) };
+}
+
+/**
+ * The stored start of the meeting: { time, zone }, each '' when it is not
+ * known. Both are '' when the report has since been given another meeting
+ * id or another meeting date than the one they were stored with, so that
+ * the start of one meeting is never written for another. Never throws.
+ */
+function getMeetingStartForOpening_() {
+  const none = { time: '', zone: '' };
+  try {
+    const props = PropertiesService.getDocumentProperties();
+    const basis = props.getProperty(MEETING_START_BASIS_KEY_);
+    if (!basis || basis !== meetingStartBasis_(props.getProperty('MEETING_ID'), props.getProperty('MEETING_DATE'))) return none;
+    const time = String(props.getProperty(MEETING_START_TIME_KEY_) || '');
+    const zone = String(props.getProperty(MEETING_TIME_ZONE_KEY_) || '');
+    return { time: isValidMeetingStartTime_(time) ? time : '', zone: isValidMeetingTimeZoneLabel_(zone) ? zone : '' };
+  } catch (e) {
+    return none;
+  }
 }
 
 // =========================================================
@@ -12888,10 +13267,17 @@ function refreshUploadedTdocMetadata_(body, tdocNumber, tdocData, index, context
 
     const parsed = parseExactSA4DocumentId_(tdocNumber);
     if (!parsed.isValid) return done;
+    // A withdrawn TDoc gets its link and nothing else: no abstract is asked
+    // for, and its "no summary" answer is not touched.
+    const portalStatus = tdocListStatus_(tdocData);
+    if (abstractFetchBlockedBy_(table, portalStatus)) {
+      perfCount_('abstracts not asked for: TDoc withdrawn');
+      Logger.log(`Upload of ${tdocNumber}: withdrawn, no abstract is asked for`);
+      return done;
+    }
     clearReviewerNoSummaryCache_(parsed.raw, context);
     if (findCellText_(table, 'Abstract')) return done;
-    done.abstractAttempted = true;
-    fetchAndAddAbstract_(table, parsed.raw, context);
+    done.abstractAttempted = fetchAndAddAbstract_(table, parsed.raw, context, portalStatus) !== false;
   } catch (e) {
     Logger.log(`Upload of ${tdocNumber}: could not be completed: ${e.message}`);
   }
@@ -12915,8 +13301,7 @@ function completeInsertedUploadedTdoc_(body, tdocNumber, tdocData, index, contex
     const table = findTdocTable_(body, tdocNumber, index);
     if (!table || safeCellText_(table, 0, 1).trim() !== tdocNumber) return false;
     if (findCellText_(table, 'Abstract')) return false;
-    fetchAndAddAbstract_(table, parsed.raw, context);
-    return true;
+    return fetchAndAddAbstract_(table, parsed.raw, context, tdocListStatus_(tdocData)) !== false;
   } catch (e) {
     Logger.log(`Upload of ${tdocNumber}: its abstract could not be asked for: ${e.message}`);
     return false;
@@ -18902,6 +19287,8 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     agendaCandidates: agendaCandidates,
     startDateRaw: resolvedMeeting ? resolvedMeeting.startDate : null,
     endDateRaw: resolvedMeeting ? resolvedMeeting.endDate : null,
+    // The Portal's time zone of the start, as it is given (see computeMeetingTimeZoneLabel_()).
+    startTimeZoneRaw: resolvedMeeting && resolvedMeeting.timeZone ? resolvedMeeting.timeZone : null,
     warnings: resolved ? resolved.warnings : [],
     unresolved: resolved ? resolved.unresolved : [],
     location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null

@@ -226,12 +226,17 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
       // ADDON-007A: via the anchors helper (main strings asserted alongside).
       /openingSubSection\s*=\s*anchors\.openingSubSection/.test(body) &&
       /openingSubSection:\s*`\$\{n\}\.1\.1`/.test(source), true);
+    // After T-2026.10.8 the sentence is written by buildMeetingOpeningSentence_(), which the sub-branch calls
+    // with cfg.MEETING_DATE; the placeholders are there. No time zone is written into the code any more.
+    const openingSentence = extractFunctionBody(source, 'buildMeetingOpeningSentence_') || '';
     check('the ad-hoc sub-branch reads cfg.MEETING_DATE with a non-invented placeholder fallback',
-      /\(cfg\.MEETING_DATE \|\| ''\)\.trim\(\) \|\| '<meeting date>'/.test(body), true);
+      /buildMeetingOpeningSentence_\(cfg\.MEETING_DATE, /.test(body) && /\.trim\(\) \|\| '<meeting date>'/.test(openingSentence), true);
     check('the ad-hoc opening text retains the literal "<Chair>" placeholder (never invented in code)',
-      /<Chair> opens the session on/.test(body), true);
+      /'<Chair> opens the session on '/.test(openingSentence), true);
     check('the ad-hoc opening text retains the literal "<start>" placeholder (never invented in code)',
-      /at <start> CEST\./.test(body), true);
+      /: '<start>';/.test(openingSentence), true);
+    check('and has a "<time zone>" placeholder: no time zone ("CEST") is written into the build or the sentence',
+      [/: '<time zone>';/.test(openingSentence), /CEST|CET\b/.test(stripComments(body)), /CEST|CET\b/.test(openingSentence)], [true, false, false]);
     check('the ad-hoc opening text does not hardcode "September 22" or any specific date in generic production logic',
       /September 22/.test(stripComments(body)), false);
     check('the main-meeting else branch still copies the template (findHeading_ + copySectionContentWithReplacement_), unchanged',

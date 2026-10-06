@@ -286,7 +286,9 @@ console.log('2. the link arrives together with the status change: reserved -> av
 }
 
 console.log('3. a Status decided by hand, with Minutes and Disposition');
-['agreed', 'noted', 'endorsed', 'Agreed with changes', 'withdrawn', 'postponed', ''].forEach((manual) => {
+// "withdrawn" was in this list until T-2026.10.8. No abstract is asked for a withdrawn TDoc now: it gets its link only (below,
+// and tests/withdrawn-no-abstract.test.js).
+['agreed', 'noted', 'endorsed', 'Agreed with changes', 'postponed', ''].forEach((manual) => {
   const r = makeReport({ reviewer: { S4aP260100: 'Summary.' } }, (s) => [makeTdocTable(s, 'S4aP260100', manual, { minutes: 'Discussed at length.\n\n  Offline until Thursday.  ', disposition: 'Agreed, see the chair\'s notes' })]);
   const t = r.tables[0];
   const before = protectedOf(t);
@@ -294,6 +296,15 @@ console.log('3. a Status decided by hand, with Minutes and Disposition');
   check(`Status ${JSON.stringify(manual)}: link and abstract are added; Status, Minutes, Disposition and the rest are untouched`,
     [result, linkOf(t), field(t, 'Abstract'), protectedOf(t), t._writes], [OK, zip('S4aP260100'), 'Summary.', before, [linkWrite('S4aP260100', zip('S4aP260100'))].concat(abstractWrites())]);
 });
+
+{
+  const r = makeReport({ reviewer: { S4aP260100: 'Summary.' } }, (s) => [makeTdocTable(s, 'S4aP260100', 'withdrawn', { minutes: 'Discussed at length.\n\n  Offline until Thursday.  ', disposition: 'Agreed, see the chair\'s notes' })]);
+  const t = r.tables[0];
+  const before = protectedOf(t);
+  const result = r.update([listRow('S4aP260100', 'available', zip('S4aP260100'))]);
+  check('Status "withdrawn": the link is added and no abstract is asked for; Status, Minutes, Disposition and the rest are untouched',
+    [result, linkOf(t), field(t, 'Abstract'), protectedOf(t), t._writes, r.requests], [OK, zip('S4aP260100'), undefined, before, [linkWrite('S4aP260100', zip('S4aP260100'))], []]);
+}
 
 console.log('4. a link the report already has is never replaced, and is not a transition');
 {
@@ -533,7 +544,7 @@ console.log('10. source: where the completion happens, and what was left alone')
     [(core.match(/completeInsertedUploadedTdoc_\(/g) || []).length, (withoutComments(CODE).match(/completeInsertedUploadedTdoc_\(/g) || []).length,
       /insertNewTdoc_\(body, tdocData, cfg, tdocTableIndex, context\)\);[\s\S]{0,700}?newTdocsAdded\+\+;[\s\S]{0,400}?completeInsertedUploadedTdoc_\(body, tdocNumber, tdocData, tdocTableIndex, context\)\)\) \{[\s\S]{0,160}?\} else \{/.test(core)], [1, 2, true]);
   check('nothing else calls it, and the registration links are completed once per update', [(withoutComments(CODE).match(/refreshUploadedTdocMetadata_\(/g) || []).length, (withoutComments(CODE).match(/refreshRegistrationTableLinks_\(/g) || []).length], [2, 2]);
-  check('the changelog has the entry of 2.18.1, the release of the upload completion (Code.js is 2.20.0 now)', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), /\n \* 2\.18\.1 \(2026-10-05\)\n \*   - Fixed: a TDoc that entered the report while it was only reserved\n/.test(CODE)], [['2.20.0', '2026-10-06'], true]);
+  check('the changelog has the entry of 2.18.1, the release of the upload completion (Code.js is 2.21.0 now)', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), /\n \* 2\.18\.1 \(2026-10-05\)\n \*   - Fixed: a TDoc that entered the report while it was only reserved\n/.test(CODE)], [['2.21.0', '2026-10-06'], true]);
   // The status dropdowns (T-2026.10.7) came after the upload completion. What they added to released functions, taken out again:
   const DROPDOWN_HOOKS = [
     "  // T-2026.10.7: a Status that is a dropdown is never written as text; the same rule is applied to its selected value.\n  if (statusCellHoldsDropdown_(statusInfo.cell)) return applyTdocStatusUpdateToDropdown_(table, tdocNumber, newStatus);\n",
@@ -545,10 +556,16 @@ console.log('10. source: where the completion happens, and what was left alone')
   if (!RELEASED) {
     console.log('  note: template-release/T-2026.10.5 is not available in this checkout; the comparisons with it are skipped.');
   } else {
-    const same = (names) => names.filter((name) => functionSource(CODE, name) === null || withoutDropdownHooks(functionSource(CODE, name)) !== functionSource(RELEASED, name));
+    // After T-2026.10.8 the Reviewer request has one guard at its head (no abstract for a withdrawn TDoc) and, for it, a
+    // fourth parameter. Taken out again, the function is the released one.
+    const WITHDRAWN_GUARD = /  \/\/ Nothing is asked for a withdrawn TDoc \(abstractFetchBlockedBy_\(\)\): this\n[\s\S]*?\n    return false;\n  \}\n/;
+    const withoutWithdrawnGuard = (source) => (source === null ? source : source.replace('function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus) {\n', 'function fetchAndAddAbstract_(table, tdocNumber, context) {\n').replace(WITHDRAWN_GUARD, ''));
+    check('the guard of fetchAndAddAbstract_() is there, once, and is the first thing it does',
+      [(functionSource(CODE, 'fetchAndAddAbstract_').match(WITHDRAWN_GUARD) || []).length, functionSource(CODE, 'fetchAndAddAbstract_').indexOf('  // Nothing is asked for a withdrawn TDoc') === 'function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus) {\n'.length], [1, true]);
+    const same = (names) => names.filter((name) => functionSource(CODE, name) === null || withoutWithdrawnGuard(withoutDropdownHooks(functionSource(CODE, name))) !== functionSource(RELEASED, name));
     check('the status logic is the released one, byte for byte (but for the dropdown branch of T-2026.10.7)',
       same(['applyTdocStatusUpdate_', 'updateTdocStatus_', 'normalizeStatus_', 'findStatusInDocTable_', 'styleStatusCell_']), []);
-    check('so are the Reviewer request, its parsing, the Abstract row and the "no summary" cache',
+    check('so are the Reviewer request (but for its guard for withdrawn TDocs), its parsing, the Abstract row and the "no summary" cache',
       same(['fetchAndAddAbstract_', 'findAbstractInsertIndex_', 'isReviewerNoSummaryCached_', 'markReviewerNoSummary_', 'clearReviewerNoSummaryCache_', 'getFetchAbstractsSetting_']), []);
     check('and the insertion of a new TDoc (but for the note of T-2026.10.7), the registration table and the revision placement',
       same(['insertNewTdoc_', 'insertTDocTableAtIndex_', 'updateRegisteredDocumentsTable_', 'findRegistrationTable_', 'rearrangeRevisionTables_', 'setDispositionRevisedTo_', 'collectorUpdate_']), []);
@@ -556,22 +573,36 @@ console.log('10. source: where the completion happens, and what was left alone')
     // The eleven other functions are those the status dropdowns changed (tests/status-dropdown.test.js, tests/adhoc-sessions-config.test.js).
     const DROPDOWN_FUNCTIONS = ['insertNewTdoc_', 'applyTdocStatusUpdate_', 'updateStatusWithStrictRules_', 'insertRevisedDocTablesAfter_', 'analyzeReportStatus', 'runFullReportBuildCore_', 'buildSkeletonWithTdocTables',
       'appendTdocDetailTable_', 'collectRevisionsOnly', 'detectTdocTablesInDocument_', 'generateTdocDiscussionEmails'];
+    // After T-2026.10.8 eleven more changed, for other reasons than the upload completion (tests/after-10-8-ledger.test.js).
+    const AFTER_10_8_FUNCTIONS = ['fetchAndAddAbstract_', 'persistConfigurationSettings_', 'computeResolvedMeetingPreview_', 'configureMeetingSettings', 'saveConfigurationSettings',
+      'getReportConfig_', 'testAllConnections', 'testReviewerApi', 'validateConfiguration', 'getReviewerApiTokenForRun_', 'resetReviewerTokenRunState_'];
     check('of the released functions, the upload completion changed exactly two: the update and the abstract sweep',
-      released.filter((name, i, list) => list.indexOf(name) === i && functionSource(CODE, name) !== functionSource(RELEASED, name) && DROPDOWN_FUNCTIONS.indexOf(name) === -1), ['continuousUpdateCore_', 'addAbstractsForTables_']);
+      released.filter((name, i, list) => list.indexOf(name) === i && functionSource(CODE, name) !== functionSource(RELEASED, name) && DROPDOWN_FUNCTIONS.indexOf(name) === -1 && AFTER_10_8_FUNCTIONS.indexOf(name) === -1), ['continuousUpdateCore_', 'addAbstractsForTables_']);
+    check('and those eleven did change', AFTER_10_8_FUNCTIONS.filter((name) => functionSource(CODE, name) === functionSource(RELEASED, name)), []);
+    // The functions of the section after T-2026.10.8 (below) are not of the upload completion.
+    const after108Section = CODE.slice(CODE.indexOf('// =========================================================\n// AFTER T-2026.10.8 -- WITHDRAWN TDOCS AND ABSTRACTS; THE START OF AN AD-HOC MEETING\n'), CODE.indexOf('// =========================================================\n// TDOC STATUS DROPDOWNS'));
+    const AFTER_10_8_NEW = functionNames(after108Section);
+    check('the section after T-2026.10.8 has its fourteen functions', AFTER_10_8_NEW.length, 14);
     check('the new functions are the seven of the upload completion; none was removed',
-      [functionNames(CODE).filter((name) => released.indexOf(name) === -1 && !/[sS]tatusD(ropdown|ocs)|^readTdocStatus_$|^statusCellHoldsDropdown_$|^mapPortalStatusToDropdownOption_$|^applyTdocStatusUpdateToDropdown_$|^(convert|migrate)StatusFieldsToDropdowns_?$/.test(name)).sort(), released.filter((name) => functionNames(CODE).indexOf(name) === -1)],
+      [functionNames(CODE).filter((name) => released.indexOf(name) === -1 && !/[sS]tatusD(ropdown|ocs)|^readTdocStatus_$|^statusCellHoldsDropdown_$|^mapPortalStatusToDropdownOption_$|^applyTdocStatusUpdateToDropdown_$|^(convert|migrate)StatusFieldsToDropdowns_?$/.test(name) && AFTER_10_8_NEW.indexOf(name) === -1).sort(), released.filter((name) => functionNames(CODE).indexOf(name) === -1)],
       [['addMissingTdocLink_', 'completeInsertedUploadedTdoc_', 'refreshRegistrationTableLinks_', 'refreshUploadedTdocMetadata_', 'tdocListLinkIsKnown_', 'tdocListLinkUrl_', 'tdocsNotUploadedYet_'].sort(), []]);
     // The section of the status dropdowns stands directly before the upload-completion section; both are left out.
-    const withoutSection = CODE.replace(CODE.slice(CODE.indexOf('// =========================================================\n// TDOC STATUS DROPDOWNS'), CODE.indexOf('// =========================================================\n// AD-HOC SESSIONS (stage A)')), '');
+    // So is the section of the work after T-2026.10.8, which stands directly before that of the status dropdowns.
+    const withoutSection = CODE.replace(CODE.slice(CODE.indexOf('// =========================================================\n// AFTER T-2026.10.8 -- WITHDRAWN TDOCS AND ABSTRACTS; THE START OF AN AD-HOC MEETING\n'), CODE.indexOf('// =========================================================\n// AD-HOC SESSIONS (stage A)')), '');
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
     // The header: the version line and the changelog entry of 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSection.replace(/ \* 2\.20\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.20.0 (2026-10-06)\n', ' * Version: 2.18.0 (2026-10-02)\n');
-    check('outside its functions, the upload-completion and status-dropdown sections, the version line and the changelog entries since 2.18.0, Code.js is the released file',
+    const withoutRelease = withoutSection.replace(/ \* 2\.21\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.21.0 (2026-10-06)\n', ' * Version: 2.18.0 (2026-10-02)\n');
+    check('outside its functions, the upload-completion, status-dropdown and after-T-2026.10.8 sections, the version line and the changelog entries since 2.18.0, Code.js is the released file',
       [outsideFunctions(withoutRelease) === outsideFunctions(RELEASED), withoutRelease === withoutSection], [true, false]);
   }
   const section = CODE.slice(CODE.indexOf('// TDOC UPLOAD COMPLETION'), CODE.indexOf('// AD-HOC SESSIONS (stage A)'));
   const sectionCode = withoutComments(section);
-  check('the completion code does not read or write a Status, Minutes, Disposition, Title, Source, Contact or Type/For', /status|minutes|disposition|title|source|contact|type\/for/i.test(sectionCode), false);
+  // After T-2026.10.8 it asks ONE thing about a status: whether the TDoc is withdrawn (abstractFetchBlockedBy_(), with the
+  // status of the TDoc list). Those three names taken out, it still names no Status -- and it writes none (next check).
+  const withdrawnRuleUses = (sectionCode.match(/tdocListStatus_\(tdocData\)|abstractFetchBlockedBy_\(table, portalStatus\)|\bportalStatus\b/g) || []).length;
+  check('the completion code asks whether the TDoc is withdrawn, through the one rule, in its two ways', withdrawnRuleUses, 5);
+  check('otherwise the completion code does not read or write a Status, Minutes, Disposition, Title, Source, Contact or Type/For',
+    /status|minutes|disposition|title|source|contact|type\/for/i.test(sectionCode.replace(/tdocListStatus_\(tdocData\)|abstractFetchBlockedBy_\(table, portalStatus\)|\bportalStatus\b/g, '')), false);
   check('it sets a link, and nothing else in a table: no setText, no row, no style', /setText|appendTableRow|insertTableRow|removeRow|appendTableCell|setBold|setForegroundColor|setFontSize|styleStatusCell_/.test(sectionCode), false);
   check('it has no Reviewer request or parser of its own: the abstract goes through fetchAndAddAbstract_() only', [/UrlFetchApp|reviewer\.bouazizi|JSON\.parse/.test(sectionCode), (sectionCode.match(/fetchAndAddAbstract_\(/g) || []).length], [false, 2]);
   check('it does not look at FETCH_ABSTRACTS_ON_UPDATE, and stores nothing', /getFetchAbstractsSetting_|FETCH_ABSTRACTS_ON_UPDATE|setProperty/.test(sectionCode), false);

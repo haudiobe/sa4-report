@@ -75,7 +75,10 @@ function makeFakeDocumentBody(sandbox) {
       const te = {
         getText: () => c._t,
         appendText: (v) => { c._t += String(v); return te; },
-        setLinkUrl: (...args) => { c._links.push(args); return te; }, setFontSize: () => te, setForegroundColor: () => te, setBold: (b) => { c._bold = !!b; return te; }
+        setLinkUrl: (...args) => { c._links.push(args); return te; },
+        // Addition only (after T-2026.10.8): the link at one character, as recorded by setLinkUrl() -- the last one set wins.
+        getLinkUrl: (i) => { for (let k = c._links.length - 1; k >= 0; k--) if (i >= c._links[k][0] && i <= c._links[k][1]) return c._links[k][2] || null; return null; },
+        setFontSize: () => te, setForegroundColor: () => te, setBold: (b) => { c._bold = !!b; return te; }
       };
       c.editAsText = () => te;
       return c;

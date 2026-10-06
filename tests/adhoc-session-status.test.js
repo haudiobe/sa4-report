@@ -757,7 +757,7 @@ console.log('9. main-meeting reports and reports without sessions; menu; source'
   check('the TDoc sessions come from the resolver of the Session column; the attendance values from the block of the report (source)', [/makeAdhocTdocSessionResolver_\(\)/.test(SECTION), /resolver\.effective\(td\)/.test(SECTION), /buildAdhocAttendanceBlocks_\(sessions, attendance\)/.test(SECTION),
     /formatTeamsDuration_|durationSeconds|averageAttendanceSeconds|attendanceRecords/.test(SECTION.replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, ''))], [true, true, true, false]);
   check('nothing is calculated from the attendance but a count (source): no sum, no mean, no percentage', /reduce\(|Math\.(round|floor|max|min)|\/ total|\* 100|pct\(/.test(SECTION.replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, '')), false);
-  check('Code.js is version 2.20.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.20.0');
+  check('Code.js is version 2.21.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.0');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll ad-hoc session status checks passed.');

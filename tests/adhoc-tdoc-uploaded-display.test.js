@@ -250,7 +250,7 @@ console.log('5. manual assignments and the automatic rule are what they were');
     [['s1', 's2'], ['s1'], [], ['s1'], []]);
   check('the cut-off is inclusive, and the automatic rule is the one function it always was (source)', [(CODE.match(/if \(at <= adhocSessionCutoff_\(ordered\[i\]\)\) return ordered\[i\]\.id;/g) || []).length, (CODE.match(/const automatic = function \(td\) \{ return assignAdhocSession_\(uploaded\(td\), sessions\); \};/g) || []).length], [1, 1]);
   check('the clock selector is still under Advanced, with UTC as the normal choice', (() => { m.s.assignAdhocTdocSessions(); const html = m.ui.dialogs[0].html; return [/<details[^>]*>\s*<summary[^>]*>Advanced<\/summary>[\s\S]*<select id="clock">/.test(html), /<option value="utc">in UTC, as the 3GPP Portal records them \(normal\)<\/option>/.test(html)]; })(), [true, true]);
-  check('Code.js is version 2.20.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.20.0');
+  check('Code.js is version 2.21.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.0');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll TDoc uploaded-display checks passed.');
