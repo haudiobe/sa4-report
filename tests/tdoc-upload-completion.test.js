@@ -544,7 +544,7 @@ console.log('10. source: where the completion happens, and what was left alone')
     [(core.match(/completeInsertedUploadedTdoc_\(/g) || []).length, (withoutComments(CODE).match(/completeInsertedUploadedTdoc_\(/g) || []).length,
       /insertNewTdoc_\(body, tdocData, cfg, tdocTableIndex, context\)\);[\s\S]{0,700}?newTdocsAdded\+\+;[\s\S]{0,400}?completeInsertedUploadedTdoc_\(body, tdocNumber, tdocData, tdocTableIndex, context\)\)\) \{[\s\S]{0,160}?\} else \{/.test(core)], [1, 2, true]);
   check('nothing else calls it, and the registration links are completed once per update', [(withoutComments(CODE).match(/refreshUploadedTdocMetadata_\(/g) || []).length, (withoutComments(CODE).match(/refreshRegistrationTableLinks_\(/g) || []).length], [2, 2]);
-  check('the changelog has the entry of 2.18.1, the release of the upload completion (Code.js is 2.21.0 now)', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), /\n \* 2\.18\.1 \(2026-10-05\)\n \*   - Fixed: a TDoc that entered the report while it was only reserved\n/.test(CODE)], [['2.21.0', '2026-10-06'], true]);
+  check('the changelog has the entry of 2.18.1, the release of the upload completion (Code.js is 2.21.1 now)', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), /\n \* 2\.18\.1 \(2026-10-05\)\n \*   - Fixed: a TDoc that entered the report while it was only reserved\n/.test(CODE)], [['2.21.1', '2026-10-06'], true]);
   // The status dropdowns (T-2026.10.7) came after the upload completion. What they added to released functions, taken out again:
   const DROPDOWN_HOOKS = [
     "  // T-2026.10.7: a Status that is a dropdown is never written as text; the same rule is applied to its selected value.\n  if (statusCellHoldsDropdown_(statusInfo.cell)) return applyTdocStatusUpdateToDropdown_(table, tdocNumber, newStatus);\n",
@@ -576,8 +576,11 @@ console.log('10. source: where the completion happens, and what was left alone')
     // After T-2026.10.8 eleven more changed, for other reasons than the upload completion (tests/after-10-8-ledger.test.js).
     const AFTER_10_8_FUNCTIONS = ['fetchAndAddAbstract_', 'persistConfigurationSettings_', 'computeResolvedMeetingPreview_', 'configureMeetingSettings', 'saveConfigurationSettings',
       'getReportConfig_', 'testAllConnections', 'testReviewerApi', 'validateConfiguration', 'getReviewerApiTokenForRun_', 'resetReviewerTokenRunState_'];
+    // After T-2026.10.9 one more: the table of a discussion e-mail, which shows the value of a Status dropdown (tests/email-status-dropdown.test.js).
+    const AFTER_10_9_FUNCTIONS = ['docTableToHtml_'];
     check('of the released functions, the upload completion changed exactly two: the update and the abstract sweep',
-      released.filter((name, i, list) => list.indexOf(name) === i && functionSource(CODE, name) !== functionSource(RELEASED, name) && DROPDOWN_FUNCTIONS.indexOf(name) === -1 && AFTER_10_8_FUNCTIONS.indexOf(name) === -1), ['continuousUpdateCore_', 'addAbstractsForTables_']);
+      released.filter((name, i, list) => list.indexOf(name) === i && functionSource(CODE, name) !== functionSource(RELEASED, name) && DROPDOWN_FUNCTIONS.indexOf(name) === -1 && AFTER_10_8_FUNCTIONS.indexOf(name) === -1 && AFTER_10_9_FUNCTIONS.indexOf(name) === -1), ['continuousUpdateCore_', 'addAbstractsForTables_']);
+    check('and that one did change', AFTER_10_9_FUNCTIONS.filter((name) => functionSource(CODE, name) === functionSource(RELEASED, name)), []);
     check('and those eleven did change', AFTER_10_8_FUNCTIONS.filter((name) => functionSource(CODE, name) === functionSource(RELEASED, name)), []);
     // The functions of the section after T-2026.10.8 (below) are not of the upload completion.
     const after108Section = CODE.slice(CODE.indexOf('// =========================================================\n// AFTER T-2026.10.8 -- WITHDRAWN TDOCS AND ABSTRACTS; THE START OF AN AD-HOC MEETING\n'), CODE.indexOf('// =========================================================\n// TDOC STATUS DROPDOWNS'));
@@ -591,7 +594,7 @@ console.log('10. source: where the completion happens, and what was left alone')
     const withoutSection = CODE.replace(CODE.slice(CODE.indexOf('// =========================================================\n// AFTER T-2026.10.8 -- WITHDRAWN TDOCS AND ABSTRACTS; THE START OF AN AD-HOC MEETING\n'), CODE.indexOf('// =========================================================\n// AD-HOC SESSIONS (stage A)')), '');
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
     // The header: the version line and the changelog entry of 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSection.replace(/ \* 2\.21\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.21.0 (2026-10-06)\n', ' * Version: 2.18.0 (2026-10-02)\n');
+    const withoutRelease = withoutSection.replace(/ \* 2\.21\.1 \(2026-10-06\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.21.1 (2026-10-06)\n', ' * Version: 2.18.0 (2026-10-02)\n');
     check('outside its functions, the upload-completion, status-dropdown and after-T-2026.10.8 sections, the version line and the changelog entries since 2.18.0, Code.js is the released file',
       [outsideFunctions(withoutRelease) === outsideFunctions(RELEASED), withoutRelease === withoutSection], [true, false]);
   }

@@ -1059,7 +1059,7 @@ console.log('11. menu, adoption, and nothing else changed');
   check('the section writes one property, in one place', (code.match(/\.setProperty\(/g) || []).length, 1);
   check('it logs fixed texts and error messages only', (code.match(/Logger\.log\((.*)\);/g) || []).filter((line) => !/^Logger\.log\('TDoc sessions: [^']*' \+ (e\.message|resolver\.error \+ ' Only the automatic sessions are used\.')\);$/.test(line)), []);
   check('an update reads the TDoc list once, as before, and the assignments once', (() => { const x = report(); x.build(); const n = x.downloads; x.update(); return x.downloads - n; })(), 1);
-  check('Code.js is version 2.21.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.0');
+  check('Code.js is version 2.21.1 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token, 2.21.1 the dropdown status in a discussion e-mail)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.1');
   check('ReportCreator.js: one more menu item, nothing else', (CREATOR.match(/TDoc Sessions|assignAdhocTdocSessions/g) || []).length, 2);
 }
 

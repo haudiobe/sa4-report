@@ -30,6 +30,11 @@
  * dropdown; a copy of a table carries its dropdowns, each with a NEW id.
  * The body knows whether it has unsaved changes (_dirty) and, once the test
  * says the document was saved and closed (_closed), refuses every change.
+ *
+ * Discussion e-mails (T-2026.10.10), addition only: the paragraph of a cell
+ * gives its text as a Text element (editAsText()), the one of the cell --
+ * the e-mail export reads a cell paragraph by paragraph. A dropdown is not
+ * in it, as in Google Docs.
  */
 
 function makeFakeDocumentBody(sandbox) {
@@ -67,7 +72,9 @@ function makeFakeDocumentBody(sandbox) {
         setSpacingBefore: (v) => { c._spacing[0] = v; return para; }, setSpacingAfter: (v) => { c._spacing[1] = v; return para; },
         // The children of the paragraph: its text, then a dropdown -- which DocumentApp knows as UNSUPPORTED only.
         getNumChildren: () => (c._t ? 1 : 0) + (c._dropdown ? 1 : 0),
-        getChild: (k) => ({ getType: () => (c._t && k === 0 ? 'TEXT' : 'UNSUPPORTED') }) };
+        getChild: (k) => ({ getType: () => (c._t && k === 0 ? 'TEXT' : 'UNSUPPORTED') }),
+        // Addition only (T-2026.10.10): the text of the paragraph, for the e-mail export.
+        editAsText: () => te };
       c.getNumChildren = () => 1;
       c.getChild = () => para;
       // ADDON-008A2: a minimal Text element over the cell's text (the e-mail

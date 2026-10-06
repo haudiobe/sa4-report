@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.21.0 (2026-10-06)
+ * Version: 2.21.1 (2026-10-06)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,17 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.21.1 (2026-10-06)
+ *   - Fixed: a discussion e-mail showed an empty Status for a TDoc whose
+ *     Status is a native dropdown (since 2.19.0): DocumentApp has no text
+ *     for a dropdown, and the e-mail copies the table through DocumentApp.
+ *     docTableToHtml_() now writes, for the value cell of the Status row
+ *     and only when that cell holds a dropdown and no text, the value
+ *     readTdocStatus_() reads -- HTML-escaped, in the paragraph an
+ *     ordinary cell has. A text Status, text beside a dropdown, a
+ *     dropdown that cannot be read (the cell stays empty) and every other
+ *     cell are rendered as before. Generating an e-mail writes nothing to
+ *     the report and asks the Portal nothing, as before.
  * 2.21.0 (2026-10-06)
  *   - Changed (ad-hoc reports without sessions): the opening sentence has
  *     the start time and the time zone the Portal gives for the meeting
@@ -20506,15 +20517,29 @@ function docCellToHtml_(cell, documentUrl) {
 function docTableToHtml_(table, documentUrl) {
   const rows = table.getNumRows();
   let html = '<table style="border-collapse:collapse;width:100%;font-family:Arial,Helvetica,sans-serif;font-size:12px;" border="1" cellpadding="6" cellspacing="0">';
+  let statusRowSeen = false;
   for (let r = 0; r < rows; r++) {
     const row = table.getRow(r);
     const cells = row.getNumCells();
+    // 2.21.1: the Status row is the one findStatusInDocTable_() finds -- the first with one of its two labels.
+    const label = !statusRowSeen && cells >= 2 ? row.getCell(0).getText().trim().toLowerCase() : '';
+    const isStatusRow = label === 'tdoc status' || label === 'status';
+    if (isStatusRow) statusRowSeen = true;
     html += '<tr>';
     for (let c = 0; c < cells; c++) {
       const cell = row.getCell(c);
       const isLabelCol = c === 0;
       const cellStyle = 'border:1px solid #999;padding:6px;vertical-align:top;text-align:left;' + (isLabelCol ? 'font-weight:bold;background:#f2f2f2;white-space:nowrap;' : '');
-      html += '<td style="' + cellStyle + '">' + docCellToHtml_(cell, documentUrl) + '</td>';
+      let cellHtml = docCellToHtml_(cell, documentUrl);
+      // 2.21.1: a Status that is a native dropdown has no text for DocumentApp. The value selected in it is read the one
+      // way a status is read (readTdocStatus_()); nothing is written. Text in the cell, and a dropdown that cannot be
+      // read, leave the cell as it was rendered above.
+      if (isStatusRow && c === 1 && statusCellHoldsDropdown_(cell)) {
+        const cellText = cell.getText();
+        const selected = String(cellText || '').trim() ? '' : readTdocStatus_(table, cellText);
+        if (selected) cellHtml = '<p style="margin:0 0 4px 0;">' + escapeHtmlForEmailExport_(selected) + '</p>';
+      }
+      html += '<td style="' + cellStyle + '">' + cellHtml + '</td>';
     }
     html += '</tr>';
   }

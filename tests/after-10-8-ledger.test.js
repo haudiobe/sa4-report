@@ -17,8 +17,12 @@
  *      rest of the file outside its functions is the released file;
  *   3. ReportCreator.js: which functions changed, which are new;
  *   4. the other files of the bundle are the released ones; the version
- *      line and one changelog entry are those of the candidate for
- *      T-2026.10.9 (Code.js 2.21.0).
+ *      line and the changelog entries are those of T-2026.10.9 (Code.js
+ *      2.21.0) and of the hotfix after it (Code.js 2.21.1).
+ *
+ * After T-2026.10.9 one more function changed: docTableToHtml_(), the table
+ * of a discussion e-mail (Code.js 2.21.1). It is in the list below like the
+ * others, compared with T-2026.10.8, which had it as T-2026.10.9 did.
  *
  * Without the tag in the checkout the comparisons are skipped, and said so.
  *
@@ -242,6 +246,25 @@ const CODE_CHANGES = {
      '  }\n' +
      '\n', ''],
     ['  let reallocationRestoreNote = revisionPlacementNote;\n', "  let reallocationRestoreNote = '';\n"]
+  ],
+  // After T-2026.10.9 (Code.js 2.21.1): the value of a Status dropdown in the table of a discussion e-mail.
+  docTableToHtml_: [
+    ['  let statusRowSeen = false;\n', ''],
+    ['    // 2.21.1: the Status row is the one findStatusInDocTable_() finds -- the first with one of its two labels.\n' +
+     "    const label = !statusRowSeen && cells >= 2 ? row.getCell(0).getText().trim().toLowerCase() : '';\n" +
+     "    const isStatusRow = label === 'tdoc status' || label === 'status';\n" +
+     '    if (isStatusRow) statusRowSeen = true;\n', ''],
+    ['      let cellHtml = docCellToHtml_(cell, documentUrl);\n' +
+     '      // 2.21.1: a Status that is a native dropdown has no text for DocumentApp. The value selected in it is read the one\n' +
+     '      // way a status is read (readTdocStatus_()); nothing is written. Text in the cell, and a dropdown that cannot be\n' +
+     '      // read, leave the cell as it was rendered above.\n' +
+     '      if (isStatusRow && c === 1 && statusCellHoldsDropdown_(cell)) {\n' +
+     '        const cellText = cell.getText();\n' +
+     "        const selected = String(cellText || '').trim() ? '' : readTdocStatus_(table, cellText);\n" +
+     "        if (selected) cellHtml = '<p style=\"margin:0 0 4px 0;\">' + escapeHtmlForEmailExport_(selected) + '</p>';\n" +
+     '      }\n' +
+     "      html += '<td style=\"' + cellStyle + '\">' + cellHtml + '</td>';\n",
+     "      html += '<td style=\"' + cellStyle + '\">' + docCellToHtml_(cell, documentUrl) + '</td>';\n"]
   ]
 };
 const SECTION_FUNCTIONS = ['isWithdrawnStatus_', 'abstractFetchBlockedBy_', 'tdocListStatus_', 'tdocListStatuses_', 'resolveReviewerApiToken_', 'computeMeetingStartTimeFromStartDate_', 'computeMeetingTimeZoneLabel_',
@@ -254,7 +277,7 @@ console.log('1. Code.js: the functions that changed');
 if (!OLD_CODE) {
   console.log('  note: ' + TAG + ' is not available in this checkout; the comparisons with it are skipped.');
 } else {
-  check('exactly these sixteen functions of T-2026.10.8 changed', changed(CODE, OLD_CODE).sort(), Object.keys(CODE_CHANGES).sort());
+  check('exactly these seventeen functions of T-2026.10.8 changed (sixteen for T-2026.10.9, and docTableToHtml_() after it)', changed(CODE, OLD_CODE).sort(), Object.keys(CODE_CHANGES).sort());
   Object.keys(CODE_CHANGES).forEach((name) => {
     const now = functionSource(CODE, name);
     const counts = CODE_CHANGES[name].map((pair) => now.split(pair[0]).length - 1);
@@ -273,10 +296,10 @@ console.log('2. Code.js: the new functions and the rest of the file');
   check('it has these fourteen functions, in this order', functionNames(section), SECTION_FUNCTIONS);
   if (OLD_CODE) {
     check('they are the new functions of Code.js, all of them', added(CODE, OLD_CODE), SECTION_FUNCTIONS.slice().sort());
-    // The header: the version line and the changelog entry of 2.21.0 are new; the rest of it is unchanged.
+    // The header: the version line and the changelog entries of 2.21.0 and 2.21.1 are new; the rest of it is unchanged.
     const withoutSection = CODE.slice(0, at) + CODE.slice(end);
-    const withoutRelease = withoutSection.replace(/ \* 2\.21\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.20\.0 \(2026-10-06\)\n/, ' * 2.20.0 (2026-10-06)\n').replace(' * Version: 2.21.0 (2026-10-06)\n', ' * Version: 2.20.0 (2026-10-06)\n');
-    check('outside its functions, that section, the version line and the changelog entry of 2.21.0, Code.js is the released file: no constant and no comment differs',
+    const withoutRelease = withoutSection.replace(/ \* 2\.21\.1 \(2026-10-06\)\n[\s\S]*? \* 2\.20\.0 \(2026-10-06\)\n/, ' * 2.20.0 (2026-10-06)\n').replace(' * Version: 2.21.1 (2026-10-06)\n', ' * Version: 2.20.0 (2026-10-06)\n');
+    check('outside its functions, that section, the version line and the changelog entries of 2.21.0 and 2.21.1, Code.js is the released file: no constant and no comment differs',
       [outsideFunctions(withoutRelease) === outsideFunctions(OLD_CODE), withoutRelease === withoutSection], [true, false]);
   }
   check('the section declares three constants, the keys of the stored start, and nothing else at top level',
@@ -310,8 +333,8 @@ console.log('4. the rest of the bundle, and the version');
 {
   const others = ['HyperLink.js', 'appsscript.json', 'colab_notebook.html', 'colab_notebook_shared.html', 'tools/template-release.js', '.claspignore'];
   if (OLD_CODE) check('the other files of the bundle, the release tool and the push filter are the released ones', others.filter((file) => read(file) !== gitShow(file)), []);
-  check('Code.js is version 2.21.0, and the first changelog entry is that of 2.21.0, directly above the one of 2.20.0',
-    [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), (CODE.match(/^ \* (\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)$/gm) || []).slice(0, 2)], [['2.21.0', '2026-10-06'], [' * 2.21.0 (2026-10-06)', ' * 2.20.0 (2026-10-06)']]);
+  check('Code.js is version 2.21.1, and the first changelog entries are those of 2.21.1, 2.21.0 and 2.20.0, in this order',
+    [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), (CODE.match(/^ \* (\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)$/gm) || []).slice(0, 3)], [['2.21.1', '2026-10-06'], [' * 2.21.1 (2026-10-06)', ' * 2.21.0 (2026-10-06)', ' * 2.20.0 (2026-10-06)']]);
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll after-T-2026.10.8 ledger checks passed.');
