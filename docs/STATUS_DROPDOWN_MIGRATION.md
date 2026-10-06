@@ -1,12 +1,13 @@
-# Status dropdowns for an existing report (release candidate T-2026.10.8)
+# Status dropdowns for an existing report (T-2026.10.8)
 
-2026-10-06. Branch `feature/status-dropdown-migration`, on master `a289628` (T-2026.10.7,
-`Code.js` 2.19.0).
+Developed 2026-10-06 on branch `feature/status-dropdown-migration`, on master `a289628`
+(T-2026.10.7, `Code.js` 2.19.0). This document was written as the release candidate; §10 records
+the release.
 
-**Status: RELEASE CANDIDATE, SMOKE TEST PASSED (2026-10-06, §9). `Code.js` 2.20.0, proposed
-template release T-2026.10.8. Not tagged, not pushed, not deployed: each of those is a separate,
-explicitly authorized step. Installed on the disposable test report only. T-2026.10.7 and its
-tag are not changed.**
+**Status: RELEASED AND DEPLOYED. Template release T-2026.10.8, `Code.js` 2.20.0, release commit
+`7a6fcc4d6d34ffbb8b8763f1da501f669f3fc338`, tag `template-release/T-2026.10.8`. Published and
+deployed to the master template on 2026-10-06 (§10). T-2026.10.7 and its tag were not changed.
+No existing report was updated or converted.**
 
 ## 1. Why
 
@@ -274,3 +275,65 @@ file equals its remote counterpart — also when the project holds a file more t
 folder. Removing the helper therefore took a push that differed in one file, followed by the push
 of the exact candidate. A deployment is verified by reading the project back and counting its
 files, not by the message of the push.
+
+## 10. Release: complete
+
+Each step was authorized on its own and verified before the next.
+
+| Step | Result |
+|---|---|
+| Smoke test in a real Google document (§9) | **Pass** |
+| Release commit | **Complete.** One squashed commit on master, `7a6fcc4d6d34ffbb8b8763f1da501f669f3fc338`, with `a289628f1bfefe064f916e93bdd635e64e3a38cf` (T-2026.10.7 and its closeout) as its only parent and the tree of the accepted branch, `abe9a30e85925da1c27aa30498d1cf8f4bab5b0b` |
+| Automated tests and mutation checks, on the release commit | **Pass** (see below) |
+| Tag and publication | **Complete.** The lightweight tag `template-release/T-2026.10.8` on the release commit; master and the tag pushed together in one atomic push, fast-forward, without force. Every older release tag is where it was, locally and published |
+| The release bundle | Built by the release tool from the tagged commit: the seven production files. Its six source files are byte-identical to the candidate of the smoke test; `Release.js` differs from the candidate's only in the commit it names and the time it was built |
+| Deployment to the master template's script project | **Pass** (see below) |
+
+### Verification on the release commit
+
+| | |
+|---|---|
+| Conversion tests (`tests/status-dropdown-migration.test.js`) | 131 checks, 0 failures |
+| Status dropdown tests (`tests/status-dropdown.test.js`) | 190 checks, 0 failures |
+| Mutation checks of the conversion and the revision guard | 72 of 72 caught |
+| Mutation checks of T-2026.10.7 | 75 of 75 and 35 of 35 caught |
+| The full suite | 95 files, 0 failing |
+
+The full suite counts 6,451 checks in a checkout that has the repository's own, git-ignored
+`.clasp.json`, and 6,449 in one that does not: two checks — that this very target is refused by
+the release tool and by the adoption tool — can only run where that file exists. The suite was
+run on the release commit in a checkout without the file (6,449, none failing); the two test
+files concerned were then run on the same commit in the checkout that has it, with all their
+checks passing. Nothing failed and nothing was skipped that could have run.
+
+### Deployment to the master template
+
+| | |
+|---|---|
+| Before | The project held T-2026.10.7, `Code.js` 2.19.0: seven files, each identical to that release's bundle, no other file |
+| The bundle, checked again right before | The tag on the release commit; every file matching the bundle's own manifest; the ignore file admitting exactly the seven production files; no helper file |
+| The push | One normal `clasp push` from the release bundle. Seven files pushed. No prompt (the manifest is the one of T-2026.10.7). No `--force` |
+| Read-back | **Exactly seven files, each byte-identical to the release bundle** |
+| `Release.js` as deployed | T-2026.10.8, template, 2.20.0, the release commit, the tag |
+| The manifest as deployed | Unchanged from T-2026.10.7: Europe/Berlin, V8, Drive v3 and Docs v1, the same six OAuth scopes |
+
+The deployment replaced the files of the script project and nothing else:
+
+- the master template **document** was not modified, and its "Document Status" definition
+  (`docs/STATUS_DROPDOWN_RELEASE_CANDIDATE.md`, §8) was not touched;
+- no conversion was run on it, and no Build Report from Scratch;
+- no trigger was changed;
+- the disposable test report, the live reports, CENTRAL and Legacy were not touched by it.
+
+### What is live
+
+- **The master template: T-2026.10.8.** A report created from it has the action "Convert Status
+  Fields to Dropdowns…" in its menu; as before, it gets its dropdowns with its first Build
+  Report from Scratch and has nothing to convert.
+- **The live 6G report: still T-2026.10.7**, its Status fields still text. Not converted.
+- **The live MBS report: not yet on T-2026.10.8**, and not converted.
+- CENTRAL and Legacy were not deployed and do not use the feature.
+
+Next, and only for the 6G report: install T-2026.10.8 in its script project, verify by reading
+the project back, and then run the conversion from its menu — in place, without rebuilding the
+report. Each of these is a separate, explicitly authorized step.
