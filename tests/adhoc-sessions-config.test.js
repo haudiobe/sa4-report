@@ -575,7 +575,7 @@ console.log('10. nothing else changed');
     check('Code.js: every function of T-2026.10.4 is byte-for-byte what it was, but the seven of the releases since and nine more for the status dropdowns', changed(CODE, OLD_CODE),
       ['continuousUpdateCore_', 'insertNewTdoc_', 'applyTdocStatusUpdate_', 'updateRegisteredDocumentsTable_', 'createSummaryTable_', 'updateStatusWithStrictRules_', 'insertRevisedDocTablesAfter_', 'analyzeReportStatus',
         'runFullReportBuildCore_', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_', 'appendTdocDetailTable_', 'collectRevisionsOnly', 'addAbstractsForTables_', 'detectTdocTablesInDocument_', 'generateTdocDiscussionEmails']);
-    check('ReportCreator.js: only the report menu and the build question changed', changed(CREATOR, OLD_CREATOR), ['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_']);
+    check('ReportCreator.js: only the report menu (the Sessions submenu, and the item that converts the Status fields of an existing report) and the build question changed', changed(CREATOR, OLD_CREATOR), ['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_']);
     // Outside the functions: constants and comments. Without the ad-hoc sections and the two adoption keys they are unchanged.
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
     const start = CODE.indexOf('// AD-HOC SESSIONS (stage A) -- SESSION MODEL AND CONFIGURATION\n');
@@ -589,8 +589,8 @@ console.log('10. nothing else changed');
     check('the status dropdowns are one section, directly before the upload completion', [dropdownStart !== -1, dropdownStart < uploadStart, CODE.slice(uploadStart - 1, uploadStart)], [true, true, '\n']);
     const withoutSections = (CODE.slice(0, dropdownStart) + BAR + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
     // The header: the version line and the changelog entries of 2.18.0 and 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSections.replace(/ \* 2\.19\.0 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.19.0 (2026-10-05)\n', ' * Version: 2.17.4 (2026-10-01)\n');
-    check('Code.js outside its functions, without the ad-hoc, upload-completion and status-dropdown sections, the two adoption keys, the version line and the changelog entries of 2.18.0, 2.18.1 and 2.19.0, is the T-2026.10.4 file outside its functions',
+    const withoutRelease = withoutSections.replace(/ \* 2\.20\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.20.0 (2026-10-06)\n', ' * Version: 2.17.4 (2026-10-01)\n');
+    check('Code.js outside its functions, without the ad-hoc, upload-completion and status-dropdown sections, the two adoption keys, the version line and the changelog entries since 2.17.4, is the T-2026.10.4 file outside its functions',
       [outsideFunctions(withoutRelease) === outsideFunctions(OLD_CODE), withoutRelease === withoutSections], [true, false]);
   }
 

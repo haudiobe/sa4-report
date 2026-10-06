@@ -612,7 +612,8 @@ console.log('\n11. reports with text statuses: unchanged, and no API call');
   old.exec(() => old.s.analyzeReportStatus());
   old.exec(() => old.s.detectTdocTablesInDocument_(old.body));
   check('its status summary and its e-mail list make no API call either', old.events, []);
-  check('the mark is set by a build only (source)', (CODE.match(/setProperty\(STATUS_DROPDOWN_ENABLED_KEY_/g) || []).length === 1 && /if \(definition && mode === 'build'\) props\.setProperty\(STATUS_DROPDOWN_ENABLED_KEY_, '1'\);/.test(CODE), true);
+  check('the mark is set by a build, and by a complete conversion of an existing report (tests/status-dropdown-migration.test.js) -- nowhere else (source)',
+    [(CODE.match(/setProperty\(STATUS_DROPDOWN_ENABLED_KEY_/g) || []).length, /if \(definition && mode === 'build'\) props\.setProperty\(STATUS_DROPDOWN_ENABLED_KEY_, '1'\);/.test(CODE), /if \(result\.ok\) \{ props\.setProperty\(STATUS_DROPDOWN_ENABLED_KEY_, '1'\); result\.marked = true; \}/.test(CODE)], [2, true, true]);
 
   // What a text report produces is what the previous release produced.
   const withService = report();
@@ -625,7 +626,7 @@ console.log('\n11. reports with text statuses: unchanged, and no API call');
   check('the manifest: the Google Docs API service beside Drive, and no new scope', (() => { const m = JSON.parse(fs.readFileSync(require('path').join(__dirname, '..', 'appsscript.json'), 'utf8')); return [m.dependencies.enabledAdvancedServices, m.oauthScopes.length, m.oauthScopes.filter((x) => /documents$/.test(x)).length, m.timeZone, m.runtimeVersion]; })(),
     [[{ userSymbol: 'Drive', serviceId: 'drive', version: 'v3' }, { userSymbol: 'Docs', serviceId: 'docs', version: 'v1' }], 6, 1, 'Europe/Berlin', 'V8']);
   check('the feature stores one property of its own and reads one more (source)', [(CODE.match(/const STATUS_DROPDOWN_[A-Z_]*KEY_ = '[A-Z_]+';/g) || []).length, /STATUS_DROPDOWN/.test(JSON.stringify(S.ADDON003_ADOPTION_FIXED_KEYS_))], [2, false]);
-  check('Code.js is version 2.19.0', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.19.0');
+  check('Code.js is version 2.20.0', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.20.0');
 }
 
 // ================================================================ 12. a dropdown that could not be made
@@ -811,7 +812,7 @@ console.log('\n13. Build Report from Scratch keeps what was selected in a dropdo
   check('CENTRAL and Legacy: nothing is read, nothing is kept, nothing changes', [central.events, central.all()[0]], [[], 'S4aA269001 text:agreed']);
   check('the values are read in one place: before the build clears the document (source)', [(CODE.match(/captureStatusDropdownValuesForRebuild_\(\)/g) || []).length,
     /  captureStatusDropdownValuesForRebuild_\(\);\n\n  \/\/ Step 2: Clear document, set title\n  const body = DocumentApp\.getActiveDocument\(\)\.getBody\(\)\.clear\(\);/.test(CODE)], [2, true]);
-  check('nothing of it is stored: the feature still writes one property only (source)', (CODE.slice(CODE.indexOf('// TDOC STATUS DROPDOWNS (T-2026.10.7)'), CODE.indexOf('// TDOC UPLOAD COMPLETION')).match(/\.setProperty\(/g) || []).length, 1);
+  check('nothing of it is stored: the feature writes its one property only, in its two places (source)', (CODE.slice(CODE.indexOf('// TDOC STATUS DROPDOWNS (T-2026.10.7)'), CODE.indexOf('// TDOC UPLOAD COMPLETION')).match(/\.setProperty\(([A-Z_a-z]*)/g) || []), ['.setProperty(STATUS_DROPDOWN_ENABLED_KEY_', '.setProperty(STATUS_DROPDOWN_ENABLED_KEY_']);
 }
 
 console.log(failures === 0 ? '\nAll status-dropdown checks passed.' : `\n${failures} check(s) FAILED.`);

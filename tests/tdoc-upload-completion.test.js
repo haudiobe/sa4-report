@@ -533,7 +533,7 @@ console.log('10. source: where the completion happens, and what was left alone')
     [(core.match(/completeInsertedUploadedTdoc_\(/g) || []).length, (withoutComments(CODE).match(/completeInsertedUploadedTdoc_\(/g) || []).length,
       /insertNewTdoc_\(body, tdocData, cfg, tdocTableIndex, context\)\);[\s\S]{0,700}?newTdocsAdded\+\+;[\s\S]{0,400}?completeInsertedUploadedTdoc_\(body, tdocNumber, tdocData, tdocTableIndex, context\)\)\) \{[\s\S]{0,160}?\} else \{/.test(core)], [1, 2, true]);
   check('nothing else calls it, and the registration links are completed once per update', [(withoutComments(CODE).match(/refreshUploadedTdocMetadata_\(/g) || []).length, (withoutComments(CODE).match(/refreshRegistrationTableLinks_\(/g) || []).length], [2, 2]);
-  check('the changelog has the entry of 2.18.1, the release of the upload completion (Code.js is 2.19.0 now)', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), /\n \* 2\.18\.1 \(2026-10-05\)\n \*   - Fixed: a TDoc that entered the report while it was only reserved\n/.test(CODE)], [['2.19.0', '2026-10-05'], true]);
+  check('the changelog has the entry of 2.18.1, the release of the upload completion (Code.js is 2.20.0 now)', [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), /\n \* 2\.18\.1 \(2026-10-05\)\n \*   - Fixed: a TDoc that entered the report while it was only reserved\n/.test(CODE)], [['2.20.0', '2026-10-06'], true]);
   // The status dropdowns (T-2026.10.7) came after the upload completion. What they added to released functions, taken out again:
   const DROPDOWN_HOOKS = [
     "  // T-2026.10.7: a Status that is a dropdown is never written as text; the same rule is applied to its selected value.\n  if (statusCellHoldsDropdown_(statusInfo.cell)) return applyTdocStatusUpdateToDropdown_(table, tdocNumber, newStatus);\n",
@@ -559,14 +559,14 @@ console.log('10. source: where the completion happens, and what was left alone')
     check('of the released functions, the upload completion changed exactly two: the update and the abstract sweep',
       released.filter((name, i, list) => list.indexOf(name) === i && functionSource(CODE, name) !== functionSource(RELEASED, name) && DROPDOWN_FUNCTIONS.indexOf(name) === -1), ['continuousUpdateCore_', 'addAbstractsForTables_']);
     check('the new functions are the seven of the upload completion; none was removed',
-      [functionNames(CODE).filter((name) => released.indexOf(name) === -1 && !/[sS]tatusD(ropdown|ocs)|^readTdocStatus_$|^statusCellHoldsDropdown_$|^mapPortalStatusToDropdownOption_$|^applyTdocStatusUpdateToDropdown_$/.test(name)).sort(), released.filter((name) => functionNames(CODE).indexOf(name) === -1)],
+      [functionNames(CODE).filter((name) => released.indexOf(name) === -1 && !/[sS]tatusD(ropdown|ocs)|^readTdocStatus_$|^statusCellHoldsDropdown_$|^mapPortalStatusToDropdownOption_$|^applyTdocStatusUpdateToDropdown_$|^(convert|migrate)StatusFieldsToDropdowns_?$/.test(name)).sort(), released.filter((name) => functionNames(CODE).indexOf(name) === -1)],
       [['addMissingTdocLink_', 'completeInsertedUploadedTdoc_', 'refreshRegistrationTableLinks_', 'refreshUploadedTdocMetadata_', 'tdocListLinkIsKnown_', 'tdocListLinkUrl_', 'tdocsNotUploadedYet_'].sort(), []]);
     // The section of the status dropdowns stands directly before the upload-completion section; both are left out.
     const withoutSection = CODE.replace(CODE.slice(CODE.indexOf('// =========================================================\n// TDOC STATUS DROPDOWNS'), CODE.indexOf('// =========================================================\n// AD-HOC SESSIONS (stage A)')), '');
     const outsideFunctions = (src) => functionNames(src).filter((name, i, list) => list.indexOf(name) === i).reduce((text, name) => text.replace(functionSource(src, name), ''), src);
     // The header: the version line and the changelog entry of 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSection.replace(/ \* 2\.19\.0 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.1 \(2026-10-05\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.19.0 (2026-10-05)\n', ' * Version: 2.18.0 (2026-10-02)\n');
-    check('outside its functions, the upload-completion and status-dropdown sections, the version line and the changelog entries of 2.18.1 and 2.19.0, Code.js is the released file',
+    const withoutRelease = withoutSection.replace(/ \* 2\.20\.0 \(2026-10-06\)\n[\s\S]*? \* 2\.18\.0 \(2026-10-02\)\n/, ' * 2.18.0 (2026-10-02)\n').replace(' * Version: 2.20.0 (2026-10-06)\n', ' * Version: 2.18.0 (2026-10-02)\n');
+    check('outside its functions, the upload-completion and status-dropdown sections, the version line and the changelog entries since 2.18.0, Code.js is the released file',
       [outsideFunctions(withoutRelease) === outsideFunctions(RELEASED), withoutRelease === withoutSection], [true, false]);
   }
   const section = CODE.slice(CODE.indexOf('// TDOC UPLOAD COMPLETION'), CODE.indexOf('// AD-HOC SESSIONS (stage A)'));

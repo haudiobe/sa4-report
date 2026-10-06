@@ -21,6 +21,12 @@
  *   - A read sees the SAVED document: while the document has unsaved
  *     DocumentApp changes, Documents.get() describes it as it was before
  *     the first of them -- a table added in this execution is not there.
+ *   - The document has a revision. It changes with every write of the API,
+ *     with every DocumentApp change that is saved, and when a user edits the
+ *     document (pick(), edited()). Documents.get() names the revision it
+ *     describes; a batchUpdate with writeControl.requiredRevisionId is
+ *     refused unless that is the revision the document is at, and every
+ *     reply names the revision the document is at afterwards.
  *   - A write is refused while the document has unsaved DocumentApp changes:
  *     the API works on the saved document, so a write before the save would
  *     be a write to other positions than the code believes.
@@ -35,7 +41,8 @@ function makeFakeDocsApi(options) {
   const reportId = options.reportId;
   const sources = {};
   const definitions = {};                    // of the report: id -> { dropdownDefinitionId, dropdownDefinitionProperties }
-  const counters = { definition: 0, dropdown: 0 };
+  const counters = { definition: 0, dropdown: 0, revision: 1 };
+  const revisionOf = (n) => 'rev.' + n;
   const api = { calls: [], fail: { get: null, batchUpdate: null }, definitions: definitions, tabId: REPORT_TAB_ID };
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const refuse = (message) => { const e = new Error(message); e.fakeDocsApi = true; return e; };
@@ -99,9 +106,10 @@ function makeFakeDocsApi(options) {
   const allCells = () => render().cells.map((x) => x.cell);
 
   // The saved document: kept the moment before DocumentApp makes its first unsaved change.
+  // The unsaved changes of DocumentApp will be another revision once they are saved; until then the API is at the old one.
   let saved = null;
-  body._state.onFirstTouch = () => { saved = clone({ definitions: definitions, content: render().content }); };
-  const view = () => (body._state.dirty && saved ? saved : { definitions: definitions, content: render().content });
+  body._state.onFirstTouch = () => { saved = clone({ definitions: definitions, content: render().content, revisionId: revisionOf(counters.revision) }); counters.revision++; };
+  const view = () => (body._state.dirty && saved ? saved : { definitions: definitions, content: render().content, revisionId: revisionOf(counters.revision) });
 
   function applyRequest(request, n) {
     const kind = Object.keys(request)[0];
@@ -168,7 +176,7 @@ function makeFakeDocsApi(options) {
       if (api.fail.get) { const message = api.fail.get(id, opts, api.calls.length); if (message) throw refuse(message); }
       if (id === reportId) {
         const v = view();
-        return clone({ revisionId: 'rev' + api.calls.length, tabs: [{ tabProperties: { tabId: REPORT_TAB_ID }, documentTab: { dropdownDefinitions: v.definitions, body: { content: v.content } } }] });
+        return clone({ revisionId: v.revisionId, tabs: [{ tabProperties: { tabId: REPORT_TAB_ID }, documentTab: { dropdownDefinitions: v.definitions, body: { content: v.content } } }] });
       }
       if (sources[id]) return clone(sources[id]);
       throw refuse('Requested entity was not found.');
@@ -179,10 +187,16 @@ function makeFakeDocsApi(options) {
       if (id !== reportId) throw refuse('The fake Docs API writes to the report only: ' + id);
       if (api.fail.batchUpdate) { const message = api.fail.batchUpdate(requests, api.calls.length); if (message) throw refuse(message); }
       if (body._state.dirty) throw refuse('FAKE DOCS API: the document has unsaved DocumentApp changes; a write now would go to other positions than the caller read.');
+      if (api.beforeWrite) api.beforeWrite(requests, api.calls.length);          // a test lets somebody edit the document at this very moment
+      const required = resource && resource.writeControl && resource.writeControl.requiredRevisionId;
+      api.calls[api.calls.length - 1].requiredRevisionId = required || null;
+      if (required && required !== revisionOf(counters.revision)) throw refuse('Invalid requests: The required revision ID \'' + required + '\' does not match the latest revision.');
       // All or nothing.
       const before = { cells: allCells().map((c) => ({ c: c, t: c._t, d: c._dropdown ? Object.assign({}, c._dropdown) : null })), definitions: clone(definitions), counters: Object.assign({}, counters) };
       try {
-        return { replies: requests.map((request, n) => applyRequest(request, n)) };
+        const replies = requests.map((request, n) => applyRequest(request, n));
+        counters.revision++;
+        return { replies: replies, writeControl: api.noRevisionInReply ? undefined : { requiredRevisionId: revisionOf(counters.revision) } };
       } catch (e) {
         before.cells.forEach((x) => { x.c._t = x.t; x.c._dropdown = x.d; });
         Object.keys(definitions).forEach((k) => delete definitions[k]);
@@ -225,7 +239,11 @@ function makeFakeDocsApi(options) {
     const cell = api.statusCell(number);
     const def = definitions[cell._dropdown.definitionId];
     cell._dropdown.optionId = def.dropdownDefinitionProperties.options.filter((o) => o.displayValue === displayValue)[0].optionId;
+    counters.revision++;
   };
+  /** Somebody edited the document outside this execution (the test changed the fake document itself): it is at a new revision. */
+  api.edited = () => { counters.revision++; };
+  api.revision = () => revisionOf(counters.revision);
   api.count = (call, id) => api.calls.filter((c) => c.call === call && (id === undefined || c.id === id)).length;
   return api;
 }

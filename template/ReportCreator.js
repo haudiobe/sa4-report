@@ -581,7 +581,9 @@ function buildTemplateReportMenu_(ui) {
     .addItem('Update TDoc Revisions', 'collectRevisionsOnly')
     .addItem('Update Abstracts', 'addAbstractsOnly')
     .addSeparator()
-    .addItem('Report Status Summary', 'analyzeReportStatus'));
+    .addItem('Report Status Summary', 'analyzeReportStatus')
+    // T-2026.10.8: an existing report gets its status dropdowns without a rebuild.
+    .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns'));
 
   menu.addItem('💬 Prepare Discussion E-mails…', 'prepareTdocDiscussionEmails');
 

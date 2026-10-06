@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.19.0 (2026-10-05)
+ * Version: 2.20.0 (2026-10-06)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,25 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.20.0 (2026-10-06)
+ *   - Added (template reports): "Convert Status Fields to Dropdowns…". An
+ *     existing report gets its status dropdowns without being rebuilt: the
+ *     Status cell of every TDoc table whose text is exactly a status of
+ *     the "Document Status" dropdown becomes a dropdown with that value.
+ *     Nothing else of the document is touched, no status is changed, and
+ *     the Portal is not asked. The action shows what it will do and asks
+ *     first; it can be run again at any time. A text that is no status of
+ *     the dropdown, and an empty cell, stay as they are; nothing becomes
+ *     "other". After a complete conversion the report is a report with
+ *     status dropdowns, as after a Build Report from Scratch of 2.19.0.
+ *   - Changed: every write that replaces a Status text by a dropdown now
+ *     names the revision of the document it was planned on, and is
+ *     refused by Google Docs when the document changed in between -- so a
+ *     dropdown can never land beside what somebody typed meanwhile. A
+ *     refused write leaves the text status; the next update makes up for
+ *     it.
+ *   - Nothing happens because this code is installed: a report keeps its
+ *     text statuses until the action is used or the report is rebuilt.
  * 2.19.0 (2026-10-05)
  *   - Added (template reports): the Status of a TDoc table as a native
  *     Google Docs dropdown, "Document Status". Its definition -- option
@@ -11890,6 +11909,15 @@ function setTdocTableAgendaItem_(table, value) {
 //     is in the report again, decided by the rule of the sync
 //     (statusDropdownRebuildChoice_()).
 //
+// An existing report becomes such a report without a rebuild through the
+// menu action "Convert Status Fields to Dropdowns…"
+// (convertStatusFieldsToDropdowns(), T-2026.10.8): see there.
+//
+// Every write that depends on a POSITION in the document names the revision
+// the position was read from (writeControl.requiredRevisionId). Google Docs
+// refuses it when the document has changed since, so a text typed in the
+// meantime can never be cut or a dropdown put in the wrong place.
+//
 // The Portal status is never guessed into an option: see
 // mapPortalStatusToDropdownOption_().
 
@@ -11905,6 +11933,8 @@ const STATUS_DROPDOWN_MANUAL_ONLY_ = ['parked', 'plenary', 'other'];
 // Dropdowns inserted per batchUpdate (two requests each).
 const STATUS_DROPDOWN_BATCH_ = 50;
 const STATUS_DOCS_REPORT_FIELDS_ = 'revisionId,tabs(tabProperties(tabId),documentTab(dropdownDefinitions,body(content(startIndex,endIndex,table(tableRows(tableCells(content(paragraph(elements(startIndex,endIndex,textRun(content),dropdown(dropdownId,dropdownProperties)))))))))))';
+// The same and the text of the paragraphs outside the tables: for the conversion of an existing report, which proves afterwards that nothing but Status cells changed.
+const STATUS_DOCS_MIGRATION_FIELDS_ = 'revisionId,tabs(tabProperties(tabId),documentTab(dropdownDefinitions,body(content(startIndex,endIndex,paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(startIndex,endIndex,textRun(content),dropdown(dropdownId,dropdownProperties)))))))))))';
 const STATUS_DOCS_SOURCE_FIELDS_ = 'tabs(documentTab(dropdownDefinitions),childTabs(documentTab(dropdownDefinitions)))';
 
 // What one execution knows: the statuses read through the API (undefined until asked), and what is to be written at its end.
@@ -12023,7 +12053,7 @@ function statusDocsCellEntry_(cell) {
 
 /**
  * Pure: the statuses of a report, from one Docs API read of it.
- * { tabId, definitions, definition, tables: { <TDoc number>: entry }, duplicates: { <TDoc number>: true } }
+ * { revisionId, tabId, definitions, definition, tables: { <TDoc number>: entry }, duplicates: { <TDoc number>: true } }
  * A TDoc table is a table whose first cell reads "TDoc"; its number is the
  * cell beside it; its Status cell is beside the label "Status" or "TDoc
  * Status" -- the same structure the rest of this file reads. `definition`
@@ -12062,7 +12092,7 @@ function buildStatusDocsIndex_(document) {
     if (tables[number]) { duplicates[number] = true; return; }
     tables[number] = entry;
   });
-  return { tabId: tab.tabProperties ? tab.tabProperties.tabId : undefined, definitions: definitions, definition: definition, tables: tables, duplicates: duplicates };
+  return { revisionId: document.revisionId || null, tabId: tab.tabProperties ? tab.tabProperties.tabId : undefined, definitions: definitions, definition: definition, tables: tables, duplicates: duplicates };
 }
 
 /** One Docs API read, with a field mask; without it should the mask be refused. */
@@ -12218,13 +12248,37 @@ function statusDropdownDefinitionRequest_(properties, tabId) {
   return { createDropdownDefinition: request };
 }
 
-/** Creates the definition in the report. { id, title, options } with the option ids of the report, or null when the source has none. */
+/**
+ * Creates the definition in the report. { id, title, options, revisionId } with the option ids of the report and the
+ * revision of the document after it (null when the API does not say), or null when the source has none.
+ */
 function createStatusDropdownDefinition_(documentId, tabId) {
   const properties = readStatusDropdownSourceDefinition_();
   if (!properties) return null;
   const reply = Docs.Documents.batchUpdate({ requests: [statusDropdownDefinitionRequest_(properties, tabId)] }, documentId);
   const made = reply.replies[0].createDropdownDefinition.dropdownDefinition;
-  return { id: made.dropdownDefinitionId, title: made.dropdownDefinitionProperties.title, options: made.dropdownDefinitionProperties.options };
+  return { id: made.dropdownDefinitionId, title: made.dropdownDefinitionProperties.title, options: made.dropdownDefinitionProperties.options,
+    revisionId: (reply.writeControl && reply.writeControl.requiredRevisionId) || null };
+}
+
+/**
+ * Sends insert pairs (planStatusDropdownRequests_()) in batches of STATUS_DROPDOWN_BATCH_. Every batch names the
+ * revision its positions belong to: the one the document was read at, then the one each batch leaves behind. Google
+ * Docs refuses a batch when the document is at another revision -- somebody edited it -- and applies a batch as a
+ * whole or not at all. `progress.sent` counts the pairs that were applied, also when a later batch throws.
+ * Throws what the API throws, and when the revision is not known.
+ */
+function sendStatusDropdownInsertPairs_(documentId, pairs, revisionId, progress) {
+  let revision = revisionId;
+  for (let i = 0; i < pairs.length; i += STATUS_DROPDOWN_BATCH_) {
+    if (!revision) throw new Error('the revision of the document is not known, so no position in it can be trusted');
+    const chunk = pairs.slice(i, i + STATUS_DROPDOWN_BATCH_);
+    let requests = [];
+    chunk.forEach(function (pair) { requests = requests.concat(pair.requests); });
+    const reply = Docs.Documents.batchUpdate({ requests: requests, writeControl: { requiredRevisionId: revision } }, documentId);
+    progress.sent += chunk.length;
+    revision = (reply && reply.writeControl && reply.writeControl.requiredRevisionId) || null;
+  }
 }
 
 /** Pure: the option of that very name (case and outer whitespace aside), or null. No alias, and every option counts: this is for a value that was selected, not for a Portal status. */
@@ -12400,7 +12454,12 @@ function finalizeStatusDropdowns_(mode) {
     const index = buildStatusDocsIndex_(statusDocsGet_(documentId, STATUS_DOCS_REPORT_FIELDS_));
     if (!index) throw new Error('the document has no readable tab');
     let definition = index.definition;
-    if (!definition && mayInsert) definition = createStatusDropdownDefinition_(documentId, index.tabId);
+    // The revision the positions of `index` belong to. Creating the definition moves no position, but makes a new revision.
+    let revision = index.revisionId;
+    if (!definition && mayInsert) {
+      definition = createStatusDropdownDefinition_(documentId, index.tabId);
+      if (definition) revision = definition.revisionId;
+    }
     if (!definition && mayInsert) result.reason = 'no "' + STATUS_DROPDOWN_TITLE_ + '" dropdown is defined in the template';
     // The report has its definition: from here on it is a dropdown report, whatever becomes of the inserts below.
     if (definition && mode === 'build') props.setProperty(STATUS_DROPDOWN_ENABLED_KEY_, '1');
@@ -12424,17 +12483,21 @@ function finalizeStatusDropdowns_(mode) {
     }
 
     const plan = planStatusDropdownRequests_(index, mayInsert ? definition : null, inserts, run.updates, forced);
+    // First what depends on positions, each batch tied to its revision; a batch that is refused leaves the rest as text.
+    const progress = { sent: 0 };
+    let insertProblem = null;
+    try {
+      sendStatusDropdownInsertPairs_(documentId, plan.insertPairs, revision, progress);
+    } catch (e) {
+      insertProblem = e;
+    }
+    result.inserted = progress.sent;
+    // Then what names a dropdown by its id: no position is involved, so no revision is needed.
     if (plan.updateRequests.length) {
       Docs.Documents.batchUpdate({ requests: plan.updateRequests }, documentId);
       result.updated = plan.updated.length;
     }
-    for (let i = 0; i < plan.insertPairs.length; i += STATUS_DROPDOWN_BATCH_) {
-      const chunk = plan.insertPairs.slice(i, i + STATUS_DROPDOWN_BATCH_);
-      let requests = [];
-      chunk.forEach(function (pair) { requests = requests.concat(pair.requests); });
-      Docs.Documents.batchUpdate({ requests: requests }, documentId);
-      result.inserted += chunk.length;
-    }
+    if (insertProblem) throw insertProblem;
     Logger.log('Status dropdowns: ' + result.inserted + ' inserted, ' + result.updated + ' updated' + (plan.left.length ? ', ' + plan.left.length + ' left as they are' : '') + (result.reason ? ' (' + result.reason + ')' : '') + '.');
   } catch (e) {
     result.reason = e.message;
@@ -12442,6 +12505,275 @@ function finalizeStatusDropdowns_(mode) {
   } finally {
     resetStatusDropdownRun_();
   }
+  return result;
+}
+
+// --- An existing report: "Convert Status Fields to Dropdowns…" (T-2026.10.8)
+//
+// A report that was built before the status dropdowns existed has text
+// statuses, and nothing turns them into dropdowns: a rebuild would, but a
+// rebuild writes the whole report again and the minutes typed into it are
+// gone. This action converts the Status cells IN PLACE. It does not use
+// DocumentApp to change anything: it reads the document once through the
+// API, decides for every TDoc table what its Status cell is, and replaces
+// the text of the eligible ones by a dropdown with the same value -- with
+// the requests, the batches and the revision guard of the last step above.
+//
+// What is converted: a Status cell that is one paragraph of plain text, in
+// a table whose TDoc number is a valid one and occurs once, whose text is
+// exactly a status of the dropdown. Other than for a status that comes
+// from the Portal (mapPortalStatusToDropdownOption_()), EVERY option counts
+// here: a status somebody typed as "parked", "Plenary" or "other" is that
+// decision and becomes that option. A text that is no option is never
+// guessed into one, and nothing becomes "other" that does not say "other".
+//
+// It asks first, with the numbers of what it found; it changes no status;
+// it does not ask the Portal; it is safe to run again: a cell that has its
+// dropdown is left alone. The report is marked as a report with status
+// dropdowns (STATUS_DROPDOWNS) only when a run ends with every eligible
+// cell converted and everything else as it was.
+
+/** Pure: the option an existing Status TEXT stands for -- the option a Portal status of that wording selects, else the option of exactly that name. null: it stays text. */
+function statusDropdownMigrationOption_(text, options) {
+  return mapPortalStatusToDropdownOption_(text, options) || statusDropdownOptionByName_(text, options);
+}
+
+/**
+ * Pure: what the conversion does with every TDoc table of `index`.
+ * { inspected, already: [number], convert: { number: text }, forced: { number: option },
+ *   unmapped: [{ number, text }], empty: [number], skipped: [{ number, why }] }
+ * `definitionId` is the report's "Document Status" definition, or null when it has none yet.
+ */
+function planStatusDropdownMigration_(index, options, definitionId) {
+  const plan = { inspected: 0, already: [], convert: {}, forced: {}, unmapped: [], empty: [], skipped: [] };
+  Object.keys(index.tables).sort().forEach(function (number) {
+    const entry = index.tables[number];
+    plan.inspected++;
+    if (index.duplicates[number]) { plan.skipped.push({ number: number, why: 'this TDoc number has more than one table' }); return; }
+    if (!parseExactSA4DocumentId_(number).isValid) { plan.skipped.push({ number: number, why: 'not a TDoc number' }); return; }
+    if (entry.kind === 'dropdown') {
+      if (definitionId && entry.definitionId === definitionId) plan.already.push(number);
+      else plan.skipped.push({ number: number, why: 'it has a dropdown that is not "' + STATUS_DROPDOWN_TITLE_ + '"' });
+      return;
+    }
+    if (entry.text.trim() === '') { plan.empty.push(number); return; }
+    const option = statusDropdownMigrationOption_(entry.text, options);
+    if (!option) { plan.unmapped.push({ number: number, text: entry.text.trim() }); return; }
+    if (!entry.insertable) { plan.skipped.push({ number: number, why: 'its Status cell is not one line of plain text' }); return; }
+    plan.convert[number] = entry.text;
+    plan.forced[number] = option;
+  });
+  return plan;
+}
+
+/**
+ * Pure: everything a document of the API says that is NOT the value of a Status cell, as a list of texts in
+ * document order: every paragraph outside the tables, and every table cell -- the value cell of a Status row of a
+ * TDoc table as a fixed mark. Two reads give the same list exactly when nothing but Status values changed.
+ */
+function statusDocsOtherContent_(document) {
+  const out = [];
+  const tab = ((document && document.tabs) || [])[0];
+  const content = (tab && tab.documentTab && tab.documentTab.body && tab.documentTab.body.content) || [];
+  content.forEach(function (element) {
+    if (element.paragraph) {
+      let text = '';
+      (element.paragraph.elements || []).forEach(function (el) { if (el.textRun) text += String(el.textRun.content || ''); });
+      out.push('P ' + text);
+    } else if (element.table) {
+      const rows = element.table.tableRows || [];
+      const head = (rows[0] && rows[0].tableCells) || [];
+      const isTdocTable = head.length >= 2 && statusDocsCellText_(head[0]).trim() === 'TDoc';
+      let statusSeen = false;
+      out.push('T ' + rows.length);
+      rows.forEach(function (row) {
+        const cells = row.tableCells || [];
+        const key = cells.length >= 2 ? statusDocsCellText_(cells[0]).trim().toLowerCase() : '';
+        const isStatusRow = isTdocTable && !statusSeen && (key === 'tdoc status' || key === 'status');
+        if (isStatusRow) statusSeen = true;
+        out.push('R ' + cells.map(function (cell, c) { return isStatusRow && c === 1 ? '<status>' : JSON.stringify(statusDocsCellText_(cell)); }).join(' | '));
+      });
+    } else {
+      out.push('X');
+    }
+  });
+  return out;
+}
+
+/**
+ * The conversion itself, without any dialog. `options.dryRun`: only look.
+ * Returns { ok, dryRun, error, inspected, already, toConvert, converted, unmapped: [{ number, text }], empty,
+ *   skipped: [{ number, why }], notConverted: [number], unexpected: [number], contentUnchanged, definition:
+ *   'in the report' | 'created' | 'to be created', markedBefore, marked }.
+ * `ok` of a real run: every eligible cell is a dropdown with the value its text had, every other Status cell is what
+ * it was, and nothing else of the document differs. Only then is the report marked. Never throws.
+ */
+function migrateStatusFieldsToDropdowns_(options) {
+  const dryRun = !!(options && options.dryRun);
+  const result = { ok: false, dryRun: dryRun, error: '', inspected: 0, already: 0, toConvert: 0, converted: 0, unmapped: [], empty: 0, skipped: [], notConverted: [], unexpected: [], contentUnchanged: null,
+    definition: '', markedBefore: false, marked: false };
+  try {
+    if (!statusDropdownsAvailable_()) { result.error = 'Status dropdowns are not available in this report: it needs the template runtime with the Google Docs API service.'; return result; }
+    const props = PropertiesService.getDocumentProperties();
+    result.markedBefore = props.getProperty(STATUS_DROPDOWN_ENABLED_KEY_) === '1';
+    const documentId = DocumentApp.getActiveDocument().getId();
+    let beforeDocument = statusDocsGet_(documentId, STATUS_DOCS_MIGRATION_FIELDS_);
+    let index = buildStatusDocsIndex_(beforeDocument);
+    if (!index) { result.error = 'The document could not be read.'; return result; }
+
+    // The definition: the report's own, else the one of the template -- created now, or only looked at for a dry run.
+    let definition = index.definition;
+    let optionList = definition ? definition.options : null;
+    result.definition = definition ? 'in the report' : 'to be created';
+    if (!definition) {
+      const source = readStatusDropdownSourceDefinition_();
+      if (!source) { result.error = 'The template has no "' + STATUS_DROPDOWN_TITLE_ + '" dropdown to take the statuses from. Nothing was changed.'; return result; }
+      optionList = source.options;
+      if (!dryRun) {
+        createStatusDropdownDefinition_(documentId, index.tabId);
+        result.definition = 'created';
+        // Read again: the positions are the same, but they are used with the revision this read names.
+        beforeDocument = statusDocsGet_(documentId, STATUS_DOCS_MIGRATION_FIELDS_);
+        index = buildStatusDocsIndex_(beforeDocument);
+        definition = index && index.definition;
+        if (!definition) { result.error = 'The "' + STATUS_DROPDOWN_TITLE_ + '" dropdown could not be created in this report. No Status was changed.'; return result; }
+        optionList = definition.options;
+      }
+    }
+
+    const plan = planStatusDropdownMigration_(index, optionList, definition ? definition.id : null);
+    result.inspected = plan.inspected;
+    result.already = plan.already.length;
+    result.toConvert = Object.keys(plan.convert).length;
+    result.unmapped = plan.unmapped;
+    result.empty = plan.empty.length;
+    result.skipped = plan.skipped;
+    if (dryRun) { result.ok = true; return result; }
+
+    // The writes: only insert pairs, each batch tied to its revision.
+    const requests = planStatusDropdownRequests_(index, definition, plan.convert, {}, plan.forced);
+    const progress = { sent: 0 };
+    try {
+      sendStatusDropdownInsertPairs_(documentId, requests.insertPairs, index.revisionId, progress);
+    } catch (e) {
+      result.error = 'Not every Status could be converted (' + e.message + '). What was converted is complete; the rest is unchanged. Run the conversion again.';
+    }
+
+    // Read back: every cell is looked at, and everything that is not a Status value is compared.
+    const afterDocument = statusDocsGet_(documentId, STATUS_DOCS_MIGRATION_FIELDS_);
+    const after = buildStatusDocsIndex_(afterDocument);
+    Object.keys(index.tables).forEach(function (number) {
+      const was = index.tables[number];
+      const now = after && after.tables[number];
+      if (Object.prototype.hasOwnProperty.call(plan.convert, number)) {
+        const want = plan.forced[number];
+        if (now && now.kind === 'dropdown' && now.text === '' && now.selectedOptionId === want.optionId && now.definitionId === definition.id) result.converted++;
+        else if (now && now.kind === 'text' && now.text === was.text) result.notConverted.push(number);
+        else result.unexpected.push(number);
+      } else if (!now || now.kind !== was.kind || now.text !== was.text || (was.kind === 'dropdown' && now.selectedOptionId !== was.selectedOptionId)) {
+        result.unexpected.push(number);
+      }
+    });
+    const a = statusDocsOtherContent_(beforeDocument);
+    const b = statusDocsOtherContent_(afterDocument);
+    result.contentUnchanged = a.length === b.length && a.every(function (line, i) { return line === b[i]; });
+
+    result.ok = !result.error && result.notConverted.length === 0 && result.unexpected.length === 0 && result.contentUnchanged === true;
+    // Marked only now: a complete conversion. From here on the report behaves as one that was built with dropdowns.
+    if (result.ok) { props.setProperty(STATUS_DROPDOWN_ENABLED_KEY_, '1'); result.marked = true; }
+    if (!result.ok && !result.error) {
+      result.error = result.unexpected.length ? 'After the conversion ' + result.unexpected.length + ' Status cell(s) are not what was expected: ' + result.unexpected.slice(0, 10).join(', ') + '.'
+        : (result.contentUnchanged === false ? 'The document differs outside its Status cells from what it was before the conversion. It may have been edited meanwhile; run the conversion again to check.'
+          : 'Not every Status was converted. Run the conversion again.');
+    }
+    Logger.log('Status dropdowns: conversion of an existing report -- ' + result.inspected + ' inspected, ' + result.already + ' already dropdowns, ' + result.converted + ' converted, ' + (result.unmapped.length + result.empty) + ' left as text, ' +
+      result.skipped.length + ' skipped, ' + result.notConverted.length + ' not converted, ' + result.unexpected.length + ' unexpected; marked: ' + result.marked + '.');
+  } catch (e) {
+    result.error = 'The conversion stopped: ' + e.message;
+    Logger.log('Status dropdowns: the conversion of an existing report stopped (' + e.message + ').');
+  }
+  return result;
+}
+
+/** Pure: a few TDoc numbers for a dialog -- "A, B, C and 4 more". */
+function statusDropdownNumberList_(numbers) {
+  const shown = numbers.slice(0, 8);
+  return shown.join(', ') + (numbers.length > shown.length ? ' and ' + (numbers.length - shown.length) + ' more' : '');
+}
+
+/** Pure: the question the action asks, from a dry run. */
+function formatStatusDropdownMigrationPreview_(preview) {
+  const lines = [];
+  lines.push('This converts the Status fields of this report into dropdowns, in place.');
+  lines.push('');
+  lines.push('TDoc tables found: ' + preview.inspected);
+  lines.push('• already a dropdown: ' + preview.already);
+  lines.push('• to be converted now: ' + preview.toConvert);
+  lines.push('• left as text: ' + (preview.unmapped.length + preview.empty) + (preview.unmapped.length ? ' (no such status in the dropdown: ' + preview.unmapped.slice(0, 5).map(function (u) { return u.number + ' "' + u.text.slice(0, 30) + '"'; }).join(', ') +
+    (preview.unmapped.length > 5 ? ' and ' + (preview.unmapped.length - 5) + ' more' : '') + (preview.empty ? '; ' + preview.empty + ' empty' : '') + ')' : (preview.empty ? ' (empty)' : '')));
+  if (preview.skipped.length) lines.push('• skipped: ' + preview.skipped.length + ' (' + preview.skipped.slice(0, 5).map(function (s) { return s.number + ': ' + s.why; }).join('; ') + (preview.skipped.length > 5 ? '; …' : '') + ')');
+  lines.push('');
+  lines.push('Every converted field keeps the status it has now. Minutes, abstracts, links and everything else in the report stay exactly as they are.');
+  lines.push('The report is NOT rebuilt, and the TDoc list is not read.');
+  if (preview.definition === 'to be created') lines.push('The "' + STATUS_DROPDOWN_TITLE_ + '" dropdown is added to this report first.');
+  lines.push('');
+  lines.push('Do not edit the document while this runs. Continue?');
+  return lines.join('\n');
+}
+
+/** Pure: what the action says at its end. */
+function formatStatusDropdownMigrationResult_(result) {
+  const lines = [];
+  lines.push(result.ok ? 'Done.' : 'The conversion is NOT complete.');
+  if (result.error) { lines.push(''); lines.push(result.error); }
+  lines.push('');
+  lines.push('TDoc tables found: ' + result.inspected);
+  lines.push('• already a dropdown before: ' + result.already);
+  lines.push('• converted now: ' + result.converted + (result.toConvert !== result.converted ? ' of ' + result.toConvert : ''));
+  lines.push('• left as text: ' + (result.unmapped.length + result.empty));
+  if (result.skipped.length) lines.push('• skipped: ' + result.skipped.length + ' (' + statusDropdownNumberList_(result.skipped.map(function (s) { return s.number; })) + ')');
+  if (result.notConverted.length) lines.push('• not converted, still text: ' + result.notConverted.length + ' (' + statusDropdownNumberList_(result.notConverted) + ')');
+  if (result.unexpected.length) lines.push('• to be looked at: ' + result.unexpected.length + ' (' + statusDropdownNumberList_(result.unexpected) + ')');
+  lines.push('');
+  lines.push(result.ok ? 'New TDocs of this report get a dropdown from now on. A Status that stayed text can be converted later by running this again.'
+    : 'Nothing was lost: a field is either converted or as it was. Run "Convert Status Fields to Dropdowns…" again.');
+  return lines.join('\n');
+}
+
+/**
+ * Menu (template report): Report > Convert Status Fields to Dropdowns…
+ * Looks, asks, converts, reports. Nothing happens without the answer Yes. While it writes it holds the lock an
+ * update of the report holds, so that the two never run at the same time.
+ */
+function convertStatusFieldsToDropdowns() {
+  assertNotTemplateMaster_();
+  const ui = DocumentApp.getUi();
+  const TITLE = 'Convert Status Fields to Dropdowns';
+  resetStatusDropdownRun_();
+  const preview = migrateStatusFieldsToDropdowns_({ dryRun: true });
+  if (preview.error) {
+    ui.alert(TITLE, preview.error, ui.ButtonSet.OK);
+    return preview;
+  }
+  if (preview.toConvert === 0 && preview.markedBefore) {
+    ui.alert(TITLE, 'There is nothing to convert.\n\nTDoc tables found: ' + preview.inspected + '\n• already a dropdown: ' + preview.already + '\n• left as text: ' + (preview.unmapped.length + preview.empty) +
+      (preview.skipped.length ? '\n• skipped: ' + preview.skipped.length : ''), ui.ButtonSet.OK);
+    return preview;
+  }
+  if (ui.alert(TITLE, formatStatusDropdownMigrationPreview_(preview), ui.ButtonSet.YES_NO) !== ui.Button.YES) return { ok: false, cancelled: true };
+
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    ui.alert(TITLE, 'Nothing was changed: an update of this report is running right now. Try again in a minute.', ui.ButtonSet.OK);
+    return { ok: false, error: 'locked' };
+  }
+  let result;
+  try {
+    result = migrateStatusFieldsToDropdowns_({ dryRun: false });
+  } finally {
+    lock.releaseLock();
+  }
+  ui.alert(TITLE, formatStatusDropdownMigrationResult_(result), ui.ButtonSet.OK);
   return result;
 }
 

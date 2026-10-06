@@ -137,6 +137,7 @@ const REPORT_TREE_AFTER_SETUP = [
   '    Update Abstracts -> addAbstractsOnly',
   '    ---',
   '    Report Status Summary -> analyzeReportStatus',
+  '    Convert Status Fields to Dropdowns… -> convertStatusFieldsToDropdowns',
   '  💬 Prepare Discussion E-mails… -> prepareTdocDiscussionEmails',
   '  🔀 Document Reallocation',
   '    Add or Change a Reallocation… -> addDocumentReallocation',
@@ -200,13 +201,13 @@ console.log('1. report menu after setup');
   check('every item calls an existing public function (a menu cannot call a private one)',
     reportTargets.filter((f) => typeof r.s[f] !== 'function' || /_$/.test(f)), []);
   check('no label is used twice', t.filter((l, i) => / -> /.test(l) && t.indexOf(l) !== i), []);
-  check('ad-hoc report: 25 items after setup, 4 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
-    [25, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
+  check('ad-hoc report: 26 items after setup, 4 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [26, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
   const main = runtime({ docId: REPORT_ID, props: SET_UP_MAIN });
   main.s.onOpen();
   check('main-meeting report: exact tree, without the Sessions and Attendance submenu', tree(main.ui), REPORT_TREE_AFTER_SETUP);
-  check('main-meeting report: 19 items after setup, 3 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
-    [19, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
+  check('main-meeting report: 20 items after setup, 3 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [20, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
   check('a document configured by hand (state "manual") gets the same menu',
     (() => { const m = runtime({ docId: REPORT_ID, props: { SA4_BOOTSTRAP_STATE: 'manual' } }); m.s.onOpen(); return tree(m.ui); })(), REPORT_TREE_AFTER_SETUP);
 }
@@ -291,7 +292,9 @@ console.log('2. hidden operations are still in the code');
     const UPLOAD_COMPLETION_FUNCTIONS_CODE = ['addMissingTdocLink_', 'completeInsertedUploadedTdoc_', 'refreshRegistrationTableLinks_', 'refreshUploadedTdocMetadata_', 'tdocListLinkIsKnown_',
       'tdocListLinkUrl_', 'tdocsNotUploadedYet_'];
     // The Status of a TDoc table as a native dropdown (T-2026.10.7).
-    const STATUS_DROPDOWN_FUNCTIONS_CODE = ['captureStatusDropdownValuesForRebuild_', 'statusDropdownHealCandidates_', 'statusDropdownOptionByName_', 'statusDropdownRebuildChoice_',
+    // T-2026.10.8: the conversion of an existing report.
+    const STATUS_DROPDOWN_FUNCTIONS_CODE = ['convertStatusFieldsToDropdowns', 'formatStatusDropdownMigrationPreview_', 'formatStatusDropdownMigrationResult_', 'migrateStatusFieldsToDropdowns_', 'planStatusDropdownMigration_',
+      'sendStatusDropdownInsertPairs_', 'statusDocsOtherContent_', 'statusDropdownMigrationOption_', 'statusDropdownNumberList_', 'captureStatusDropdownValuesForRebuild_', 'statusDropdownHealCandidates_', 'statusDropdownOptionByName_', 'statusDropdownRebuildChoice_',
       'applyTdocStatusUpdateToDropdown_', 'buildStatusDocsIndex_', 'createStatusDropdownDefinition_', 'finalizeStatusDropdowns_', 'mapPortalStatusToDropdownOption_',
       'noteStatusDropdownCandidate_', 'planStatusDropdownRequests_', 'readStatusDropdownSourceDefinition_', 'readTdocStatus_', 'resetStatusDropdownRun_', 'statusCellHoldsDropdown_', 'statusDocsCellEntry_',
       'statusDocsCellText_', 'statusDocsGet_', 'statusDropdownDefinitionRequest_', 'statusDropdownEntryOfTable_', 'statusDropdownIndex_', 'statusDropdownLabel_', 'statusDropdownRun_', 'statusDropdownsAvailable_'];
