@@ -1,8 +1,10 @@
 # Shared Minutes
 
-**Status: implemented and tested locally (`Code.js` 2.22.0). Not released, not deployed, not
-smoke-tested against Google Drive.** Template reports only; CENTRAL and Legacy have no such
-section and no such code.
+**Status: RELEASED AND LIVE. Template release T-2026.10.11 (`Code.js` 2.22.0), commit
+`3f737ff0f5e2e80d8d18ed3ba9065cf14a944020`, tag `template-release/T-2026.10.11`. Deployed to
+the master template and adopted by the 6G and MBS live reports on 2026-10-07 (§ Deployment).**
+
+Template reports only. CENTRAL and Legacy have no such section and no such code.
 
 ## What it does
 
@@ -18,9 +20,10 @@ Pressing it:
 Afterwards the section shows the document name, "Anyone with the link can edit ✓", **Open
 Shared Minutes**, **Verify** and **Forget**.
 
-Nothing is created or shared by opening a report, by opening or saving Configure Meeting, by an
-update (by hand or by a trigger), by a build, or by the discussion e-mails. None of them asks
-Drive about the shared minutes. A build writes the link again from what is stored.
+The document is created only by that button. Nothing is created or shared by opening a report,
+by opening or saving Configure Meeting, by an update (by hand or by a trigger), by a build, or
+by the discussion e-mails, and none of them asks Drive about the shared minutes. Build Report
+from Scratch only writes the link again, from a valid record that is stored already.
 
 ## The document
 
@@ -80,13 +83,78 @@ line; it asks Drive nothing and does not change the document.
 The label is text and the document name is the link. A line that already says this is not
 written again.
 
-## A copied report
+## Safety
 
-A copy starts without Document Properties, and a `SHARED_DOCUMENT` value that names another
-document is ignored. The marker of the original's document is private to the original's script
-project, so the copy cannot find or adopt it: Create in a copy makes the copy's own document.
-The link text the copy inherited in its body is shown as stale in Configure Meeting; it is
-replaced by Create or Verify, and a Build Report from Scratch does not write it again.
+- **`reportDocumentId` guard.** A `SHARED_DOCUMENT` record is used only in the document it
+  names. A record that arrives in another document (a copied value) is read as "not created":
+  it is not shown, not verified, and not linked by a build.
+- **`meetingId` guard.** A record is used only for the meeting it names. When the report is
+  configured for another meeting, nothing is created or linked until the user uses Forget.
+- **No adoption by a copy.** A document is taken over only when its marker names this report
+  and this meeting. A record that points at another report's document is refused by Create
+  and by Verify: the document is neither shared again nor linked.
+- **A stale link in a copied report is presentation only.** A copy carries the link line of
+  the report it was copied from as text. Configure Meeting flags it; it is replaced by Create
+  or Verify, and a Build Report from Scratch does not write it again. Nothing reads it.
+- **Sharing is believed only when read back.** After the permission is created, the
+  permissions of the document are listed (`Permissions.list`), and the setup counts as done
+  only when an entry with `type: anyone` and `role: writer` is there.
+- **`appProperties` and other script projects.** In the live smoke the marker written by one
+  report's script project was not visible to another bound script project, neither by reading
+  the file nor by search. That is an observation. Correctness does not depend on it: the two
+  guards above decide.
+
+## Live validation
+
+Run on real Google Drive against commit `73a7cfc` — the tree of which is the tree of the
+release commit — on disposable documents with their own bound script projects. Everything the
+smoke made was moved to the trash, and the smoke project was restored to its previous seven
+files (hash-verified).
+
+| Check | Result |
+|---|---|
+| Create: exactly one Google Doc, with the expected name, folder, content and `appProperties` | Pass |
+| Permission, read back independently with `Permissions.list`: `anyone`, `writer`, `allowFileDiscovery: false` | Pass |
+| Editing in a private browser window, signed out (by hand) | Pass |
+| Exactly one link line in the report, linked to the document | Pass |
+| Second Create: no second document, same file, no second permission, one link line | Pass |
+| Verify: succeeds, `permissionVerifiedAt` set, no permission changed | Pass |
+| Build Report from Scratch: link restored exactly once, record unchanged, no Shared Minutes request to Drive | Pass |
+| Copy safety in a second document with its own script project: `reportDocumentId` guard, `meetingId` guard, a forged record refused, nothing adopted, the first document and its permission unchanged | Pass |
+| Create New SA4 Report's copy path (`makeCopy` into the folder of the document): the copy keeps its bound script project with the release candidate's code | Pass |
+| Cleanup | Pass |
+
+**Covered by the automated tests only, not by the live smoke:**
+
+- the main-meeting placement (filling the template's existing `Link to the shared minutes:` line);
+- the placement in an ad-hoc report with sessions;
+- sharing that Drive refuses or drops ("SHARING FAILED");
+- a real Drive copy of a report with shared minutes: the second document of the smoke was a
+  separate document given the first one's text and record, not a Drive copy. That a Drive copy
+  starts without Document Properties was verified live earlier (TEMPLATE-001).
+
+One copy made during the preparation of the smoke arrived without its bound script project.
+It could not be reproduced: the copy test above, with the release candidate, kept the script.
+The cause is not established.
+
+## Deployment
+
+T-2026.10.11 on 2026-10-07. Each project was read back after the push: exactly seven files,
+each identical to the release bundle; `appsscript.json` unchanged from T-2026.10.10, so no new
+scope and no new authorization.
+
+| Project | Before | After |
+|---|---|---|
+| Master template | T-2026.10.10 (`Code.js` 2.21.1) | T-2026.10.11 (`Code.js` 2.22.0) |
+| 6G live report | T-2026.10.10 | T-2026.10.11 |
+| MBS live report | T-2026.10.10 | T-2026.10.11 |
+
+Against T-2026.10.10 the bundle differs in `Code.js`, `ReportCreator.js` and `Release.js`; the
+other four files are the same.
+
+No document migration is needed: a report has no shared minutes until somebody presses the
+button. The adoption pushed script files only; no report body, Document Property, trigger or
+Drive permission was touched, and no Shared Minutes document was created by it.
 
 ## Code
 
@@ -101,13 +169,5 @@ replaced by Create or Verify, and a Build Report from Scratch does not write it 
 
 `node tests/shared-minutes.test.js` — the rules, every state of the table above and the press
 after it, Verify and Forget, the three placements, a real build/update/trigger/e-mail/rebuild,
-a copied report, the dialog, and what did not change.
-
-## Not verified yet
-
-Everything Drive does is tested against a fake. One live smoke is still required for:
-
-- the HTML upload being converted to a Google Doc with name, folder and `appProperties`;
-- `anyone` / `writer` being accepted for the account, and what Drive answers when it is not;
-- `files.list` finding the document by its `appProperties` (and how soon after its creation);
-- a copy of the report not seeing the original's `appProperties`.
+a copied report, the dialog, and what did not change. The complete suite at the release
+commit: 105 files, 7158 checks, no failure.
