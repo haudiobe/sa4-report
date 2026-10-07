@@ -41,18 +41,21 @@ console.log('a clean, tagged release is planned');
   const p = plan();
   check('ok', [p.ok, p.errors], [true, []]);
   check('exactly the whitelisted runtime files + Release.js',
-    p.files.map((f) => f.name), ['appsscript.json', 'Code.js', 'HyperLink.js', 'colab_notebook.html', 'colab_notebook_shared.html', 'ReportCreator.js', 'Release.js']);
+    p.files.map((f) => f.name), ['appsscript.json', 'Code.js', 'HyperLink.js', 'ReportCreator.js', 'Release.js']);
   check('Code.js is bundled byte-identical (the tested CENTRAL runtime)',
     p.files.find((f) => f.name === 'Code.js').content.equals(readRepo('Code.js')), true);
   check('no test file is ever bundled', p.files.some((f) => /test|helpers|fixtures/.test(f.source)), false);
   check('.clasp.json targets the template script only', JSON.parse(p.claspJson), { scriptId: TARGET.templateScriptId, rootDir: '.' });
   check('.claspignore whitelists exactly the bundle', p.claspIgnore.trim().split('\n'),
-    ['**/**', '!appsscript.json', '!Code.js', '!HyperLink.js', '!colab_notebook.html', '!colab_notebook_shared.html', '!ReportCreator.js', '!Release.js']);
+    ['**/**', '!appsscript.json', '!Code.js', '!HyperLink.js', '!ReportCreator.js', '!Release.js']);
   const release = p.files.find((f) => f.name === 'Release.js').content;
   check('Release.js records release, commit, tag and template ids',
     [/"releaseId": "T-2026.10.0"/.test(release), release.indexOf(COMMIT) !== -1, /"gitTag": "template-release\/T-2026.10.0"/.test(release), release.indexOf(TARGET.templateDocumentId) !== -1],
     [true, true, true, true]);
   check('manifest hashes every file', p.manifest.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)), true);
+  check('the manifest lists exactly the five files, each with its source',
+    p.manifest.files.map((f) => [f.name, f.source]),
+    [['appsscript.json', 'appsscript.json'], ['Code.js', 'Code.js'], ['HyperLink.js', 'HyperLink.js'], ['ReportCreator.js', 'template/ReportCreator.js'], ['Release.js', '(generated)']]);
 }
 
 console.log('the Legacy and CENTRAL projects can never be a target');
@@ -104,6 +107,7 @@ console.log('CENTRAL/Legacy push payloads cannot pick up template files');
 {
   const ignore = fs.readFileSync(path.join(ROOT, '.claspignore'), 'utf8').replace(/^﻿/, '');
   check('repo .claspignore whitelists named files only, none under template/', [/^\*\*\/\*\*$/m.test(ignore), /template/.test(ignore)], [true, false]);
+  check('and names exactly the three files of a Code.js-only push: no saved Colab page', ignore.replace(/\r/g, '').split('\n').filter(Boolean), ['**/**', '!appsscript.json', '!Code.js', '!HyperLink.js']);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall ok');

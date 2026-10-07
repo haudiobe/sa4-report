@@ -18,11 +18,16 @@
  * Adoption mode (existing-report migration): prepares the UNCHANGED payload
  * of a release that was already built, for ANOTHER bound script project --
  * an existing report that is to run the template runtime. Nothing is
- * rebuilt: the seven files are copied byte for byte from the release bundle
- * (Release.js included, so the report identifies itself as that release),
- * after they were checked against the bundle's manifest and against the
- * release tag. Only the deployment-local .clasp.json differs, and it is not
- * part of the uploaded payload.
+ * rebuilt: the release's files are copied byte for byte from the release
+ * bundle (Release.js included, so the report identifies itself as that
+ * release), after they were checked against the bundle's manifest and against
+ * the release tag. Only the deployment-local .clasp.json differs, and it is
+ * not part of the uploaded payload.
+ *
+ * Which files a release consists of is read from the release's own tag (the
+ * RELEASE_FILES list of this tool as it was at the tag), never from the list
+ * below: T-2026.10.11 and earlier are seven files, later releases are five.
+ * See docs/PRODUCTION_FILE_SET.md.
  *
  *   node tools/template-release.js --adopt T-2026.10.4 --target-script <id> --label <name>            (dry run)
  *   node tools/template-release.js --adopt T-2026.10.4 --target-script <id> --label <name> --write
@@ -84,14 +89,56 @@ function protectedProject(id, protection) {
 }
 
 // Repository path -> published file name. Nothing else is ever bundled.
+// This is the list of the release built from THIS commit. An existing release
+// is described by the list at its own tag: releaseFilesFromToolSource() reads
+// it from there, so keep one ['source', 'name'] pair per line.
 const RELEASE_FILES = [
   ['appsscript.json', 'appsscript.json'],
   ['Code.js', 'Code.js'],
   ['HyperLink.js', 'HyperLink.js'],
-  ['colab_notebook.html', 'colab_notebook.html'],
-  ['colab_notebook_shared.html', 'colab_notebook_shared.html'],
   ['template/ReportCreator.js', 'ReportCreator.js']
 ];
+const RELEASE_TOOL_PATH = 'tools/template-release.js';
+const GENERATED_RELEASE_FILE = 'Release.js';
+
+/**
+ * The RELEASE_FILES list written in a copy of this tool's source -- the copy
+ * a release tag holds -- or null when it cannot be read with certainty. The
+ * source is parsed, never executed. Pure.
+ */
+function releaseFilesFromToolSource(source) {
+  const block = String(source === null || source === undefined ? '' : source).replace(/\r\n/g, '\n').match(/^const RELEASE_FILES = \[\n([\s\S]*?)^\];/m);
+  if (!block) return null;
+  const list = [];
+  const lines = block[1].split('\n').map((line) => line.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length; i++) {
+    const pair = lines[i].match(/^\['([A-Za-z0-9_.\/-]+)', '([A-Za-z0-9_.-]+)'\],?$/);
+    if (!pair || /(^|\/)\.\.?(\/|$)/.test(pair[1]) || pair[1].charAt(0) === '/' || pair[2] === GENERATED_RELEASE_FILE) return null;
+    if (list.some((entry) => entry[0] === pair[1] || entry[1] === pair[2])) return null;
+    list.push([pair[1], pair[2]]);
+  }
+  return list.length ? list : null;
+}
+
+/**
+ * The source payload of an existing release, from its tag alone: the file
+ * list the tag declares and each of those files as the tag holds it.
+ * showAtTag(repoPath) returns the content or throws. Release.js is not among
+ * them: it is generated at build time and exists only in the bundle. Pure.
+ */
+function taggedReleaseSources(showAtTag, tag) {
+  let list = null;
+  try { list = releaseFilesFromToolSource(showAtTag(RELEASE_TOOL_PATH)); } catch (e) { /* reported below */ }
+  if (!list) {
+    return { ok: false, releaseFiles: null, published: null, files: [], errors: ['Could not read the release file list of ' + tag + ' (RELEASE_FILES in ' + RELEASE_TOOL_PATH + ' at the tag).'] };
+  }
+  const errors = [];
+  const files = [];
+  list.forEach(([src, name]) => {
+    try { files.push({ name, source: src, content: showAtTag(src) }); } catch (e) { errors.push('Could not read ' + src + ' at ' + tag + '.'); }
+  });
+  return { ok: errors.length === 0, releaseFiles: list, published: list.map(([, name]) => name).concat([GENERATED_RELEASE_FILE]), files, errors };
+}
 
 const RELEASE_ID_RE = /^T-\d{4}\.\d{2}\.\d+$/;
 const SCRIPT_ID_RE = /^[A-Za-z0-9_-]{40,80}$/;
@@ -168,7 +215,7 @@ function planRelease({ releaseId, target, git, readFile, builtAt, protection }) 
     templateDocumentId: target ? target.templateDocumentId : null,
     templateScriptId: target ? target.templateScriptId : null
   };
-  files.push({ name: 'Release.js', source: '(generated)', content: buildReleaseJs(meta) });
+  files.push({ name: GENERATED_RELEASE_FILE, source: '(generated)', content: buildReleaseJs(meta) });
 
   const published = files.map((f) => f.name);
   return {
@@ -222,22 +269,35 @@ function adoptionTargetRefusal(targetScriptId, templateScriptId, allowLegacyTarg
  * existing release bundle as read from disk (null when it does not exist).
  * git: { tagCommit, showAtTag(repoPath) -> content or throws }.
  * protection: optional digest table (tests); the built-in one otherwise.
+ *
+ * The expected files are those of the release's own tag (see
+ * taggedReleaseSources()), not today's RELEASE_FILES: a seven-file release
+ * stays seven files, and nothing is adopted from a tag that does not say
+ * which files it has.
  */
 function planAdoption({ releaseId, targetScriptId, label, allowLegacyTarget, bundle, git, protection }) {
   const errors = [];
-  const published = RELEASE_FILES.map(([, name]) => name).concat(['Release.js']);
   if (!RELEASE_ID_RE.test(String(releaseId || ''))) errors.push('--adopt must name a release like T-2026.10.4.');
   if (!ADOPT_LABEL_RE.test(String(label || ''))) errors.push('--label is required (letters, digits, ".", "_", "-"; it names the output folder).');
   const tag = 'template-release/' + releaseId;
-  if (!git || !/^[0-9a-f]{40}$/.test(String(git.tagCommit || ''))) errors.push('Tag ' + tag + ' does not exist in this repository.');
+  const tagExists = !!git && /^[0-9a-f]{40}$/.test(String(git.tagCommit || ''));
+  if (!tagExists) errors.push('Tag ' + tag + ' does not exist in this repository.');
+
+  // What the release consists of, from its tag. Without it nothing below
+  // can be checked, and nothing is planned.
+  const tagged = tagExists && git.showAtTag ? taggedReleaseSources(git.showAtTag, tag) : null;
+  if (tagged && !tagged.releaseFiles) errors.push(...tagged.errors);
+  const published = tagged && tagged.published ? tagged.published : null;
 
   let release = null;
   const files = [];
   if (!bundle || !bundle.files || !bundle.manifest) {
     errors.push('The release bundle for ' + releaseId + ' was not found. Adoption copies an existing bundle; it never rebuilds a release.');
-  } else {
+  } else if (published) {
     const listed = (bundle.manifest.files || []).map((f) => f.name);
-    if (JSON.stringify(listed) !== JSON.stringify(published)) errors.push('The bundle manifest does not list exactly the seven release files.');
+    if (JSON.stringify(listed) !== JSON.stringify(published)) {
+      errors.push('The bundle manifest does not list exactly the ' + published.length + ' files of ' + tag + ' (' + published.join(', ') + ').');
+    }
     if (bundle.manifest.releaseId !== releaseId) errors.push('The bundle manifest is for ' + bundle.manifest.releaseId + ', not ' + releaseId + '.');
     published.forEach((name) => {
       const content = bundle.files[name];
@@ -251,7 +311,7 @@ function planAdoption({ releaseId, targetScriptId, label, allowLegacyTarget, bun
     });
 
     // Release.js is the release identity: it must be the tagged release.
-    const releaseJs = bundle.files['Release.js'];
+    const releaseJs = bundle.files[GENERATED_RELEASE_FILE];
     if (releaseJs) {
       try {
         release = JSON.parse(String(releaseJs).slice(String(releaseJs).indexOf('{'), String(releaseJs).lastIndexOf('}') + 1));
@@ -264,16 +324,13 @@ function planAdoption({ releaseId, targetScriptId, label, allowLegacyTarget, bun
       if (release.flavor !== 'template') errors.push('Release.js is not a template release.');
       if (git && git.tagCommit && release.gitCommit !== git.tagCommit) errors.push('Release.js was built from ' + release.gitCommit + ', but ' + tag + ' is ' + git.tagCommit + '.');
     }
-    // The six source files must be what the tag holds (line endings aside:
-    // the bundle carries the checkout's, git stores LF).
-    if (git && git.showAtTag) {
-      RELEASE_FILES.forEach(([src, name]) => {
-        if (!bundle.files[name]) return;
-        let tagged;
-        try { tagged = git.showAtTag(src); } catch (e) { errors.push('Could not read ' + src + ' at ' + tag + '.'); return; }
-        if (lf(tagged) !== lf(bundle.files[name])) errors.push(name + ' in the bundle differs from ' + src + ' at ' + tag + '.');
-      });
-    }
+    // The source files must be what the tag holds (line endings aside: the
+    // bundle carries the checkout's, git stores LF).
+    errors.push(...tagged.errors);
+    tagged.files.forEach((f) => {
+      if (!bundle.files[f.name]) return;
+      if (lf(f.content) !== lf(bundle.files[f.name])) errors.push(f.name + ' in the bundle differs from ' + f.source + ' at ' + tag + '.');
+    });
   }
 
   const refusal = adoptionTargetRefusal(targetScriptId, release ? release.templateScriptId : null, allowLegacyTarget, protection);
@@ -289,7 +346,7 @@ function planAdoption({ releaseId, targetScriptId, label, allowLegacyTarget, bun
     // Deployment-local only: the whitelist below keeps both files (and the
     // adoption record) out of the upload.
     claspJson: JSON.stringify({ scriptId: String(targetScriptId || ''), rootDir: '.' }, null, 2) + '\n',
-    claspIgnore: buildClaspIgnore(published),
+    claspIgnore: published ? buildClaspIgnore(published) : null,
     record: {
       action: 'adopt',
       releaseId,
@@ -443,5 +500,6 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 module.exports = {
   planRelease, validateTarget, buildReleaseJs, buildClaspIgnore, RELEASE_FILES,
   PROTECTED_SCRIPT_ID_DIGESTS, PROTECTED_PROJECT_LABELS, protectionForScriptIds, protectedProject, protectedProjectKey,
-  planAdoption, adoptionTargetRefusal, adoptionBanner
+  planAdoption, adoptionTargetRefusal, adoptionBanner,
+  releaseFilesFromToolSource, taggedReleaseSources, RELEASE_TOOL_PATH
 };

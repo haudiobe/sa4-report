@@ -16,7 +16,9 @@
  *   2. the new functions of Code.js are the fourteen of one section, and the
  *      rest of the file outside its functions is the released file;
  *   3. ReportCreator.js: which functions changed, which are new;
- *   4. the other files of the bundle are the released ones; the version
+ *   4. the other files of the bundle are the released ones, except that
+ *      the two saved Colab pages left it after T-2026.10.11 (the release
+ *      tool and the push filter no longer name them); the version
  *      line and the changelog entries are those of T-2026.10.9 (Code.js
  *      2.21.0) and of the hotfix after it (Code.js 2.21.1).
  *
@@ -354,8 +356,26 @@ if (!OLD_CREATOR) {
 
 console.log('4. the rest of the bundle, and the version');
 {
-  const others = ['HyperLink.js', 'appsscript.json', 'colab_notebook.html', 'colab_notebook_shared.html', 'tools/template-release.js', '.claspignore'];
-  if (OLD_CODE) check('the other files of the bundle, the release tool and the push filter are the released ones', others.filter((file) => read(file) !== gitShow(file)), []);
+  // After T-2026.10.11 the two saved Colab pages left the production files
+  // (docs/PRODUCTION_FILE_SET.md): they are gone here and still in the tag,
+  // and the release tool and the push filter differ from the released ones
+  // in the lines that name them and in what tests/release-file-set.test.js covers.
+  const others = ['HyperLink.js', 'appsscript.json'];
+  const colab = ['colab_notebook.html', 'colab_notebook_shared.html'];
+  const withoutColab = (text) => text.replace(/^\uFEFF/, '').split('\n').filter((line) => !/colab_notebook/.test(line)).join('\n');
+  if (OLD_CODE) {
+    check('the other files of the bundle are the released ones', others.filter((file) => read(file) !== gitShow(file)), []);
+    check('the two Colab pages are no longer here; the tag still has them', [colab.map((file) => fs.existsSync(path.join(ROOT, file))), colab.map((file) => (gitShow(file) || '').length > 50000)], [[false, false], [true, true]]);
+    check('the push filter is the released one without its two Colab lines', [withoutColab(read('.claspignore')) === withoutColab(gitShow('.claspignore')), /colab_notebook/.test(read('.claspignore')), (gitShow('.claspignore').match(/colab_notebook/g) || []).length], [true, false, 2]);
+    const fileList = (text) => (text.match(/^const RELEASE_FILES = \[\n([\s\S]*?)^\];/m) || [])[1];
+    check('the release list of the tool is the released one without its two Colab lines', [withoutColab(fileList(read('tools/template-release.js'))) === withoutColab(fileList(gitShow('tools/template-release.js'))), /colab_notebook/.test(fileList(read('tools/template-release.js')))], [true, false]);
+    const functionsOf = (text) => functionNames(text).map((name) => [name, functionSource(text, name)]);
+    const toolNow = read('tools/template-release.js');
+    const toolOld = gitShow('tools/template-release.js');
+    check('of the functions the tool had, planAdoption() changed and planRelease() in one name; two are new', [changed(toolNow, toolOld), functionsOf(toolNow).map((f) => f[0]).filter((name) => functionNames(toolOld).indexOf(name) === -1)],
+      [['planRelease', 'planAdoption'], ['releaseFilesFromToolSource', 'taggedReleaseSources']]);
+    check('planRelease() is the released one once Release.js is written as the name again', functionSource(toolNow, 'planRelease').replace('name: GENERATED_RELEASE_FILE,', "name: 'Release.js',") === functionSource(toolOld, 'planRelease'), true);
+  }
   check('Code.js is version 2.22.0, and the first changelog entries are those of 2.22.0, 2.21.1 and 2.21.0, in this order',
     [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), (CODE.match(/^ \* (\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)$/gm) || []).slice(0, 3)], [['2.22.0', '2026-10-07'], [' * 2.22.0 (2026-10-07)', ' * 2.21.1 (2026-10-06)', ' * 2.21.0 (2026-10-06)']]);
 }

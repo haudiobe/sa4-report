@@ -42,7 +42,9 @@ const REPORT_SCRIPT = 'REPORTscript0000000000000000000000000000000000000000000';
 const LEGACY_SCRIPT_ID = 'LEGACYscript0000000000000000000000000000000000000000000';
 const CENTRAL_SCRIPT_ID = 'CENTRALscript000000000000000000000000000000000000000000';
 const PROTECTION = protectionForScriptIds({ legacy: LEGACY_SCRIPT_ID, central: CENTRAL_SCRIPT_ID });
-const SEVEN = ['appsscript.json', 'Code.js', 'HyperLink.js', 'colab_notebook.html', 'colab_notebook_shared.html', 'ReportCreator.js', 'Release.js'];
+// The files of a release built from this checkout. The files of an older
+// release are those of its own tag: tests/release-file-set.test.js.
+const FIVE = ['appsscript.json', 'Code.js', 'HyperLink.js', 'ReportCreator.js', 'Release.js'];
 
 /** A release bundle exactly as the normal release mode writes it (in memory). */
 function builtBundle() {
@@ -68,16 +70,16 @@ console.log('an adoption of a built release for another script is planned');
   const bundle = builtBundle();
   const p = adopt({ bundle });
   check('ok', [p.ok, p.errors], [true, []]);
-  check('exactly the seven release files, in release order', p.files.map((f) => f.name), SEVEN);
-  check('every file is the bundle\'s file, byte for byte', p.files.map((f) => Buffer.compare(Buffer.from(f.content), bundle.files[f.name])), [0, 0, 0, 0, 0, 0, 0]);
+  check('exactly the five release files, in release order', p.files.map((f) => f.name), FIVE);
+  check('every file is the bundle\'s file, byte for byte', p.files.map((f) => Buffer.compare(Buffer.from(f.content), bundle.files[f.name])), [0, 0, 0, 0, 0]);
   check('Release.js is not regenerated: same bytes, same build time',
-    [sha(p.files[6].content) === bundle.manifest.files[6].sha256, /"builtAt": "2026-10-01T12:01:57\.805Z"/.test(String(p.files[6].content))], [true, true]);
+    [p.files[4].name, sha(p.files[4].content) === bundle.manifest.files[4].sha256, /"builtAt": "2026-10-01T12:01:57\.805Z"/.test(String(p.files[4].content))], ['Release.js', true, true]);
   check('the report will identify itself as the release', [p.release.releaseId, p.release.codeVersion, p.release.gitCommit, p.release.flavor],
     [RELEASE_ID, (String(readRepo('Code.js')).match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], COMMIT, 'template']);
   check('Release.js still names the MASTER template, so the adopted document is a report', p.release.templateScriptId, TEMPLATE_SCRIPT);
   check('.clasp.json targets the given script only', JSON.parse(p.claspJson), { scriptId: REPORT_SCRIPT, rootDir: '.' });
-  check('.claspignore uploads the seven files and nothing else (not .clasp.json, not the adoption record)',
-    p.claspIgnore.trim().split('\n'), ['**/**'].concat(SEVEN.map((n) => '!' + n)));
+  check('.claspignore uploads the five files and nothing else (not .clasp.json, not the adoption record)',
+    p.claspIgnore.trim().split('\n'), ['**/**'].concat(FIVE.map((n) => '!' + n)));
   check('the adoption record names action, release and target', [p.record.action, p.record.releaseId, p.record.targetScriptId, p.record.label, p.record.legacyTarget],
     ['adopt', RELEASE_ID, REPORT_SCRIPT, 'rehearsal-6g', false]);
 }
@@ -143,7 +145,7 @@ console.log('nothing is rebuilt: the bundle must be the tagged release');
 
   const reReleased = builtBundle();
   reReleased.files['Release.js'] = Buffer.from(String(reReleased.files['Release.js']).replace('T-2026.10.4', 'T-2026.10.5'));
-  reReleased.manifest.files[6].sha256 = sha(reReleased.files['Release.js']);
+  reReleased.manifest.files.find((f) => f.name === 'Release.js').sha256 = sha(reReleased.files['Release.js']);
   check('a Release.js with another release id: refused', adopt({ bundle: reReleased }).errors.some((e) => /Release\.js says T-2026\.10\.5, not T-2026\.10\.4/.test(e)), true);
 
   check('a bundle built from another commit than the tag: refused',
@@ -161,7 +163,7 @@ console.log('nothing is rebuilt: the bundle must be the tagged release');
   const missing = builtBundle();
   delete missing.files['HyperLink.js'];
   check('a missing file in the bundle: refused', adopt({ bundle: missing }).errors, ['The bundle has no HyperLink.js.']);
-  check('the release whitelist is still six sources plus Release.js', RELEASE_FILES.map((f) => f[1]).concat(['Release.js']), SEVEN);
+  check('the release whitelist is four sources plus Release.js', RELEASE_FILES.map((f) => f[1]).concat(['Release.js']), FIVE);
 }
 
 console.log('the normal release mode is unchanged');

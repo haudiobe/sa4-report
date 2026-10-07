@@ -860,7 +860,7 @@ console.log('12. Where the code is, and what did not change');
     'https://www.googleapis.com/auth/script.external_request', 'https://www.googleapis.com/auth/script.scriptapp', 'https://www.googleapis.com/auth/script.container.ui']);
   check('and has the Drive service the feature uses, in version 3', manifest.dependencies.enabledAdvancedServices.filter((x) => x.userSymbol === 'Drive').map((x) => x.version), ['v3']);
   check('ReportCreator.js is not in the push of CENTRAL or Legacy: the filter names its files, and this is not one', fs.readFileSync(path.join(ROOT, '.claspignore'), 'utf8').replace(/\r/g, '').replace(/^﻿/, '').split('\n').filter(Boolean),
-    ['**/**', '!appsscript.json', '!Code.js', '!HyperLink.js', '!colab_notebook_shared.html', '!colab_notebook.html']);
+    ['**/**', '!appsscript.json', '!Code.js', '!HyperLink.js']);
   const bare = require('./helpers/load-code.js').loadCode({ documentProperties: PROPS });
   check('Code.js alone (CENTRAL, Legacy) has none of the functions', ['createSharedMinutes', 'verifySharedMinutes', 'forgetSharedMinutes', 'sharedMinutesDrive_', 'finishSharedMinutesRebuild_', 'sharedMinutesDialogParts_'].filter((n) => typeof bare.sandbox[n] !== 'undefined'), []);
 }
