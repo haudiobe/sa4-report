@@ -605,7 +605,7 @@ console.log('10. nothing else changed');
     check('the work after T-2026.10.8 is one section, directly before the status dropdowns', [after108Start !== -1, after108Start < dropdownStart, CODE.slice(dropdownStart - 1, dropdownStart)], [true, true, '\n']);
     const withoutSections = (CODE.slice(0, after108Start) + BAR + CODE.slice(end)).replace(/  'DEADLINE_EXTENSIONS',\n[\s\S]*?  'ADHOC_TDOC_SESSIONS'\n\];/, "  'DEADLINE_EXTENSIONS'\n];");
     // The header: the version line and the changelog entries of 2.18.0 and 2.18.1 are new; the rest of it is unchanged.
-    const withoutRelease = withoutSections.replace(/ \* 2\.21\.1 \(2026-10-06\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.21.1 (2026-10-06)\n', ' * Version: 2.17.4 (2026-10-01)\n');
+    const withoutRelease = withoutSections.replace(/ \* 2\.22\.0 \(2026-10-07\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').replace(' * Version: 2.22.0 (2026-10-07)\n', ' * Version: 2.17.4 (2026-10-01)\n');
     check('Code.js outside its functions, without the ad-hoc, upload-completion, status-dropdown and after-T-2026.10.8 sections, the two adoption keys, the version line and the changelog entries since 2.17.4, is the T-2026.10.4 file outside its functions',
       [outsideFunctions(withoutRelease) === outsideFunctions(OLD_CODE), withoutRelease === withoutSections], [true, false]);
   }

@@ -233,7 +233,7 @@ console.log('6. the code');
   const code = fn.replace(/^\s*\/\/.*$/gm, '');
   check('docTableToHtml_() reads a dropdown through readTdocStatus_(), once, and escapes what it reads', [(code.match(/readTdocStatus_\(table, cellText\)/g) || []).length, /escapeHtmlForEmailExport_\(selected\)/.test(code)], [1, true]);
   check('it has no way of its own to read a dropdown, and writes nothing', /Docs\.|statusDropdownIndex_|statusDropdownEntryOfTable_|displayValue|setText|batchUpdate|saveAndClose|setProperty/.test(code), false);
-  check('Code.js is version 2.21.1', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.1');
+  check('Code.js is version 2.22.0 (2.21.1 brought the dropdown status of a discussion e-mail; 2.22.0 the shared minutes)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.22.0');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll e-mail status dropdown checks passed.');

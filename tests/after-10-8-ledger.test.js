@@ -20,6 +20,12 @@
  *      line and the changelog entries are those of T-2026.10.9 (Code.js
  *      2.21.0) and of the hotfix after it (Code.js 2.21.1).
  *
+ * After T-2026.10.10 (Code.js 2.22.0, the shared minutes -- tests/shared-minutes.test.js)
+ * no further function of Code.js changed: configureMeetingSettings() and
+ * buildSkeletonWithTdocTables(), which are in the list already, each have
+ * lines more, named below. ReportCreator.js has thirty functions and eight
+ * constants more, in one section at its end.
+ *
  * After T-2026.10.9 one more function changed: docTableToHtml_(), the table
  * of a discussion e-mail (Code.js 2.21.1). It is in the list below like the
  * others, compared with T-2026.10.8, which had it as T-2026.10.9 did.
@@ -157,6 +163,14 @@ const CODE_CHANGES = {
      "    persistConfigurationSettings_(config);\n    return;\n"]
   ],
   configureMeetingSettings: [
+    // After T-2026.10.10 (Code.js 2.22.0): the Shared Minutes section of a template report, and the script of its buttons.
+    ['  // A template report: the Shared Minutes section and its buttons (sharedMinutesDialogParts_(), ReportCreator.js). Opening the\n' +
+     '  // dialog asks Drive nothing; Save Configuration sends nothing of it. Everywhere else the dialog is as it was.\n' +
+     '  const sharedMinutesUi = templateRuntimeRelease_() ? sharedMinutesDialogParts_() : null;\n', ''],
+    ['  // The script of the Shared Minutes section goes to the browser with it: the dialog script below stays one static text.\n' +
+     "  const readinessEvaluatorSource = evaluateMeetingReadiness_.toString() + (sharedMinutesUi ? '\\n\\n      ' + sharedMinutesUi.script : '');\n",
+     '  const readinessEvaluatorSource = evaluateMeetingReadiness_.toString();\n'],
+    ["    </div>${sharedMinutesUi ? '\\n\\n    ' + sharedMinutesUi.sectionHtml : ''}\n", '    </div>\n'],
     ['      // The start of the meeting Resolve found, as the Portal gives it, and\n' +
      '      // the meeting it is of. Sent with Save only for that same meeting id.\n' +
      '      let resolvedMeetingStart = null;\n', ''],
@@ -245,7 +259,11 @@ const CODE_CHANGES = {
      "    revisionPlacementNote = '\\n\\n⚠️ Revisions could not be placed below the documents they revise (' + e.message + '). The next update of the report places them.';\n" +
      '  }\n' +
      '\n', ''],
-    ['  let reallocationRestoreNote = revisionPlacementNote;\n', "  let reallocationRestoreNote = '';\n"]
+    ['  let reallocationRestoreNote = revisionPlacementNote;\n', "  let reallocationRestoreNote = '';\n"],
+    // After T-2026.10.10 (Code.js 2.22.0): the link to the shared minutes, written again at the end of a build of a template report.
+    ["  // Shared minutes (template reports): the link to them, from what is stored ('' and nothing done without a\n" +
+     '  // verified record of this report). Nothing is created or shared here, and Drive is not asked.\n' +
+     "  if (templateRuntimeRelease_() && typeof finishSharedMinutesRebuild_ === 'function') reallocationRestoreNote += finishSharedMinutesRebuild_(body);\n", '']
   ],
   // After T-2026.10.9 (Code.js 2.21.1): the value of a Status dropdown in the table of a discussion e-mail.
   docTableToHtml_: [
@@ -296,10 +314,10 @@ console.log('2. Code.js: the new functions and the rest of the file');
   check('it has these fourteen functions, in this order', functionNames(section), SECTION_FUNCTIONS);
   if (OLD_CODE) {
     check('they are the new functions of Code.js, all of them', added(CODE, OLD_CODE), SECTION_FUNCTIONS.slice().sort());
-    // The header: the version line and the changelog entries of 2.21.0 and 2.21.1 are new; the rest of it is unchanged.
+    // The header: the version line and the changelog entries of 2.21.0, 2.21.1 and 2.22.0 are new; the rest of it is unchanged.
     const withoutSection = CODE.slice(0, at) + CODE.slice(end);
-    const withoutRelease = withoutSection.replace(/ \* 2\.21\.1 \(2026-10-06\)\n[\s\S]*? \* 2\.20\.0 \(2026-10-06\)\n/, ' * 2.20.0 (2026-10-06)\n').replace(' * Version: 2.21.1 (2026-10-06)\n', ' * Version: 2.20.0 (2026-10-06)\n');
-    check('outside its functions, that section, the version line and the changelog entries of 2.21.0 and 2.21.1, Code.js is the released file: no constant and no comment differs',
+    const withoutRelease = withoutSection.replace(/ \* 2\.22\.0 \(2026-10-07\)\n[\s\S]*? \* 2\.20\.0 \(2026-10-06\)\n/, ' * 2.20.0 (2026-10-06)\n').replace(' * Version: 2.22.0 (2026-10-07)\n', ' * Version: 2.20.0 (2026-10-06)\n');
+    check('outside its functions, that section, the version line and the changelog entries of 2.21.0, 2.21.1 and 2.22.0, Code.js is the released file: no constant and no comment differs',
       [outsideFunctions(withoutRelease) === outsideFunctions(OLD_CODE), withoutRelease === withoutSection], [true, false]);
   }
   check('the section declares three constants, the keys of the stored start, and nothing else at top level',
@@ -313,19 +331,24 @@ if (!OLD_CREATOR) {
   // The setup information (payload and its validation), the first run and what it reports, About This Report.
   check('these functions of T-2026.10.8 changed, and no other', changed(CREATOR, OLD_CREATOR),
     ['buildReportBootstrapPayload_', 'validateBootstrapPayload_', 'finishReportSetupWith_', 'describeTemplateRuntime_', 'liveTemplateDeps_', 'ensureReportBootstrapped_', 'finishReportSetup', 'showTemplateInfo']);
-  // The drafts folder (five), and the personal Reviewer token (sixteen).
-  check('twenty-one functions are new; none was removed', [added(CREATOR, OLD_CREATOR), removed(CREATOR, OLD_CREATOR)],
-    [['afterTemplateConfigurationSaved_', 'confirmAdhocRevisionsFolderWith_', 'currentRevisionsCandidate_', 'describeRevisionsFolderOutcome_', 'retryAdhocRevisionsFolderWith_',
+  // The drafts folder (five), the personal Reviewer token (sixteen), and -- after T-2026.10.10 -- the shared minutes (thirty).
+  const SHARED_MINUTES_FUNCTIONS = ['sharedMinutesUrl_', 'sharedMinutesName_', 'sharedMinutesHtml_', 'sharedMinutesAppProperties_', 'sharedMinutesQuery_', 'isSharedMinutesFile_', 'hasAnyoneWriterPermission_', 'serializeSharedMinutes_',
+    'readSharedMinutes_', 'sharedMinutesDrive_', 'currentSharedMinutesWith_', 'writeSharedMinutesLinkWith_', 'createSharedMinutesWith_', 'verifySharedMinutesWith_', 'forgetSharedMinutesWith_', 'sharedMinutesTextHolder_',
+    'findSharedMinutesLine_', 'sharedMinutesLineLink_', 'findSharedMinutesInsertIndex_', 'renderSharedMinutesLink_', 'removeSharedMinutesLine_', 'finishSharedMinutesRebuild_', 'sharedMinutesView_', 'currentSharedMinutesView_',
+    'sharedMinutesDialogParts_', 'liveSharedMinutesDeps_', 'runSharedMinutesAction_', 'createSharedMinutes', 'verifySharedMinutes', 'forgetSharedMinutes'];
+  check('fifty-one functions are new; none was removed', [added(CREATOR, OLD_CREATOR), removed(CREATOR, OLD_CREATOR)],
+    [SHARED_MINUTES_FUNCTIONS.concat(['afterTemplateConfigurationSaved_', 'confirmAdhocRevisionsFolderWith_', 'currentRevisionsCandidate_', 'describeRevisionsFolderOutcome_', 'retryAdhocRevisionsFolderWith_',
       'applyPersonalReviewerTokenPlanSafely_', 'applyPersonalReviewerTokenPlanWith_', 'beforeTemplateConfigurationSaved_', 'classifyUserSettingsFile_', 'clearPersonalReviewerTokenWith_', 'describeReviewerTokenStatus_',
       'inspectPersonalReviewerSettingsWith_', 'isUsableReviewerTokenValue_', 'isVerifiedUserSettingsFile_', 'parseUserSettingsText_', 'personalTokenProblemForLog_', 'readPersonalReviewerTokenSafely_', 'serializeUserSettings_',
-      'templateReviewerTokenDialogParts_', 'userSettingsDrive_', 'writePersonalReviewerTokenWith_'].sort(), []]);
+      'templateReviewerTokenDialogParts_', 'userSettingsDrive_', 'writePersonalReviewerTokenWith_']).sort(), []]);
   const constant = (src, name) => { const start = src.indexOf('\nvar ' + name + ' = '); return src.slice(start + 1, src.indexOf(';\n', start) + 1); };
   const constants = (src) => (src.match(/^var [A-Za-z0-9_$]+/gm) || []).map((m) => m.slice(4));
   check('of the constants it had, two changed: the keys of the setup information (two more) and the state keys (one more)',
     [constants(OLD_CREATOR).filter((name) => constant(CREATOR, name) !== constant(OLD_CREATOR, name)), constants(OLD_CREATOR).filter((name) => constants(CREATOR).indexOf(name) === -1)], [['TEMPLATE_BOOTSTRAP_CONFIG_KEYS_', 'TEMPLATE_STATE_KEYS_'], []]);
-  check('the new constants are those of the personal settings file',
+  check('the new constants are those of the personal settings file and, after T-2026.10.10, those of the shared minutes',
     constants(CREATOR).filter((name) => constants(OLD_CREATOR).indexOf(name) === -1),
-    ['USER_SETTINGS_SCHEMA_', 'USER_SETTINGS_MARKER_KEY_', 'USER_SETTINGS_MARKER_VALUE_', 'USER_SETTINGS_FILE_NAME_', 'USER_SETTINGS_MIME_', 'USER_SETTINGS_MAX_BYTES_', 'USER_SETTINGS_TOKEN_MAX_CHARS_', 'USER_SETTINGS_QUERY_', 'USER_SETTINGS_FILE_FIELDS_']);
+    ['USER_SETTINGS_SCHEMA_', 'USER_SETTINGS_MARKER_KEY_', 'USER_SETTINGS_MARKER_VALUE_', 'USER_SETTINGS_FILE_NAME_', 'USER_SETTINGS_MIME_', 'USER_SETTINGS_MAX_BYTES_', 'USER_SETTINGS_TOKEN_MAX_CHARS_', 'USER_SETTINGS_QUERY_', 'USER_SETTINGS_FILE_FIELDS_',
+      'SHARED_MINUTES_KEY_', 'SHARED_MINUTES_PENDING_KEY_', 'SHARED_MINUTES_SCHEMA_VERSION_', 'SHARED_MINUTES_LABEL_', 'SHARED_MINUTES_PURPOSE_', 'SHARED_MINUTES_MIME_', 'SHARED_MINUTES_PENDING_MS_', 'SHARED_MINUTES_FILE_FIELDS_']);
   check('the menus are the released ones', ['buildTemplateMasterMenu_', 'buildTemplateReportMenu_', 'addTemplateReportMenuHead_', 'addTemplateReportMenuTail_'].filter((name) => functionSource(CREATOR, name) !== functionSource(OLD_CREATOR, name)), []);
 }
 
@@ -333,8 +356,8 @@ console.log('4. the rest of the bundle, and the version');
 {
   const others = ['HyperLink.js', 'appsscript.json', 'colab_notebook.html', 'colab_notebook_shared.html', 'tools/template-release.js', '.claspignore'];
   if (OLD_CODE) check('the other files of the bundle, the release tool and the push filter are the released ones', others.filter((file) => read(file) !== gitShow(file)), []);
-  check('Code.js is version 2.21.1, and the first changelog entries are those of 2.21.1, 2.21.0 and 2.20.0, in this order',
-    [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), (CODE.match(/^ \* (\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)$/gm) || []).slice(0, 3)], [['2.21.1', '2026-10-06'], [' * 2.21.1 (2026-10-06)', ' * 2.21.0 (2026-10-06)', ' * 2.20.0 (2026-10-06)']]);
+  check('Code.js is version 2.22.0, and the first changelog entries are those of 2.22.0, 2.21.1 and 2.21.0, in this order',
+    [(CODE.match(/^ \* Version: (\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)/m) || []).slice(1), (CODE.match(/^ \* (\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)$/gm) || []).slice(0, 3)], [['2.22.0', '2026-10-07'], [' * 2.22.0 (2026-10-07)', ' * 2.21.1 (2026-10-06)', ' * 2.21.0 (2026-10-06)']]);
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll after-T-2026.10.8 ledger checks passed.');

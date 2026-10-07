@@ -309,8 +309,13 @@ console.log('2. hidden operations are still in the code');
       // the personal Reviewer API token: the private settings file in the user's Drive
       'applyPersonalReviewerTokenPlanSafely_', 'applyPersonalReviewerTokenPlanWith_', 'beforeTemplateConfigurationSaved_', 'classifyUserSettingsFile_', 'clearPersonalReviewerTokenWith_', 'describeReviewerTokenStatus_',
       'inspectPersonalReviewerSettingsWith_', 'isUsableReviewerTokenValue_', 'isVerifiedUserSettingsFile_', 'parseUserSettingsText_', 'personalTokenProblemForLog_', 'readPersonalReviewerTokenSafely_', 'serializeUserSettings_',
-      'templateReviewerTokenDialogParts_', 'userSettingsDrive_', 'writePersonalReviewerTokenWith_'];
-    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js), the ad-hoc sessions and attendance, the TDoc upload completion, the status dropdowns, and the work after T-2026.10.8',
+      'templateReviewerTokenDialogParts_', 'userSettingsDrive_', 'writePersonalReviewerTokenWith_',
+      // After T-2026.10.10 (Code.js 2.22.0): the shared minutes, one section at the end of ReportCreator.js (tests/shared-minutes.test.js)
+      'sharedMinutesUrl_', 'sharedMinutesName_', 'sharedMinutesHtml_', 'sharedMinutesAppProperties_', 'sharedMinutesQuery_', 'isSharedMinutesFile_', 'hasAnyoneWriterPermission_', 'serializeSharedMinutes_',
+      'readSharedMinutes_', 'sharedMinutesDrive_', 'currentSharedMinutesWith_', 'writeSharedMinutesLinkWith_', 'createSharedMinutesWith_', 'verifySharedMinutesWith_', 'forgetSharedMinutesWith_', 'sharedMinutesTextHolder_',
+      'findSharedMinutesLine_', 'sharedMinutesLineLink_', 'findSharedMinutesInsertIndex_', 'renderSharedMinutesLink_', 'removeSharedMinutesLine_', 'finishSharedMinutesRebuild_', 'sharedMinutesView_', 'currentSharedMinutesView_',
+      'sharedMinutesDialogParts_', 'liveSharedMinutesDeps_', 'runSharedMinutesAction_', 'createSharedMinutes', 'verifySharedMinutes', 'forgetSharedMinutes'];
+    check('the new functions are exactly these: TEMPLATE-003 (ReportCreator.js), the ad-hoc sessions and attendance, the TDoc upload completion, the status dropdowns, the work after T-2026.10.8, and the shared minutes',
       [now.filter((f) => before.indexOf(f) === -1).sort(), functionNames(CODE).filter((f) => functionNames(OLD_CODE).indexOf(f) === -1).sort()],
       [['buildTemplateReportMenu_', 'confirmTemplateBuildFromScratch_', 'describeUpdateReportNowFailure_', 'updateReportNow']
         .concat(SESSION_FUNCTIONS_CODE, SESSION_FUNCTIONS_CREATOR, TEAMS_PARSER_FUNCTIONS_CODE, ATTENDANCE_FUNCTIONS_CODE, TDOC_SESSION_FUNCTIONS_CODE, OPENING_FUNCTIONS_CODE, STATUS_FUNCTIONS_CODE, MULTIDAY_FUNCTIONS_CODE, UPLOAD_COMPLETION_FUNCTIONS_CODE, STATUS_DROPDOWN_FUNCTIONS_CODE, AFTER_10_8_FUNCTIONS_CODE, AFTER_10_8_FUNCTIONS_CREATOR).sort(),

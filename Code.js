@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.21.1 (2026-10-06)
+ * Version: 2.22.0 (2026-10-07)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,32 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.22.0 (2026-10-07)
+ *   - Added (template reports): Shared Minutes. Configure Meeting has a
+ *     section with the button "Create Shared Minutes": it creates one
+ *     separate Google Doc for the report (in the folder of the report,
+ *     else in the user's My Drive; its title and one line naming the
+ *     meeting), lets ANYONE WITH THE LINK EDIT it, reads that permission
+ *     back from Drive, and writes "Link to the shared minutes: <name>"
+ *     into the opening of the report -- into the line a main-meeting
+ *     report copies from the meeting report template, below the Online
+ *     information of an ad-hoc report with sessions, else below the
+ *     "Opening of the session" heading. Sharing that cannot be set or
+ *     confirmed is reported as failed: the document is kept and
+ *     recorded, and no link is written. The button is idempotent and
+ *     goes on from where an earlier press stopped: the document carries
+ *     Drive appProperties naming the report and the meeting, one that
+ *     exists is used, and with more than one nothing is done. Stored as
+ *     the Document Property SHARED_DOCUMENT, used only in the document
+ *     and for the meeting it names. Build Report from Scratch writes the
+ *     link again from it. The code is in ReportCreator.js; Code.js calls
+ *     it in two places, in the template runtime only
+ *     (configureMeetingSettings(), buildSkeletonWithTdocTables()).
+ *   - Unchanged: nothing is created or shared by opening a report, by
+ *     opening or saving Configure Meeting, by an update (by hand or by a
+ *     trigger), by a build or by the discussion e-mails, and none of them
+ *     asks Drive about the shared minutes. CENTRAL and Legacy have no
+ *     such section and no such code.
  * 2.21.1 (2026-10-06)
  *   - Fixed: a discussion e-mail showed an empty Status for a TDoc whose
  *     Status is a native dropdown (since 2.19.0): DocumentApp has no text
@@ -7679,6 +7705,9 @@ function configureMeetingSettings() {
   // A template report: the token of this report and the personal one (templateReviewerTokenDialogParts_(), ReportCreator.js).
   // Words and controls only; no token goes into the dialog. Everywhere else the dialog is as it was.
   const tokenUi = templateRuntimeRelease_() ? templateReviewerTokenDialogParts_() : null;
+  // A template report: the Shared Minutes section and its buttons (sharedMinutesDialogParts_(), ReportCreator.js). Opening the
+  // dialog asks Drive nothing; Save Configuration sends nothing of it. Everywhere else the dialog is as it was.
+  const sharedMinutesUi = templateRuntimeRelease_() ? sharedMinutesDialogParts_() : null;
 
   // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date, in the
   // template runtime only. A stored value is shown as it is; without one the
@@ -7722,7 +7751,8 @@ function configureMeetingSettings() {
   // ADDON-007B3: the canonical rules and the evaluator's own source are
   // handed to the browser, so the live status uses exactly the server rules.
   const readinessRules = MEETING_READINESS_RULES_;
-  const readinessEvaluatorSource = evaluateMeetingReadiness_.toString();
+  // The script of the Shared Minutes section goes to the browser with it: the dialog script below stays one static text.
+  const readinessEvaluatorSource = evaluateMeetingReadiness_.toString() + (sharedMinutesUi ? '\n\n      ' + sharedMinutesUi.script : '');
 
   function esc(v) {
     return String(v === null || v === undefined ? '' : v)
@@ -7834,7 +7864,7 @@ function configureMeetingSettings() {
         Show email preview snippets in report
       </label>
       <div class="hint" id="tokenStatus">${tokenUi ? esc(tokenUi.status) : (tokenConfigured ? 'Reviewer API token configured' : 'No Reviewer API token configured')}</div>
-    </div>
+    </div>${sharedMinutesUi ? '\n\n    ' + sharedMinutesUi.sectionHtml : ''}
 
     <details class="advanced">
       <summary>Advanced</summary>
@@ -10598,6 +10628,9 @@ function buildSkeletonWithTdocTables(options) {
   // Ad-hoc opening (stage E): the Session administration section, from the
   // sessions and the stored opening details ('' and nothing done without sessions).
   reallocationRestoreNote += finishAdhocOpeningRebuild_(body);
+  // Shared minutes (template reports): the link to them, from what is stored ('' and nothing done without a
+  // verified record of this report). Nothing is created or shared here, and Drive is not asked.
+  if (templateRuntimeRelease_() && typeof finishSharedMinutesRebuild_ === 'function') reallocationRestoreNote += finishSharedMinutesRebuild_(body);
 
   // TEMPLATE-002C: Full Build formats once, after its enrichment phases.
   if (!(options && options.skipFormatting)) removeRowHeightAndSpacing();

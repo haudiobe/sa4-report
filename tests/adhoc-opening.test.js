@@ -810,7 +810,7 @@ console.log('9. menu, adoption, privacy, and nothing else changed');
   });
   const section = CODE.slice(CODE.indexOf('// AD-HOC SESSIONS (stage A)'), CODE.indexOf('// ARCH-009 -- MEETING-ID RESOLVER CORE'));
   check('outside the ad-hoc sections (and the changelog), Code.js mentions the opening details in the one build hook only', (CODE.replace(section, '').replace(/ \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').match(/[A-Za-z_]*AdhocOpening[A-Za-z_]*|ADHOC_[A-Z_]*OPENING[A-Z_]*/g) || []), ['finishAdhocOpeningRebuild_']);
-  check('Code.js is version 2.21.1 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token, 2.21.1 the dropdown status in a discussion e-mail)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.21.1');
+  check('Code.js is version 2.22.0 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token, 2.21.1 the dropdown status in a discussion e-mail, 2.22.0 the shared minutes)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.22.0');
   check('ReportCreator.js: one more menu item and the build question, nothing else', (CREATOR.match(/Opening Details|editAdhocOpeningDetails|adhocOpening|ADHOC_OPENING/g) || []).length, 5);
 }
 

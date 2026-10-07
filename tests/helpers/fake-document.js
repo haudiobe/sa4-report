@@ -35,6 +35,10 @@
  * gives its text as a Text element (editAsText()), the one of the cell --
  * the e-mail export reads a cell paragraph by paragraph. A dropdown is not
  * in it, as in Google Docs.
+ *
+ * Shared minutes (after T-2026.10.10), addition only: the link at one
+ * character of a body paragraph can be read (getLinkUrl()), as recorded by
+ * setLinkUrl() -- the last one set wins, and null takes a link away.
  */
 
 function makeFakeDocumentBody(sandbox) {
@@ -58,7 +62,8 @@ function makeFakeDocumentBody(sandbox) {
       setGlyphType: () => p,
       setText: (v) => { p._text = String(v); return p; },
       // A link set on a paragraph's text is recorded (_links: [start, end, url]).
-      editAsText: () => ({ setBold: (b) => { p._bold = !!b; }, setLinkUrl: (...args) => { (p._links = p._links || []).push(args); } })
+      editAsText: () => ({ setBold: (b) => { p._bold = !!b; }, setLinkUrl: (...args) => { (p._links = p._links || []).push(args); },
+        getLinkUrl: (i) => { const links = p._links || []; for (let k = links.length - 1; k >= 0; k--) if (i >= links[k][0] && i <= links[k][1]) return links[k][2] || null; return null; } })
     };
     return p;
   }

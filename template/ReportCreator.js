@@ -1644,3 +1644,745 @@ function applyPersonalReviewerTokenPlanSafely_(plan) {
     return '';
   }
 }
+
+// ------------------------------------------------------------------
+// Shared Minutes: a separate Google Doc that anyone with the link can
+// edit, created for one report and linked from it
+// ------------------------------------------------------------------
+//
+// WHAT. The report of a meeting says where its shared minutes are ("Link to
+// the shared minutes:"). Until now that document was made and shared by
+// hand, and its address typed into the report. Configure Meeting has a
+// button for it now: Create Shared Minutes makes one Google Doc -- its title
+// and one line naming the meeting, nothing else --, gives ANYONE WITH THE
+// LINK the right to EDIT it, and writes the link into the report.
+//
+// WHEN. Only when that button is pressed. Opening a report, opening or
+// saving Configure Meeting, an update (by hand or by a trigger), a build and
+// the discussion e-mails create nothing, share nothing and ask Drive
+// nothing about it: a build writes the link again from what is stored, and
+// nothing else here runs in them.
+//
+// WHAT IS STORED. One Document Property of the report, SHARED_DOCUMENT:
+//
+//   { "v": 1, "fileId", "url", "name", "reportDocumentId", "meetingId",
+//     "createdAt", "permissionVerifiedAt" }
+//
+// It is used only in the document it names and for the meeting it names. A
+// copy of a report starts without properties (TEMPLATE-001); a value that
+// names another document is ignored all the same. permissionVerifiedAt is
+// null until the permission "anyone, writer" was READ BACK from Drive; the
+// link is written into the report only then.
+//
+// ONE DOCUMENT, ALSO AFTER A CRASH. The document is created with Drive
+// appProperties that say what it is (sa4Purpose, sa4ReportId, sa4MeetingId)
+// -- in the request that creates it, so an unmarked one never exists. They
+// are private to the script project that wrote them, i.e. to this report: a
+// copy of the report cannot see them. Before anything is created Drive is
+// asked for a document so marked:
+//   - exactly one:   it is the document. It is recorded and used;
+//   - more than one: NOTHING is created, shared or recorded. The user is
+//                    shown them and resolves it;
+//   - none:          one is created -- unless a creation was started less
+//                    than two minutes ago (SHARED_DOCUMENT_PENDING): what
+//                    Drive finds can lag behind what it has, so the answer
+//                    "none" is not trusted that soon.
+// The property is stored directly after the creation, before the document
+// is shared; pressing the button again goes on from wherever it stopped.
+//
+// Like the personal settings above: pure functions, *With_(deps) functions
+// with every service injected, and the public functions the dialog calls.
+
+var SHARED_MINUTES_KEY_ = 'SHARED_DOCUMENT';
+var SHARED_MINUTES_PENDING_KEY_ = 'SHARED_DOCUMENT_PENDING';
+var SHARED_MINUTES_SCHEMA_VERSION_ = 1;
+var SHARED_MINUTES_LABEL_ = 'Link to the shared minutes:';
+var SHARED_MINUTES_PURPOSE_ = 'shared-minutes';
+var SHARED_MINUTES_MIME_ = 'application/vnd.google-apps.document';
+var SHARED_MINUTES_PENDING_MS_ = 120000;
+var SHARED_MINUTES_FILE_FIELDS_ = 'id,name,mimeType,trashed,appProperties,createdTime';
+
+/** Pure: the address of the document, in the one form that is stored and linked. */
+function sharedMinutesUrl_(fileId) {
+  return 'https://docs.google.com/document/d/' + fileId + '/edit';
+}
+
+/**
+ * Pure: the name of the document, from the title the report is given
+ * (generateReportTitle_()): its first "Minutes" becomes "Shared Minutes" --
+ * "Video SWG Shared Minutes SA4#137-e". The name says what the document is;
+ * it is never what the document is found by.
+ */
+function sharedMinutesName_(reportTitle) {
+  const title = trimmed_(reportTitle);
+  if (/\bMinutes\b/.test(title)) return title.replace(/\bMinutes\b/, 'Shared Minutes');
+  return title ? 'Shared Minutes – ' + title : 'Shared Minutes';
+}
+
+/** Pure: what the new document says -- its title, and one line naming the meeting when the report knows it. */
+function sharedMinutesHtml_(name, meetingName, meetingDate) {
+  const esc = function (v) { return trimmed_(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  const meeting = [esc(meetingName), esc(meetingDate)].filter(Boolean).join(', ');
+  return '<html><head><meta charset="utf-8"></head><body><h1>' + esc(name) + '</h1>' + (meeting ? '<p>' + meeting + '</p>' : '') + '</body></html>';
+}
+
+/** Pure: the marker of the document of one report and one meeting. */
+function sharedMinutesAppProperties_(documentId, meetingId) {
+  return { sa4Purpose: SHARED_MINUTES_PURPOSE_, sa4ReportId: String(documentId), sa4MeetingId: String(meetingId) };
+}
+
+/** Pure: the one query for the marked documents of a report. The id is a Drive id: it has nothing to escape. */
+function sharedMinutesQuery_(documentId) {
+  return "appProperties has { key='sa4ReportId' and value='" + documentId + "' } and appProperties has { key='sa4Purpose' and value='" + SHARED_MINUTES_PURPOSE_ + "' }" +
+    " and mimeType = '" + SHARED_MINUTES_MIME_ + "' and trashed = false";
+}
+
+/** Pure: whether a file, as Drive describes it, is the shared minutes of this report and meeting. Checked for every file, whatever a query returned. */
+function isSharedMinutesFile_(meta, documentId, meetingId) {
+  if (!meta || typeof meta !== 'object' || !isPlausibleDriveId_(meta.id)) return false;
+  if (meta.mimeType !== SHARED_MINUTES_MIME_ || meta.trashed !== false) return false;
+  const marker = meta.appProperties;
+  return !!marker && marker.sa4Purpose === SHARED_MINUTES_PURPOSE_ && marker.sa4ReportId === String(documentId) && marker.sa4MeetingId === String(meetingId);
+}
+
+/** Pure: whether the permissions of a file, as Drive lists them, give anyone with the link the right to edit. */
+function hasAnyoneWriterPermission_(permissions) {
+  return Array.isArray(permissions) && permissions.some(function (p) { return !!p && p.type === 'anyone' && p.role === 'writer'; });
+}
+
+/** Pure: the one stored form, fields in a fixed order. */
+function serializeSharedMinutes_(record) {
+  return JSON.stringify({
+    v: SHARED_MINUTES_SCHEMA_VERSION_, fileId: record.fileId, url: record.url, name: record.name, reportDocumentId: record.reportDocumentId,
+    meetingId: record.meetingId, createdAt: record.createdAt, permissionVerifiedAt: record.permissionVerifiedAt || null
+  });
+}
+
+/**
+ * Pure: reads a SHARED_DOCUMENT value for the document and the meeting it is
+ * asked for. { status, record }:
+ *   'absent'        nothing stored;
+ *   'invalid'       not what this code stores -- not used;
+ *   'unsupported'   written by a newer release -- not used, not changed;
+ *   'other-report'  names another document (a copied value) -- not used;
+ *   'other-meeting' of this document, for another meeting -- not used;
+ *   'ok'            the shared minutes of this report.
+ * `record` is given for the last two. Never throws.
+ */
+function readSharedMinutes_(raw, documentId, meetingId) {
+  const none = function (status) { return { status: status, record: null }; };
+  if (raw === null || raw === undefined || trimmed_(raw) === '') return none('absent');
+  let data;
+  try { data = JSON.parse(String(raw)); } catch (e) { data = null; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return none('invalid');
+  if (data.v !== SHARED_MINUTES_SCHEMA_VERSION_) return none(typeof data.v === 'number' && data.v > SHARED_MINUTES_SCHEMA_VERSION_ ? 'unsupported' : 'invalid');
+  const text = function (v) { return typeof v === 'string' && v.trim() !== '' && v.length <= 500; };
+  if (!isPlausibleDriveId_(data.fileId) || data.url !== sharedMinutesUrl_(data.fileId) || !text(data.name) || !text(data.reportDocumentId) ||
+      !/^\d+$/.test(String(data.meetingId === undefined ? '' : data.meetingId)) || typeof data.meetingId !== 'string' || !text(data.createdAt) ||
+      !(data.permissionVerifiedAt === null || text(data.permissionVerifiedAt))) return none('invalid');
+  const record = { fileId: data.fileId, url: data.url, name: data.name, reportDocumentId: data.reportDocumentId, meetingId: data.meetingId, createdAt: data.createdAt, permissionVerifiedAt: data.permissionVerifiedAt };
+  if (record.reportDocumentId !== String(documentId)) return none('other-report');
+  if (record.meetingId !== trimmed_(meetingId)) return { status: 'other-meeting', record: record };
+  return { status: 'ok', record: record };
+}
+
+/**
+ * The Drive calls of the shared minutes, in one place (the functions below
+ * take them as `drive`, so that they are tested with a fake Drive). The only
+ * calls in the project that create a document for other people or change
+ * who can open a file -- and only createSharedMinutesWith_() makes them.
+ */
+function sharedMinutesDrive_() {
+  return {
+    search: function (documentId) {
+      const found = Drive.Files.list({ q: sharedMinutesQuery_(documentId), fields: 'files(' + SHARED_MINUTES_FILE_FIELDS_ + ')', pageSize: 20, includeItemsFromAllDrives: true, supportsAllDrives: true });
+      return (found && found.files) || [];
+    },
+    meta: function (id) { return Drive.Files.get(id, { fields: SHARED_MINUTES_FILE_FIELDS_, supportsAllDrives: true }); },
+    /** The folder the report is in: { id, name, writable }, or null when it has none the user can see. */
+    reportFolder: function (documentId) {
+      const report = Drive.Files.get(documentId, { fields: 'parents', supportsAllDrives: true });
+      const parentId = report && report.parents && report.parents[0];
+      if (!parentId) return null;
+      const folder = Drive.Files.get(parentId, { fields: 'id,name,capabilities(canAddChildren)', supportsAllDrives: true });
+      return { id: folder.id, name: folder.name, writable: !!(folder.capabilities && folder.capabilities.canAddChildren) };
+    },
+    /** One request: name, place, marker and content together. Without a folder the document goes to the user's My Drive. */
+    create: function (name, folderId, appProperties, html) {
+      const resource = { name: name, mimeType: SHARED_MINUTES_MIME_, appProperties: appProperties };
+      if (folderId) resource.parents = [folderId];
+      return Drive.Files.create(resource, Utilities.newBlob(html, 'text/html', name + '.html'), { fields: SHARED_MINUTES_FILE_FIELDS_, supportsAllDrives: true });
+    },
+    permissions: function (id) {
+      const all = [];
+      let pageToken = null;
+      for (let page = 0; page < 20; page++) {
+        const args = { fields: 'nextPageToken,permissions(id,type,role)', pageSize: 100, supportsAllDrives: true };
+        if (pageToken) args.pageToken = pageToken;
+        const found = Drive.Permissions.list(id, args) || {};
+        (found.permissions || []).forEach(function (p) { all.push(p); });
+        pageToken = found.nextPageToken || null;
+        if (!pageToken) break;
+      }
+      return all;
+    },
+    /** Anyone with the link can edit. What Drive answers is not looked at: the permission is read back with permissions(). */
+    shareWithAnyoneAsWriter: function (id) {
+      Drive.Permissions.create({ type: 'anyone', role: 'writer', allowFileDiscovery: false }, id, { fields: 'id', supportsAllDrives: true });
+    }
+  };
+}
+
+/** What is stored for this document and its meeting now: { documentId, meetingId, status, record }. */
+function currentSharedMinutesWith_(deps) {
+  const documentId = deps.activeDocumentId();
+  const props = deps.documentProperties;
+  const meetingId = trimmed_(props.getProperty('MEETING_ID'));
+  const stored = readSharedMinutes_(props.getProperty(SHARED_MINUTES_KEY_), documentId, meetingId);
+  return { documentId: documentId, meetingId: meetingId, status: stored.status, record: stored.record };
+}
+
+/** Writes the link of a verified record into the report. Returns '' or what to tell the user; never throws. */
+function writeSharedMinutesLinkWith_(deps, record) {
+  try {
+    const rendered = renderSharedMinutesLink_(deps.body(), record);
+    return rendered.line === 'no-place' ? 'The report has no opening section yet: the link is written when the report is built.' : '';
+  } catch (e) {
+    Logger.log('Shared minutes: the link could not be written into the report: ' + e.message);
+    return 'The link could not be written into the report (' + e.message + '). Press Verify to write it, or build the report.';
+  }
+}
+
+/**
+ * Create Shared Minutes -- the one action that creates and shares. It is
+ * also the action that finishes what an earlier one began: every step looks
+ * at what is there first, so pressing the button again never makes a second
+ * document and never shares twice.
+ *
+ * deps: { release, activeDocumentId(), nowIso(), nowMs(), documentProperties,
+ * drive (sharedMinutesDrive_()), describe() -> { name, meetingName,
+ * meetingDate }, body() }.
+ * Returns { ok, state, message, created, adopted, record }; `state` is
+ * 'complete' | 'sharing-failed' | 'ambiguous' | 'refused'. Never throws.
+ */
+function createSharedMinutesWith_(deps) {
+  const refused = function (message, state) { return { ok: false, state: state || 'refused', message: message, created: false, adopted: false, record: null }; };
+  if (templateDocumentRole_(deps.activeDocumentId(), deps.release) === 'template') return refused('This is the SA4 Report Template itself: shared minutes belong to a report.');
+  const props = deps.documentProperties;
+  const drive = deps.drive;
+  const current = currentSharedMinutesWith_(deps);
+  const documentId = current.documentId;
+  const meetingId = current.meetingId;
+  if (!isPlausibleDriveId_(documentId)) return refused('Nothing was created: this document could not be identified.');
+  if (!/^\d+$/.test(meetingId)) return refused('Nothing was created: this report has no meeting yet. Resolve the meeting and save the configuration first.');
+  if (current.status === 'unsupported') return refused('Nothing was created: the shared minutes of this report were recorded by a newer release and are not changed here.');
+  if (current.status === 'other-meeting') {
+    return refused('Nothing was created: this report has the shared minutes of meeting ' + current.record.meetingId + ' recorded ("' + current.record.name + '"), and is configured for meeting ' + meetingId +
+      ' now. Use "Forget" first; the document of meeting ' + current.record.meetingId + ' is not changed by it.');
+  }
+
+  let record = current.status === 'ok' ? current.record : null;
+  let created = false;
+  let adopted = false;
+  let placeNote = '';
+
+  if (record) {
+    // Recorded already: it must still be the document that was created.
+    let meta;
+    try {
+      meta = drive.meta(record.fileId);
+    } catch (e) {
+      return refused('Nothing was created or shared: the recorded Shared Minutes document "' + record.name + '" could not be opened (' + e.message + '). If it was deleted, use "Forget" and create a new one.');
+    }
+    if (!isSharedMinutesFile_(meta, documentId, meetingId)) {
+      return refused('Nothing was created or shared: the recorded Shared Minutes document "' + record.name + '" is in the trash, or is not the document that was created for this report. Restore it, or use "Forget" and create a new one.');
+    }
+  } else {
+    // Not recorded. Is there one already -- from an action that did not get as far as recording it?
+    let found;
+    try {
+      found = (drive.search(documentId) || []).filter(function (meta) { return isSharedMinutesFile_(meta, documentId, meetingId); });
+    } catch (e) {
+      return refused('Nothing was created: Google Drive could not be searched for an existing Shared Minutes document (' + e.message + '). Try again.');
+    }
+    if (found.length > 1) {
+      return refused('Nothing was created, shared or recorded: Google Drive has ' + found.length + ' Shared Minutes documents for this report and meeting, and none is picked for you:\n' +
+        found.map(function (meta) { return '• ' + meta.name + ' — ' + sharedMinutesUrl_(meta.id); }).join('\n') +
+        '\nMove all but one to the trash, then press the button again.', 'ambiguous');
+    }
+    let meta;
+    if (found.length === 1) {
+      meta = found[0];
+      adopted = true;
+    } else {
+      const now = deps.nowMs();
+      let pendingSince = NaN;
+      try { pendingSince = Number(JSON.parse(String(props.getProperty(SHARED_MINUTES_PENDING_KEY_))).startedAt); } catch (e) { pendingSince = NaN; }
+      if (isFinite(pendingSince) && now >= pendingSince && now - pendingSince < SHARED_MINUTES_PENDING_MS_) {
+        return refused('Nothing was created: a creation was started ' + Math.max(1, Math.round((now - pendingSince) / 1000)) + ' seconds ago, and Google Drive may not show its document yet. ' +
+          'Press the button again in ' + Math.ceil((SHARED_MINUTES_PENDING_MS_ - (now - pendingSince)) / 1000) + ' seconds: the document is used if it exists, and created if it does not.');
+      }
+      let description;
+      try {
+        description = deps.describe();
+        props.setProperty(SHARED_MINUTES_PENDING_KEY_, JSON.stringify({ startedAt: now }));
+      } catch (e) {
+        return refused('Nothing was created: the creation could not be prepared (' + e.message + ').');
+      }
+      // The folder of the report when the user can add to it; the user's My Drive otherwise. Never a reason to fail.
+      let folder = null;
+      try { folder = drive.reportFolder(documentId); } catch (e) { folder = null; }
+      const folderId = folder && folder.writable ? folder.id : '';
+      if (!folderId) placeNote = 'It is in your My Drive: the folder of the report could not be used.';
+      try {
+        meta = drive.create(description.name, folderId, sharedMinutesAppProperties_(documentId, meetingId), sharedMinutesHtml_(description.name, description.meetingName, description.meetingDate));
+      } catch (e) {
+        return refused('The Shared Minutes document could not be created (' + e.message + '). Nothing was shared or recorded. Press the button again in two minutes: should Google Drive have created it after all, it is found and used.');
+      }
+      if (!meta || !isPlausibleDriveId_(meta.id)) return refused('Google Drive did not say which document it created. Nothing was shared or recorded. Press the button again in two minutes: the document is found and used if it exists.');
+      created = true;
+    }
+    record = { fileId: meta.id, url: sharedMinutesUrl_(meta.id), name: trimmed_(meta.name) || 'Shared Minutes', reportDocumentId: documentId, meetingId: meetingId,
+      createdAt: created ? deps.nowIso() : (trimmed_(meta.createdTime) || deps.nowIso()), permissionVerifiedAt: null };
+    // Recorded now, before it is shared: whatever happens next, the report knows its document.
+    try {
+      props.setProperty(SHARED_MINUTES_KEY_, serializeSharedMinutes_(record));
+    } catch (e) {
+      return refused('The Shared Minutes document "' + record.name + '" exists, but could not be recorded in this report (' + e.message + '), and was not shared. Press the button again: it is found and used, not created a second time.');
+    }
+  }
+
+  // Anyone with the link can edit -- added only when it is not there, and believed only when it was read back.
+  let shareError = '';
+  let permissions = null;
+  try {
+    permissions = drive.permissions(record.fileId);
+    if (!hasAnyoneWriterPermission_(permissions)) {
+      try { drive.shareWithAnyoneAsWriter(record.fileId); } catch (e) { shareError = e.message; }
+      permissions = drive.permissions(record.fileId);
+    }
+  } catch (e) {
+    permissions = null;
+    shareError = shareError || e.message;
+  }
+  if (!hasAnyoneWriterPermission_(permissions)) {
+    if (record.permissionVerifiedAt) {
+      record.permissionVerifiedAt = null;
+      try { props.setProperty(SHARED_MINUTES_KEY_, serializeSharedMinutes_(record)); } catch (e) { Logger.log('Shared minutes: the record could not be updated: ' + e.message); }
+    }
+    return { ok: false, state: 'sharing-failed', created: created, adopted: adopted, record: record,
+      message: 'SHARING FAILED. The Shared Minutes document "' + record.name + '" ' + (created ? 'was created' : 'exists') + ' and is recorded in this report, but "anyone with the link can edit" could not be ' +
+        (shareError ? 'set (' + shareError + ')' : 'confirmed') + '. It is NOT shared, and no link was written into the report. Press "Finish sharing" to try again.' + (placeNote ? ' ' + placeNote : '') };
+  }
+  record.permissionVerifiedAt = deps.nowIso();
+  try {
+    props.setProperty(SHARED_MINUTES_KEY_, serializeSharedMinutes_(record));
+  } catch (e) {
+    return { ok: false, state: 'sharing-failed', created: created, adopted: adopted, record: record,
+      message: 'The Shared Minutes document "' + record.name + '" is shared, but that could not be recorded in this report (' + e.message + '). No link was written. Press the button again.' };
+  }
+  try { props.deleteProperty(SHARED_MINUTES_PENDING_KEY_); } catch (e) { Logger.log('Shared minutes: the creation marker could not be removed: ' + e.message); }
+
+  const linkNote = writeSharedMinutesLinkWith_(deps, record);
+  const what = created ? 'The Shared Minutes document "' + record.name + '" was created.'
+    : (adopted ? 'The Shared Minutes document "' + record.name + '" existed already for this report and is used; no second one was created.'
+      : 'The Shared Minutes document "' + record.name + '" is set up already; nothing was created.');
+  return { ok: true, state: 'complete', created: created, adopted: adopted, record: record,
+    message: what + ' Anyone with the link can edit it.' + (linkNote ? ' ' + linkNote : (created || adopted ? ' The link is in the report.' : '')) + (placeNote ? ' ' + placeNote : '') };
+}
+
+/**
+ * Verify: asks Drive whether the recorded document is there and whether
+ * anyone with the link can edit it, and records the answer. It never
+ * creates a document and never changes who can open one. A document that is
+ * verified has its link written into the report (it may not be there yet);
+ * a link that is in the report is not taken out.
+ * Returns { ok, message }. Never throws.
+ */
+function verifySharedMinutesWith_(deps) {
+  const props = deps.documentProperties;
+  const current = currentSharedMinutesWith_(deps);
+  if (current.status !== 'ok') return { ok: false, message: 'There is no Shared Minutes document of this report to verify.' };
+  const record = current.record;
+  const unverified = function (message) {
+    if (record.permissionVerifiedAt) {
+      record.permissionVerifiedAt = null;
+      try { props.setProperty(SHARED_MINUTES_KEY_, serializeSharedMinutes_(record)); } catch (e) { Logger.log('Shared minutes: the record could not be updated: ' + e.message); }
+    }
+    return { ok: false, message: message };
+  };
+  let meta;
+  let permissions;
+  try {
+    meta = deps.drive.meta(record.fileId);
+  } catch (e) {
+    return { ok: false, message: 'Not verified: the Shared Minutes document "' + record.name + '" could not be opened (' + e.message + '). Nothing was changed.' };
+  }
+  if (!isSharedMinutesFile_(meta, current.documentId, current.meetingId)) {
+    return unverified('NOT VERIFIED: the Shared Minutes document "' + record.name + '" is in the trash, or is not the document that was created for this report. Nothing was changed in Drive.');
+  }
+  try {
+    permissions = deps.drive.permissions(record.fileId);
+  } catch (e) {
+    return { ok: false, message: 'Not verified: who can open "' + record.name + '" could not be read (' + e.message + '). Nothing was changed.' };
+  }
+  if (!hasAnyoneWriterPermission_(permissions)) {
+    return unverified('NOT VERIFIED: "' + record.name + '" is not shared so that anyone with the link can edit. Nothing was changed in Drive; press "Finish sharing" to share it.');
+  }
+  record.permissionVerifiedAt = deps.nowIso();
+  try {
+    props.setProperty(SHARED_MINUTES_KEY_, serializeSharedMinutes_(record));
+  } catch (e) {
+    return { ok: false, message: 'The sharing is as it should be, but that could not be recorded (' + e.message + ').' };
+  }
+  const linkNote = writeSharedMinutesLinkWith_(deps, record);
+  return { ok: true, message: 'Verified: "' + record.name + '" exists, and anyone with the link can edit it.' + (linkNote ? ' ' + linkNote : '') };
+}
+
+/**
+ * Forget: the report no longer names a Shared Minutes document. Drive is
+ * not asked anything and the document is not changed -- it exists and is
+ * shared as before. The link line is taken out of the report only when it
+ * is the link of the forgotten document.
+ * Returns { ok, message }. Never throws.
+ */
+function forgetSharedMinutesWith_(deps) {
+  const props = deps.documentProperties;
+  const current = currentSharedMinutesWith_(deps);
+  if (current.status === 'absent') return { ok: false, message: 'This report has no Shared Minutes document recorded.' };
+  if (current.status === 'unsupported') return { ok: false, message: 'The shared minutes of this report were recorded by a newer release and are not changed here.' };
+  try {
+    props.deleteProperty(SHARED_MINUTES_KEY_);
+    props.deleteProperty(SHARED_MINUTES_PENDING_KEY_);
+  } catch (e) {
+    return { ok: false, message: 'Nothing was changed: the record could not be removed (' + e.message + ').' };
+  }
+  let lineNote = '';
+  if (current.record) {
+    try {
+      if (removeSharedMinutesLine_(deps.body(), current.record.url) === 'removed') lineNote = ' Its link was taken out of the report.';
+    } catch (e) {
+      Logger.log('Shared minutes: the link could not be taken out of the report: ' + e.message);
+      lineNote = ' Its link could not be taken out of the report (' + e.message + '); remove the line by hand.';
+    }
+  }
+  return { ok: true, message: 'This report no longer names a Shared Minutes document.' + lineNote +
+    (current.record ? ' The document "' + current.record.name + '" itself was not changed: it exists and is shared as before.' : '') +
+    (current.status === 'ok' ? ' Create Shared Minutes finds and uses it again, unless it is in the trash.' : '') };
+}
+
+// --- The link in the report: one line, "Link to the shared minutes: <name>".
+
+/** The paragraph or list item a body child is, when it is ordinary text; null for a heading, a table and anything else. */
+function sharedMinutesTextHolder_(child) {
+  const type = child.getType();
+  if (type === DocumentApp.ElementType.PARAGRAPH) {
+    const p = child.asParagraph();
+    return p.getHeading() === DocumentApp.ParagraphHeading.NORMAL ? p : null;
+  }
+  if (type === DocumentApp.ElementType.LIST_ITEM && typeof child.asListItem === 'function') return child.asListItem();
+  return null;
+}
+
+/**
+ * The line of the report that begins with the label: { index, holder }, or
+ * null. In a main-meeting report it is the line the build copies from the
+ * meeting report template; elsewhere it is the line written here.
+ */
+function findSharedMinutesLine_(body) {
+  const label = SHARED_MINUTES_LABEL_.replace(/:$/, '').toLowerCase();
+  const count = body.getNumChildren();
+  for (let i = 0; i < count; i++) {
+    const holder = sharedMinutesTextHolder_(body.getChild(i));
+    if (holder && String(holder.getText()).trim().toLowerCase().indexOf(label) === 0) return { index: i, holder: holder };
+  }
+  return null;
+}
+
+/** The address a line links to (its first link), '' when it has none or that cannot be told. */
+function sharedMinutesLineLink_(holder) {
+  try {
+    const text = holder.editAsText();
+    if (typeof text.getLinkUrl !== 'function') return '';
+    const length = Math.min(String(holder.getText()).length, 600);
+    for (let i = 0; i < length; i++) {
+      const url = text.getLinkUrl(i);
+      if (url) return String(url);
+    }
+  } catch (e) {
+    Logger.log('Shared minutes: the link of the line could not be read: ' + e.message);
+  }
+  return '';
+}
+
+/**
+ * Where a new line goes: at the end of the Online information block of an
+ * ad-hoc report with sessions (directly below its last line -- the block
+ * itself is not touched, and is replaced without it); else directly below
+ * the "Opening of the session" heading, else below the first "Opening ..."
+ * heading. -1 when the report has none of them.
+ */
+function findSharedMinutesInsertIndex_(body) {
+  const information = findAdhocMeetingInformationContainer_(body);
+  if (information) return information.end;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  let opening = -1;
+  for (let i = 0; i < count; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH || child.asParagraph().getHeading() === NORMAL) continue;
+    const text = child.asParagraph().getText().trim();
+    if (/^(?:\d+(?:\.\d+)*\s+)?opening of the session\s*$/i.test(text)) return i + 1;
+    if (opening === -1 && /^(?:\d+(?:\.\d+)*\s+)?opening\b/i.test(text)) opening = i;
+  }
+  return opening === -1 ? -1 : opening + 1;
+}
+
+/**
+ * Writes the line for `link` ({ name, url }) and nothing else. A line that
+ * says exactly this and links there is left alone; another line with the
+ * label is rewritten where it stands; without one a new line is written.
+ * Returns { line: 'created' | 'replaced' | 'unchanged' | 'no-place' }.
+ */
+function renderSharedMinutesLink_(body, link) {
+  const text = SHARED_MINUTES_LABEL_ + ' ' + link.name;
+  const existing = findSharedMinutesLine_(body);
+  let holder;
+  if (existing) {
+    holder = existing.holder;
+    if (holder.getText() === text && sharedMinutesLineLink_(holder) === link.url) return { line: 'unchanged' };
+    holder.setText(text);
+  } else {
+    const index = findSharedMinutesInsertIndex_(body);
+    if (index === -1) return { line: 'no-place' };
+    holder = index >= body.getNumChildren() ? body.appendParagraph(text) : body.insertParagraph(index, text);
+    holder.setHeading(DocumentApp.ParagraphHeading.NORMAL);
+  }
+  const start = text.length - link.name.length;
+  const t = holder.editAsText();
+  if (!existing) t.setBold(false);
+  // The label is plain text; the name is the link. (The line may have been a link as a whole before.)
+  if (existing) { try { t.setLinkUrl(0, start - 1, null); } catch (e) { Logger.log('Shared minutes: an old link of the label could not be removed: ' + e.message); } }
+  t.setLinkUrl(start, text.length - 1, link.url);
+  return { line: existing ? 'replaced' : 'created' };
+}
+
+/** Takes the line out when it links to `url`. A line that links elsewhere, or nowhere, is somebody's text and stays. Returns 'removed' | 'kept' | 'none'. */
+function removeSharedMinutesLine_(body, url) {
+  const existing = findSharedMinutesLine_(body);
+  if (!existing) return 'none';
+  if (!url || sharedMinutesLineLink_(existing.holder) !== url) return 'kept';
+  removeAdhocBodyChild_(body, body.getChild(existing.index));
+  return 'removed';
+}
+
+/**
+ * Build Report from Scratch, at the end (called by Code.js in the template
+ * runtime): the link is written again from what is stored. Drive is not
+ * asked anything, and without a verified record of this report nothing in
+ * the document is looked at. Returns a note for the build result, '' when
+ * all is well.
+ */
+function finishSharedMinutesRebuild_(body) {
+  try {
+    const current = currentSharedMinutesWith_({
+      activeDocumentId: function () { return DocumentApp.getActiveDocument().getId(); },
+      documentProperties: PropertiesService.getDocumentProperties()
+    });
+    if (current.status !== 'ok' || !current.record.permissionVerifiedAt) return '';
+    const rendered = renderSharedMinutesLink_(body, current.record);
+    return rendered.line === 'no-place' ? '\n\n⚠️ The link to the shared minutes could not be written: the report has no opening section.' : '';
+  } catch (e) {
+    Logger.log('Shared minutes: the link could not be written after the rebuild: ' + e.message);
+    return '\n\n⚠️ The link to the shared minutes could not be written (' + e.message + '). Use Configure Meeting > Verify to write it.';
+  }
+}
+
+// --- Configure Meeting: the Shared Minutes section.
+
+/**
+ * Pure: what the section shows -- { lines: [{ text, strong }], warning,
+ * createLabel, createDisabled, openUrl, canVerify, canForget }. `stale`:
+ * the report shows a link in its shared-minutes line that is not the link
+ * of the recorded document (a copied report shows the link of the report it
+ * was copied from).
+ */
+function sharedMinutesView_(current, stale) {
+  const view = { lines: [], warning: '', createLabel: '', createDisabled: false, openUrl: '', canVerify: false, canForget: false };
+  const line = function (text, strong) { view.lines.push({ text: text, strong: !!strong }); };
+  const record = current.record;
+  if (current.status === 'ok') {
+    line(record.name, true);
+    view.openUrl = record.url;
+    view.canVerify = true;
+    view.canForget = true;
+    if (record.permissionVerifiedAt) {
+      line('Anyone with the link can edit ✓ (verified ' + String(record.permissionVerifiedAt).slice(0, 10) + ')');
+    } else {
+      line('NOT shared: "anyone with the link can edit" is not confirmed. The link is not in the report.');
+      view.createLabel = 'Finish sharing';
+    }
+  } else if (current.status === 'other-meeting') {
+    line('Status: recorded for meeting ' + record.meetingId + ' ("' + record.name + '"); this report is configured for meeting ' + (current.meetingId || '(none)') + ' now. It is not used.');
+    view.openUrl = record.url;
+    view.canForget = true;
+    view.createLabel = 'Create Shared Minutes';
+    view.createDisabled = true;
+  } else if (current.status === 'unsupported') {
+    line('Status: recorded by a newer release; not shown and not changed here.');
+  } else {
+    line('Status: Not created');
+    view.createLabel = 'Create Shared Minutes';
+    if (!/^\d+$/.test(current.meetingId)) {
+      view.createDisabled = true;
+      line('Resolve the meeting and save the configuration first.');
+    }
+    if (current.status === 'invalid' || current.status === 'other-report') view.canForget = true;
+  }
+  if (stale) {
+    view.warning = 'This report shows a link to shared minutes that is not the one recorded for it' + (current.status === 'ok' ? '' : ' (a copied report shows the link of the report it was copied from)') +
+      '. It is replaced when the Shared Minutes of this report are created or verified; Build Report from Scratch does not write it again.';
+  }
+  return view;
+}
+
+/** The view of the active document, from what is stored and what the report shows. Drive is not asked. Never throws. */
+function currentSharedMinutesView_() {
+  let current = { documentId: '', meetingId: '', status: 'absent', record: null };
+  let stale = false;
+  try {
+    const doc = DocumentApp.getActiveDocument();
+    current = currentSharedMinutesWith_({ activeDocumentId: function () { return doc.getId(); }, documentProperties: PropertiesService.getDocumentProperties() });
+    const shown = findSharedMinutesLine_(doc.getBody());
+    const link = shown ? sharedMinutesLineLink_(shown.holder) : '';
+    stale = !!link && link !== (current.status === 'ok' ? current.record.url : '');
+  } catch (e) {
+    Logger.log('Configure Meeting: the shared minutes could not be looked at: ' + e.message);
+  }
+  return sharedMinutesView_(current, stale);
+}
+
+/**
+ * Called by configureMeetingSettings() (Code.js) in the template runtime:
+ * the section and the script of its buttons. Words and controls only --
+ * opening the dialog asks Drive nothing and changes nothing. The buttons
+ * call createSharedMinutes(), verifySharedMinutes() and
+ * forgetSharedMinutes(); Save Configuration does not.
+ */
+function sharedMinutesDialogParts_() {
+  const attr = function (v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  const sectionHtml =
+    '<div class="section">\n' +
+    '      <h3>Shared Minutes</h3>\n' +
+    '      <div id="sharedMinutesBox"></div>\n' +
+    '      <div class="hint">A separate Google Doc for the minutes takers. Create Shared Minutes makes it, lets anyone with the link edit it, and writes its link into the report. ' +
+    'Nothing is created or shared by saving this dialog, by an update or by a build.</div>\n' +
+    '      <input type="hidden" id="sharedMinutesView" value="' + attr(JSON.stringify(currentSharedMinutesView_())) + '">\n' +
+    '    </div>';
+  const script = [
+    'var sharedMinutesViewNow = null;',
+    'function sharedMinutesShow(view, message, busy) {',
+    '  var box = document.getElementById("sharedMinutesBox");',
+    '  if (!box) return;',
+    '  if (view) sharedMinutesViewNow = view;',
+    '  view = sharedMinutesViewNow;',
+    '  if (!view) return;',
+    '  var off = busy ? " disabled" : "";',
+    '  var html = "";',
+    '  view.lines.forEach(function (line) { html += "<div" + (line.strong ? " style=\'font-weight:bold\'" : "") + ">" + escapeHtml(line.text) + "</div>"; });',
+    '  if (view.warning) html += "<div class=\'hint\' style=\'color:#a94442\'>" + escapeHtml(view.warning) + "</div>";',
+    '  if (message) html += "<div id=\'sharedMinutesMessage\' style=\'white-space:pre-wrap;font-size:12px;margin-top:6px\'>" + escapeHtml(message) + "</div>";',
+    '  if (view.createLabel) html += "<button type=\'button\' onclick=\'sharedMinutesCreate()\'" + (view.createDisabled ? " disabled" : off) + ">" + escapeHtml(view.createLabel) + "</button> ";',
+    '  if (view.openUrl) html += "<a href=\'" + escapeHtml(view.openUrl) + "\' target=\'_blank\'>Open Shared Minutes</a> ";',
+    '  if (view.canVerify) html += "<button type=\'button\' style=\'background:#666\' onclick=\'sharedMinutesVerify()\'" + off + ">Verify</button> ";',
+    '  if (view.canForget) html += "<button type=\'button\' style=\'background:#666\' onclick=\'sharedMinutesForget()\'" + off + ">Forget</button>";',
+    '  box.innerHTML = html;',
+    '}',
+    'function sharedMinutesRun(name, busyText) {',
+    '  sharedMinutesShow(null, busyText, true);',
+    '  google.script.run',
+    '    .withSuccessHandler(function (result) { sharedMinutesShow(result && result.view, result && result.message, false); })',
+    '    .withFailureHandler(function (error) { sharedMinutesShow(null, "Failed: " + error, false); })',
+    '    [name]();',
+    '}',
+    'function sharedMinutesCreate() { sharedMinutesRun("createSharedMinutes", "Working. This can take a moment; do not close the dialog."); }',
+    'function sharedMinutesVerify() { sharedMinutesRun("verifySharedMinutes", "Asking Google Drive."); }',
+    'function sharedMinutesForget() {',
+    '  if (typeof confirm === "function" && !confirm("Forget the Shared Minutes document of this report? The document itself is not changed.")) return;',
+    '  sharedMinutesRun("forgetSharedMinutes", "Working.");',
+    '}',
+    // The first thing the dialog script does; escapeHtml() is a function of that script, declared further down.
+    'try { sharedMinutesShow(JSON.parse(document.getElementById("sharedMinutesView").value), "", false); } catch (e) {}'
+  ].join('\n      ');
+  return { sectionHtml: sectionHtml, script: script };
+}
+
+// --- The live entry points (the buttons of the dialog).
+
+function liveSharedMinutesDeps_() {
+  const doc = DocumentApp.getActiveDocument();
+  const props = PropertiesService.getDocumentProperties();
+  return {
+    release: templateRuntimeRelease_(),
+    activeDocumentId: function () { return doc.getId(); },
+    nowIso: function () { return new Date().toISOString(); },
+    nowMs: function () { return Date.now(); },
+    documentProperties: props,
+    drive: sharedMinutesDrive_(),
+    // The name follows the title a build gives the report (setDocumentTitleFromTemplate_(), Code.js) -- from the configuration, not from the file name.
+    describe: function () {
+      const context = getMeetingContext_();
+      const title = generateReportTitle_({
+        REPORT_SUFFIX: context.report.type,
+        TDOC_LIST_URL: context.sources.tdocListUrl,
+        MEETING_ID: context.meeting.portalId,
+        meetingLabel: context.meeting.type === 'adhoc' ? context.meeting.name : undefined
+      });
+      return { name: sharedMinutesName_(title), meetingName: props.getProperty('MEETING_NAME'), meetingDate: props.getProperty('MEETING_DATE') };
+    },
+    body: function () { return doc.getBody(); }
+  };
+}
+
+/**
+ * One action of the section, under the document lock an update holds: two
+ * presses, or a press during an update, run one after the other. Returns
+ * what the action returned, with the view the section shows afterwards.
+ * Never throws.
+ */
+function runSharedMinutesAction_(action) {
+  let result;
+  try {
+    assertNotTemplateMaster_();
+    const lock = LockService.getDocumentLock();
+    if (!lock.tryLock(30000)) {
+      result = { ok: false, message: 'Nothing was done: another action on this report is running right now. Try again in a minute.' };
+    } else {
+      try {
+        result = action(liveSharedMinutesDeps_());
+      } finally {
+        lock.releaseLock();
+      }
+    }
+  } catch (e) {
+    Logger.log('Shared minutes: the action failed: ' + e.message);
+    result = { ok: false, message: 'The action stopped (' + e.message + '). Press the button again: it goes on from what is there.' };
+  }
+  result.view = currentSharedMinutesView_();
+  return result;
+}
+
+/** RPC of Configure Meeting: Create Shared Minutes / Finish sharing. The only entry point that creates or shares. */
+function createSharedMinutes() {
+  return runSharedMinutesAction_(createSharedMinutesWith_);
+}
+
+/** RPC of Configure Meeting: Verify. */
+function verifySharedMinutes() {
+  return runSharedMinutesAction_(verifySharedMinutesWith_);
+}
+
+/** RPC of Configure Meeting: Forget. */
+function forgetSharedMinutes() {
+  return runSharedMinutesAction_(forgetSharedMinutesWith_);
+}

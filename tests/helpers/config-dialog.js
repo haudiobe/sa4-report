@@ -64,6 +64,11 @@ function configurableReport(options) {
       f.getAttribute = (n) => attr('collectionStartField', n);
       fields.collectionStartField = f;
     }
+    // The Shared Minutes section of a template report: what it shows when the dialog opens.
+    if (/id="sharedMinutesView"/.test(html)) {
+      fields.sharedMinutesView = element('sharedMinutesView');
+      fields.sharedMinutesView.value = (attr('sharedMinutesView', 'value') || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    }
     const selectedFamily = html.match(/<option value="([A-Za-z0-9]+)" selected>/);
     if (selectedFamily) fields.reportType.value = selectedFamily[1];
     const selectedType = html.match(/id="meetingType"[\s\S]*?<option value="(main|adhoc)" selected>/);
@@ -76,8 +81,10 @@ function configurableReport(options) {
       fields[id].checked = /\schecked(?=[\s>])/.test(tag);
       fields[id].inPage = true;
     });
-    const page = { html: html, fields: fields, alerts: [], sent: [], closed: false };
+    const page = { html: html, fields: fields, alerts: [], sent: [], called: [], closed: false };
     const rpc = { resolveMeetingForConfigDialog: s.resolveMeetingForConfigDialog, discoverAgendaForConfigDialog: s.discoverAgendaForConfigDialog, saveConfigurationSettings: s.saveConfigurationSettings };
+    // The buttons of the Shared Minutes section, where the bundle has them. Every call is recorded (page.called).
+    ['createSharedMinutes', 'verifySharedMinutes', 'forgetSharedMinutes'].forEach((name) => { if (typeof s[name] === 'function') rpc[name] = s[name]; });
     const run = () => {
       let ok = () => {};
       let failed = () => {};
@@ -85,6 +92,7 @@ function configurableReport(options) {
       Object.keys(rpc).forEach((name) => {
         call[name] = (...args) => {
           if (name === 'saveConfigurationSettings') page.sent.push(plain(args[0]));
+          page.called.push(name);
           let out;
           try { out = rpc[name](...args.map(plain)); } catch (e) { failed(e.message); return; }
           ok(out === undefined ? null : plain(out));
@@ -102,6 +110,8 @@ function configurableReport(options) {
     vm.runInContext(script, globals);
     page.resolve = (meetingId) => { fields.meetingId.value = String(meetingId); globals.resolveMeeting(); return page; };
     page.save = () => { globals.saveConfig(); return page; };
+    /** Calls a function of the dialog script, as a button of the page does. */
+    page.press = (name) => { globals[name](); return page; };
     return page;
   };
   r.props = (keys) => keys.map((k) => loaded.docProps.getProperty(k));

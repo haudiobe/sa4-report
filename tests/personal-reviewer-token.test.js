@@ -60,6 +60,10 @@ function check(name, actual, expected) {
 const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
 const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
 const withoutComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+// ReportCreator.js up to the Shared Minutes (Code.js 2.22.0), its last section: that section has Drive calls of its own -- it
+// marks its document with appProperties and shares it -- and is covered by tests/shared-minutes.test.js.
+const SHARED_MINUTES_AT = CREATOR.indexOf('// Shared Minutes: a separate Google Doc');
+const CREATOR_BEFORE_SHARED_MINUTES = SHARED_MINUTES_AT === -1 ? CREATOR : CREATOR.slice(0, SHARED_MINUTES_AT);
 const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
 const plain = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
@@ -122,7 +126,7 @@ console.log('1. the pure rules');
       with_({ properties: { sa4ReportUserSettings: 1 } }), with_({ id: '' }), s.classifyUserSettingsFile_(null), s.classifyUserSettingsFile_('f1')],
     ['private', 'shared', 'shared', 'shared', 'other', 'other', 'other', 'other', 'other', 'other', 'other', 'other', 'other', 'other', 'other', 'other', 'other', 'other']);
   check('the file is looked for by its marker among the files the user owns -- never by its name (source)',
-    [s.USER_SETTINGS_QUERY_, /name\s*(=|contains)/.test(s.USER_SETTINGS_QUERY_), /getFilesByName|searchFiles|title\s*=/.test(withoutComments(CREATOR)), /appProperties/.test(withoutComments(CREATOR)),
+    [s.USER_SETTINGS_QUERY_, /name\s*(=|contains)/.test(s.USER_SETTINGS_QUERY_), /getFilesByName|searchFiles|title\s*=/.test(withoutComments(CREATOR_BEFORE_SHARED_MINUTES)), /appProperties/.test(withoutComments(CREATOR_BEFORE_SHARED_MINUTES)),
       /getUserProperties/.test(withoutComments(CREATOR)) || /getUserProperties/.test(withoutComments(CODE))],
     [EXPECTED_QUERY, false, false, false, false]);
   check('its name is for the reader only', [s.USER_SETTINGS_FILE_NAME_, s.USER_SETTINGS_SCHEMA_, s.USER_SETTINGS_MAX_BYTES_], [NAME, 'sa4-report-user-settings/1', 2048]);
@@ -558,7 +562,8 @@ console.log('10. several files, a shared file, a file with other content: writin
   check('after that there is exactly one usable file, so no ambiguity was created', plain(beside.r.s.resolveReviewerApiToken_()), { token: NEW, source: 'user', problem: '' });
   const sharedCleared = save(driveWith([{ id: 'leaked', content: SETTINGS(PERSONAL), shared: true }, { id: 'mine', content: SETTINGS(OTHER) }]), { clear: true });
   check('removing the personal token leaves a shared file as it is, and says so', [sharedCleared.r.drive.files.map((f) => [f.id, f.trashed]), /A settings file that is shared was left as it is; delete it in Drive\./.test(sharedCleared.alert)], [[['leaked', false], ['mine', true]], true]);
-  check('no code changes who a file is shared with (source)', /addEditor|addViewer|removeEditor|removeViewer|setSharing|Permissions\.|\.permissions/.test(withoutComments(CREATOR)), false);
+  check('no code of the personal settings changes who a file is shared with -- the Shared Minutes, after it, are the one place that shares (source)',
+    [/addEditor|addViewer|removeEditor|removeViewer|setSharing|Permissions\.|\.permissions/.test(withoutComments(CREATOR_BEFORE_SHARED_MINUTES)), SHARED_MINUTES_AT > CREATOR.indexOf('function applyPersonalReviewerTokenPlanSafely_(')], [false, true]);
 }
 
 // =====================================================================
@@ -590,7 +595,7 @@ console.log('11. a stored token is in no HTML, no answer to the browser, no log'
       /\.token\b/.test(withoutComments(functionSource(CREATOR, 'templateReviewerTokenDialogParts_'))),
       /personal = \{ status: found\.status, sharedCount: found\.sharedCount \};/.test(functionSource(CREATOR, 'templateReviewerTokenDialogParts_'))], [false, false, true]);
   check('the personal token is never written into the report: no property of the report is set by this code (source)',
-    /setProperty\(/.test(withoutComments(CREATOR.slice(CREATOR.indexOf('// The personal Reviewer API token: one private settings file')))), false);
+    /setProperty\(/.test(withoutComments(CREATOR_BEFORE_SHARED_MINUTES.slice(CREATOR.indexOf('// The personal Reviewer API token: one private settings file')))), false);
 }
 
 // =====================================================================
