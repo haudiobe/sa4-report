@@ -278,7 +278,7 @@ Nothing below was changed by this release.
   the bundle and are not referenced by the script code. They are saved copies of the Google
   Colab page and contain that page's own browser keys; they are unchanged since T-2026.10.8.
   Whether they are still needed is to be looked at.
-  *(Looked at after T-2026.10.11: not needed, and removed from later releases. See
+  *(Looked at after T-2026.10.11: not needed, and removed with T-2026.10.12. See
   `PRODUCTION_FILE_SET.md`.)*
 - **Attendance**: to be looked at separately, and extended if required.
 - **Adoption by a live report** (6G, MBS) is a separate, explicitly authorized step for each.

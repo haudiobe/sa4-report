@@ -1,8 +1,12 @@
 # The production file set
 
-**Status: IMPLEMENTED, NOT RELEASED. Intended for template release T-2026.10.12. No script
-project holds the five-file payload yet: the master template and the 6G and MBS live reports
-run T-2026.10.11, seven files.**
+**Status: RELEASED AND LIVE. Template release T-2026.10.12 (`Code.js` 2.22.0), commit
+`3bde97fb0b443400187a2d0428cfb99a83c45e5b`, tag `template-release/T-2026.10.12`. Deployed to
+the master template and adopted by the 6G and MBS live reports on 2026-10-07 (§ Deployment).**
+
+`Code.js` is still 2.22.0: this release changed the packaging and the release tool, not the
+runtime. `Code.js`, `HyperLink.js`, `ReportCreator.js` and `appsscript.json` are byte for byte
+those of T-2026.10.11.
 
 ## Current state
 
@@ -34,7 +38,9 @@ Up to T-2026.10.11 a release had two more files, `colab_notebook.html` and
   every release carried them.
 
 They are removed from the current sources, from the root `.claspignore` and from the release
-list. The history is not rewritten: every earlier commit and every release tag still has them.
+list. No tracked file of the current sources holds a Google browser key any more. The history
+is not rewritten: every earlier commit and every release tag still has the two pages, keys
+included.
 
 ## Every release keeps its own file set
 
@@ -65,19 +71,57 @@ never rebuilds one. It does not use the adoption folders of earlier deployments.
 **For the maintainer of the tool:** keep `RELEASE_FILES` as one `['source', 'name']` pair per
 line. `tests/release-file-set.test.js` checks that the tool can read its own list.
 
-## At the first five-file deployment
+## What a push does to the two pages
 
 `clasp push` (3.3.0) sends the whole file list, and the script project then holds exactly
-those files: the two pages disappear from the project with the first push of a five-file
+those files: the two pages disappear from a project with the first push of a five-file
 release. Such a push always differs from the project in `Release.js`, so it is sent. The
 read-back after it is **exactly five files** — as always, a deployment is verified by reading
 the project back and counting its files, not by the message of the push
 (`docs/STATUS_DROPDOWN_MIGRATION.md`, "One thing learned about the tooling").
 
+**Push the bundle the release tool wrote, as it is.** It carries the line ends of the checkout,
+and so does every script project it was pushed to. The same files taken from Git objects have
+other line ends; clasp then sees a changed manifest and asks whether to overwrite it. That
+happened once in the smoke below; the question was not answered and nothing was sent.
+
+## Validation
+
+- Automated tests, on the commit the release was made from: 106 test files, no failure.
+  `tests/release-file-set.test.js` covers both generations and, where the checkout has them,
+  the real tags; also `tests/template-release.test.js`, `tests/template-adopt.test.js`,
+  `tests/after-10-8-ledger.test.js`.
+- Seven-file releases, with the released tool: every release tag up to T-2026.10.11 declares
+  seven files and holds both pages; the adoption of T-2026.10.11 is planned as seven files,
+  the adoption of T-2026.10.12 as five.
+- **Deletion smoke, 2026-10-07, on the disposable test report's script project** (never a live
+  one). The project was brought to the T-2026.10.11 bundle and read back: seven files. Then
+  one normal `clasp push` of the five files of the candidate: "Pushed 5 files". Read back:
+  exactly five files, both pages gone, the other four files and `appsscript.json` unchanged.
+  The project was then put back to what it held before and read back: its seven files, each
+  identical to the copy taken at the start.
+
+## Deployment
+
+T-2026.10.12 on 2026-10-07, in this order. Each project was read before the push — T-2026.10.11,
+exactly seven files, each identical to that release's bundle — and again after it.
+
+| Project | Before | Push | After |
+|---|---|---|---|
+| Master template | T-2026.10.11, seven files | the release bundle | T-2026.10.12, five files |
+| 6G live report | T-2026.10.11, seven files | adoption of the release bundle | T-2026.10.12, five files |
+| MBS live report | T-2026.10.11, seven files | adoption of the release bundle | T-2026.10.12, five files |
+
+In each of the three:
+
+- one normal `clasp push`, without a question from clasp and without `--force`;
+- read back: **exactly five files, each identical to the release bundle**; `Release.js` names
+  T-2026.10.12, `Code.js` 2.22.0, the release commit and its tag;
+- both Colab pages are gone from the project;
+- `appsscript.json` is byte for byte what it was before: no new scope, no new authorization.
+
+Nothing was run in a document: no build, no configuration, no update, no migration. No
+document, Document Property, trigger or Drive permission was touched. CENTRAL and the
+disposable test project were not part of the deployment.
+
 The records of earlier deployments say "seven files". They are correct and stay as they are.
-
-## Tests
-
-`tests/release-file-set.test.js` (both generations, and the real tags where the checkout has
-them), `tests/template-release.test.js`, `tests/template-adopt.test.js`,
-`tests/after-10-8-ledger.test.js`.
