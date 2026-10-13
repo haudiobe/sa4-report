@@ -1,0 +1,118 @@
+# The structure of a report
+
+**Status: IMPLEMENTED, NOT RELEASED, NOT DEPLOYED. On branch `fix/report-structure-order`,
+after T-2026.10.12. `Code.js` is still 2.22.0. Not yet run against a Google document: the
+evidence is the exported live report and the automated tests (§ What is not verified yet).**
+
+## The rule
+
+A report is, in this order:
+
+1. the agenda sections, in the order of their numbers (2.9 before 2.10, 2.5 before 2.5.1
+   before 2.6);
+2. what closes it: "Close of the session" and, in an ad-hoc report with imported attendance,
+   the Attendance section.
+
+Nothing of the agenda — no agenda heading, no TDoc table — stands after the close or after
+the Attendance section. An update that runs twice leaves what it left the first time.
+
+## What was wrong
+
+Found in the MBS report of the ad-hoc meeting after SA4#137-e, exported on 2026-10-13: of
+1,230 body elements 1,157 were empty paragraphs, 1,129 of them in three runs (571, 215, 343);
+and after "2.8 Close of the session" and the Attendance section came a heading "2.7" with
+four TDocs and a heading "2.6" with two.
+
+Two separate defects of the update, both in `Code.js` since before the template releases:
+
+| | Blank lines | Sections after the attendance |
+|---|---|---|
+| Where | `moveTableAfter_()`, called by `rearrangeRevisionTables_()` at the end of every update | `findInsertionPointForAgendaItem_()`, called by `insertNewTdoc_()` |
+| What it did | Asked whether the revision is the *very next body child* after its parent | Appended the heading of an agenda item the report did not have to the *end of the document* |
+| Why that fails | Google Docs keeps a paragraph between two tables, so it never is. Every revision was "out of place" on every update, was copied to below its parent again, and the original was removed — without its separator | The end of the document is after the close and after the attendance |
+| Result | One empty paragraph more per revision per update, gathering below the last table of each revision chain | The section, and every later TDoc of that item, after the Attendance section; in the order the TDocs were found (2.7 before 2.6) |
+
+The three runs stand exactly below the three revision chains of item 2.5 that existed while
+the update ran on its trigger. The two late sections are the agenda items the build had not
+written a heading for.
+
+The earlier tests did not see the first defect because their document let two tables touch,
+which Google Docs does not.
+
+## What changed
+
+- **Revision placement.** A revision is in place when it is the next *table* below its
+  parent with only empty paragraphs between them. Moving a table takes its separator with it
+  (`removeTableWithItsSeparator_()`), and at most one empty paragraph stays between two
+  tables.
+- **A heading the report does not have** is written in its place: before the first heading
+  of a later agenda item; without one, before the heading that closes the report; the end of
+  the document only when the report has neither close nor attendance
+  (`findOrderedAgendaInsertIndex_()`). It gets the title of its agenda item where the report
+  knows it (the agenda it was built from, else the TDoc list).
+- **A TDoc of the closing item** goes before the Attendance section, not after it
+  (`findAgendaSectionEndIndex_()`).
+- **Repair, at the start of every update** (`repairReportStructure_()`), of what the earlier
+  releases left:
+  1. an agenda section after the close whose number is before it is moved to its place, with
+     everything below its heading, in order. Tables and paragraphs are copied and the
+     originals removed only afterwards, as the revision placement has always done;
+  2. below a TDoc table, a run of two or more empty paragraphs becomes one.
+
+  A report that needs neither is read once and not changed.
+
+What it does **not** do:
+
+- No general removal of empty paragraphs. Only runs directly below a TDoc table are
+  shortened; a paragraph that holds anything — text, an image, a page break — is never
+  removed; empty paragraphs anywhere else stay.
+- No TDoc table is moved because its "Agenda Item" row names another item than the heading
+  it stands under. (In the MBS report S4aI260089, an item-2.7 TDoc, stands under 2.5. Why is
+  not known; it stays there until it is moved by hand or reallocated.)
+- Build Report from Scratch is unchanged. It still writes only the agenda items of its
+  agenda; the TDocs of other items are added by the first update — now in their place.
+- The "⚠️ Legacy: Update All" path (`copyTableToDoc_()`) is unchanged.
+
+One changed behaviour to know: an agenda item numbered *after* the closing item (a TDoc
+registered under 2.9 when 2.8 is "Close of the session") is written directly before the
+close, not after it.
+
+## The MBS report after one update
+
+From `tests/fixtures/mbs-report-structure-damaged.json`, the sanitized structure of the
+exported report, with the fake document that keeps a paragraph between tables:
+
+```
+2.4  S4aI260094 096 098 099 108
+2.5  S4aI260080 091 100 089 082 102 105 083 092 084 085 086 087 088 093 101 106 107
+2.6  S4aI260095 097
+2.7  S4aI260081 090 103 104
+2.8  Close of the session
+     Attendance
+```
+
+1,230 body elements become 104; 1,157 empty paragraphs become 31 (one between two tables,
+and the few of the opening section and the end). Every TDoc table is there once, with its
+minutes. A second update changes nothing.
+
+## What is not verified yet
+
+- **Google Docs itself.** That Docs keeps a paragraph between two tables is concluded from
+  the exported report (no two tables touch anywhere in it, and every moved revision stands
+  one paragraph below its parent); it was not probed in a live document. Where exactly Docs
+  puts that paragraph does not matter to the code, which normalises both sides of a move.
+- **Removing some 1,100 paragraphs in one update** takes time in a real document; how long
+  is not measured. If the run ended before it was done, the next one would go on.
+- **A paragraph Docs refuses to remove** is left where it is and logged; the update goes on.
+- Why the build of the MBS report had no heading for 2.6 and 2.7 is not established (its
+  stored agenda is not in the export).
+- 6G and every other report updated on a trigger very likely have the same runs of empty
+  paragraphs below their revision chains; their first update with this code removes them.
+
+## Tests
+
+`tests/report-structure-fix.test.js`: missing items (middle, before the close, after the
+close), reallocation, discovery order, nothing after close or attendance, idempotence over
+forty updates, text typed by hand, a report in order is not touched, main-meeting numbering,
+the MBS structure, and that `Code.js` without this fix is the `Code.js` of T-2026.10.12.
+`tests/adhoc-integration.test.js` § 3 for the ad-hoc report with sessions.

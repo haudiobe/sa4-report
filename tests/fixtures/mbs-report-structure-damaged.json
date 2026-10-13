@@ -1,0 +1,945 @@
+{
+ "about": "The structure of an ad-hoc MBS report as it was on 2026-10-13 after many updates by T-2026.10.11/12: body elements in order. Sanitized: only headings, TDoc numbers, agenda items, statuses, \"Revised to\" dispositions and the sizes of the runs of empty paragraphs are real; no text of a person, no name, no address.",
+ "elements": [
+  {
+   "h": "TITLE",
+   "text": "Synthetic MBS SWG minutes"
+  },
+  {
+   "empty": 1
+  },
+  {
+   "h": "H1",
+   "text": "2 Multicast-Broadcast-Streaming (MBS) SWG"
+  },
+  {
+   "h": "H2",
+   "text": "2.1 Opening of the session and registration of documents"
+  },
+  {
+   "h": "H3",
+   "text": "2.1.1 Opening of the session"
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "empty": 1
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "empty": 2
+  },
+  {
+   "h": "H3",
+   "text": "2.1.2 Registration of Documents"
+  },
+  {
+   "registration": [
+    [
+     "S4aI260080",
+     "2.5"
+    ],
+    [
+     "S4aI260082",
+     "2.5"
+    ],
+    [
+     "S4aI260083",
+     "2.5"
+    ],
+    [
+     "S4aI260084",
+     "2.5"
+    ],
+    [
+     "S4aI260085",
+     "2.5"
+    ],
+    [
+     "S4aI260086",
+     "2.5"
+    ],
+    [
+     "S4aI260087",
+     "2.5"
+    ],
+    [
+     "S4aI260088",
+     "2.5"
+    ],
+    [
+     "S4aI260081",
+     "2.7"
+    ],
+    [
+     "S4aI260089",
+     "2.7"
+    ],
+    [
+     "S4aI260091",
+     "2.5"
+    ],
+    [
+     "S4aI260092",
+     "2.5"
+    ],
+    [
+     "S4aI260093",
+     "2.5"
+    ],
+    [
+     "S4aI260090",
+     "2.7"
+    ],
+    [
+     "S4aI260094",
+     "2.4"
+    ],
+    [
+     "S4aI260095",
+     "2.6"
+    ],
+    [
+     "S4aI260096",
+     "2.4"
+    ],
+    [
+     "S4aI260097",
+     "2.6"
+    ],
+    [
+     "S4aI260098",
+     "2.4"
+    ],
+    [
+     "S4aI260099",
+     "2.4"
+    ],
+    [
+     "S4aI260100",
+     "2.5"
+    ],
+    [
+     "S4aI260101",
+     "2.5"
+    ],
+    [
+     "S4aI260102",
+     "2.5"
+    ],
+    [
+     "S4aI260103",
+     "2.7"
+    ],
+    [
+     "S4aI260104",
+     "2.7"
+    ],
+    [
+     "S4aI260105",
+     "2.5"
+    ],
+    [
+     "S4aI260106",
+     "2.5"
+    ],
+    [
+     "S4aI260107",
+     "2.5"
+    ],
+    [
+     "S4aI260108",
+     "2.4"
+    ]
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "h": "H3",
+   "text": "2.1.3 Document Reallocations"
+  },
+  {
+   "reallocations": [
+    [
+     "S4aI260081",
+     "3.7",
+     "2.7",
+     "Wrong SWG"
+    ]
+   ]
+  },
+  {
+   "h": "H2",
+   "text": "2.2 IPR, antitrust & consensus principles reminder"
+  },
+  {
+   "h": "H3",
+   "text": "2.2.1 Introduction"
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "h": "H3",
+   "text": "2.2.2 Call for IPRs"
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "h": "H3",
+   "text": "2.2.3 Statement regarding competition law"
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "h": "H3",
+   "text": "2.2.4 Consensus principles reminder"
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "h": "H2",
+   "text": "2.3 Reports/Liaisons from other groups/meetings"
+  },
+  {
+   "h": "H2",
+   "text": "2.4 Release 19 and earlier matters"
+  },
+  {
+   "tdoc": "S4aI260094",
+   "agenda": "2.4",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260096",
+   "agenda": "2.4",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260098",
+   "agenda": "2.4",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260099",
+   "agenda": "2.4",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260108",
+   "agenda": "2.4",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "h": "H2",
+   "text": "2.5 AMD_ARCH_Ph2-MED (Architectural Updates for Advanced Media Delivery Phase 2)"
+  },
+  {
+   "tdoc": "S4aI260080",
+   "agenda": "2.5",
+   "status": "revised",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail deadline",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260091",
+   "agenda": "2.5",
+   "status": "revised",
+   "revisedTo": "S4aI260100",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260100",
+   "agenda": "2.5",
+   "status": "withdrawn",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 571
+  },
+  {
+   "tdoc": "S4aI260089",
+   "agenda": "2.7",
+   "status": "noted",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail deadline",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260082",
+   "agenda": "2.5",
+   "status": "revised",
+   "revisedTo": "S4aI260102",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail deadline",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260102",
+   "agenda": "2.5",
+   "status": "revised",
+   "revisedTo": "S4aI260105",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260105",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 215
+  },
+  {
+   "tdoc": "S4aI260083",
+   "agenda": "2.5",
+   "status": "revised",
+   "revisedTo": "S4aI260092",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail deadline",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260092",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 343
+  },
+  {
+   "tdoc": "S4aI260084",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260085",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260086",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260087",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260088",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260093",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260101",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260106",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260107",
+   "agenda": "2.5",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "h": "H2",
+   "text": "2.8 Close of the session"
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "p": "Synthetic text."
+  },
+  {
+   "h": "H3",
+   "text": "Attendance"
+  },
+  {
+   "p": "Statistics"
+  },
+  {
+   "p": "Meeting: synthetic"
+  },
+  {
+   "p": "Session: synthetic"
+  },
+  {
+   "p": "Start: synthetic"
+  },
+  {
+   "p": "End: synthetic"
+  },
+  {
+   "p": "Duration: synthetic"
+  },
+  {
+   "p": "Attendance records: synthetic"
+  },
+  {
+   "p": "Average attendance: synthetic"
+  },
+  {
+   "p": "Attendees"
+  },
+  {
+   "attendees": 24
+  },
+  {
+   "h": "H2",
+   "text": "2.7"
+  },
+  {
+   "tdoc": "S4aI260081",
+   "agenda": "2.7",
+   "status": "revised",
+   "revisedTo": "S4aI260090",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail deadline",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260090",
+   "agenda": "2.7",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260103",
+   "agenda": "2.7",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260104",
+   "agenda": "2.7",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "h": "H2",
+   "text": "2.6"
+  },
+  {
+   "tdoc": "S4aI260095",
+   "agenda": "2.6",
+   "status": "reserved",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  },
+  {
+   "tdoc": "S4aI260097",
+   "agenda": "2.6",
+   "status": "available",
+   "revisedTo": "",
+   "rows": [
+    "TDoc",
+    "Title",
+    "Source",
+    "Contact",
+    "Agenda Item",
+    "Abstract",
+    "Type/For",
+    "E-mail Discussion",
+    "Revisions",
+    "Minutes",
+    "Disposition",
+    "Status"
+   ]
+  },
+  {
+   "empty": 1
+  }
+ ]
+}

@@ -39,9 +39,21 @@
  * Shared minutes (after T-2026.10.10), addition only: the link at one
  * character of a body paragraph can be read (getLinkUrl()), as recorded by
  * setLinkUrl() -- the last one set wins, and null takes a link away.
+ *
+ * Report structure (after T-2026.10.12), additions only. A body paragraph
+ * says how many children it has (none when it has no text), can be copied
+ * and removed, and insertParagraph() takes a detached paragraph as well as a
+ * text. And, only for a body made with { tableSeparators: true }, two rules
+ * of Google Docs that the report's structure depends on:
+ *   - two tables are never adjacent: a table that is inserted or appended
+ *     next to another table gets an empty paragraph between them;
+ *   - the last paragraph of the document cannot be removed.
+ * Without the option the body is as it always was, so every earlier test
+ * runs on the document it was written for.
  */
 
-function makeFakeDocumentBody(sandbox) {
+function makeFakeDocumentBody(sandbox, options) {
+  const strict = !!(options && options.tableSeparators);
   const PARAGRAPH = sandbox.DocumentApp.ElementType.PARAGRAPH;
   const TABLE = sandbox.DocumentApp.ElementType.TABLE;
   const NORMAL = sandbox.DocumentApp.ParagraphHeading.NORMAL;
@@ -61,6 +73,9 @@ function makeFakeDocumentBody(sandbox) {
       setHeading: (h) => { p._heading = h; return p; },
       setGlyphType: () => p,
       setText: (v) => { p._text = String(v); return p; },
+      getNumChildren: () => (p._text ? 1 : 0),
+      copy: () => { const made = makeParagraph(p._text, p._heading); made._bold = p._bold; if (p._links) made._links = p._links.map((l) => l.slice()); return made; },
+      removeFromParent: () => { touch(); const i = children.indexOf(p); if (i !== -1) { refuseLastParagraph(p); children.splice(i, 1); } return p; },
       // A link set on a paragraph's text is recorded (_links: [start, end, url]).
       editAsText: () => ({ setBold: (b) => { p._bold = !!b; }, setLinkUrl: (...args) => { (p._links = p._links || []).push(args); },
         getLinkUrl: (i) => { const links = p._links || []; for (let k = links.length - 1; k >= 0; k--) if (i >= links[k][0] && i <= links[k][1]) return links[k][2] || null; return null; } })
@@ -124,6 +139,19 @@ function makeFakeDocumentBody(sandbox) {
     return t;
   }
 
+  /** Google Docs: "Can't remove the last paragraph in a document section." (Only with tableSeparators.) */
+  const refuseLastParagraph = (el) => {
+    if (strict && el.getType() === PARAGRAPH && children.indexOf(el) === children.length - 1) throw new Error("Can't remove the last paragraph in a document section.");
+  };
+  /** Google Docs: a paragraph between two tables. Puts `t` at `idx`, with an empty paragraph on each side where a table would touch it. */
+  const placeTable = (idx, t) => {
+    if (!strict) { children.splice(idx, 0, t); return; }
+    const isTable = (el) => !!el && el.getType() === TABLE;
+    if (isTable(children[idx - 1])) { children.splice(idx, 0, makeParagraph('')); idx++; }
+    children.splice(idx, 0, t);
+    if (isTable(children[idx + 1])) children.splice(idx + 1, 0, makeParagraph(''));
+  };
+
   /** Whether the element before position `idx` is a bold paragraph: what a table inserted there starts with. */
   const boldBefore = (idx) => { const prev = children[idx - 1]; return !!(prev && prev.getType() === PARAGRAPH && prev._bold); };
 
@@ -132,7 +160,7 @@ function makeFakeDocumentBody(sandbox) {
     getType: () => 'BODY_SECTION',
     asTable: () => { throw new Error("BODY_SECTION can't be cast to TABLE."); },
     asParagraph: () => { throw new Error("BODY_SECTION can't be cast to PARAGRAPH."); },
-    removeChild: (c) => { touch(); const i = children.indexOf(c); if (i === -1) throw new Error('Element is not a child of this body.'); children.splice(i, 1); return body; },
+    removeChild: (c) => { touch(); const i = children.indexOf(c); if (i === -1) throw new Error('Element is not a child of this body.'); refuseLastParagraph(c); children.splice(i, 1); return body; },
     clear: () => { touch(); children.length = 0; return body; },
     getNumChildren: () => children.length,
     getChild: (i) => children[i],
@@ -141,8 +169,15 @@ function makeFakeDocumentBody(sandbox) {
     getParagraphs: () => children.filter(c => c.getType() === PARAGRAPH),
     appendParagraph: (text) => { touch(); const p = makeParagraph(text); children.push(p); return p; },
     appendListItem: (text) => { touch(); const p = makeParagraph(text); children.push(p); return p; },
-    appendTable: (data) => { touch(); const t = makeTable(Array.isArray(data) ? data : [], boldBefore(children.length)); children.push(t); return t; },
-    insertParagraph: (idx, text) => { touch(); const p = makeParagraph(text); children.splice(idx, 0, p); return p; },
+    appendTable: (data) => { touch(); const t = makeTable(Array.isArray(data) ? data : [], boldBefore(children.length)); placeTable(children.length, t); return t; },
+    insertParagraph: (idx, text) => {
+      touch();
+      const given = text && typeof text.getType === 'function';
+      if (given && children.indexOf(text) !== -1) throw new Error('Element must be detached.');
+      const p = given ? text : makeParagraph(text);
+      children.splice(idx, 0, p);
+      return p;
+    },
     insertTable: (idx, data) => {
       touch();
       let t;
@@ -152,7 +187,7 @@ function makeFakeDocumentBody(sandbox) {
       } else {
         t = makeTable(data, boldBefore(idx));
       }
-      children.splice(idx, 0, t);
+      placeTable(idx, t);
       return t;
     }
   };

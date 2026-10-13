@@ -44,6 +44,7 @@ const CACHE = (id) => 'REVIEWER_NO_SUMMARY_CACHE_' + id;
  *   docs      false: no Google Docs API service
  *   agenda    another agenda
  *   drive     a fake Drive of tests/helpers/fake-drive-files.js: the Drive of the user the report runs as
+ *   tableSeparators  true: the document keeps a paragraph between two tables and its last paragraph, as Google Docs does
  */
 function templateReport(options) {
   const o = options || {};
@@ -52,7 +53,7 @@ function templateReport(options) {
   // With a Drive (the personal settings of the user) the report is a whole template bundle: Code.js and ReportCreator.js.
   const loaded = (o.drive ? loadTemplateRuntime : loadCode)({ documentProperties: props, scriptProperties: o.token === false ? {} : { REVIEWER_API_TOKEN: 'synthetic-test-token' } });
   const s = loaded.sandbox;
-  const body = makeFakeDocumentBody(s);
+  const body = makeFakeDocumentBody(s, { tableSeparators: !!o.tableSeparators });
   const api = makeFakeDocsApi({ body: body, reportId: REPORT_ID });
   api.addSource(TEMPLATE_ID, [STATUS_DEFINITION]);
   const r = { s: s, body: body, api: api, docProps: loaded.docProps, scriptProps: loaded.scriptProps, logs: [], requests: [], fetches: [], reviewer: Object.assign({}, o.reviewer || {}),

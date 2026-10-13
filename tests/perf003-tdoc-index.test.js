@@ -321,7 +321,8 @@ console.log('rearrangeRevisionTables_() -- updates the index to the NEW table ob
   const unrelated = makeFakeParagraph('filler', 'NORMAL');
   // child starts BEFORE parent -- moveTableAfter_() must actually move it.
   const body = makeFakeBody([child, unrelated, parent]);
-  sandbox.DocumentApp = { getActiveDocument: () => ({ getBody: () => body }) };
+  // The element types and headings stay those of the loaded sandbox: the move asks what stands next to a table.
+  sandbox.DocumentApp = Object.assign({}, sandbox.DocumentApp, { getActiveDocument: () => ({ getBody: () => body }) });
   const index = sandbox.buildTdocTableIndex_(body.getTables());
   const originalChildRef = index.get('S4-260101');
 

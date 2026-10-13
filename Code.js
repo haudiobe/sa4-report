@@ -1162,6 +1162,19 @@ function continuousUpdateCore_(context) {
 
     Logger.log(`Downloaded ${allTdocs.length} TDOCs`);
 
+    // The structure of the report, before anything is looked up in it: agenda
+    // sections that an earlier release appended after the close of the report
+    // go back into the order of the agenda, and the empty paragraphs the
+    // revision placement left below TDoc tables are removed. A report that
+    // needs neither is only read. Never fails the update.
+    const agendaTitleOf = makeAgendaTitleResolver_(allTdocs, context);
+    let structure = { sectionsMoved: 0, emptyParagraphsRemoved: 0 };
+    try {
+      structure = repairReportStructure_(body, agendaTitleOf);
+    } catch (e) {
+      Logger.log('Structure: the structure of the report could not be checked: ' + e.message);
+    }
+
     // Get existing TDOCs. PERF-003 (Part A): also builds the canonical
     // TDoc-table index from this SAME scan (no extra body.getTables()
     // call) -- this is what lets updateTdocStatus_()/findTdocTable_() stop
@@ -1195,6 +1208,8 @@ function continuousUpdateCore_(context) {
       perfCount_('TDocs processed (loop iterations)');
 
       if (!existingTdocs.has(tdocNumber)) {
+        // The title of its agenda item, for a heading the report does not have yet.
+        tdocData.agendaTitle = agendaTitleOf(tdocData.agendaItem);
         perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg, tdocTableIndex, context));
         // TEMPLATE-002A (port of Legacy BUGFIX-LEGACY-002, d1021cf):
         // `existingTdocs` was only populated from the document scan taken
@@ -1290,7 +1305,7 @@ function continuousUpdateCore_(context) {
     // table) have already run, so nothing structural that happens later
     // in this same function is missed.
     const structuralChangeThisRun = shouldReformatAfterUpdate_(
-      newTdocsAdded,
+      newTdocsAdded + structure.sectionsMoved,
       rev.moved,
       perfCounterValue_('structural: new revision-linked tables inserted (insertRevisedDocTablesAfter_)'),
       perfCounterValue_('structural: abstract row inserted (fetchAndAddAbstract_)')
@@ -2156,7 +2171,7 @@ function insertNewTdoc_(body, tdocData, cfg, index, context) {
     insertIdx = body.getChildIndex(parentTable) + 1;
     Logger.log(`Placing ${tdocNumberOf_(tdocData)} directly below its parent`);
   }
-  if (insertIdx < 0) insertIdx = findInsertionPointForAgendaItem_(body, agendaItem, '');
+  if (insertIdx < 0) insertIdx = findInsertionPointForAgendaItem_(body, agendaItem, tdocData.agendaTitle || '');
 
   const typeCol = tdocData.typeCol;
   const forCol = tdocData.forCol;
@@ -4349,16 +4364,437 @@ function findInsertionPointForAgendaItem_(body, agendaItem, agendaTopic) {
   const existing = findAgendaSectionEndIndex_(body, agendaItem);
   if (existing !== -1) return existing;
 
-  // Heading not found: create it and return position after it
+  // Heading not found: create it IN ITS PLACE in the order of the agenda and
+  // return the position after it. It used to be appended at the end of the
+  // document -- after "Close of the session" and after the Attendance
+  // section, whatever stood there.
   const agendaLevel = (agendaItem.match(/\./g) || []).length + 1;
   const headingText = agendaItem + (agendaTopic ? ' ' + agendaTopic : '');
-  const newHeading = body.appendParagraph(headingText);
+  const at = findOrderedAgendaInsertIndex_(body, agendaItem);
+  const newHeading = at >= body.getNumChildren() ? body.appendParagraph(headingText) : body.insertParagraph(at, headingText);
   if (agendaLevel === 1) newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING1);
   else if (agendaLevel === 2) newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING2);
   else newHeading.setHeading(DocumentApp.ParagraphHeading.HEADING3);
-  
-  return body.getNumChildren();
+
+  return body.getChildIndex(newHeading) + 1;
 }
+
+// =========================================================
+// REPORT STRUCTURE (after T-2026.10.12) -- THE ORDER OF THE AGENDA SECTIONS; NO PARAGRAPHS LEFT BEHIND
+// =========================================================
+//
+// A report is: the agenda sections in the order of their numbers, then what
+// closes it -- "Close of the session" and, in an ad-hoc report with imported
+// attendance, the Attendance section. Nothing of the agenda stands after
+// that. Two things broke this, both on updates:
+//
+//   - the heading of an agenda item the report did not have was appended at
+//     the END OF THE DOCUMENT, after the close and the attendance, and its
+//     TDocs with it (findInsertionPointForAgendaItem_());
+//   - the revision placement (moveTableAfter_()) took a revision for out of
+//     place on every update, because Google Docs keeps a paragraph between
+//     two tables, moved it again and left one empty paragraph behind each
+//     time.
+//
+// The functions of this section say where a section belongs, remove a table
+// without leaving its separator, and put right, once, what the earlier
+// releases left in a report (repairReportStructure_(), at the start of every
+// update). docs/REPORT_STRUCTURE.md.
+
+/**
+ * True for a paragraph of the body that holds nothing at all: normal style,
+ * no text, no child element (no image, no page break, no rule). Only such a
+ * paragraph is ever removed as a separator.
+ */
+function isEmptyBodyParagraph_(element) {
+  if (!element || element.getType() !== DocumentApp.ElementType.PARAGRAPH) return false;
+  const p = element.asParagraph();
+  if (p.getHeading() !== DocumentApp.ParagraphHeading.NORMAL) return false;
+  if (p.getText() !== '') return false;
+  if (typeof p.getNumChildren === 'function' && p.getNumChildren() > 0) return false;
+  if (typeof p.getPositionedImages === 'function') {
+    try { if (p.getPositionedImages().length > 0) return false; } catch (e) { return false; }
+  }
+  return true;
+}
+
+/** True when `table` is the next table below `afterTable` and only empty paragraphs stand between them. */
+function isTableDirectlyBelow_(body, table, afterTable) {
+  const from = body.getChildIndex(afterTable);
+  const to = body.getChildIndex(table);
+  if (to <= from) return false;
+  for (let i = from + 1; i < to; i++) {
+    if (!isEmptyBodyParagraph_(body.getChild(i))) return false;
+  }
+  return true;
+}
+
+/**
+ * Removes the empty paragraphs directly below `element`, except one: of a
+ * run of empty paragraphs the last one stays (a document must end with a
+ * paragraph, and two tables need one between them). Returns how many were
+ * removed. A run of one, and anything that is not empty, is left alone.
+ */
+function collapseEmptyParagraphsAfter_(body, element) {
+  const start = body.getChildIndex(element) + 1;
+  const run = [];
+  for (let i = start; i < body.getNumChildren(); i++) {
+    const child = body.getChild(i);
+    if (!isEmptyBodyParagraph_(child)) break;
+    run.push(child);
+  }
+  let removed = 0;
+  for (let i = 0; i < run.length - 1; i++) if (removeSeparatorParagraph_(run[i])) removed++;
+  return removed;
+}
+
+/**
+ * Removes one empty paragraph. A paragraph Google Docs does not let go stays
+ * where it is: a blank line more never fails what is being done. Returns
+ * whether it was removed.
+ */
+function removeSeparatorParagraph_(paragraph) {
+  try {
+    paragraph.removeFromParent();
+    return true;
+  } catch (e) {
+    Logger.log('Structure: an empty paragraph could not be removed: ' + e.message);
+    return false;
+  }
+}
+
+/**
+ * Removes a table of the body together with the empty paragraph that only
+ * separated it from its neighbours, so that taking a table away leaves no
+ * blank line where it stood. An empty paragraph is removed only when it has
+ * become redundant: next to another empty paragraph, or between a table and
+ * something that needs no separator. The last paragraph of the document is
+ * never removed.
+ */
+function removeTableWithItsSeparator_(body, table) {
+  const TABLE = DocumentApp.ElementType.TABLE;
+  const index = body.getChildIndex(table);
+  table.removeFromParent();
+  const count = body.getNumChildren();
+  const before = index > 0 ? body.getChild(index - 1) : null;
+  const after = index < count ? body.getChild(index) : null;
+  const isTable = function (el) { return !!el && el.getType() === TABLE; };
+  const isLast = function (el) { return body.getChildIndex(el) === body.getNumChildren() - 1; };
+  if (isEmptyBodyParagraph_(before) && isEmptyBodyParagraph_(after)) {
+    // Two separators where one table stood: one of them goes.
+    removeSeparatorParagraph_(isLast(after) ? before : after);
+  } else if (isEmptyBodyParagraph_(before) && after && !isTable(after) && index > 1 && isTable(body.getChild(index - 2))) {
+    // table, separator, [the table that was here], heading or text.
+    removeSeparatorParagraph_(before);
+  } else if (isEmptyBodyParagraph_(after) && before && !isTable(before) && !isLast(after) && isTable(body.getChild(index + 1))) {
+    // heading or text, [the table that was here], separator, table.
+    removeSeparatorParagraph_(after);
+  }
+}
+
+
+/**
+ * What this report knows about the titles of agenda items, as a function
+ * number -> title ('' when unknown): the agenda the report was built from
+ * (PARSED_AGENDA), and otherwise what the TDoc list says about the agenda
+ * item of a TDoc that is registered under that very item -- a reallocated
+ * TDoc describes the item it came from, so it says nothing here.
+ */
+function makeAgendaTitleResolver_(allTdocs, context) {
+  const titles = {};
+  (allTdocs || []).forEach(function (td) {
+    if (!td || !td.row || td.agendaDescriptionCol === undefined || td.agendaDescriptionCol < 0 || td.agendaCol === undefined || td.agendaCol < 0) return;
+    const number = String(td.row[td.agendaCol] === null || td.row[td.agendaCol] === undefined ? '' : td.row[td.agendaCol]).trim();
+    const title = String(td.row[td.agendaDescriptionCol] === null || td.row[td.agendaDescriptionCol] === undefined ? '' : td.row[td.agendaDescriptionCol]).trim();
+    if (number && title && !titles[number]) titles[number] = title;
+  });
+  try {
+    const parsed = JSON.parse(getReportStateStore_(context).getProperty('PARSED_AGENDA') || '[]');
+    if (Array.isArray(parsed)) {
+      parsed.forEach(function (item) {
+        const number = String((item && item.number) || '').trim();
+        const title = String((item && item.title) || '').trim();
+        if (number && title) titles[number] = title;
+      });
+    }
+  } catch (e) {
+    // No stored agenda, or one that cannot be read: the TDoc list's titles are all there is.
+  }
+  return function (number) { return titles[String(number || '').trim()] || ''; };
+}
+
+/** "2.7" for "2.7 Energy"; "2.7" for "2.7"; '' for a heading that does not start with an agenda number. */
+function agendaNumberOfHeadingText_(text) {
+  const m = String(text === null || text === undefined ? '' : text).trim().match(/^(\d+(?:\.\d+)*)(?=\s|$)/);
+  return m ? m[1] : '';
+}
+
+/** Agenda numbers in the order of an agenda: 2.9 before 2.10, 2.5 before 2.5.1, 2.5.1 before 2.6. Negative, zero or positive. */
+function compareAgendaNumbers_(a, b) {
+  const x = String(a).split('.');
+  const y = String(b).split('.');
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if (i >= x.length) return -1;
+    if (i >= y.length) return 1;
+    const d = parseInt(x[i], 10) - parseInt(y[i], 10);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** True for the text of a heading that closes the report ("Close of the session", "Closing of the meeting"). */
+function isClosingHeadingText_(text) {
+  const lower = String(text || '').toLowerCase();
+  return lower.indexOf('close of') !== -1 || lower.indexOf('closing') !== -1;
+}
+
+/**
+ * Where the agenda part of the report ends: { index, closeNumber }.
+ * `index` is the body index of the heading that closes the report -- the
+ * last "Close of ..." heading, or, without one, the heading of the generated
+ * Attendance section -- and the number of children when the report has
+ * neither. `closeNumber` is the agenda number of the closing heading ('' when
+ * it has none or the boundary is the Attendance section).
+ */
+function findReportTerminalBoundary_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  let close = -1;
+  let closeNumber = '';
+  let attendance = -1;
+  for (let i = 0; i < count; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (p.getHeading() === NORMAL) continue;
+    const text = p.getText().trim();
+    if (isClosingHeadingText_(text)) { close = i; closeNumber = agendaNumberOfHeadingText_(text); }
+    else if (attendance === -1 && text === ADHOC_ATTENDANCE_HEADING_) attendance = i;
+  }
+  if (close !== -1) return { index: close, closeNumber: closeNumber };
+  if (attendance !== -1) return { index: attendance, closeNumber: '' };
+  return { index: count, closeNumber: '' };
+}
+
+/**
+ * Where the heading of agenda item `agendaItem` belongs when the report has
+ * none: before the first heading of a LATER agenda item, and otherwise at the
+ * end of the agenda part -- before the heading that closes the report (see
+ * findReportTerminalBoundary_()). The end of the document only when the
+ * report has neither. Never modifies the document.
+ */
+function findOrderedAgendaInsertIndex_(body, agendaItem) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const boundary = findReportTerminalBoundary_(body);
+  for (let i = 0; i < boundary.index; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (p.getHeading() === NORMAL) continue;
+    const number = agendaNumberOfHeadingText_(p.getText());
+    if (number && compareAgendaNumbers_(number, agendaItem) > 0) return i;
+  }
+  return boundary.index;
+}
+
+/**
+ * The body index of the heading of `agendaItem` among the first `limit`
+ * children, or -1.
+ */
+function findAgendaHeadingIndexBefore_(body, agendaItem, limit) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  for (let i = 0; i < limit; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (p.getHeading() === NORMAL) continue;
+    if (agendaNumberOfHeadingText_(p.getText()) === agendaItem) return i;
+  }
+  return -1;
+}
+
+/**
+ * The agenda sections that stand AFTER the heading that closes the report
+ * although they belong before it: [{ number, start, end, bare }] in document
+ * order (`end` exclusive; the empty paragraphs at the end of a section are
+ * not part of it; `bare` when the heading is the number alone, which is how
+ * an update wrote the heading of an agenda item the report did not have).
+ * Read-only.
+ */
+function findMisplacedAgendaSections_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const boundary = findReportTerminalBoundary_(body);
+  const count = body.getNumChildren();
+  const out = [];
+  for (let i = boundary.index + 1; i < count; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (p.getHeading() === NORMAL) continue;
+    const text = p.getText().trim();
+    const number = agendaNumberOfHeadingText_(text);
+    if (!number) continue;
+    // An item of the closing section itself (2.8.1 under 2.8), or one that
+    // really is numbered after it, is where it belongs.
+    if (boundary.closeNumber && compareAgendaNumbers_(number, boundary.closeNumber) >= 0) continue;
+    let end = i + 1;
+    while (end < count) {
+      const next = body.getChild(end);
+      if (next.getType() === PARAGRAPH && next.asParagraph().getHeading() !== NORMAL) break;
+      end++;
+    }
+    while (end > i + 1 && isEmptyBodyParagraph_(body.getChild(end - 1))) end--;
+    out.push({ number: number, start: i, end: end, bare: text === number });
+  }
+  return out;
+}
+
+/**
+ * Puts one misplaced agenda section (see findMisplacedAgendaSections_())
+ * where it belongs: the heading and everything below it, in their order, as
+ * copies, and only then removes the originals. A section whose agenda item
+ * already has a heading in the agenda part is added to the end of that
+ * section, without its own bare heading. Returns true when it was moved;
+ * false -- and the document untouched -- when it holds something that cannot
+ * be copied, or its agenda item already has a heading and its own heading
+ * is not a bare number.
+ */
+function moveMisplacedAgendaSection_(body, section, titleOf) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const TABLE = DocumentApp.ElementType.TABLE;
+  const LIST_ITEM = DocumentApp.ElementType.LIST_ITEM;
+  const boundary = findReportTerminalBoundary_(body);
+  const existing = findAgendaHeadingIndexBefore_(body, section.number, boundary.index);
+  if (existing !== -1 && !section.bare) return false;
+
+  const originals = [];
+  for (let i = section.start; i < section.end; i++) originals.push(body.getChild(i));
+  for (let i = 0; i < originals.length; i++) {
+    const type = originals[i].getType();
+    if (type !== PARAGRAPH && type !== TABLE && type !== LIST_ITEM) return false;
+    if (type === LIST_ITEM && typeof body.insertListItem !== 'function') return false;
+  }
+
+  let at;
+  let moving = originals;
+  if (existing !== -1) {
+    at = Math.min(findAgendaSectionEndIndex_(body, section.number), boundary.index);
+    moving = originals.slice(1);
+  } else {
+    at = findOrderedAgendaInsertIndex_(body, section.number);
+  }
+  moving.forEach(function (original, k) {
+    const type = original.getType();
+    const copy = original.copy();
+    if (type === TABLE) body.insertTable(at + k, copy);
+    else if (type === LIST_ITEM) body.insertListItem(at + k, copy);
+    else body.insertParagraph(at + k, copy);
+    if (k === 0 && existing === -1 && section.bare && titleOf) {
+      const title = String(titleOf(section.number) || '').trim();
+      if (title) copy.setText(section.number + ' ' + title);
+    }
+  });
+  for (let i = originals.length - 1; i >= 0; i--) removeAdhocBodyChild_(body, originals[i]);
+  return true;
+}
+
+/**
+ * One pass over the body, for repairReportStructure_(): { misplaced,
+ * redundant }. `misplaced`: whether a numbered heading stands after the
+ * heading that closes the report although its number is before it.
+ * `redundant`: the empty paragraphs below TDoc tables that are one too many
+ * -- of a run of two or more, all but the last. Read-only.
+ */
+function scanReportStructure_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const TABLE = DocumentApp.ElementType.TABLE;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const count = body.getNumChildren();
+  const headings = [];
+  const redundant = [];
+  let run = null;
+  const flush = function () { if (run && run.length > 1) for (let k = 0; k < run.length - 1; k++) redundant.push(run[k]); };
+  for (let i = 0; i < count; i++) {
+    const child = body.getChild(i);
+    const type = child.getType();
+    if (type === PARAGRAPH) {
+      const paragraph = child.asParagraph();
+      if (paragraph.getHeading() !== NORMAL) headings.push({ index: i, text: paragraph.getText().trim() });
+      else if (run && isEmptyBodyParagraph_(child)) { run.push(child); continue; }
+    }
+    flush();
+    run = (type === TABLE && isTDocTable_(child.asTable())) ? [] : null;
+  }
+  flush();
+
+  // The same boundary as findReportTerminalBoundary_(), from the headings read above.
+  let close = null;
+  let attendance = null;
+  headings.forEach(function (h) {
+    if (isClosingHeadingText_(h.text)) close = h;
+    else if (!attendance && h.text === ADHOC_ATTENDANCE_HEADING_) attendance = h;
+  });
+  const boundary = close || attendance;
+  const closeNumber = close ? agendaNumberOfHeadingText_(close.text) : '';
+  const misplaced = !!boundary && headings.some(function (h) {
+    if (h.index <= boundary.index) return false;
+    const number = agendaNumberOfHeadingText_(h.text);
+    return !!number && !(closeNumber && compareAgendaNumbers_(number, closeNumber) >= 0);
+  });
+  return { misplaced: misplaced, redundant: redundant };
+}
+
+/**
+ * Repairs what earlier releases left in a report, before an update works on
+ * it. Two things, and nothing else:
+ *
+ *   1. agenda sections that stand after "Close of the session" / the
+ *      Attendance section are put back in the order of the agenda;
+ *   2. below a TDoc table, a run of two or more empty paragraphs becomes one.
+ *      Those runs are the paragraphs the revision placement left behind on
+ *      every update. Empty paragraphs anywhere else are not touched, and a
+ *      paragraph that holds anything is never removed.
+ *
+ * `titleOf(agendaNumber)` may give the title of an agenda item for a heading
+ * that is a bare number. Returns { sectionsMoved, emptyParagraphsRemoved }.
+ * A report that needs neither is read once and not changed.
+ */
+function repairReportStructure_(body, titleOf) {
+  const result = { sectionsMoved: 0, emptyParagraphsRemoved: 0 };
+  let scan = scanReportStructure_(body);
+
+  if (scan.misplaced) {
+    // In document order. A section that cannot be moved stays, so the ones
+    // already refused are always the first of the next reading.
+    let refused = 0;
+    for (let guard = 0; guard < 200; guard++) {
+      const next = findMisplacedAgendaSections_(body)[refused];
+      if (!next) break;
+      if (moveMisplacedAgendaSection_(body, next, titleOf)) {
+        result.sectionsMoved++;
+        Logger.log('Structure: agenda section ' + next.number + ' was after the close of the report; put back in the order of the agenda');
+      } else {
+        refused++;
+        Logger.log('Structure: agenda section ' + next.number + ' stands after the close of the report and could not be moved; left where it is');
+      }
+    }
+    if (result.sectionsMoved > 0) scan = scanReportStructure_(body);
+  }
+
+  // The elements were collected before anything is removed, so no index is
+  // used after the document has changed.
+  scan.redundant.forEach(function (paragraph) { if (removeSeparatorParagraph_(paragraph)) result.emptyParagraphsRemoved++; });
+  if (result.emptyParagraphsRemoved) Logger.log('Structure: ' + result.emptyParagraphsRemoved + ' empty paragraph(s) left below TDoc tables by earlier updates removed');
+  return result;
+}
+
+// =========================================================
+// END OF REPORT STRUCTURE
+// =========================================================
 
 /**
  * ADDON-008A1: the read-only half of findInsertionPointForAgendaItem_() --
@@ -4394,6 +4830,9 @@ function findAgendaSectionEndIndex_(body, agendaItem) {
       if (nextHeading === DocumentApp.ParagraphHeading.NORMAL) continue;
       
       const nextText = nextPara.getText().trim();
+      // The Attendance section closes the report: nothing of an agenda item
+      // goes after it, also not of the item it stands in.
+      if (nextText === ADHOC_ATTENDANCE_HEADING_) return j;
       const nextLevel = (nextText.match(/^(\d+(?:\.\d+)*)/) || ['', ''])[1];
       const nextDots = nextLevel ? (nextLevel.match(/\./g) || []).length + 1 : 99;
       
@@ -6039,15 +6478,23 @@ function setDispositionRevisedTo_(table, revisedTo) {
  * dangling reference the instant this function returns.
  */
 function moveTableAfter_(body, table, afterTable) {
-  const targetIndex = body.getChildIndex(afterTable) + 1;
-  const currentIndex = body.getChildIndex(table);
-  if (currentIndex === targetIndex) return null; // already in the right place
+  // "In the right place" is: the next table below `afterTable`, with nothing
+  // but empty paragraphs between them. Google Docs keeps a paragraph between
+  // two tables, so a table can never be the very next child of another one:
+  // comparing child indices (as this did) found every revision out of place
+  // on every update, moved it again, and left one empty paragraph behind
+  // each time -- hundreds of them after some days of updates.
+  if (isTableDirectlyBelow_(body, table, afterTable)) return null;
 
   // Insert a copy at the destination, then drop the original. Holding the
   // element reference means the shifting indices do not matter.
   const copy = table.copy();
-  body.insertTable(targetIndex, copy);
-  table.removeFromParent();
+  body.insertTable(body.getChildIndex(afterTable) + 1, copy);
+  removeTableWithItsSeparator_(body, table);
+  // Whatever Google Docs added around the copy: one empty paragraph at most
+  // stays between two tables.
+  collapseEmptyParagraphsAfter_(body, afterTable);
+  collapseEmptyParagraphsAfter_(body, copy);
   return copy;
 }
 
@@ -10689,6 +11136,7 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {
     const contactCol = headers.indexOf('Contact');
     const agendaCol = headers.indexOf('Agenda item');
     const agendaTopicCol = headers.indexOf('Agenda Topic');
+    const agendaDescriptionCol = headers.indexOf('Agenda item description');
     const statusCol = headers.indexOf('TDoc Status');
     const typeCol = headers.indexOf('Type');
     const forCol = headers.indexOf('For');
@@ -10749,7 +11197,7 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {
         row: row,
         richTextRow: richTextValues[i],
         tdocCol, titleCol, sourceCol, contactCol, agendaCol, agendaTopicCol, statusCol, typeCol, forCol,
-        revisedToCol
+        revisedToCol, agendaDescriptionCol
       });
       if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];
     }

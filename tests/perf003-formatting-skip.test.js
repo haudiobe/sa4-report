@@ -73,8 +73,9 @@ console.log('source-structure: continuousUpdateCore_() feeds its REAL newTdocsAd
   const body = fnStart >= 0 ? source.slice(fnStart, fnEnd) : '';
 
   check('continuousUpdateCore_() was located in Code.js', fnStart >= 0, true);
-  check('continuousUpdate() calls shouldReformatAfterUpdate_(newTdocsAdded, rev.moved, ...)',
-    /shouldReformatAfterUpdate_\(\s*newTdocsAdded,\s*rev\.moved,/.test(body), true);
+  // After T-2026.10.12 an agenda section the update put back in its place counts like a new table: its tables were written again.
+  check('continuousUpdate() calls shouldReformatAfterUpdate_(newTdocsAdded + structure.sectionsMoved, rev.moved, ...)',
+    /shouldReformatAfterUpdate_\(\s*newTdocsAdded \+ structure\.sectionsMoved,\s*rev\.moved,/.test(body), true);
   check('continuousUpdate() reads the revision-linked-table-insertion counter as the third argument',
     /perfCounterValue_\('structural: new revision-linked tables inserted \(insertRevisedDocTablesAfter_\)'\)/.test(body), true);
   check('PERF-003B: continuousUpdate() reads the abstract-row-insertion counter as the fourth argument (closes the gap the PERF-002 measured run exposed)',

@@ -46,7 +46,11 @@ function check(name, actual, expected) {
 }
 
 const ROOT = path.join(__dirname, '..');
-const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+// The ledger of this file is about its own feature. The report-structure fix (after T-2026.10.12) is taken out of the
+// Code.js it reads -- tests/helpers/before-structure-fix.js; what that fix changed is pinned in tests/report-structure-fix.test.js.
+const STRUCTURE_VIEW = require('./helpers/before-structure-fix.js').codeBeforeStructureFix(fs.readFileSync(CODE_JS_PATH, 'utf8'));
+const CODE = STRUCTURE_VIEW.code;
+check('Code.js is read without the report-structure fix, every change of which was found once', STRUCTURE_VIEW.problems, []);
 const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
 const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
 const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));

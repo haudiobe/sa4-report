@@ -184,7 +184,7 @@ console.log('2. writing one part leaves the others, and the prose, alone');
 
 // ================================================================ 3. updates
 
-console.log('3. updates move nothing; a new TDoc table never lands inside a container');
+console.log('3. updates move nothing; a new TDoc table never lands inside a container, and never after the Attendance section');
 {
   const opening = r.container(OPENING);
   const attendance = r.container(ATTENDANCE);
@@ -197,16 +197,21 @@ console.log('3. updates move nothing; a new TDoc table never lands inside a cont
   check('an update with five new TDocs completes', [r.update(), r.inserted.slice().sort()], [{ success: true, error: null }, ['S4aA269004 @4.4', 'S4aA269005 @1', 'S4aA269006 @1.1', 'S4aA269007 @5', 'S4aA269008 @6']]);
   check('no TDoc table is inside the Session administration section or the Attendance section', r.tdocTablesInside(), [0, 0]);
   check('both containers are the very same elements as before the update, and still there once', [r.same(opening, OPENING), r.same(attendance, ATTENDANCE), r.count(OPENING), r.count(ATTENDANCE)], [true, true, 1, 1]);
-  check('where the new tables are: at the end of their agenda item\'s section -- after a container that ends that section, never in it', [
+  // After T-2026.10.12 (docs/REPORT_STRUCTURE.md): the Attendance section closes the report. The TDoc of the closing item goes
+  // before it, not after it; and the agenda item the report has no heading for gets its heading in the agenda part -- here, with no
+  // later item to stand before, directly before the closing item -- not at the end of the document.
+  check('where the new tables are: at the end of their agenda item\'s section -- after the opening container that ends its section, before the Attendance section, never in either', [
     r.texts()[r.at('[TDoc|S4aA269004]') - 1], r.texts()[r.at('[TDoc|S4aA269004]') + 1],
     r.at('[TDoc|S4aA269006]') === r.s.findAdhocOpeningContainer_(r.body).end, r.texts()[r.at('[TDoc|S4aA269006]') + 1],
     r.texts()[r.at('[TDoc|S4aA269005]') + 1],
-    r.at('[TDoc|S4aA269007]') === r.s.findAdhocAttendanceContainer_(r.body).end,
-    r.texts().slice(r.at('[TDoc|S4aA269007]') + 1)],
-    ['[TDoc|S4aA269003]', '5 Close of the meeting', true, '1.2 Registration of Documents', '2 Approval of the agenda and registration of documents', true, ['6', '[TDoc|S4aA269008]']]);
+    r.at('[TDoc|S4aA269007]') === r.s.findAdhocAttendanceContainer_(r.body).start - 1,
+    r.texts().slice(r.at('6'), r.at('6') + 3)],
+    ['[TDoc|S4aA269003]', '6', true, '1.2 Registration of Documents', '2 Approval of the agenda and registration of documents', true, ['6', '[TDoc|S4aA269008]', '5 Close of the meeting']]);
+  check('nothing of the agenda stands after the Attendance section: no TDoc table and no heading', r.texts().slice(r.at(ATTENDANCE) + 1).filter((t) => /^\[TDoc\|/.test(t) || /^\d+(\.\d+)* /.test(t) || /^\d+$/.test(t)), []);
   check('the registration table has the new TDocs, each once, with five cells and its session', rowsOf(r.s.findRegistrationTable_(r.body).table).slice(1).map((row) => row.length + ' ' + row[0] + ' ' + row[4]).sort(),
     ['5 S4aA269001 A01, A03', '5 S4aA269002 A02', '5 S4aA269003 A03', '5 S4aA269004 A03', '5 S4aA269005 A01', '5 S4aA269006 A01', '5 S4aA269007 A03', '5 S4aA269008 A03']);
-  check('the prose typed by hand is where it was', [r.texts()[r.at(OPENING) - 1], r.texts()[r.at(ATTENDANCE) - 1]], ['The chair welcomes the participants. (typed by hand)', 'The chair thanks the participants and closes the meeting. (typed by hand)']);
+  check('the prose typed by hand is where it was: the closing words are followed by the TDoc of the closing item, then by the Attendance section', [r.texts()[r.at(OPENING) - 1], r.texts()[r.at('[TDoc|S4aA269007]') - 1], r.texts()[r.at(ATTENDANCE) - 1]],
+    ['The chair welcomes the participants. (typed by hand)', 'The chair thanks the participants and closes the meeting. (typed by hand)', '[TDoc|S4aA269007]']);
 
   // Now write the containers again: the TDoc tables next to them survive.
   const tables = () => r.texts().filter((t) => /^\[TDoc\|S4aA/.test(t));
@@ -216,18 +221,21 @@ console.log('3. updates move nothing; a new TDoc table never lands inside a cont
   r.importAttendance('s1');
   check('refreshing the Attendance section, changing the opening details and importing again: every TDoc table is still there, none is inside a container, each container is there once',
     [tables(), r.tdocTablesInside(), r.count(OPENING), r.count(ATTENDANCE), all.length], [all, [0, 0], 1, 1, 8]);
-  check('the TDoc table after the Attendance section is still directly after it', r.at('[TDoc|S4aA269007]') === r.s.findAdhocAttendanceContainer_(r.body).end, true);
-  check('removing the last attendance removes the Attendance section and nothing else', (() => {
+  check('the TDoc table before the Attendance section is still directly before it', r.at('[TDoc|S4aA269007]') === r.s.findAdhocAttendanceContainer_(r.body).start - 1, true);
+  // The section is the end of the report now. A document ends with a paragraph, so its last one -- empty already -- stays
+  // (removeAdhocBodyChild_()); everything else of the section goes.
+  check('removing the last attendance removes the Attendance section and nothing else; the empty paragraph the document ends with stays', (() => {
     const snap = JSON.parse(r.snapshot());
     const c = r.s.findAdhocAttendanceContainer_(r.body);
-    const expected = JSON.stringify(snap.filter((e, i) => i < c.start || i >= c.end));
+    const endsTheDocument = c.end === snap.length && r.texts()[snap.length - 1] === '';
+    const expected = JSON.stringify(snap.filter((e, i) => i < c.start || i >= c.end).concat([snap[snap.length - 1]]));
     r.s.removeTeamsAttendanceImport('s1');
-    return [r.snapshot() === expected, r.count(ATTENDANCE), tables().length];
-  })(), [true, 0, 8]);
-  check('importing again puts it back at the end of the closing section: after the TDoc table that is in that section now, before the next agenda item', (() => {
+    return [endsTheDocument, r.snapshot() === expected, r.count(ATTENDANCE), tables().length];
+  })(), [true, true, 0, 8]);
+  check('importing again puts it back at the end of the closing section, which is the end of the report: after the TDoc table of that section (and the paragraph the document ended with), nothing after it', (() => {
     r.importAttendance('s1');
-    return [r.texts()[r.at(ATTENDANCE) - 1], r.texts()[r.s.findAdhocAttendanceContainer_(r.body).end], r.count(ATTENDANCE), r.tdocTablesInside(), r.texts()[r.at('[TDoc|S4aA269007]') - 1]];
-  })(), ['[TDoc|S4aA269007]', '6', 1, [0, 0], 'The chair thanks the participants and closes the meeting. (typed by hand)']);
+    return [r.texts().slice(r.at('[TDoc|S4aA269007]'), r.at(ATTENDANCE) + 1), r.s.findAdhocAttendanceContainer_(r.body).end === r.body.getNumChildren(), r.count(ATTENDANCE), r.tdocTablesInside(), r.texts()[r.at('[TDoc|S4aA269007]') - 1]];
+  })(), [['[TDoc|S4aA269007]', '', ATTENDANCE], true, 1, [0, 0], 'The chair thanks the participants and closes the meeting. (typed by hand)']);
   const steady = r.snapshot();
   check('further updates leave the report as it is', [r.update().success, r.update().success, r.snapshot() === steady], [true, true, true]);
 }
@@ -262,9 +270,10 @@ console.log('4. a rebuild gives the same report again, from the stored state');
   const attendance = r.container(ATTENDANCE);
   r.inserted.length = 0;
   r.update();
-  check('the first update after the rebuild adds the TDoc tables the build did not place -- next to the containers, never in them; the containers are the very same elements', [r.inserted.slice().sort(), r.tdocTablesInside(), r.same(opening, OPENING), r.same(attendance, ATTENDANCE),
-    r.at('[TDoc|S4aA269006]') === r.s.findAdhocOpeningContainer_(r.body).end, r.at('[TDoc|S4aA269007]') === r.s.findAdhocAttendanceContainer_(r.body).end, r.count(OPENING), r.count(ATTENDANCE)],
-    [['S4aA269006 @1.1', 'S4aA269007 @5', 'S4aA269008 @6'], [0, 0], true, true, true, true, 1, 1]);
+  check('the first update after the rebuild adds the TDoc tables the build did not place -- next to the containers, never in them, and none after the Attendance section; the containers are the very same elements', [r.inserted.slice().sort(), r.tdocTablesInside(), r.same(opening, OPENING), r.same(attendance, ATTENDANCE),
+    r.at('[TDoc|S4aA269006]') === r.s.findAdhocOpeningContainer_(r.body).end, r.at('[TDoc|S4aA269007]') === r.s.findAdhocAttendanceContainer_(r.body).start - 1, r.count(OPENING), r.count(ATTENDANCE),
+    r.texts().slice(r.at(ATTENDANCE) + 1).filter((t) => /^\[TDoc\|/.test(t)), r.at('6') < r.at('5 Close of the meeting')],
+    [['S4aA269006 @1.1', 'S4aA269007 @5', 'S4aA269008 @6'], [0, 0], true, true, true, true, 1, 1, [], true]);
   const steady = r.snapshot();
   r.update();
   check('and a further update changes nothing', r.snapshot() === steady, true);
