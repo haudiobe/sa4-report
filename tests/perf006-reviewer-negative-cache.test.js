@@ -242,8 +242,10 @@ console.log('source-structure: 24h default TTL, central helper design (not scatt
 
 {
   const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
-  check('REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS defaults to 24 (conservative, matches the existing A1 empty-cache convention)',
-    /var REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 24;/.test(source), true);
+  // After T-2026.10.13: 4 hours, not 24 -- an abstract that the Reviewer produces shortly after a TDoc's upload no longer
+  // waits most of a day (tests/abstract-cache-retry.test.js).
+  check('REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS is 4 (24 until T-2026.10.13)',
+    /var REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 4;/.test(source), true);
   check('a dedicated reviewerNoSummaryCacheKey_() helper exists (central key construction)',
     /function reviewerNoSummaryCacheKey_\(/.test(source), true);
   check('a dedicated isReviewerNoSummaryCached_() helper exists (central read+TTL check)',

@@ -5058,7 +5058,7 @@ function createTDocTableFromData_(body, data, richTextRow, tdocCol) {
  * Inserts Abstract row after Agenda Item, so the top rows remain:
  * TDoc, Title, Source, Contact, Agenda Item, Abstract.
  */
-function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus) {
+function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus, options) {
   // Nothing is asked for a withdrawn TDoc (abstractFetchBlockedBy_()): this
   // is checked here, before the token, the "no summary" cache and the
   // request, so that no caller can ask for one. `portalStatus` is the status
@@ -5093,9 +5093,15 @@ function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus) {
     const cacheId = canonical.isValid ? canonical.raw : null;
 
     if (cacheId && isReviewerNoSummaryCached_(cacheId, context)) {
-      perfCount_('Reviewer negative-cache hits');
-      Logger.log(`Skipping Reviewer API for ${tdocNumber}: no summary was available on a previous run (cached, within TTL)`);
-      return;
+      // After T-2026.10.13: the explicit "Update Abstracts" asks anyway
+      // (options.bypassNegativeCache); every other caller waits out the TTL.
+      if (!(options && options.bypassNegativeCache)) {
+        perfCount_('Reviewer negative-cache hits');
+        Logger.log(`Skipping Reviewer API for ${tdocNumber}: no summary was available on a previous run (cached, within TTL)`);
+        return;
+      }
+      perfCount_('Reviewer negative-cache bypasses (Update Abstracts)');
+      Logger.log(`Asking the Reviewer API for ${tdocNumber} although it had no summary on a previous run (cached, within TTL): bypassing the negative cache for a manual Update Abstracts`);
     }
 
     const apiUrl = `https://reviewer.bouazizi.dev/api/v1/documents/${tdocNumber}/summary?type=summary`;
@@ -7461,7 +7467,12 @@ function clearA1EmptyCache_() {
 // rather than by URL, and deliberately narrower in what it caches (see
 // fetchAndAddAbstract_()'s own comment for exactly which response is
 // treated as "definitive no summary" vs. left uncached).
-var REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 24;
+//
+// After T-2026.10.13: 4 hours, not 24. The Reviewer often has no summary yet
+// when a TDoc has just been uploaded; with 24 hours its abstract came most
+// of a meeting day late. An hourly update now asks again after 4 hours. The
+// explicit "Update Abstracts" does not wait at all (bypassNegativeCache).
+var REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 4;
 
 function reviewerNoSummaryCacheKey_(canonicalTdocId) {
   return 'REVIEWER_NO_SUMMARY_CACHE_' + canonicalTdocId;
@@ -11828,7 +11839,7 @@ function collectRevisionsOnly() {
  * brand-new TDoc table) is correctly excluded from this function's own
  * delta.
  */
-function addAbstractsForTables_(body, context, leaveOut, portalStatuses) {
+function addAbstractsForTables_(body, context, leaveOut, portalStatuses, options) {
   body = body || getActiveDocumentBodyCounted_('addAbstractsForTables_', context);
   let candidatesProcessed = 0;
   // Only the update passes `leaveOut`, { number: true }: TDocs that are not
@@ -11838,6 +11849,8 @@ function addAbstractsForTables_(body, context, leaveOut, portalStatuses) {
   // `portalStatuses`, { number: status }, is the TDoc list of an update
   // (tdocListStatuses_()). A withdrawn TDoc -- by the Status in the report,
   // or by that list -- is no candidate: abstractFetchBlockedBy_().
+  // `options` goes to fetchAndAddAbstract_() unchanged: only "Update
+  // Abstracts" passes { bypassNegativeCache: true } (after T-2026.10.13).
 
   const requestsBefore = perfCounterValue_('Reviewer API requests');
   const cacheSkipsBefore = perfCounterValue_('Reviewer negative-cache hits');
@@ -11859,7 +11872,7 @@ function addAbstractsForTables_(body, context, leaveOut, portalStatuses) {
     const portalStatus = portalStatuses && Object.prototype.hasOwnProperty.call(portalStatuses, tdocNumber) ? portalStatuses[tdocNumber] : '';
 
     // false: the TDoc is withdrawn and nothing was asked -- no candidate.
-    const asked = perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw, context, portalStatus));
+    const asked = perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw, context, portalStatus, options));
     if (asked !== false) candidatesProcessed++;
   });
 
@@ -11876,7 +11889,9 @@ function addAbstractsForTables_(body, context, leaveOut, portalStatuses) {
 
 function addAbstractsOnly() {
   // Manual step: always runs, independent of the trigger-level switch.
-  const result = addAbstractsForTables_();
+  // After T-2026.10.13: an explicit request, so a TDoc that had no summary on
+  // an earlier run is asked again now -- the negative cache is not waited out.
+  const result = addAbstractsForTables_(null, undefined, null, null, { bypassNegativeCache: true });
   DocumentApp.getUi().alert('Success', `Abstract step completed: ${result.candidatesProcessed} candidate table(s) processed, ${result.rowsInserted} abstract(s) inserted.`, DocumentApp.getUi().ButtonSet.OK);
 }
 

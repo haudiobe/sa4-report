@@ -44,7 +44,7 @@ const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { makeFakeDocumentBody } = require('./helpers/fake-document.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeBeforeStructureFix, codeWithoutConfigurationGuard, creatorWithoutConfigurationGuard, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeBeforeStructureFix, codeWithoutConfigurationGuard, codeWithoutAbstractCacheChange, creatorWithoutConfigurationGuard, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -407,8 +407,10 @@ console.log('M. the structure of the live report, and one update');
 console.log('N. what the fix changed in Code.js');
 {
   // The configuration guard, a separate change after this one, is taken out first (tests/configuration-guard.test.js pins it).
-  const guardless = codeWithoutConfigurationGuard(fs.readFileSync(CODE_JS_PATH, 'utf8'));
-  check('Code.js is read without the configuration guard', guardless.problems, []);
+  // ...and so is the abstract-cache change after T-2026.10.13 (tests/abstract-cache-retry.test.js pins it).
+  const abstractless = codeWithoutAbstractCacheChange(fs.readFileSync(CODE_JS_PATH, 'utf8'));
+  const guardless = codeWithoutConfigurationGuard(abstractless.code);
+  check('Code.js is read without the configuration guard and the abstract-cache change', abstractless.problems.concat(guardless.problems), []);
   const CODE = guardless.code;
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };

@@ -94,7 +94,7 @@ console.log('2. one place asks the Reviewer for an abstract, and the rule is the
   const callers = CODE_ONLY.split('\nfunction ').filter((f) => /[^_]fetchAndAddAbstract_\(/.test(f.slice(f.indexOf('(')))).map((f) => f.slice(0, f.indexOf('(')));
   check('it has the four callers this test goes through, and no other', callers, ['createTDocTableFromData_', 'addAbstractsForTables_', 'refreshUploadedTdocMetadata_', 'completeInsertedUploadedTdoc_']);
   check('the three that run in an update hand it the status of the TDoc list',
-    [/fetchAndAddAbstract_\(table, parsedTdoc\.raw, context, portalStatus\)/.test(functionSource('addAbstractsForTables_')), /fetchAndAddAbstract_\(table, parsed\.raw, context, portalStatus\)/.test(functionSource('refreshUploadedTdocMetadata_')),
+    [/fetchAndAddAbstract_\(table, parsedTdoc\.raw, context, portalStatus, options\)/.test(functionSource('addAbstractsForTables_')), /fetchAndAddAbstract_\(table, parsed\.raw, context, portalStatus\)/.test(functionSource('refreshUploadedTdocMetadata_')),
       /fetchAndAddAbstract_\(table, parsed\.raw, context, tdocListStatus_\(tdocData\)\)/.test(functionSource('completeInsertedUploadedTdoc_')),
       /addAbstractsForTables_\(body, context, Object\.assign\(tdocsNotUploadedYet_\(allTdocs\), abstractAskedThisRun\), tdocListStatuses_\(allTdocs\)\)/.test(functionSource('continuousUpdateCore_'))], [true, true, true, true]);
   check('the upload completion asks the rule before it forgets a "no summary" answer',

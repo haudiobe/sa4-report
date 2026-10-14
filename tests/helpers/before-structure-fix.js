@@ -159,12 +159,54 @@ function codeWithoutReleaseHeader(code) {
   return takeOut(code, null, null, RELEASE_CHANGES, 'RELEASE HEADER');
 }
 
-function codeBeforeStructureFix(code) {
-  const unreleased = codeWithoutReleaseHeader(code);
-  const guardless = codeWithoutConfigurationGuard(unreleased.code);
-  const view = takeOut(guardless.code, SECTION_START, SECTION_END, CHANGES, 'REPORT STRUCTURE');
-  return { code: view.code, problems: unreleased.problems.concat(guardless.problems, view.problems) };
+/**
+ * The abstract-cache change after T-2026.10.13: the Reviewer "no summary" cache
+ * lasts 4 hours, and "Update Abstracts" asks past it. [now, before] pairs.
+ */
+const ABSTRACT_CACHE_CHANGED_FUNCTIONS = ['fetchAndAddAbstract_', 'addAbstractsForTables_', 'addAbstractsOnly'];
+const ABSTRACT_CACHE_CHANGES = [
+ [
+  "//\n// After T-2026.10.13: 4 hours, not 24. The Reviewer often has no summary yet\n// when a TDoc has just been uploaded; with 24 hours its abstract came most\n// of a meeting day late. An hourly update now asks again after 4 hours. The\n// explicit \"Update Abstracts\" does not wait at all (bypassNegativeCache).\nvar REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 4;",
+  "var REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 24;"
+ ],
+ [
+  "function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus, options) {",
+  "function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus) {"
+ ],
+ [
+  "    if (cacheId && isReviewerNoSummaryCached_(cacheId, context)) {\n      // After T-2026.10.13: the explicit \"Update Abstracts\" asks anyway\n      // (options.bypassNegativeCache); every other caller waits out the TTL.\n      if (!(options && options.bypassNegativeCache)) {\n        perfCount_('Reviewer negative-cache hits');\n        Logger.log(`Skipping Reviewer API for ${tdocNumber}: no summary was available on a previous run (cached, within TTL)`);\n        return;\n      }\n      perfCount_('Reviewer negative-cache bypasses (Update Abstracts)');\n      Logger.log(`Asking the Reviewer API for ${tdocNumber} although it had no summary on a previous run (cached, within TTL): bypassing the negative cache for a manual Update Abstracts`);\n    }",
+  "    if (cacheId && isReviewerNoSummaryCached_(cacheId, context)) {\n      perfCount_('Reviewer negative-cache hits');\n      Logger.log(`Skipping Reviewer API for ${tdocNumber}: no summary was available on a previous run (cached, within TTL)`);\n      return;\n    }"
+ ],
+ [
+  "function addAbstractsForTables_(body, context, leaveOut, portalStatuses, options) {",
+  "function addAbstractsForTables_(body, context, leaveOut, portalStatuses) {"
+ ],
+ [
+  "  // `options` goes to fetchAndAddAbstract_() unchanged: only \"Update\n  // Abstracts\" passes { bypassNegativeCache: true } (after T-2026.10.13).\n",
+  ""
+ ],
+ [
+  "() => fetchAndAddAbstract_(table, parsedTdoc.raw, context, portalStatus, options));",
+  "() => fetchAndAddAbstract_(table, parsedTdoc.raw, context, portalStatus));"
+ ],
+ [
+  "  // After T-2026.10.13: an explicit request, so a TDoc that had no summary on\n  // an earlier run is asked again now -- the negative cache is not waited out.\n  const result = addAbstractsForTables_(null, undefined, null, null, { bypassNegativeCache: true });",
+  "  const result = addAbstractsForTables_();"
+ ]
+];
+
+/** Code.js without the abstract-cache change: { code, problems }. */
+function codeWithoutAbstractCacheChange(code) {
+  return takeOut(code, null, null, ABSTRACT_CACHE_CHANGES, 'ABSTRACT CACHE');
 }
 
-module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, codeWithoutReleaseHeader, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
+function codeBeforeStructureFix(code) {
+  const abstractless = codeWithoutAbstractCacheChange(code);
+  const unreleased = codeWithoutReleaseHeader(abstractless.code);
+  const guardless = codeWithoutConfigurationGuard(unreleased.code);
+  const view = takeOut(guardless.code, SECTION_START, SECTION_END, CHANGES, 'REPORT STRUCTURE');
+  return { code: view.code, problems: abstractless.problems.concat(unreleased.problems, guardless.problems, view.problems) };
+}
+
+module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

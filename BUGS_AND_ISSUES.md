@@ -397,6 +397,29 @@ one only while it still holds what the list said before -- never a cell edited b
 **Related Files:**
 - Code.js (`continuousUpdateCore_()`, existing-TDoc branch; `insertRevisedDocTablesAfter_()`)
 
+### 🔄 Reviewer "no summary" answer kept 24 hours (abstracts came late)
+
+**Status:** 🔄 fixed on branch `fix/abstract-cache-retry`, not released
+
+**Description:**
+A 404 from the Reviewer ("no summary for this document") is remembered per TDoc in the report's
+Document Properties (`REVIEWER_NO_SUMMARY_CACHE_<TDoc>`, PERF-006) so that an update does not ask
+again on every run. It was kept for 24 hours, and "Update Abstracts" respected it too. The Reviewer
+often has no summary yet when a TDoc has just been uploaded, so its abstract could come most of a
+meeting day late, with no way to ask again.
+
+**Fix:**
+- An update waits **4 hours** after a 404, then asks again (`REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS`,
+  not configurable). Only a 404 is remembered, as before; an abstract that arrives removes the entry;
+  a table with an Abstract is never asked for; the upload completion is unchanged. Existing entries
+  are read with the new 4 hours; none is migrated or deleted.
+- The explicit **Update Abstracts** asks for every table without an Abstract even when an entry is
+  live, and logs that it bypasses the negative cache. No other caller does.
+
+**Related Files:**
+- Code.js (`fetchAndAddAbstract_()`, `addAbstractsForTables_()`, `addAbstractsOnly()`)
+- tests/abstract-cache-retry.test.js, tests/perf006-reviewer-negative-cache.test.js
+
 ### 🔵 Attendance Company enrichment
 
 **Status:** 🔵 (working as designed; possible improvement, no decision made)
