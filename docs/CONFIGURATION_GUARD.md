@@ -1,8 +1,9 @@
 # No update without a saved meeting
 
-**Status: IMPLEMENTED, NOT RELEASED, NOT DEPLOYED. On branch `fix/report-structure-order`, the
-commit after the report-structure fix (`docs/REPORT_STRUCTURE.md`). `Code.js` is still
-2.22.0.**
+**Status: RELEASED AND LIVE. Template release T-2026.10.13 (`Code.js` 2.23.0), guard commit
+`67badd9`, release commit `4668c8eeb3299d876d5c29811284ede8a129bc38`, tag
+`template-release/T-2026.10.13`, with the report-structure fix (`docs/REPORT_STRUCTURE.md`).
+Deployed to the master template, 6G and MBS on 2026-10-14 (§ Verification).**
 
 ## What happened
 
@@ -71,6 +72,25 @@ meeting type, or with family and folder, passes as well.
 
 Not covered: Update E-mail Discussions, Update TDoc Revisions and Update Abstracts in an
 unconfigured report still read the defaults. None of them adds a TDoc or a section.
+
+## Verification
+
+- **Smoke, 2026-10-14**, on a fresh Drive copy of the live MBS report (empty properties), with
+  the candidate `67badd9`: Update Report Now before configuring was refused at once with the
+  message above (3.5 s). The log has no TDoc-list download, no SA4#136 / TSGS4_136_Montreal,
+  no FS_6G_MED, no repair and no revision step; the exports before and after are the same
+  document (only the ids the exporter gives the dropdowns differ). After Configure Meeting
+  (86172, ad-hoc, MBS, the meeting's TDoc list and agenda.csv, list 3GPP_TSG_SA_WG4_MBS, start
+  2026-08-21) the updates ran from the MBS sources.
+- **Live MBS**: the first update after the deployment ran on its saved configuration: TDoc
+  list `meetingId=86172`, 29 TDocs, collector 3GPP_TSG_SA_WG4_MBS.
+- **Live 6G**: not stopped by the guard. Its first update after the deployment ran on its
+  saved sources (its own ad-hoc TDoc list, 35 TDocs; 3GPP_TSG_SA4_FS_6G_MED; its drafts folder)
+  to `=== COMPLETE ===` and its summaries; only then Apps Script reported "the JavaScript
+  engine reported an unexpected error. Error code INTERNAL" and marked the run Failed. No code
+  of the report runs after those lines but the release of the document lock, which this
+  release did not change. The next scheduled update completed normally (88.6 s) and found the
+  change of the run before kept. A transient error of the platform, not of the release.
 
 ## Tests
 

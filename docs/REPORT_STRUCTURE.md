@@ -1,8 +1,10 @@
 # The structure of a report
 
-**Status: IMPLEMENTED, NOT RELEASED, NOT DEPLOYED. On branch `fix/report-structure-order`,
-after T-2026.10.12. `Code.js` is still 2.22.0. Not yet run against a Google document: the
-evidence is the exported live report and the automated tests (§ What is not verified yet).**
+**Status: RELEASED AND LIVE. Template release T-2026.10.13 (`Code.js` 2.23.0), fix commit
+`319084a`, release commit `4668c8eeb3299d876d5c29811284ede8a129bc38`, tag
+`template-release/T-2026.10.13`. Deployed to the master template and adopted by the 6G and MBS
+live reports on 2026-10-14; the live MBS report was repaired by its first update
+(§ Verification).**
 
 ## The rule
 
@@ -77,7 +79,7 @@ One changed behaviour to know: an agenda item numbered *after* the closing item 
 registered under 2.9 when 2.8 is "Close of the session") is written directly before the
 close, not after it.
 
-## The MBS report after one update
+## The MBS report after one update (the test)
 
 From `tests/fixtures/mbs-report-structure-damaged.json`, the sanitized structure of the
 exported report, with the fake document that keeps a paragraph between tables:
@@ -95,19 +97,35 @@ exported report, with the fake document that keeps a paragraph between tables:
 and the few of the opening section and the end). Every TDoc table is there once, with its
 minutes. A second update changes nothing.
 
-## What is not verified yet
+## Verification
 
-- **Google Docs itself.** That Docs keeps a paragraph between two tables is concluded from
-  the exported report (no two tables touch anywhere in it, and every moved revision stands
-  one paragraph below its parent); it was not probed in a live document. Where exactly Docs
-  puts that paragraph does not matter to the code, which normalises both sides of a move.
-- **Removing some 1,100 paragraphs in one update** takes time in a real document; how long
-  is not measured. If the run ended before it was done, the next one would go on.
-- **A paragraph Docs refuses to remove** is left where it is and logged; the update goes on.
-- Why the build of the MBS report had no heading for 2.6 and 2.7 is not established (its
-  stored agenda is not in the export).
-- 6G and every other report updated on a trigger very likely have the same runs of empty
-  paragraphs below their revision chains; their first update with this code removes them.
+**Real-document smoke**, 2026-10-14, on a Drive copy of the live MBS report (the candidate
+`67badd9`, which also carries the configuration guard, `docs/CONFIGURATION_GUARD.md`).
+After the meeting was configured:
+
+- first update: agenda sections 2.7 and 2.6 put back before "2.8 Close of the session",
+  1,216 empty paragraphs removed, revision chains in place, the MBS sources only (29 TDocs);
+  the result checked by eye and in the export, status dropdowns working;
+- second update: 0 new TDocs, 0 statuses, revision placement 6 in place / 0 moved, no
+  "Structure:" line, formatting skipped -- nothing changed.
+
+An earlier copy, updated before its meeting was saved, had imported unrelated SA4#136 TDocs
+(the reason for the configuration guard); its structural results were the same.
+
+**Live, after the deployment of T-2026.10.13:**
+
+| Report | First update | Next update |
+|---|---|---|
+| MBS | 2.7 and 2.6 put back before the close; 1,222 empty paragraphs removed; 29 TDocs, 0 new; revisions 6 in place, 0 moved | completed (49.7 s) |
+| 6G | one empty paragraph removed; 35 TDocs, 0 new | completed (88.6 s); no "Structure:" line, so the removal of the run before had been kept |
+
+What remains as it was:
+
+- That Google Docs keeps a paragraph between two tables is concluded from the documents, not
+  probed separately; the code does not depend on where exactly Docs puts it.
+- Why the build of the MBS report had no heading for 2.6 and 2.7 is not established.
+- S4aI260089, a TDoc of item 2.7, stands under 2.5 in the MBS report; an update does not move
+  a table whose section exists. Not part of this fix.
 
 ## Tests
 

@@ -3,7 +3,7 @@
 ## Overview
 This document tracks known bugs, issues, and improvement opportunities in the Google Apps Script project.
 
-**Last Updated:** 2026-07-23
+**Last Updated:** 2026-10-14
 
 ## Status Legend
 - 🔴 **Critical** - Blocking functionality, needs immediate attention
@@ -370,6 +370,42 @@ Add JSDoc comments to all functions
 - [ ] Check quota usage
 - [ ] Test with concurrent users (if applicable)
 - [ ] Monitor memory usage
+
+---
+
+## Observations after T-2026.10.13 (2026-10-14)
+
+### 🔵 TDoc Title / Source / Contact are written once
+
+**Status:** 🔵 (not a defect today)
+
+**Description:**
+A TDoc table gets Title, Source and Contact from the TDoc list when it is created (build,
+update, or a revision table from the drafts folder -- that one with all three empty). No later
+update writes them again: the update changes the Status, upload completion adds the link and the
+abstract, and the registration table only gains rows for new TDocs. A company changed in the
+TDoc list afterwards does not reach the report.
+
+**Impact:**
+None in the live MBS report: its 29 TDoc tables have the same Source and Contact as the current
+TDoc list of meeting 86172 (checked 2026-10-14).
+
+**Possible Solution:**
+Let the update fill empty Title / Source / Contact cells from the TDoc list, and change a filled
+one only while it still holds what the list said before -- never a cell edited by hand.
+
+**Related Files:**
+- Code.js (`continuousUpdateCore_()`, existing-TDoc branch; `insertRevisedDocTablesAfter_()`)
+
+### ℹ️ Sessions are metadata, not report structure (working as designed)
+
+The sessions of an ad-hoc report (MBS: AHG 1 on 2026-10-01, AHG 2 on 2026-10-15) assign TDocs to
+sessions by upload time, carry the Teams attendance and the statistics, and feed the Session
+administration section. The agenda stays the structure of the report: there are no session
+headings and no grouping by session (`docs/ADHOC_SESSIONS_ATTENDANCE_DESIGN.md` §2). The
+Session column of the registration table is opt-in -- Sessions › Assign TDoc Sessions… › Add the
+Session column, or a new build -- and the MBS report does not have it yet. Nothing to change; a
+build would clear the minutes written by hand, so that is not the way to add it.
 
 ---
 
