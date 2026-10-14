@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.23.0 (2026-10-14)
+ * Version: 2.24.0 (2026-10-14)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,16 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.24.0 (2026-10-14)
+ *   - Changed: the Reviewer's "no summary" answer (404) is remembered for
+ *     4 hours instead of 24 (REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS). An update
+ *     asks again after 4 hours, so an abstract the Reviewer produces soon
+ *     after an upload no longer comes most of a meeting day late. Only a
+ *     404 is remembered, as before; existing entries keep their key and are
+ *     read with the new 4 hours.
+ *   - Changed: "Update Abstracts" asks the Reviewer for every table without
+ *     an Abstract even when a "no summary" answer is still remembered, and
+ *     logs that it bypasses the negative cache. Updates do not.
  * 2.23.0 (2026-10-14)
  *   - Fixed: the revision placement of every update took each revision for
  *     out of place (Google Docs keeps a paragraph between two tables), moved
