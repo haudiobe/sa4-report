@@ -1198,6 +1198,8 @@ function updateReportNow() {
 
 /** The error text for a result of continuousUpdateCore_(), or '' when the update completed (pure). */
 function describeUpdateReportNowFailure_(result) {
+  // After T-2026.10.12: refused before the report was touched (no saved meeting, or an ad-hoc meeting that is not ready).
+  if (result && result.success !== true && result.notUpdated) return 'The report was not updated: ' + (result.error || 'it is not ready to be updated.');
   if (!result || result.success !== true) {
     return 'The report update failed: ' + ((result && result.error) || 'no result was returned') +
       '\nThe report may have been updated in part. Nothing is lost; run Update Report Now again once the cause is fixed.';

@@ -1150,7 +1150,13 @@ function continuousUpdateCore_(context) {
   try {
     // ADDON-007B3: fail before any document change (a background run then
     // counts as failed and does not advance lastRunAt).
-    assertMeetingReadyToBuild_(context);
+    try {
+      assertMeetingReadyToBuild_(context);
+    } catch (e) {
+      // After T-2026.10.12: the caller can say that nothing was changed.
+      result.notUpdated = true;
+      throw e;
+    }
 
     // Download latest TDOC list
     const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context));
@@ -1331,7 +1337,7 @@ function continuousUpdateCore_(context) {
   } catch (e) {
     Logger.log('ERROR: ' + e.message);
     Logger.log(e.stack);
-    result = { success: false, error: e.message };
+    result = Object.assign({ success: false, error: e.message }, result.notUpdated ? { notUpdated: true } : {});
   } finally {
     // PERF-002: this `finally` guarantees the summary runs after a normal
     // completion OR a catchable in-script exception (the `catch` above) --
@@ -19942,12 +19948,66 @@ function assertMeetingReadyToBuild_(context) {
   // TEMPLATE-002B: never build or update in the master template (a
   // background context is the CENTRAL scheduler, which has no template).
   if (!context) assertNotTemplateMaster_();
+  // After T-2026.10.12: a template report with no saved meeting is not a main meeting by default.
+  assertMeetingConfigured_(context);
   const readiness = getBuildReadiness_(context);
   if (readiness.ready) return;
   throw new Error('Cannot build report yet.\n\n' +
     readiness.issues.map(function (issue) { return '• ' + issue.message; }).join('\n') +
     '\n\nOpen Configure Meeting to finish the setup.');
 }
+
+// =========================================================
+// CONFIGURATION GUARD (after T-2026.10.12) -- NO UPDATE OR BUILD WITHOUT A SAVED MEETING
+// =========================================================
+//
+// getReportConfig_() fills every missing meeting value with a built-in
+// default: meeting folder TSGS4_136_Montreal, number 136, family 6G (so the
+// FS_6G_MED mailing list and agenda prefix 11.), and the SA4#136 TDoc list.
+// A missing MEETING_TYPE counts as "main" (normalizeMeetingType_()), and the
+// readiness rules never block a main meeting -- that keeps the CENTRAL
+// add-on and the Legacy reports working, which may rely on those defaults.
+//
+// A template report never does. Its meeting is always saved by Configure
+// Meeting or by the report creator. A Drive copy of a report starts with
+// empty properties, and an update of such a copy imported the SA4#136 TDoc
+// list into it. So, in the template runtime only, an update or a build needs
+// a saved meeting first:
+//   - MEETING_TYPE "adhoc" -- and then the ad-hoc readiness rules, as before;
+//   - MEETING_TYPE "main";
+//   - no MEETING_TYPE, but a saved report family and a saved main-meeting
+//     location (meeting folder, TDoc list or document folder): a main
+//     meeting saved by hand, without Resolve.
+// Anything else is refused before the document is touched and before any
+// download. docs/CONFIGURATION_GUARD.md.
+
+const MEETING_NOT_CONFIGURED_MESSAGE_ = 'This report has not been configured for a meeting yet: no saved meeting configuration was found. ' +
+  'Open Configure Meeting, Resolve the meeting, Discover Agenda / TDocs where it is an ad-hoc meeting, and Save. Nothing was changed.';
+
+/**
+ * Pure: whether these saved Document Properties hold a meeting -- see the
+ * section header. `props` is a property store (getProperty()).
+ */
+function hasSavedMeetingConfiguration_(props) {
+  const raw = function (key) { const v = props.getProperty(key); return String(v === null || v === undefined ? '' : v).trim(); };
+  const type = raw('MEETING_TYPE').toLowerCase();
+  if (type === 'adhoc' || type === 'main') return true;
+  if (type) return false;
+  return !!raw('REPORT_SUFFIX') && !!(raw('MEETING_FOLDER') || raw('TDOC_LIST_URL') || raw('FTP_BASE'));
+}
+
+/**
+ * Throws MEETING_NOT_CONFIGURED_MESSAGE_ in a template report that has no
+ * saved meeting. Nothing outside the template runtime is affected.
+ */
+function assertMeetingConfigured_(context) {
+  if (!templateRuntimeRelease_()) return;
+  if (!hasSavedMeetingConfiguration_(getReportStateStore_(context))) throw new Error(MEETING_NOT_CONFIGURED_MESSAGE_);
+}
+
+// =========================================================
+// END OF CONFIGURATION GUARD
+// =========================================================
 
 /**
  * PROD-016: reads current Document Properties (read-only) and calls

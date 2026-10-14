@@ -44,7 +44,7 @@ const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { makeFakeDocumentBody } = require('./helpers/fake-document.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeBeforeStructureFix, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeBeforeStructureFix, codeWithoutConfigurationGuard, creatorWithoutConfigurationGuard, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -406,10 +406,13 @@ console.log('M. the structure of the live report, and one update');
 // ====================================================================== N
 console.log('N. what the fix changed in Code.js');
 {
-  const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // The configuration guard, a separate change after this one, is taken out first (tests/configuration-guard.test.js pins it).
+  const guardless = codeWithoutConfigurationGuard(fs.readFileSync(CODE_JS_PATH, 'utf8'));
+  check('Code.js is read without the configuration guard', guardless.problems, []);
+  const CODE = guardless.code;
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
-  const view = codeBeforeStructureFix(CODE);
+  const view = codeBeforeStructureFix(fs.readFileSync(CODE_JS_PATH, 'utf8'));
   check('every change the fix made is in Code.js exactly once', view.problems, []);
   const section = CODE.slice(CODE.indexOf(SECTION_START), CODE.indexOf(SECTION_END) + SECTION_END.length);
   check('its new functions are one section, in this order', functionNames(section), SECTION_FUNCTIONS);
@@ -430,7 +433,7 @@ console.log('N. what the fix changed in Code.js');
       [SECTION_FUNCTIONS.slice().sort(), []]);
     const creator = (ref) => execFileSync('git', ['show', ref + ':template/ReportCreator.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
     check('ReportCreator.js, HyperLink.js and the manifest are the released files',
-      ['template/ReportCreator.js', 'HyperLink.js', 'appsscript.json'].filter((file) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r/g, '') !==
+      ['template/ReportCreator.js', 'HyperLink.js', 'appsscript.json'].filter((file) => (file === 'template/ReportCreator.js' ? creatorWithoutConfigurationGuard(fs.readFileSync(path.join(ROOT, file), 'utf8')).code : fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r/g, '')) !==
         execFileSync('git', ['show', 'template-release/T-2026.10.12:' + file], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '')).concat(creator('template-release/T-2026.10.12') ? [] : ['?']), []);
   }
 }

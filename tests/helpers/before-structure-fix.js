@@ -1,18 +1,21 @@
 /**
- * Code.js as it was before the report-structure fix (after T-2026.10.12).
+ * Code.js as it was before the work after T-2026.10.12: the report-structure
+ * fix and the configuration guard.
  *
  * Several test files hold a ledger of what changed in Code.js since a
  * release: which functions, and that nothing else did. The structure fix
- * changed seven released functions and added one section. Those ledgers are
- * about their own feature; they go on comparing with their release through
- * this view, which takes the structure fix out again -- every change named
- * here, each found exactly once. What the fix itself changed is pinned in
- * tests/report-structure.fix.test.js: this view is, byte for byte, the
- * Code.js of T-2026.10.12.
+ * changed six released functions and added one section; the configuration
+ * guard changed one and added one section. Those ledgers are about their own
+ * feature; they go on comparing with their release through this view, which
+ * takes both out again -- every change named here, each found exactly once.
+ * What each changed is pinned in its own test (tests/report-structure-fix.test.js,
+ * tests/configuration-guard.test.js): without both, Code.js is, byte for
+ * byte, the Code.js of T-2026.10.12.
  *
- * codeBeforeStructureFix(code) -> { code, problems }: `problems` names every
- * change that was not found exactly once (then the view is not to be trusted
- * and the ledger that uses it fails).
+ * codeBeforeStructureFix(code) -> { code, problems }: both taken out.
+ * codeWithoutConfigurationGuard(code) -> { code, problems }: the guard only.
+ * `problems` names every change that was not found exactly once (then the
+ * view is not to be trusted and the ledger that uses it fails).
  */
 
 const BAR = '// =========================================================\n';
@@ -89,22 +92,64 @@ const CHANGES = [
   ["        revisedToCol, agendaDescriptionCol\n", "        revisedToCol\n"]
 ];
 
-function codeBeforeStructureFix(code) {
+const GUARD_SECTION_START = BAR + '// CONFIGURATION GUARD (after T-2026.10.12) -- NO UPDATE OR BUILD WITHOUT A SAVED MEETING\n' + BAR;
+const GUARD_SECTION_END = BAR + '// END OF CONFIGURATION GUARD\n' + BAR + '\n';
+const GUARD_SECTION_FUNCTIONS = ['hasSavedMeetingConfiguration_', 'assertMeetingConfigured_'];
+const GUARD_CHANGED_FUNCTIONS = ['continuousUpdateCore_', 'assertMeetingReadyToBuild_'];
+const GUARD_CHANGES = [
+  ["    try {\n" +
+   "      assertMeetingReadyToBuild_(context);\n" +
+   "    } catch (e) {\n" +
+   "      // After T-2026.10.12: the caller can say that nothing was changed.\n" +
+   "      result.notUpdated = true;\n" +
+   "      throw e;\n" +
+   "    }\n", "    assertMeetingReadyToBuild_(context);\n"],
+  ["    result = Object.assign({ success: false, error: e.message }, result.notUpdated ? { notUpdated: true } : {});\n",
+   "    result = { success: false, error: e.message };\n"],
+  ["  // After T-2026.10.12: a template report with no saved meeting is not a main meeting by default.\n" +
+   "  assertMeetingConfigured_(context);\n", '']
+];
+
+function takeOut(code, start, end, changes, name) {
   let text = String(code).replace(/\r/g, '');
   const problems = [];
-  const start = text.indexOf(SECTION_START);
-  const end = text.indexOf(SECTION_END);
-  if (start === -1 || end === -1 || end < start || text.indexOf(SECTION_START, start + 1) !== -1) {
-    problems.push('the REPORT STRUCTURE section is not in Code.js exactly once');
+  const a = text.indexOf(start);
+  const b = text.indexOf(end);
+  if (a === -1 || b === -1 || b < a || text.indexOf(start, a + 1) !== -1) {
+    problems.push('the ' + name + ' section is not in Code.js exactly once');
   } else {
-    text = text.slice(0, start) + text.slice(end + SECTION_END.length);
+    text = text.slice(0, a) + text.slice(b + end.length);
   }
-  CHANGES.forEach(([now, before], i) => {
+  changes.forEach(([now, before], i) => {
     const at = text.indexOf(now);
-    if (at === -1 || text.indexOf(now, at + 1) !== -1) { problems.push('change ' + (i + 1) + ' is not in Code.js exactly once: ' + JSON.stringify(now.slice(0, 60))); return; }
+    if (at === -1 || text.indexOf(now, at + 1) !== -1) { problems.push(name + ' change ' + (i + 1) + ' is not in Code.js exactly once: ' + JSON.stringify(now.slice(0, 60))); return; }
     text = text.slice(0, at) + before + text.slice(at + now.length);
   });
   return { code: text, problems: problems };
 }
 
-module.exports = { codeBeforeStructureFix, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS };
+/** The one change of the guard in template/ReportCreator.js: Update Report Now says the report was not changed. */
+const GUARD_CREATOR_CHANGED_FUNCTIONS = ['describeUpdateReportNowFailure_'];
+const GUARD_CREATOR_CHANGE = "  // After T-2026.10.12: refused before the report was touched (no saved meeting, or an ad-hoc meeting that is not ready).\n" +
+   "  if (result && result.success !== true && result.notUpdated) return 'The report was not updated: ' + (result.error || 'it is not ready to be updated.');\n";
+
+/** template/ReportCreator.js without the guard's change: { code, problems }. */
+function creatorWithoutConfigurationGuard(code) {
+  const text = String(code).replace(/\r/g, '');
+  const at = text.indexOf(GUARD_CREATOR_CHANGE);
+  if (at === -1 || text.indexOf(GUARD_CREATOR_CHANGE, at + 1) !== -1) return { code: text, problems: ['the CONFIGURATION GUARD change of ReportCreator.js is not in it exactly once'] };
+  return { code: text.slice(0, at) + text.slice(at + GUARD_CREATOR_CHANGE.length), problems: [] };
+}
+
+function codeWithoutConfigurationGuard(code) {
+  return takeOut(code, GUARD_SECTION_START, GUARD_SECTION_END, GUARD_CHANGES, 'CONFIGURATION GUARD');
+}
+
+function codeBeforeStructureFix(code) {
+  const guardless = codeWithoutConfigurationGuard(code);
+  const view = takeOut(guardless.code, SECTION_START, SECTION_END, CHANGES, 'REPORT STRUCTURE');
+  return { code: view.code, problems: guardless.problems.concat(view.problems) };
+}
+
+module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
+  GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

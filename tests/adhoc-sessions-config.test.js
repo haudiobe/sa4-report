@@ -45,7 +45,10 @@ const thrown = (fn) => { try { fn(); return null; } catch (e) { return e.message
 const STRUCTURE_VIEW = require('./helpers/before-structure-fix.js').codeBeforeStructureFix(fs.readFileSync(CODE_JS_PATH, 'utf8'));
 const CODE = STRUCTURE_VIEW.code;
 check('Code.js is read without the report-structure fix, every change of which was found once', STRUCTURE_VIEW.problems, []);
-const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
+// The configuration guard (after T-2026.10.12) is taken out of ReportCreator.js as well -- tests/helpers/before-structure-fix.js.
+const CREATOR_VIEW = require('./helpers/before-structure-fix.js').creatorWithoutConfigurationGuard(fs.readFileSync(REPORT_CREATOR_PATH, 'utf8'));
+const CREATOR = CREATOR_VIEW.code;
+check('ReportCreator.js is read without the configuration guard, whose change was found once', CREATOR_VIEW.problems, []);
 const KEY = 'ADHOC_SESSIONS';
 
 const S = loadCode().sandbox;
