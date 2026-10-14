@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.22.0 (2026-10-07)
+ * Version: 2.23.0 (2026-10-14)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,26 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.23.0 (2026-10-14)
+ *   - Fixed: the revision placement of every update took each revision for
+ *     out of place (Google Docs keeps a paragraph between two tables), moved
+ *     it again and left one empty paragraph behind each time -- over a
+ *     thousand in a live report. A revision is in place when it is the next
+ *     table below its parent; a moved table takes its separator with it.
+ *   - Fixed: the heading of an agenda item a report did not have was
+ *     appended at the end of the document, after "Close of the session" and
+ *     the Attendance section, with its TDocs. It is now written in the order
+ *     of the agenda, with the title of the item where known; a TDoc of the
+ *     closing item goes before the Attendance section.
+ *   - Added: an update first repairs what earlier releases left: agenda
+ *     sections after the close go back to their place, and a run of empty
+ *     paragraphs below a TDoc table becomes one. A report in order is only
+ *     read. (REPORT STRUCTURE section; docs/REPORT_STRUCTURE.md.)
+ *   - Fixed (template reports): a report with no saved meeting -- a Drive
+ *     copy, or Resolve without Save -- is no longer updated or built on the
+ *     built-in SA4#136 / 6G defaults. It is refused before anything is read
+ *     or changed, with what to do. CENTRAL and Legacy are unchanged.
+ *     (CONFIGURATION GUARD section; docs/CONFIGURATION_GUARD.md.)
  * 2.22.0 (2026-10-07)
  *   - Added (template reports): Shared Minutes. Configure Meeting has a
  *     section with the button "Create Shared Minutes": it creates one

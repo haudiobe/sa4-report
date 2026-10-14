@@ -113,12 +113,14 @@ const GUARD_CHANGES = [
 function takeOut(code, start, end, changes, name) {
   let text = String(code).replace(/\r/g, '');
   const problems = [];
-  const a = text.indexOf(start);
-  const b = text.indexOf(end);
-  if (a === -1 || b === -1 || b < a || text.indexOf(start, a + 1) !== -1) {
-    problems.push('the ' + name + ' section is not in Code.js exactly once');
-  } else {
-    text = text.slice(0, a) + text.slice(b + end.length);
+  if (start !== null) {
+    const a = text.indexOf(start);
+    const b = text.indexOf(end);
+    if (a === -1 || b === -1 || b < a || text.indexOf(start, a + 1) !== -1) {
+      problems.push('the ' + name + ' section is not in Code.js exactly once');
+    } else {
+      text = text.slice(0, a) + text.slice(b + end.length);
+    }
   }
   changes.forEach(([now, before], i) => {
     const at = text.indexOf(now);
@@ -145,11 +147,24 @@ function codeWithoutConfigurationGuard(code) {
   return takeOut(code, GUARD_SECTION_START, GUARD_SECTION_END, GUARD_CHANGES, 'CONFIGURATION GUARD');
 }
 
-function codeBeforeStructureFix(code) {
-  const guardless = codeWithoutConfigurationGuard(code);
-  const view = takeOut(guardless.code, SECTION_START, SECTION_END, CHANGES, 'REPORT STRUCTURE');
-  return { code: view.code, problems: guardless.problems.concat(view.problems) };
+/** The release of both (T-2026.10.13): the version line and the changelog entry of 2.23.0. */
+const RELEASE_ENTRY = " * 2.23.0 (2026-10-14)\n *   - Fixed: the revision placement of every update took each revision for\n *     out of place (Google Docs keeps a paragraph between two tables), moved\n *     it again and left one empty paragraph behind each time -- over a\n *     thousand in a live report. A revision is in place when it is the next\n *     table below its parent; a moved table takes its separator with it.\n *   - Fixed: the heading of an agenda item a report did not have was\n *     appended at the end of the document, after \"Close of the session\" and\n *     the Attendance section, with its TDocs. It is now written in the order\n *     of the agenda, with the title of the item where known; a TDoc of the\n *     closing item goes before the Attendance section.\n *   - Added: an update first repairs what earlier releases left: agenda\n *     sections after the close go back to their place, and a run of empty\n *     paragraphs below a TDoc table becomes one. A report in order is only\n *     read. (REPORT STRUCTURE section; docs/REPORT_STRUCTURE.md.)\n *   - Fixed (template reports): a report with no saved meeting -- a Drive\n *     copy, or Resolve without Save -- is no longer updated or built on the\n *     built-in SA4#136 / 6G defaults. It is refused before anything is read\n *     or changed, with what to do. CENTRAL and Legacy are unchanged.\n *     (CONFIGURATION GUARD section; docs/CONFIGURATION_GUARD.md.)\n";
+const RELEASE_CHANGES = [
+  [' * Version: 2.23.0 (2026-10-14)\n', ' * Version: 2.22.0 (2026-10-07)\n'],
+  [' * CHANGELOG\n' + RELEASE_ENTRY, ' * CHANGELOG\n']
+];
+
+/** Code.js without the release header of 2.23.0 only: { code, problems }. */
+function codeWithoutReleaseHeader(code) {
+  return takeOut(code, null, null, RELEASE_CHANGES, 'RELEASE HEADER');
 }
 
-module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
+function codeBeforeStructureFix(code) {
+  const unreleased = codeWithoutReleaseHeader(code);
+  const guardless = codeWithoutConfigurationGuard(unreleased.code);
+  const view = takeOut(guardless.code, SECTION_START, SECTION_END, CHANGES, 'REPORT STRUCTURE');
+  return { code: view.code, problems: unreleased.problems.concat(guardless.problems, view.problems) };
+}
+
+module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, codeWithoutReleaseHeader, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

@@ -417,7 +417,7 @@ console.log('N. what the fix changed in Code.js');
   const section = CODE.slice(CODE.indexOf(SECTION_START), CODE.indexOf(SECTION_END) + SECTION_END.length);
   check('its new functions are one section, in this order', functionNames(section), SECTION_FUNCTIONS);
   check('the section declares nothing else at top level', section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm) || [], []);
-  check('Code.js is still version 2.22.0: this is not a release', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.22.0');
+  check('Code.js is version 2.23.0: the release of this fix and the configuration guard (tests/helpers/before-structure-fix.js takes its header out with them)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.23.0');
   let released = null;
   try {
     released = execFileSync('git', ['show', 'template-release/T-2026.10.12:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
