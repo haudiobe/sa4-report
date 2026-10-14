@@ -397,6 +397,24 @@ one only while it still holds what the list said before -- never a cell edited b
 **Related Files:**
 - Code.js (`continuousUpdateCore_()`, existing-TDoc branch; `insertRevisedDocTablesAfter_()`)
 
+### 🔵 Attendance Company enrichment
+
+**Status:** 🔵 (working as designed; possible improvement, no decision made)
+
+**Description:**
+The earlier observation "Company names were not loaded" (2026-10-14) refers to the Company column
+of the attendee table in the Attendance section, not to TDoc Source/Contact. The live MBS
+attendance lists 24 attendees, and all 24 Company cells are blank. Teams attendance exports have no
+company field, and the report deliberately does not infer a company from an e-mail domain
+(`docs/ADHOC_SESSIONS_ATTENDANCE_DESIGN.md` §11). Companies corrected by hand stay authoritative
+and survive refresh and rebuild. Not a T-2026.10.13 regression and not a release defect.
+
+**Possible Solution (to investigate):**
+Derive or propose a Company only from reliable evidence the report already has -- for example an
+unambiguous match of an attendee's name to a TDoc Contact whose TDoc has a known Source. Never infer
+it silently from an e-mail domain. Where the evidence is not authoritative, propose and let the user
+confirm rather than write.
+
 ### ℹ️ Sessions are metadata, not report structure (working as designed)
 
 The sessions of an ad-hoc report (MBS: AHG 1 on 2026-10-01, AHG 2 on 2026-10-15) assign TDocs to
