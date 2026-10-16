@@ -210,6 +210,8 @@ function codeWithoutAbstractCacheChange(code) {
  */
 const ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS = ['removeAdhocBodyChild_'];
 const ATTENDANCE_EMPTY_TEXT_CHANGES = [
+  [" * Version: 2.25.0 (2026-10-16)\n", " * Version: 2.24.0 (2026-10-14)\n"],
+  [" * CHANGELOG\n * 2.25.0 (2026-10-16)\n *   - Fixed: Refresh Attendance, and every import that replaced an existing\n *     Attendance section, failed with \"Cannot insert an empty text element.\"\n *     when the section ended the report. Google Docs keeps an empty paragraph\n *     after the last table; removing the section tried to empty it with\n *     setText(''), which Google Docs refuses on a paragraph without text.\n *     An empty last paragraph is now left as it is, any other is cleared.\n *     Stored attendance is unchanged; Refresh Attendance writes the section\n *     again from it.\n", " * CHANGELOG\n"],
  [
   "/**\n * Removes one child of the body. A document must end with a paragraph, so\n * the last paragraph is emptied instead of removed. Google Docs cannot insert\n * an empty text: setText('') throws on a paragraph that has no text -- and the\n * empty paragraph after a table at the end of the document is exactly that --\n * so an empty paragraph is left as it is and any other is cleared.\n */",
   "/**\n * Removes one child of the body. A document must end with a paragraph, so\n * the last paragraph is emptied instead of removed.\n */"

@@ -438,6 +438,25 @@ unambiguous match of an attendee's name to a TDoc Contact whose TDoc has a known
 it silently from an e-mail domain. Where the evidence is not authoritative, propose and let the user
 confirm rather than write.
 
+### 🔵 Attendance: a blank paragraph per remove-all / import-again cycle
+
+**Status:** 🔵 (low priority, cosmetic; not fixed, no decision made)
+
+**Description:**
+When all attendance of a report is removed (the section is deleted) and attendance is imported
+again, the new section is appended after the empty last paragraph that Google Docs keeps, and the
+table gets a new empty paragraph of its own after it. Each such cycle leaves one more blank
+paragraph before the Attendance heading. A plain Refresh Attendance (replace) is idempotent and
+does not accumulate (`tests/adhoc-attendance-empty-paragraph.test.js`). Found while fixing the
+empty-text failure of T-2026.10.14 (Code.js 2.25.0); deliberately not part of that fix.
+
+**Possible Solution (to investigate):**
+When the section is created at the end of the document and the last paragraph is empty, insert
+before it instead of appending after it.
+
+**Related Files:**
+- Code.js (`renderAdhocAttendanceSection_()`, `findAdhocAttendanceInsertIndex_()`)
+
 ### ℹ️ Sessions are metadata, not report structure (working as designed)
 
 The sessions of an ad-hoc report (MBS: AHG 1 on 2026-10-01, AHG 2 on 2026-10-15) assign TDocs to

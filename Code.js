@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.24.0 (2026-10-14)
+ * Version: 2.25.0 (2026-10-16)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,15 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.25.0 (2026-10-16)
+ *   - Fixed: Refresh Attendance, and every import that replaced an existing
+ *     Attendance section, failed with "Cannot insert an empty text element."
+ *     when the section ended the report. Google Docs keeps an empty paragraph
+ *     after the last table; removing the section tried to empty it with
+ *     setText(''), which Google Docs refuses on a paragraph without text.
+ *     An empty last paragraph is now left as it is, any other is cleared.
+ *     Stored attendance is unchanged; Refresh Attendance writes the section
+ *     again from it.
  * 2.24.0 (2026-10-14)
  *   - Changed: the Reviewer's "no summary" answer (404) is remembered for
  *     4 hours instead of 24 (REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS). An update
