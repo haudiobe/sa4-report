@@ -50,10 +50,17 @@
  *   - the last paragraph of the document cannot be removed.
  * Without the option the body is as it always was, so every earlier test
  * runs on the document it was written for.
+ *
+ * Empty text (after T-2026.10.14), addition only: as in Google Docs,
+ * setText('') on a paragraph that has no text throws "Cannot insert an
+ * empty text element."; clear() empties a paragraph. With
+ * { tableSeparators: true, endParagraph: true }, a table placed last gets
+ * the empty paragraph that Google Docs keeps after it.
  */
 
 function makeFakeDocumentBody(sandbox, options) {
   const strict = !!(options && options.tableSeparators);
+  const endParagraph = strict && !!(options && options.endParagraph);
   const PARAGRAPH = sandbox.DocumentApp.ElementType.PARAGRAPH;
   const TABLE = sandbox.DocumentApp.ElementType.TABLE;
   const NORMAL = sandbox.DocumentApp.ParagraphHeading.NORMAL;
@@ -72,7 +79,10 @@ function makeFakeDocumentBody(sandbox, options) {
       getHeading: () => p._heading,
       setHeading: (h) => { p._heading = h; return p; },
       setGlyphType: () => p,
-      setText: (v) => { p._text = String(v); return p; },
+      // Google Docs: an empty text cannot be inserted. A paragraph without text has no Text element to set, so setText('') on it throws
+      // (the production failure of 2026-10-16); on a paragraph with text it would replace the text. clear() is always allowed.
+      setText: (v) => { if (String(v) === '' && p._text === '') throw new Error('Exception: Cannot insert an empty text element.'); p._text = String(v); return p; },
+      clear: () => { p._text = ''; p._bold = false; p._links = null; return p; },
       getNumChildren: () => (p._text ? 1 : 0),
       copy: () => { const made = makeParagraph(p._text, p._heading); made._bold = p._bold; if (p._links) made._links = p._links.map((l) => l.slice()); return made; },
       removeFromParent: () => { touch(); const i = children.indexOf(p); if (i !== -1) { refuseLastParagraph(p); children.splice(i, 1); } return p; },
@@ -150,6 +160,8 @@ function makeFakeDocumentBody(sandbox, options) {
     if (isTable(children[idx - 1])) { children.splice(idx, 0, makeParagraph('')); idx++; }
     children.splice(idx, 0, t);
     if (isTable(children[idx + 1])) children.splice(idx + 1, 0, makeParagraph(''));
+    // A document ends with a paragraph: a table placed last gets an empty one after it (the one the Attendance section ends with).
+    if (endParagraph && idx === children.length - 1) children.push(makeParagraph(''));
   };
 
   /** Whether the element before position `idx` is a bold paragraph: what a table inserted there starts with. */

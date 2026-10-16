@@ -202,13 +202,37 @@ function codeWithoutAbstractCacheChange(code) {
   return takeOut(code, null, null, ABSTRACT_CACHE_CHANGES, 'ABSTRACT CACHE');
 }
 
+/**
+ * The attendance-rendering fix after T-2026.10.14: removeAdhocBodyChild_()
+ * no longer calls setText('') on an empty last paragraph (Google Docs: "Cannot
+ * insert an empty text element."). [now, before] pairs.
+ * tests/adhoc-attendance-empty-paragraph.test.js pins the behaviour.
+ */
+const ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS = ['removeAdhocBodyChild_'];
+const ATTENDANCE_EMPTY_TEXT_CHANGES = [
+ [
+  "/**\n * Removes one child of the body. A document must end with a paragraph, so\n * the last paragraph is emptied instead of removed. Google Docs cannot insert\n * an empty text: setText('') throws on a paragraph that has no text -- and the\n * empty paragraph after a table at the end of the document is exactly that --\n * so an empty paragraph is left as it is and any other is cleared.\n */",
+  "/**\n * Removes one child of the body. A document must end with a paragraph, so\n * the last paragraph is emptied instead of removed.\n */"
+ ],
+ [
+  "    const paragraph = child.asParagraph();\n    if (paragraph.getText() !== '') paragraph.clear();\n    paragraph.setHeading(DocumentApp.ParagraphHeading.NORMAL);\n",
+  "    child.asParagraph().setText('');\n    child.asParagraph().setHeading(DocumentApp.ParagraphHeading.NORMAL);\n"
+ ]
+];
+
+/** Code.js without the attendance-rendering fix: { code, problems }. */
+function codeWithoutAttendanceEmptyTextFix(code) {
+  return takeOut(code, null, null, ATTENDANCE_EMPTY_TEXT_CHANGES, 'ATTENDANCE EMPTY TEXT');
+}
+
 function codeBeforeStructureFix(code) {
-  const abstractless = codeWithoutAbstractCacheChange(code);
+  const attendanceless = codeWithoutAttendanceEmptyTextFix(code);
+  const abstractless = codeWithoutAbstractCacheChange(attendanceless.code);
   const unreleased = codeWithoutReleaseHeader(abstractless.code);
   const guardless = codeWithoutConfigurationGuard(unreleased.code);
   const view = takeOut(guardless.code, SECTION_START, SECTION_END, CHANGES, 'REPORT STRUCTURE');
-  return { code: view.code, problems: abstractless.problems.concat(unreleased.problems, guardless.problems, view.problems) };
+  return { code: view.code, problems: attendanceless.problems.concat(abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
+module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

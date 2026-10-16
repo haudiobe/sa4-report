@@ -15773,13 +15773,17 @@ function findAdhocAttendanceInsertIndex_(body) {
 
 /**
  * Removes one child of the body. A document must end with a paragraph, so
- * the last paragraph is emptied instead of removed.
+ * the last paragraph is emptied instead of removed. Google Docs cannot insert
+ * an empty text: setText('') throws on a paragraph that has no text -- and the
+ * empty paragraph after a table at the end of the document is exactly that --
+ * so an empty paragraph is left as it is and any other is cleared.
  */
 function removeAdhocBodyChild_(body, child) {
   const isLast = body.getChildIndex(child) === body.getNumChildren() - 1;
   if (isLast && child.getType() === DocumentApp.ElementType.PARAGRAPH) {
-    child.asParagraph().setText('');
-    child.asParagraph().setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    const paragraph = child.asParagraph();
+    if (paragraph.getText() !== '') paragraph.clear();
+    paragraph.setHeading(DocumentApp.ParagraphHeading.NORMAL);
     return;
   }
   body.removeChild(child);

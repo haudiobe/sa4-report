@@ -27,7 +27,7 @@
 const fs = require('fs');
 const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport, CACHE } = require('./helpers/template-report.js');
-const { codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutAbstractCacheChange, codeWithoutAttendanceEmptyTextFix, ABSTRACT_CACHE_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -151,11 +151,13 @@ console.log('5. key, value and place as before; an entry written by the earlier 
 // ====================================================================== 6
 console.log('6. what the change is');
 {
-  const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // The attendance-rendering fix after T-2026.10.14 is taken out first (tests/adhoc-attendance-empty-paragraph.test.js pins it).
+  const attendanceless = codeWithoutAttendanceEmptyTextFix(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, ''));
+  const CODE = attendanceless.code;
   const before = codeWithoutAbstractCacheChange(CODE);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, '')).filter((n, i, list) => list.indexOf(n) === i);
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
-  check('every part of the change is in Code.js exactly once', before.problems, []);
+  check('every part of the change is in Code.js exactly once', attendanceless.problems.concat(before.problems), []);
   check('three functions changed, none added or removed', [functionNames(CODE).filter((n) => functionSource(CODE, n) !== functionSource(before.code, n)), functionNames(CODE).length === functionNames(before.code).length],
     [ABSTRACT_CACHE_CHANGED_FUNCTIONS, true]);
   check('besides, only the TTL line and its comment', CODE.split('\n').filter((l) => /REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS =/.test(l)), ['var REVIEWER_NO_SUMMARY_CACHE_TTL_HOURS = 4;']);
