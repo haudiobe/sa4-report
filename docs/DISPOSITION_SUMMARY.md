@@ -2,7 +2,8 @@
 
 **Status: CANDIDATE — not released, not deployed.** Branch
 `feature/disposition-summary-close-report`, based on `origin/master` `e2ceddc` (release
-T-2026.10.15, `Code.js` 2.25.0). `Code.js` keeps its version line; a release adds it.
+T-2026.10.15, `Code.js` 2.25.0): candidate `4276161`, refined afterwards (postponed, the four
+revision states, the end of the summary). `Code.js` keeps its version line; a release adds it.
 
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
@@ -14,8 +15,8 @@ CENTRAL and Legacy too, but nothing there calls them.
 ```
 Disposition Summary                                   (Heading 1)
 Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition
-Summary, and kept up to date by every update. Text typed into this section stops it from
-being updated.
+Summary, and kept up to date by every update. Text typed between this line and its last
+table stops it from being updated; text below it is kept.
 Agreed and Endorsed Documents (17)                    (bold)
   TDoc | Title | Source | Status                      (table; "None." without TDocs)
 Other Disposed Documents (12)
@@ -45,18 +46,15 @@ them, and the summary, Close Report and its dialog all use it:
 | Class | Statuses | Why |
 |---|---|---|
 | Agreed and Endorsed | agreed, endorsed | as asked |
-| Other disposed | noted, revised, merged, approved, withdrawn, replied, postponed | a decision of the meeting on the document; a revised document is disposed and its revision has a row of its own |
-| Not yet disposed | available, reserved, parked, Plenary, other | no decision yet (available, reserved), deferred within the meeting (parked), left to the plenary (Plenary), or no meaning (other) |
+| Other disposed | noted, revised, merged, approved, withdrawn, replied | a final decision of the meeting on the document; a revised document is disposed and its revision has a row of its own |
+| Not yet disposed | available, reserved, parked, postponed, Plenary, other | no decision yet (available, reserved), deferred within the meeting (parked), no final substantive decision at this meeting (postponed), left to the plenary (Plenary), or no meaning (other) |
 | Not yet disposed, "not a known status" | anything else: no status, a typed text such as "agreed, see minutes", a Portal status without an option ("not pursued"), two tables with different statuses | fail safe: nothing counts as disposed unless it is listed |
 
 Case and whitespace are ignored ("  AGREED " is agreed).
 
-Decisions to confirm before release:
-- **approved** is "other disposed", not in the Agreed and Endorsed table (only agreed and
-  endorsed were asked for). One line moves it.
-- **Plenary** is "not yet disposed" (the decision is taken elsewhere). If a report counts it
-  as disposed, one line moves it.
-- **postponed** is "other disposed" (a decision of this meeting).
+Confirmed (refinement of `4276161`): **approved** is "other disposed" (only agreed and endorsed
+are in the first table); **Plenary** and **postponed** are "not yet disposed", so Close Report
+shows them instead of letting the report look clean.
 
 ## Where it stands
 
@@ -79,12 +77,23 @@ It holds for what an update, a build or an import writes afterwards:
 | a new Attendance section | at the end of the closing section, which ends at the summary heading; without a close, before the summary | `findAdhocAttendanceInsertIndex_()` |
 | Refresh Attendance | in place; its section ends at the summary heading | unchanged |
 
-**Its section** runs from its heading to the next heading. It is rewritten only when what it
-would say differs from what it says (otherwise not touched: no revision, no cursor jump for
-the people editing), and only when it holds nothing but what it writes and empty paragraphs.
-Text typed into it is never removed: the summary is then not written and the dialog (or the
-update log) says why. Text under a heading of its own after the summary is outside the
-section. The empty paragraphs at its end are left as they are, so a rewrite adds none.
+**What it owns** is exactly what it writes, read from its heading on: the note, the three class
+lines, each followed by its table or "None.", and empty paragraphs between them. It ends with
+the table (or "None.") of the last class. That end is the boundary:
+
+| Text typed … | What happens |
+|---|---|
+| below the summary, with or without a heading of its own (also a line "None.") | not the summary's; never touched. The summary is updated above it. |
+| into it — between its heading and its last table, so that a part of it stands below the text | the summary is not written, nothing is removed; the dialog (or the update log) names the text and says to move it |
+| above its heading | outside it |
+
+A summary table deleted by hand is written again whole. Named ranges, the other way to mark a
+boundary, are used nowhere in this project; the summary is bounded the way the Attendance
+section and the registration table are, by what it writes.
+
+It is rewritten only when what it would say differs from what it says (otherwise not touched:
+no revision, no cursor jump for the people editing). The empty paragraphs after its end are
+left as they are, so a rewrite adds none.
 
 ## During the meeting
 
@@ -113,8 +122,9 @@ concept in the project to record a close in, and none was added.)
 
 It:
 1. reads the TDocs and writes the summary;
-2. downloads the TDoc list of the meeting (the same `downloadAndGroupTdocs_()` as an update;
-   after the configuration guard, so never the built-in SA4#136 defaults);
+2. when the report has a TDoc as revised: downloads the TDoc list of the meeting (the same
+   `downloadAndGroupTdocs_()` as an update; after the configuration guard, so never the
+   built-in SA4#136 defaults). Without such a TDoc nothing is downloaded;
 3. says **Report ready to close** or **Report NOT READY TO CLOSE**, with the counts.
 
 Not ready while any of these holds — each is listed with what to do:
@@ -122,37 +132,62 @@ Not ready while any of these holds — each is listed with what to do:
 | Check | Listed as |
 |---|---|
 | a TDoc not yet disposed (incl. an unknown status) | TDoc \| Title \| Source \| Current Status (the dialog shows 40; the summary table has all) |
-| revised in the report, not in 3GU (below) | Original TDoc \| Revision \| Source \| Report state \| 3GU state, and the action |
-| something could not be checked: a status, the TDoc list, the summary (text typed into it) | the reason |
+| revision not reserved in 3GU (below) | Original TDoc \| Revision \| Source \| Report state \| 3GU state, and the action — a list of its own |
+| revision reserved but not uploaded in 3GU | the same, a list of its own |
+| revision state could not be verified in 3GU | the same, with the reason, a list of its own |
+| something could not be checked: a status, the summary (text typed into it) | the reason |
 
-### Revised in the report, not in 3GU
+The dialog counts each of them separately (`Revision not reserved in 3GU: 1.` …).
 
-From the TDoc list of real meetings (meeting 85916: 15 TDocs with a "Revised to", all with the
-status `revised`): when a revision is reserved in 3GU "as revision of" a TDoc, 3GU gives the
-TDoc the status `revised` and the revision number in "Revised to". So, for a TDoc whose
-**Status in the report is revised** (classified as above; the visible text "revised" anywhere
-else is not used):
+### A TDoc the report has as revised
 
-| TDoc list (3GU) | Result |
-|---|---|
-| status revised, with or without "Revised to" | consistent |
-| no "Revised to" and any other status (available, reserved, agreed, …) | **revision-not-reserved** — "Author needs to reserve/upload the revision in 3GU." |
-| "Revised to" B, and B not uploaded: no hyperlink on B in the list (the upload sign of the upload completion, `tdocListLinkUrl_()`), or without a readable link B's status reserved | **revision-not-uploaded** — "Author needs to upload the revision B in 3GU." |
-| the TDoc is not in the TDoc list | **not-in-tdoc-list** — "Check the TDoc in 3GU …" |
+**What "revised" means — the evidence.** The check rests on one invariant: *in 3GU a TDoc has the
+status revised when, and only when, a revision is reserved as "revision of" it, and that
+revision is then its "Revised to".*
+
+- Real TDoc list, meeting 85916 (`tests/fixtures/meeting-85916-tdoc-list-values.json`): 15
+  revisions of TDocs of the same list. All 15 "Is revision of" are mirrored by the original's
+  "Revised to", all 15 originals have the status revised, and no TDoc is revised without a
+  "Revised to" (statuses: 77 available, 15 revised, 2 reserved, 1 withdrawn).
+- Real TDoc list, meeting 86172 (MBS): 5 reserved TDocs are revisions of main-meeting TDocs
+  (S4-…) — a revision can be in another meeting's list. Such a case is "could not be verified",
+  never "not reserved".
+- The code: the agenda resolver (`selectAgendaCandidate_()`) reads revised the same way — the
+  TDoc superseded by its "revision of" (meeting 60778). The report's Status becomes revised in
+  only two ways: the Portal status sync (`applyTdocStatusUpdate_()` and its dropdown variant, from
+  a 3GU status revised — consistent by construction), or a person choosing it. Draft revisions
+  in the Inbox/Drafts folder never set a Status (their tables are inserted as Available).
+- 3GPP practice: a revision of a TDoc is a new TDoc number; drafts (r1, r2) are not.
+
+So a person choosing revised before the revision is reserved is exactly the case to report;
+anything the list does not show reliably is "could not be verified", not a guess.
+
+For a TDoc whose **Status in the report is revised** (classified as above; the text "revised"
+anywhere else — Disposition, Minutes — decides nothing):
+
+| TDoc list (3GU) | State | Close Report says | Action |
+|---|---|---|---|
+| "Revised to" B, and B has its hyperlink in the list (the upload sign of the upload completion, `tdocListLinkUrl_()`) | complete | nothing | — |
+| no "Revised to", and the TDoc is still available or reserved | not reserved | Revision not reserved in 3GU. | Author needs to reserve the revision in 3GU. |
+| "Revised to" B, and B has no hyperlink in the list | reserved, not uploaded | Revision reserved but not uploaded in 3GU. | Author needs to upload the reserved revision in 3GU. |
+| the list could not be read (or the meeting is not saved); it has no "Revised to" column; it does not have the TDoc; it has it as revised without naming a revision; it has another decision (agreed, noted, …) or no status; the "Revised to" is not a TDoc number; B is not in the list; the links of the list cannot be read | not verified | Revision state could not be verified in 3GU. | Check the TDoc and its revision in 3GU (with the reason). |
+
+Each of the last three blocks the close. Nothing is ever written to 3GU.
 
 The Revision column shows "Revised to" from 3GU where there is one, else the TDoc numbers the
 report's Disposition and Revisions cells name (for information only; they decide nothing).
 
 ## Tests
 
-`tests/disposition-summary-close-report.test.js` (114 checks): the classification of every
-option and of unknown statuses; the summary (every TDoc once, counts, order, links, title,
+`tests/disposition-summary-close-report.test.js`: the classification of every option
+(postponed not yet disposed) and of unknown statuses; the summary (every TDoc once, counts, order, links, title,
 source, status, "None.", text statuses, duplicates); idempotence (5 runs and 5 updates
 element-for-element identical; seven status changes back and forth, each followed by an
-update: no element and no empty paragraph more); typed text never removed; an unreadable status; Close Report (clean, available,
-reserved, parked, several, unknown, 45 open, TDoc list unreadable, no saved meeting, master
-template, nothing changed but the summary, nothing stored); every revision/3GU combination,
-on the real update and as pure rules; placement (ad-hoc with and without Attendance, Attendance
+update: no element and no empty paragraph more); text typed into it never removed; prose typed below it (also "None.") kept through updates;
+a summary table deleted by hand; an unreadable status; Close Report (clean, available, reserved,
+parked, postponed, several, unknown, 45 open, no revised TDoc: no list read, TDoc list unreadable,
+no saved meeting, master template, nothing changed but the summary, nothing stored); the four
+revision states, each in its own list, on the real update and as pure rules; placement (ad-hoc with and without Attendance, Attendance
 imported later, no close, text typed at the end, an annex heading after it, main meeting); the
 MBS fixture end to end; a report without a summary is never given one; Build Report from
 Scratch; and that without this change `Code.js` and `ReportCreator.js` are those of T-2026.10.15,
@@ -168,7 +203,9 @@ MBS. No Build Report from Scratch.
 2. Update Disposition Summary. Check: the summary is after "2.8 Close of the session" and the
    Attendance section; 29 (or more) TDocs; Title, Source, Status and links as in the tables.
 3. Run it again: "already up to date"; nothing changed (version history).
-4. Close Report. Read both lists.
-5. Correct the statuses in the minutes; have the authors reserve/upload the revisions in 3GU.
+4. Close Report. Read the lists: not yet disposed; revision not reserved; reserved but not
+   uploaded; could not be verified.
+5. Correct the statuses in the minutes; have the authors reserve, or upload, their revisions in
+   3GU; check by hand what could not be verified.
 6. Close Report again until "Report ready to close".
 7. Update Report Now once more: the summary says "unchanged" in the log; nothing else changed.

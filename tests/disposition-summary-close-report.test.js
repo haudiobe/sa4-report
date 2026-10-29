@@ -73,13 +73,17 @@ const snapshot = (body) => JSON.stringify(body._children.map((c) => (c.getType()
   ? ['T', Array.from({ length: c.getNumRows() }, (x, r) => Array.from({ length: c.getRow(r).getNumCells() }, (y, k) => [c.getRow(r).getCell(k).getText(), c.getRow(r).getCell(k)._dropdown ? c.getRow(r).getCell(k)._dropdown.optionId : null, cellLink(c.getRow(r).getCell(k))]))]
   : ['P', c.getHeading(), c.getText(), !!c._bold])));
 /**
- * The document without the summary section (to the next heading): everything a summary must leave as it is. The option
- * selected in a dropdown is left out -- the tests pick decisions; what a status shows is checked by shownAll().
+ * The document without what the summary owns (its heading to the end of what it wrote): everything a summary must leave
+ * as it is, prose typed below it included. The option selected in a dropdown is left out -- the tests pick decisions;
+ * what a status shows is checked by shownAll(). So are the empty paragraphs that end the document (Google Docs keeps one
+ * after a table that ends it).
  */
 const outsideSummary = (r) => {
   const s = r.s.findDispositionSummarySection_(r.body);
-  const all = JSON.parse(snapshot(r.body)).map((e) => (e[0] === 'T' ? ['T', e[1].map((row) => row.map((cell) => [cell[0], cell[2]]))] : e));
-  return JSON.stringify(s ? all.slice(0, s.start).concat(all.slice(s.end)) : all);
+  let all = JSON.parse(snapshot(r.body)).map((e) => (e[0] === 'T' ? ['T', e[1].map((row) => row.map((cell) => [cell[0], cell[2]]))] : e));
+  if (s) all = all.slice(0, s.start).concat(all.slice(s.contentEnd));
+  while (all.length && all[all.length - 1][0] === 'P' && all[all.length - 1][1] === 'NORMAL' && all[all.length - 1][2] === '') all.pop();
+  return JSON.stringify(all);
 };
 /** Headings and TDoc numbers, in order; a summary table as '[summary n]'. */
 const outline = (body) => body._children.map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : isSummaryTable(c) ? '[summary ' + (c.getNumRows() - 1) + ']' : isHeading(c) ? '# ' + c.getText() : null)).filter(Boolean);
@@ -129,9 +133,10 @@ console.log('A. the classification of the statuses');
   const { sandbox: s } = loadCode();
   const cls = (status) => s.classifyTdocDisposition_(status).disposition;
   check('agreed and endorsed: AGREED_OR_ENDORSED, as two statuses', ['agreed', 'endorsed'].map(cls), ['AGREED_OR_ENDORSED', 'AGREED_OR_ENDORSED']);
-  check('noted, revised, merged, approved, withdrawn, replied, postponed: DISPOSED_OTHER',
-    ['noted', 'revised', 'merged', 'approved', 'withdrawn', 'replied', 'postponed'].map(cls), Array(7).fill('DISPOSED_OTHER'));
-  check('available, reserved, parked, Plenary, other: UNRESOLVED', ['available', 'reserved', 'parked', 'Plenary', 'other'].map(cls), Array(5).fill('UNRESOLVED'));
+  check('noted, revised, merged, approved, withdrawn, replied: DISPOSED_OTHER (approved is not in the agreed/endorsed table)',
+    ['noted', 'revised', 'merged', 'approved', 'withdrawn', 'replied'].map(cls), Array(6).fill('DISPOSED_OTHER'));
+  check('available, reserved, parked, postponed, Plenary, other: UNRESOLVED', ['available', 'reserved', 'parked', 'postponed', 'Plenary', 'other'].map(cls), Array(6).fill('UNRESOLVED'));
+  check('postponed: no final decision at this meeting -- not yet disposed, a known status', s.classifyTdocDisposition_('Postponed'), { label: 'postponed', known: true, disposition: 'UNRESOLVED' });
   check('every one of the fourteen options of the template is classified', OPTIONS.filter((o) => !s.classifyTdocDisposition_(o).known), []);
   const constant = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '').match(/const DISPOSITION_OF_STATUS_ = \{([\s\S]*?)\};/)[1];
   check('DISPOSITION_OF_STATUS_ names exactly the options of the template, by their label',
@@ -236,13 +241,13 @@ console.log('C. repeated: idempotent, one summary, no empty paragraphs gained, t
     [summaryHeadings(r.body), r.body._children.length - firstCount, empties(r.body) - firstEmpties, outsideSummary(r) === before], [1, 0, 0, true]);
   check('no status was changed by any of it (only the picks of the test)', shownAll(r), statusesBefore.map((x) => x.replace(id(3) + '=dropdown:parked', id(3) + '=dropdown:agreed').replace(id(4) + '=dropdown:available', id(4) + '=dropdown:available')));
 
-  // Text typed into the section is never removed: nothing is written, and the user is told.
+  // Text typed INTO the summary (between its note and its first table) is never removed: nothing is written, and the user is told.
   r.user(() => { const at = r.body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY); r.body.insertParagraph(at + 2, 'Note of the chair: 4.5 to be continued.'); });
   decide(r, { 4: 'agreed' });
   const typed = snapshot(r.body);
   updateSummary(r);
   check('typed text in the section: Update Disposition Summary writes nothing and says why',
-    [snapshot(r.body) === typed, /not updated: its section holds text it did not write \("Note of the chair: 4.5 to be continued."\)/.test(lastAlert(r)[1])], [true, true]);
+    [snapshot(r.body) === typed, /not updated: text was typed into it \("Note of the chair: 4.5 to be continued."\), above a part of the summary/.test(lastAlert(r)[1])], [true, true]);
   check('... and so does an update, which completes', [r.update(), snapshot(r.body) === typed, r.logs.filter((l) => /^Disposition Summary: not updated/.test(l)).length > 0],
     [{ success: true, error: null, dispositionSummary: 'refused' }, true, true]);
   r.user(() => { const p = r.body._children.filter((c) => c.getType() === 'PARAGRAPH' && c.getText() === 'Note of the chair: 4.5 to be continued.')[0]; p.removeFromParent(); });
@@ -270,14 +275,15 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
   const result = closeReport(clean);
   check('a clean report: ready to close', [result.ready, lastAlert(clean)[0]], [true, 'Report ready to close']);
   check('the dialog: counts and the summary', lastAlert(clean)[1],
-    'Report ready to close.\n\n5 TDocs checked.\n2 agreed/endorsed.\n3 other disposed.\n0 not yet disposed.\n0 revision/3GU inconsistencies.\n\nDisposition Summary written at the end of the report.');
+    'Report ready to close.\n\n5 TDocs checked.\n2 agreed/endorsed.\n3 other disposed.\n0 not yet disposed.\nRevision not reserved in 3GU: 0.\nRevision reserved but not uploaded in 3GU: 0.\n' +
+    'Revision state could not be verified in 3GU: 0.\n\nDisposition Summary written at the end of the report.');
   check('it wrote the summary, and changed no status, nothing in 3GU and nothing through the Docs API', [summaryHeadings(clean.body), shownAll(clean), JSON.stringify(clean.tdocs) === tdocList, clean.api.count('batchUpdate') - writesBefore],
     [1, statuses, true, 0]);
   check('it stored nothing', Object.keys(clean.docProps._store).filter((k) => /CLOSE|DISPOSITION|CLOSED/i.test(k)), []);
   closeReport(clean);
   check('run again: ready, the summary already up to date', [lastAlert(clean)[0], lastAlert(clean)[1].split('\n').slice(-1)[0], summaryHeadings(clean.body)], ['Report ready to close', 'Disposition Summary was already up to date.', 1]);
 
-  ['available', 'reserved', 'parked'].forEach((status) => {
+  ['available', 'reserved', 'parked', 'postponed'].forEach((status) => {
     const r = built([t(1, '4.3'), t(2, '4.3')], { 1: 'agreed', 2: status });
     const res = closeReport(r);
     check(status + ' blocks; the TDoc is listed with title, source and status', [res.ready, lastAlert(r)[0], lastAlert(r)[1].split('\n').filter((l) => /^• /.test(l))],
@@ -290,9 +296,10 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
   const text = lastAlert(several)[1];
   check('several not yet disposed: every one is listed, in the order of the report', [res.ready, res.unresolved.map((e) => e.tdoc), text.split('\n').filter((l) => /^• /.test(l)).map((l) => l.split(' | ')[0].slice(2))],
     [false, [id(1), id(2), id(4), id(5)], [id(1), id(2), id(4), id(5)]]);
-  check('the dialog says NOT READY TO CLOSE, the counts, and what to do', [text.split('\n')[0], text.split('\n').slice(2, 7), /NOT YET DISPOSED \(4\) -- TDoc \| Title \| Source \| Current Status:/.test(text),
+  check('the dialog says NOT READY TO CLOSE, the counts, and what to do', [text.split('\n')[0], text.split('\n').slice(2, 9), /NOT YET DISPOSED \(4\) -- TDoc \| Title \| Source \| Current Status:/.test(text),
     text.split('\n').slice(-1)[0]],
-    ['Report NOT READY TO CLOSE.', ['5 TDocs checked.', '1 agreed/endorsed.', '0 other disposed.', '4 not yet disposed.', '0 revision/3GU inconsistencies.'], true,
+    ['Report NOT READY TO CLOSE.', ['5 TDocs checked.', '1 agreed/endorsed.', '0 other disposed.', '4 not yet disposed.', 'Revision not reserved in 3GU: 0.', 'Revision reserved but not uploaded in 3GU: 0.',
+      'Revision state could not be verified in 3GU: 0.'], true,
       'Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.']);
 
   const unknown = templateReport({ tdocs: [t(1, '4.3'), t(2, '4.3')], tableSeparators: true, release: false, docs: false });
@@ -309,22 +316,30 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
   check('45 not yet disposed: the dialog lists forty and points to the summary; the summary lists all',
     [m.unresolved.length, ml.filter((l) => /^• /.test(l)).length, ml.filter((l) => /^… and 5 more: see "Documents Not Yet Disposed" in the Disposition Summary\.$/.test(l)).length, summaryOf(many.body)[2][1].length], [45, 40, 1, 45]);
 
-  // What cannot be checked blocks.
-  const broken = built([t(1, '4.3')], { 1: 'agreed' });
+  // The TDoc list is read only when the report has a TDoc as revised: without one, a list that cannot be read does not matter.
+  const norevision = built([t(1, '4.3')], { 1: 'agreed' });
+  norevision.s.SpreadsheetApp = { open: () => { throw new Error('Spreadsheet conversion failed'); } };
+  const listFetches = (r, from) => r.fetches.slice(from).filter((f) => /GenerateDocumentList/.test(f)).length;
+  const nf = norevision.fetches.length;
+  check('no TDoc revised in the report: the TDoc list is not read, and the report is ready', [closeReport(norevision).ready, listFetches(norevision, nf)], [true, 0]);
+  // What cannot be checked blocks: the TDoc list cannot be read, with a TDoc revised in the report.
+  const broken = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 2: 'agreed' });
   broken.s.SpreadsheetApp = { open: () => { throw new Error('Spreadsheet conversion failed'); } };
   const bres = closeReport(broken);
-  check('the TDoc list cannot be read: not ready, the summary written, the reason given', [bres.ready, summaryHeadings(broken.body), lastAlert(broken)[1].split('\n').filter((l) => /^⚠️/.test(l))],
-    [false, 1, ['⚠️ The revisions could not be checked against 3GU: Spreadsheet conversion failed']]);
+  check('the TDoc list cannot be read: not ready, the summary written, the revised TDoc "could not be verified", with the reason',
+    [bres.ready, summaryHeadings(broken.body), bres.revisions.map((x) => [x.tdoc, x.kind, x.reason]), lastAlert(broken)[1].split('\n').filter((l) => /^(REVISION STATE|   → )/.test(l))],
+    [false, 1, [[id(1), 'revision-not-verified', 'the TDoc list could not be read: Spreadsheet conversion failed']],
+      ['REVISION STATE COULD NOT BE VERIFIED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '   → Check the TDoc and its revision in 3GU. (The TDoc list could not be read: Spreadsheet conversion failed.)']]);
   // A Drive copy of a report, or Resolve without Save: no saved meeting (the configuration guard). The TDoc list is not read --
-  // never the built-in SA4#136 defaults.
-  const unsaved = built([t(1, '4.3')], { 1: 'agreed' });
+  // never the built-in SA4#136 defaults -- and the revision is not verified.
+  const unsaved = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 2: 'agreed' });
   delete unsaved.docProps._store.MEETING_TYPE;
   delete unsaved.docProps._store.REPORT_SUFFIX;
   const fetchesBefore = unsaved.fetches.length;
   const ures = closeReport(unsaved);
-  check('a report with no saved meeting: not ready, the reason given, and no TDoc list read',
-    [ures.ready, ures.problems.length, /\n⚠️ The revisions could not be checked against 3GU: /.test(lastAlert(unsaved)[1]), unsaved.fetches.length - fetchesBefore],
-    [false, 1, true, 0]);
+  check('a report with no saved meeting: not ready, the revision not verified, and no TDoc list read',
+    [ures.ready, ures.revisions.map((x) => x.kind), /^the TDoc list could not be read: /.test(ures.revisions[0].reason), listFetches(unsaved, fetchesBefore)],
+    [false, ['revision-not-verified'], true, 0]);
   const unreadable = built([t(1, '4.3')], { 1: 'agreed' });
   unreadable.api.fail.get = () => 'Service unavailable';
   const nres = closeReport(unreadable);
@@ -339,49 +354,72 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
 }
 
 // ====================================================================== E
-console.log('E. revised in the report, not in 3GU');
+console.log('E. revised in the report: not reserved, reserved but not uploaded, complete, not verified');
 {
-  const inconsistencies = (r) => closeReport(r).revisions.map((x) => [x.tdoc, x.kind, x.state3gu, x.action]);
+  const states = (r) => closeReport(r).revisions.map((x) => [x.tdoc, x.kind, x.state3gu, x.action]);
+  const RESERVE = 'Author needs to reserve the revision in 3GU.';
+  const UPLOAD = 'Author needs to upload the reserved revision in 3GU.';
+  const VERIFY = 'Check the TDoc and its revision in 3GU.';
   // Not revised in the report, an ordinary TDoc list.
   const plain = built([t(1, '4.3'), t(2, '4.3')], { 1: 'agreed', 2: 'noted' });
-  check('not revised in the report, an ordinary TDoc list: no warning', inconsistencies(plain), []);
+  check('not revised in the report, an ordinary TDoc list: no warning', states(plain), []);
 
-  // The revision reserved and uploaded: the list has 01 revised to 02, 02 uploaded.
+  // C. Complete: reserved (01 revised to 02 in the list) and uploaded (02 has its link).
   const proper = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 2: 'agreed' });
-  check('a revision reserved and uploaded in 3GU: no warning, ready', [inconsistencies(proper), closeReport(proper).ready], [[], true]);
+  check('C. revision reserved and uploaded in 3GU: no warning, ready', [states(proper), closeReport(proper).ready], [[], true]);
 
-  // The list says revised without naming the revision: 3GU records it, so no warning.
-  const noTarget = built([t(1, '4.3', 'revised')], {});
-  check('3GU has it as revised (no "Revised to" column value): no warning', inconsistencies(noTarget), []);
-
-  // Revised in the report (chosen in the dropdown), still available in 3GU.
+  // A. Revised in the report (chosen in the dropdown), still available in 3GU: not reserved.
   const pending = built([t(1, '4.3'), t(2, '4.3')], { 1: 'revised', 2: 'agreed' });
   const pres = closeReport(pending);
-  check('revised in the report, available in 3GU: a warning, with what to do', [pres.ready, pres.revisions.map((x) => [x.tdoc, x.kind, x.reportStatus, x.state3gu, x.action])],
-    [false, [[id(1), 'revision-not-reserved', 'revised', 'available', 'Author needs to reserve/upload the revision in 3GU.']]]);
-  check('the dialog lists it: Original TDoc | Revision | Source | Report state | 3GU state, and the action', lastAlert(pending)[1].split('\n').filter((l) => /^(• |   → |REVISED IN THE REPORT)/.test(l)),
-    ['REVISED IN THE REPORT, NOT IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '• ' + id(1) + ' | – | ExampleCorp | revised | available', '   → Author needs to reserve/upload the revision in 3GU.']);
-  check('a revised TDoc counts as disposed: 0 not yet disposed, 1 inconsistency', lastAlert(pending)[1].split('\n').slice(2, 7), ['2 TDocs checked.', '1 agreed/endorsed.', '1 other disposed.', '0 not yet disposed.', '1 revision/3GU inconsistency.']);
-
-  // The report knows the revision (named in its Disposition by hand): shown as the revision.
+  check('A. revised in the report, available in 3GU, no "Revised to": "Revision not reserved in 3GU.", reserve it', [pres.ready, pres.revisions.map((x) => [x.tdoc, x.kind, x.label, x.reportStatus, x.state3gu, x.action])],
+    [false, [[id(1), 'revision-not-reserved', 'Revision not reserved in 3GU.', 'revised', 'available', RESERVE]]]);
+  check('A. the dialog: its own list, Original TDoc | Revision | Source | Report state | 3GU state, and the action', lastAlert(pending)[1].split('\n').filter((l) => /^(• |   → |REVISION )/.test(l)),
+    ['REVISION NOT RESERVED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '• ' + id(1) + ' | – | ExampleCorp | revised | available', '   → ' + RESERVE]);
+  check('A. a revised TDoc counts as disposed; the counts of each revision state', lastAlert(pending)[1].split('\n').slice(2, 9),
+    ['2 TDocs checked.', '1 agreed/endorsed.', '1 other disposed.', '0 not yet disposed.', 'Revision not reserved in 3GU: 1.', 'Revision reserved but not uploaded in 3GU: 0.', 'Revision state could not be verified in 3GU: 0.']);
+  // The report knows the revision (named in its Disposition by hand): shown, but it decides nothing.
   pending.user(() => { const table = pending.table(id(1)); for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Disposition') table.getRow(i).getCell(1).setText('Revised to ' + id(9) + ' (to be reserved)'); });
-  check('the revision the report names in the Disposition is shown, the check is the same', closeReport(pending).revisions.map((x) => [x.revision, x.kind]), [[id(9), 'revision-not-reserved']]);
+  check('A. a revision the report names in its Disposition is shown; the state is the same (3GU decides)', closeReport(pending).revisions.map((x) => [x.revision, x.kind]), [[id(9), 'revision-not-reserved']]);
+  // A reserved original (not even uploaded itself) with no revision: not reserved either.
+  const reservedOriginal = built([t(1, '4.3', 'reserved', { uploaded: false })], { 1: 'revised' });
+  check('A. revised in the report, reserved in 3GU without "Revised to": not reserved', states(reservedOriginal).map((x) => [x[1], x[2]]), [['revision-not-reserved', 'reserved']]);
 
-  // Revised to a TDoc that is reserved but not uploaded.
+  // B. Reserved (Revised to 02), but 02 not uploaded: never called "not reserved".
   const notUploaded = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3', 'reserved', { uploaded: false })], {});
   const nres = closeReport(notUploaded);
-  check('revised to a revision 3GU has as reserved, not uploaded: a warning to upload it (and the revision is not yet disposed)',
-    [nres.ready, nres.revisions.map((x) => [x.tdoc, x.revision, x.kind, x.action]), nres.unresolved.map((e) => e.tdoc + ' ' + e.status)],
-    [false, [[id(1), id(2), 'revision-not-uploaded', 'Author needs to upload the revision ' + id(2) + ' in 3GU.']], [id(2) + ' reserved']]);
+  check('B. revised to a revision that is reserved but not uploaded: "Revision reserved but not uploaded in 3GU.", upload it (and the revision is not yet disposed)',
+    [nres.ready, nres.revisions.map((x) => [x.tdoc, x.revision, x.kind, x.label, x.action]), nres.unresolved.map((e) => e.tdoc + ' ' + e.status)],
+    [false, [[id(1), id(2), 'revision-not-uploaded', 'Revision reserved but not uploaded in 3GU.', UPLOAD]], [id(2) + ' reserved']]);
+  check('B. the dialog: its own list, and not the "not reserved" one', lastAlert(notUploaded)[1].split('\n').filter((l) => /^(REVISION |   → )/.test(l)),
+    ['REVISION RESERVED BUT NOT UPLOADED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '   → ' + UPLOAD]);
   notUploaded.tdoc(id(2)).uploaded = true;
   notUploaded.tdoc(id(2)).status = 'available';
-  check('once it is uploaded: no warning', inconsistencies(notUploaded), []);
+  check('B -> C. once it is uploaded: no warning', states(notUploaded), []);
 
-  // Several, and one the TDoc list does not have.
-  const multi = built([t(1, '4.3'), t(2, '4.3'), t(3, '4.4'), t(4, '4.4')], { 1: 'revised', 2: 'revised', 3: 'agreed', 4: 'revised' });
+  // D. Cannot be verified: never clean.
+  const noTarget = built([t(1, '4.3', 'revised')], {});
+  check('D. 3GU has it as revised but names no revision: not verified', states(noTarget), [[id(1), 'revision-not-verified', 'revised, no "Revised to"', VERIFY]]);
+  const otherDecision = built([t(1, '4.3', 'agreed')], { 1: 'revised' });
+  check('D. 3GU has another decision for it (agreed): not verified, not "not reserved"', states(otherDecision).map((x) => [x[1], x[2]]), [['revision-not-verified', 'agreed']]);
+  const lost = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 2: 'agreed' });
+  lost.tdocs = lost.tdocs.filter((x) => x.id !== id(2));
+  check('D. its "Revised to" is not in the TDoc list (another meeting, or removed): not verified', closeReport(lost).revisions.map((x) => [x.revision, x.kind, x.reason]),
+    [[id(2), 'revision-not-verified', 'the revision ' + id(2) + ' is not in the TDoc list']]);
+  check('D. the dialog: its own list, with the reason', lastAlert(lost)[1].split('\n').filter((l) => /^(REVISION |   → )/.test(l)),
+    ['REVISION STATE COULD NOT BE VERIFIED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '   → ' + VERIFY + ' (The revision ' + id(2) + ' is not in the TDoc list.)']);
+
+  // Several, of every state, and one the TDoc list does not have at all: each in its own list, in the order of the report.
+  const multi = built([t(1, '4.3'), t(2, '4.3'), t(3, '4.4', 'revised', { revisedTo: id(5) }), t(4, '4.4'), t(5, '4.4', 'reserved', { uploaded: false }), t(6, '4.5')],
+    { 1: 'revised', 2: 'revised', 4: 'revised', 5: 'agreed', 6: 'available' });
   multi.tdocs = multi.tdocs.filter((x) => x.id !== id(4));
-  check('several: every one is reported, in the order of the report; a TDoc the list does not have is reported too', inconsistencies(multi).map((x) => [x[0], x[1], x[2]]),
-    [[id(1), 'revision-not-reserved', 'available'], [id(2), 'revision-not-reserved', 'available'], [id(4), 'not-in-tdoc-list', 'not in the TDoc list']]);
+  const mres = closeReport(multi);
+  check('several: every one is reported with its own state', mres.revisions.map((x) => [x.tdoc, x.kind, x.state3gu]),
+    [[id(1), 'revision-not-reserved', 'available'], [id(2), 'revision-not-reserved', 'available'], [id(3), 'revision-not-uploaded', 'revised, revised to ' + id(5) + ' (reserved, not uploaded)'], [id(4), 'revision-not-verified', 'not in the TDoc list']]);
+  const mtext = lastAlert(multi)[1].split('\n');
+  check('the dialog distinguishes the four: not yet disposed, not reserved, reserved but not uploaded, not verified -- counts and lists',
+    [mtext.slice(5, 9), mtext.filter((l) => /^(NOT YET DISPOSED|REVISION )/.test(l)).map((l) => l.split(' -- ')[0])],
+    [['1 not yet disposed.', 'Revision not reserved in 3GU: 2.', 'Revision reserved but not uploaded in 3GU: 1.', 'Revision state could not be verified in 3GU: 1.'],
+      ['NOT YET DISPOSED (1)', 'REVISION NOT RESERVED IN 3GU (2)', 'REVISION RESERVED BUT NOT UPLOADED IN 3GU (1)', 'REVISION STATE COULD NOT BE VERIFIED IN 3GU (1)']]);
 
   // Nothing is changed: not the statuses, not the list, not a revision; nothing is reserved.
   const before = [shownAll(multi), JSON.stringify(multi.tdocs), multi.api.count('batchUpdate')];
@@ -390,18 +428,31 @@ console.log('E. revised in the report, not in 3GU');
   check('Close Report changes no status, nothing in the TDoc list, writes nothing through the API; it only downloads the list',
     [shownAll(multi), JSON.stringify(multi.tdocs), multi.api.count('batchUpdate'), multi.fetches.slice(fetchesBefore).map((f) => /GenerateDocumentList/.test(f))], before.concat([[true]]));
 
-  // Pure: the same rule on rows of the list.
+  // Pure: the same rules on rows of the list.
   const { sandbox: s } = loadCode();
   const row = (n, status, revisedTo, link) => ({ row: [id(n), status, revisedTo || ''], tdocCol: 0, statusCol: 1, revisedToCol: 2, richTextRow: [{ getLinkUrl: () => (link === false ? null : zip(id(n))) }] });
   const entry = (n, status) => Object.assign({ tdoc: id(n), title: 'T', source: 'S', status: status, revisionIds: [] }, s.classifyTdocDisposition_(status));
+  const run = (entries, rows, problem) => JSON.parse(JSON.stringify(s.checkRevisionsIn3gu_(entries, rows, problem))).map((x) => [x.tdoc, x.revision, x.kind, x.state3gu, x.reason]);
   check('pure: only a TDoc the report has as revised is checked (agreed, noted, available in the report: never)',
-    s.findRevisionsMissingIn3gu_([entry(1, 'agreed'), entry(2, 'noted'), entry(3, 'available')], [row(1, 'available'), row(2, 'available'), row(3, 'available')]), []);
-  check('pure: revised / revised to an uploaded revision: nothing; revised / available, reserved, agreed: reserve', JSON.parse(JSON.stringify(s.findRevisionsMissingIn3gu_(
-    [entry(1, 'revised'), entry(2, 'Revised'), entry(3, 'revised'), entry(4, 'revised')], [row(1, 'revised', id(9)), row(9, 'available'), row(2, 'available'), row(3, 'reserved'), row(4, 'agreed')]))).map((x) => [x.tdoc, x.kind, x.state3gu]),
-  [[id(2), 'revision-not-reserved', 'available'], [id(3), 'revision-not-reserved', 'reserved'], [id(4), 'revision-not-reserved', 'agreed']]);
-  check('pure: the upload is the link of the list; without a readable link, the status reserved', JSON.parse(JSON.stringify(s.findRevisionsMissingIn3gu_(
-    [entry(1, 'revised'), entry(2, 'revised')], [row(1, 'revised', id(8)), row(8, 'available', '', false), row(2, 'revised', id(7)), Object.assign(row(7, 'reserved'), { richTextRow: null })]))).map((x) => [x.tdoc, x.revision, x.kind]),
-  [[id(1), id(8), 'revision-not-uploaded'], [id(2), id(7), 'revision-not-uploaded']]);
+    run([entry(1, 'agreed'), entry(2, 'noted'), entry(3, 'available')], [row(1, 'available'), row(2, 'available'), row(3, 'available')]), []);
+  check('pure: C complete; A not reserved for available and reserved; D for revised without a revision, another decision, no status',
+    run([entry(1, 'revised'), entry(2, 'Revised'), entry(3, 'revised'), entry(4, 'revised'), entry(5, 'revised'), entry(6, 'revised')],
+      [row(1, 'revised', id(9)), row(9, 'available'), row(2, 'available'), row(3, 'reserved'), row(4, 'revised'), row(5, 'noted'), row(6, '')]),
+    [[id(2), '', 'revision-not-reserved', 'available', ''], [id(3), '', 'revision-not-reserved', 'reserved', ''],
+      [id(4), '', 'revision-not-verified', 'revised, no "Revised to"', 'the TDoc list has it as revised but names no revision'],
+      [id(5), '', 'revision-not-verified', 'noted', 'the TDoc list has another decision for it'], [id(6), '', 'revision-not-verified', '(no status)', 'the TDoc list has no status for it']]);
+  check('pure: B is the upload sign of the upload completion -- the list has no link on the revision; a link that cannot be read is D, not B',
+    run([entry(1, 'revised'), entry(2, 'revised')], [row(1, 'revised', id(8)), row(8, 'available', '', false), row(2, 'revised', id(7)), Object.assign(row(7, 'reserved'), { richTextRow: null })]).map((x) => [x[0], x[1], x[2]]),
+    [[id(1), id(8), 'revision-not-uploaded'], [id(2), id(7), 'revision-not-verified']]);
+  check('pure: D when the list could not be read, has no "Revised to" column, lacks the TDoc or its revision, or its "Revised to" is not a TDoc number', [
+    run([entry(1, 'revised')], null, 'the TDoc list could not be read: HTTP 500').map((x) => [x[2], x[4]]),
+    run([entry(1, 'revised')], [Object.assign(row(1, 'available'), { revisedToCol: -1 })]).map((x) => [x[2], x[4]]),
+    run([entry(1, 'revised')], [row(2, 'available')]).map((x) => [x[2], x[4]]),
+    run([entry(1, 'revised')], [row(1, 'revised', id(3))]).map((x) => [x[2], x[4]]),
+    run([entry(1, 'revised')], [row(1, 'revised', 'see e-mail')]).map((x) => [x[2], x[4]])],
+  [[['revision-not-verified', 'the TDoc list could not be read: HTTP 500']], [['revision-not-verified', 'the TDoc list has no "Revised to" column']], [['revision-not-verified', 'the TDoc list of this report does not have it']],
+    [['revision-not-verified', 'the revision ' + id(3) + ' is not in the TDoc list']], [['revision-not-verified', 'its "Revised to" is not a TDoc number']]]);
+  check('pure: a TDoc with conflicting statuses is not taken for revised', run([Object.assign(entry(1, 'revised'), { conflict: true })], [row(1, 'available')]), []);
 }
 
 // ====================================================================== F
@@ -474,6 +525,50 @@ console.log('F. where the summary stands; the agenda, the close and the Attendan
     ['Disposition Summary updated.', ['Closing remarks typed by hand, after the last TDoc of the close.', 'Notes typed by hand in an annex of their own.'], ['# ' + SUMMARY, '[summary 2]', '# Annex: notes']]);
   check('... and the summary lists both as agreed, "None." for the rest', summaryOf(h.body).map((c) => [c[0], c[1] === 'None.' ? 'None.' : c[1].length]), [[TITLES[0] + ' (2)', 2], [TITLES[1] + ' (0)', 'None.'], [TITLES[2] + ' (0)', 'None.']]);
 
+  // Prose typed BELOW the summary, without a heading of its own: not the summary's, never touched; the summary is updated above it.
+  const pr = built([t(1, '4.3'), t(2, '4.4'), t(3, '5')], { 1: 'agreed', 2: 'noted', 3: 'available' });
+  updateSummary(pr);
+  const PROSE = ['Action items after the meeting: ExampleCorp to circulate the updated draft.', '', 'Next session: to be announced on the list.'];
+  pr.user(() => PROSE.forEach((text) => pr.body.appendParagraph(text)));
+  const prose = (body) => { const at = body._children.findIndex((c) => c.getType() === 'PARAGRAPH' && c.getText() === PROSE[0]); return at === -1 ? null : body._children.slice(at, at + 3).map((c) => [c.getType(), c.getHeading(), c.getText()]); };
+  const proseBefore = JSON.stringify(prose(pr.body));
+  const proseOutside = outsideSummary(pr);
+  check('prose typed below the summary is not the summary\'s: it ends with its last table', [pr.s.findDispositionSummarySection_(pr.body).complete, pr.s.findDispositionSummarySection_(pr.body).foreign, prose(pr.body) !== null], [true, [], true]);
+  decide(pr, { 3: 'agreed' });
+  updateSummary(pr);
+  check('Update Disposition Summary: the summary is updated, the prose below it is unchanged and still below it',
+    [lastAlert(pr)[1].split('\n')[0], summaryOf(pr.body).map((c) => c[0]), JSON.stringify(prose(pr.body)) === proseBefore, outsideSummary(pr) === proseOutside,
+      pr.body._children.findIndex((c) => c.getType() === 'PARAGRAPH' && c.getText() === PROSE[0]) > pr.body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY)],
+    ['Disposition Summary updated.', [TITLES[0] + ' (2)', TITLES[1] + ' (1)', TITLES[2] + ' (0)'], true, true, true]);
+  decide(pr, { 2: 'available' });
+  check('an update does the same', [pr.update().dispositionSummary, summaryOf(pr.body).map((c) => c[0]), JSON.stringify(prose(pr.body)) === proseBefore, outsideSummary(pr) === proseOutside],
+    ['replaced', [TITLES[0] + ' (2)', TITLES[1] + ' (0)', TITLES[2] + ' (1)'], true, true]);
+  for (let k = 0; k < 4; k++) { decide(pr, { 2: k % 2 ? 'available' : 'noted' }); pr.update(); updateSummary(pr); }
+  check('four more changes: the prose is unchanged, nothing else changed, one summary, no empty paragraph more',
+    [JSON.stringify(prose(pr.body)) === proseBefore, outsideSummary(pr) === proseOutside, summaryHeadings(pr.body)], [true, true, 1]);
+  // Prose that looks like part of the summary ("None.") below it is not taken for it either: the summary ends with the table of its last class.
+  pr.user(() => pr.body.appendParagraph('None.'));
+  const withNone = outsideSummary(pr);
+  decide(pr, { 2: 'noted' });
+  updateSummary(pr);
+  check('"None." typed below the summary is kept', [lastAlert(pr)[1].split('\n')[0], outsideSummary(pr) === withNone], ['Disposition Summary updated.', true]);
+  // Prose typed BETWEEN two of its tables: the summary is not written, nothing is removed, the user is told.
+  pr.user(() => { const tables = pr.body._children.filter(isSummaryTable); pr.body.insertParagraph(pr.body.getChildIndex(tables[0]) + 1, 'A remark typed between two tables of the summary.'); });
+  decide(pr, { 2: 'available' });
+  const between = snapshot(pr.body);
+  updateSummary(pr);
+  check('prose typed between two tables of the summary: nothing written, nothing removed, the user told what to move',
+    [snapshot(pr.body) === between, /text was typed into it \("A remark typed between two tables of the summary\."\)/.test(lastAlert(pr)[1])], [true, true]);
+  check('... and an update leaves it too', [pr.update().dispositionSummary, snapshot(pr.body) === between], ['refused', true]);
+  // A table of the summary deleted by hand: the summary is written again whole; the prose below it is kept.
+  const hd = built([t(1, '4.3'), t(2, '4.4')], { 1: 'agreed', 2: 'noted' });
+  updateSummary(hd);
+  hd.user(() => { hd.body.appendParagraph('Prose below the summary.'); hd.body._children.filter(isSummaryTable)[1].removeFromParent(); });
+  const hdOutside = outsideSummary(hd);
+  updateSummary(hd);
+  check('a summary table deleted by hand: written again whole, the prose below kept', [lastAlert(hd)[1].split('\n')[0], summaryOf(hd.body).map((c) => [c[0], c[1] === 'None.' ? 'None.' : c[1].length]), outsideSummary(hd) === hdOutside],
+    ['Disposition Summary updated.', [[TITLES[0] + ' (1)', 1], [TITLES[1] + ' (1)', 1], [TITLES[2] + ' (0)', 'None.']], true]);
+
   // A main-meeting report: the same rules (the SWG of a main meeting, its close a level-two heading).
   const { sandbox: s } = loadCode({ documentProperties: {} });
   s.styleStatusCell_ = () => {};
@@ -503,8 +598,8 @@ console.log('G. the MBS report: the three tables as Close Report leaves them');
   const revisedTo = {};
   tdocsOfFixture.forEach((e) => { if (e.revisedTo) revisedTo[e.tdoc] = e.revisedTo; });
   revisedTo.S4aI260080 = 'S4aI260091';
-  // A finished meeting: the decisions as they could stand in the minutes (synthetic). Two TDocs still open, and one that is
-  // revised in the minutes although 3GU still has it as available (S4aI260089).
+  // A finished meeting: the decisions as they could stand in the minutes (synthetic). Three TDocs still open (one of them
+  // postponed), and one that is revised in the minutes although 3GU still has it as available (S4aI260089).
   const decisions = { S4aI260080: 'revised', S4aI260094: 'noted', S4aI260096: 'agreed', S4aI260098: 'endorsed', S4aI260099: 'agreed', S4aI260108: 'noted', S4aI260091: 'revised', S4aI260100: 'agreed',
     S4aI260089: 'revised', S4aI260082: 'revised', S4aI260102: 'revised', S4aI260105: 'agreed', S4aI260083: 'revised', S4aI260092: 'endorsed', S4aI260084: 'agreed', S4aI260085: 'noted', S4aI260086: 'merged',
     S4aI260087: 'agreed', S4aI260088: 'noted', S4aI260093: 'withdrawn', S4aI260101: 'available', S4aI260106: 'endorsed', S4aI260107: 'noted', S4aI260095: 'agreed', S4aI260097: 'postponed',
@@ -537,11 +632,12 @@ console.log('G. the MBS report: the three tables as Close Report leaves them');
     [outline(b).filter((x) => x[0] === '#').slice(-3), afterSummary(b)], [['# 2.8 Close of the session', '# ' + ATTENDANCE, '# ' + SUMMARY], []]);
   check('the report outside the summary is as it was: every minute typed by hand, the registration table, the attendees',
     [outsideBefore === outsideSummary(r), r.tdocTables().map((x) => r.field(x.getRow(0).getCell(1).getText(), 'Minutes'))], [true, minutesBefore]);
-  check('29 TDocs, each once: 11 agreed/endorsed, 16 other disposed, 2 not yet disposed', [res.checked, summaryOf(b).map((c) => c[0]), summaryOf(b).reduce((n, c) => n + (c[1] === 'None.' ? 0 : c[1].length), 0)],
-    [29, [TITLES[0] + ' (11)', TITLES[1] + ' (16)', TITLES[2] + ' (2)'], 29]);
-  check('not ready: S4aI260101 available and S4aI260103 parked; S4aI260089 revised in the minutes, available in 3GU',
-    [res.ready, res.unresolved.map((e) => e.tdoc + ' ' + e.status), res.revisions.map((x) => [x.tdoc, x.state3gu, x.action])],
-    [false, ['S4aI260101 available', 'S4aI260103 parked'], [['S4aI260089', 'available', 'Author needs to reserve/upload the revision in 3GU.']]]);
+  check('29 TDocs, each once: 11 agreed/endorsed, 15 other disposed, 3 not yet disposed', [res.checked, summaryOf(b).map((c) => c[0]), summaryOf(b).reduce((n, c) => n + (c[1] === 'None.' ? 0 : c[1].length), 0)],
+    [29, [TITLES[0] + ' (11)', TITLES[1] + ' (15)', TITLES[2] + ' (3)'], 29]);
+  check('not ready: S4aI260101 available, S4aI260097 postponed, S4aI260103 parked; S4aI260089 revised in the minutes, not reserved in 3GU; the five other revisions complete',
+    [res.ready, res.unresolved.map((e) => e.tdoc + ' ' + e.status), res.revisions.map((x) => [x.tdoc, x.kind, x.state3gu, x.action])],
+    [false, ['S4aI260101 available', 'S4aI260097 postponed', 'S4aI260103 parked'], [['S4aI260089', 'revision-not-reserved', 'available', 'Author needs to reserve the revision in 3GU.']]]);
+  check('the postponed TDoc stands in "Documents Not Yet Disposed", with its status', summaryOf(b)[2][1].map((x) => x[0] + ' ' + x[3]), ['S4aI260101 available', 'S4aI260097 postponed', 'S4aI260103 parked']);
   // The fixture output: the three tables as they stand in the report.
   console.log('\n  --- the Disposition Summary of the MBS fixture, as written ---');
   summaryOf(b).forEach((c) => {
@@ -550,8 +646,9 @@ console.log('G. the MBS report: the three tables as Close Report leaves them');
     (c[1] === 'None.' ? [] : c[1]).forEach((x) => console.log('    ' + x[0] + ' | ' + x[1].padEnd(29) + ' | ' + x[2].padEnd(11) + ' | ' + x[3]));
   });
   console.log('\n  --- the Close Report dialog ---\n' + lastAlert(r)[1].split('\n').map((l) => '  | ' + l).join('\n') + '\n');
-  // The minutes corrected: the two decisions taken, the revision reserved and uploaded in 3GU.
-  r.user(() => ['S4aI260101', 'S4aI260103'].forEach((n2) => { const table = r.table(n2); for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Status') table.getRow(i).getCell(1).setText(n2 === 'S4aI260101' ? 'noted' : 'agreed'); }));
+  // The minutes corrected: the three decisions taken, the revision reserved and uploaded in 3GU.
+  const corrected = { S4aI260101: 'noted', S4aI260097: 'noted', S4aI260103: 'agreed' };
+  r.user(() => Object.keys(corrected).forEach((n2) => { const table = r.table(n2); for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Status') table.getRow(i).getCell(1).setText(corrected[n2]); }));
   r.tdocs.filter((x) => x.id === 'S4aI260089')[0].status = 'revised';
   r.tdocs.filter((x) => x.id === 'S4aI260089')[0].revisedTo = 'S4aI260110';
   r.tdocs.push({ id: 'S4aI260110', agenda: '2.5', status: 'available', revisedTo: '', uploaded: true });
@@ -599,7 +696,7 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
   check('the section stands directly after the configuration guard', CODE.indexOf('// END OF CONFIGURATION GUARD\n// =========================================================\n\n' + DISPOSITION_SECTION_START) !== -1, true);
   check('it declares its constants and nothing else at top level', section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm) || [],
     ['const DISPOSITION_SUMMARY_HEADING_', 'const DISPOSITION_SUMMARY_NOTE_', 'const DISPOSITION_SUMMARY_NONE_', 'const DISPOSITION_SUMMARY_TABLE_HEADER_', 'const DISPOSITION_SUMMARY_TABLE_WIDTHS_', 'const DISPOSITION_SUMMARY_MENU_HINT_',
-      'const DISPOSITION_CLASSES_', 'const DISPOSITION_OF_STATUS_', 'const CLOSE_REPORT_LIST_LIMIT_']);
+      'const DISPOSITION_CLASSES_', 'const DISPOSITION_OF_STATUS_', 'const CLOSE_REPORT_LIST_LIMIT_', 'const REVISION_CHECK_STATES_']);
   check('Code.js is still version 2.25.0 (not released)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.25.0');
   let released = null;
   let releasedCreator = null;

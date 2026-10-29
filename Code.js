@@ -20103,8 +20103,9 @@ function assertMeetingConfigured_(context) {
 // fourteen options of the "Document Status" dropdown of the master template
 // (and the Portal wording "replied to", STATUS_DROPDOWN_ALIASES_):
 //   AGREED_OR_ENDORSED  agreed, endorsed
-//   DISPOSED_OTHER      noted, revised, merged, approved, withdrawn, replied, postponed
-//   UNRESOLVED          available, reserved, parked, Plenary, other
+//   DISPOSED_OTHER      noted, revised, merged, approved, withdrawn, replied
+//   UNRESOLVED          available, reserved, parked, postponed, Plenary, other
+// (postponed: no final decision at this meeting, so Close Report shows it.)
 // Any other status -- none, a typed text such as "agreed, see minutes", a
 // Portal status without an option -- is UNRESOLVED and named as not
 // recognised. Nothing counts as disposed that is not listed.
@@ -20125,27 +20126,41 @@ function assertMeetingConfigured_(context) {
 // (findAgendaSectionEndIndex_()), and so does an Attendance section written
 // after it.
 //
-// ITS SECTION runs from its heading to the next heading. It is rewritten only
-// when what it would say differs from what it says, and only when it holds
-// nothing but what it writes and empty paragraphs: text typed into it is
-// never removed -- the summary is then not written, and the user is told
-// why. The empty paragraphs at its end are left as they are, so a rewrite
-// adds none.
+// WHAT IT OWNS is exactly what it writes, read from its heading on: the
+// note, the three class lines, each followed by its table or "None.", and
+// empty paragraphs between them. It ends with the table (or "None.") of the
+// last class. Whatever follows -- prose typed below it, with or without a
+// heading of its own, and the empty paragraphs at its end -- is not part of
+// it and is never touched. Text typed INTO it (above the end, so that a part
+// of the summary stands below that text) stops the summary from being
+// written, and the user is told why. It is rewritten only when what it would
+// say differs from what it says.
 //
 // CLOSE REPORT writes the summary and says whether the report is ready to
 // close. It changes nothing else -- no status, no revision, nothing in 3GU,
 // no trigger, no sharing -- and stores nothing; it can be run again at any
 // time. It is not ready while:
 //   1. a TDoc is UNRESOLVED;
-//   2. a TDoc the report has as revised has no revision in the TDoc list
-//      (3GU): no "Revised to" and a status other than revised -- the author
-//      still has to reserve/upload the revision; or its "Revised to" is not
-//      uploaded yet (the sign of the upload completion: no hyperlink in the
-//      list, else the status reserved); or the list does not have it at all;
-//   3. something could not be checked (a status, the TDoc list, the summary).
+//   2. a TDoc the report has as revised (its Status; nothing else) does not
+//      have a complete revision in the TDoc list (3GU), which reads the TDoc
+//      list only when the report has such a TDoc:
+//        not reserved   no "Revised to" and the list still has it as
+//                       available or reserved;
+//        not uploaded   "Revised to" names the revision, and the list has
+//                       no hyperlink on it (the upload sign of the upload
+//                       completion);
+//        not verified   anything else: the list could not be read, has no
+//                       "Revised to" column, does not have the TDoc or the
+//                       revision, has it as revised without naming the
+//                       revision, has another decision for it, or its
+//                       links cannot be read. Never counted as clean.
+//      In 3GU a TDoc is "revised" when, and only when, a revision is
+//      reserved as "revision of" it; the revision is then its "Revised to"
+//      (docs/DISPOSITION_SUMMARY.md, the evidence);
+//   3. something could not be checked (a status, the summary).
 
 const DISPOSITION_SUMMARY_HEADING_ = 'Disposition Summary';
-const DISPOSITION_SUMMARY_NOTE_ = 'Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition Summary, and kept up to date by every update. Text typed into this section stops it from being updated.';
+const DISPOSITION_SUMMARY_NOTE_ = 'Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition Summary, and kept up to date by every update. Text typed between this line and its last table stops it from being updated; text below it is kept.';
 const DISPOSITION_SUMMARY_NONE_ = 'None.';
 const DISPOSITION_SUMMARY_TABLE_HEADER_ = ['TDoc', 'Title', 'Source', 'Status'];
 const DISPOSITION_SUMMARY_TABLE_WIDTHS_ = [0.19, 0.47, 0.20, 0.14];
@@ -20166,15 +20181,21 @@ const DISPOSITION_OF_STATUS_ = {
   'approved': 'DISPOSED_OTHER',
   'withdrawn': 'DISPOSED_OTHER',
   'replied': 'DISPOSED_OTHER',
-  'postponed': 'DISPOSED_OTHER',
   'available': 'UNRESOLVED',
   'reserved': 'UNRESOLVED',
   'parked': 'UNRESOLVED',
+  'postponed': 'UNRESOLVED',
   'plenary': 'UNRESOLVED',
   'other': 'UNRESOLVED'
 };
 // Lines of one list in the Close Report dialog; the summary in the report has all of them.
 const CLOSE_REPORT_LIST_LIMIT_ = 40;
+// What Close Report says about a TDoc the report has as revised whose revision is not complete in 3GU, in the order of its dialog.
+const REVISION_CHECK_STATES_ = [
+  { kind: 'revision-not-reserved', label: 'Revision not reserved in 3GU.', short: 'revision not reserved', action: 'Author needs to reserve the revision in 3GU.' },
+  { kind: 'revision-not-uploaded', label: 'Revision reserved but not uploaded in 3GU.', short: 'revision reserved but not uploaded', action: 'Author needs to upload the reserved revision in 3GU.' },
+  { kind: 'revision-not-verified', label: 'Revision state could not be verified in 3GU.', short: 'revision state not verified', action: 'Check the TDoc and its revision in 3GU.' }
+];
 
 /**
  * Pure: the class of a status -- { label, known, disposition }. `label` is
@@ -20308,11 +20329,16 @@ function isDispositionSummaryTable_(table) {
 }
 
 /**
- * The section of the summary: { start, end, contentEnd, foreign, count }, or
- * null. `start` is its heading, `end` the next heading (or the end of the
- * document), `contentEnd` the end without the empty paragraphs at its end.
- * `foreign`: what stands in it that the summary does not write (the start of
- * its text). `count`: how many summary headings the report has. Read-only.
+ * What the summary owns: { start, contentEnd, complete, foreign, count }, or
+ * null. `start` is its heading. From there it owns a run of what it writes
+ * -- the note, the class lines, summary tables, "None." -- with the empty
+ * paragraphs between them. The run ends with the table or "None." after the
+ * line of the last class (`complete`), or before the first element it does
+ * not write. `contentEnd` is the end of the run: nothing from there on is the
+ * summary's, so prose typed below it is never part of it. `foreign`: text
+ * typed INTO it -- the elements between the end of an incomplete run and a
+ * part of the summary that stands below them (before the next heading).
+ * `count`: how many summary headings the report has. Read-only.
  */
 function findDispositionSummarySection_(body) {
   const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
@@ -20329,24 +20355,45 @@ function findDispositionSummarySection_(body) {
     if (start === -1) start = i;
   }
   if (start === -1) return null;
-  let end = start + 1;
-  while (end < total) {
-    const next = body.getChild(end);
-    if (next.getType() === PARAGRAPH && next.asParagraph().getHeading() !== NORMAL) break;
-    end++;
-  }
-  let contentEnd = end;
-  while (contentEnd > start + 1 && isEmptyBodyParagraph_(body.getChild(contentEnd - 1))) contentEnd--;
-  const foreign = [];
-  for (let i = start + 1; i < contentEnd; i++) {
+  const last = DISPOSITION_CLASSES_[DISPOSITION_CLASSES_.length - 1];
+  // 'heading', 'table', 'none', 'last' (the line of the last class), 'part' (the note, another class line), or '' (not the summary's).
+  const kindOf = function (child) {
+    if (child.getType() === TABLE) return isDispositionSummaryTable_(child.asTable()) ? 'table' : '';
+    if (child.getType() !== PARAGRAPH) return '';
+    const p = child.asParagraph();
+    if (p.getHeading() !== NORMAL) return 'heading';
+    const text = p.getText();
+    if (text === DISPOSITION_SUMMARY_NONE_) return 'none';
+    if (new RegExp('^' + last.title + ' \\(\\d+\\)$').test(text)) return 'last';
+    return isDispositionSummaryParagraphText_(text) ? 'part' : '';
+  };
+  let contentEnd = start + 1;
+  let lastSeen = false;
+  let complete = false;
+  for (let i = start + 1; i < total && !complete; i++) {
     const child = body.getChild(i);
     if (isEmptyBodyParagraph_(child)) continue;
-    if (child.getType() === TABLE && isDispositionSummaryTable_(child.asTable())) continue;
-    if (child.getType() === PARAGRAPH && isDispositionSummaryParagraphText_(child.asParagraph().getText())) continue;
-    const text = child.getType() === PARAGRAPH ? child.asParagraph().getText() : child.getType() === TABLE ? 'a table' : 'an element of type ' + child.getType();
-    foreign.push(String(text).slice(0, 60));
+    const kind = kindOf(child);
+    if (lastSeen ? (kind !== 'table' && kind !== 'none') : (!kind || kind === 'heading')) break;
+    contentEnd = i + 1;
+    if (lastSeen) complete = true;
+    if (kind === 'last') lastSeen = true;
   }
-  return { start: start, end: end, contentEnd: contentEnd, foreign: foreign, count: count };
+  const foreign = [];
+  if (!complete) {
+    for (let i = contentEnd; i < total; i++) {
+      const kind = kindOf(body.getChild(i));
+      if (kind === 'heading') break;
+      if (kind !== 'table' && kind !== 'part' && kind !== 'last') continue;
+      for (let k = contentEnd; k < i; k++) {
+        const child = body.getChild(k);
+        if (isEmptyBodyParagraph_(child)) continue;
+        foreign.push(String(child.getType() === PARAGRAPH ? child.asParagraph().getText() : child.getType() === TABLE ? 'a table' : 'an element of type ' + child.getType()).slice(0, 60));
+      }
+      break;
+    }
+  }
+  return { start: start, contentEnd: contentEnd, complete: complete, foreign: foreign, count: count };
 }
 
 /** What the section says now, in the form of dispositionSummaryContent_(). Read-only. */
@@ -20469,7 +20516,7 @@ function syncDispositionSummaryOnUpdate_(body) {
     if (!findDispositionSummarySection_(body)) return { state: 'absent' };
     const done = writeDispositionSummary_(body);
     if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
-    else if (done.state === 'refused') Logger.log('Disposition Summary: not updated -- its section holds text it did not write: ' + done.foreign.join(' | '));
+    else if (done.state === 'refused') Logger.log('Disposition Summary: not updated -- text was typed into it, above a part of it: ' + done.foreign.join(' | '));
     else Logger.log('Disposition Summary: ' + done.state + ' (' + dispositionCountsText_(done.model) + ')');
     return { state: done.state };
   } catch (e) {
@@ -20492,43 +20539,57 @@ function dispositionCountsText_(model) {
   return model.map(function (c) { return c.entries.length + ' ' + c.short; }).join(', ');
 }
 
+/** Pure: true for a TDoc the report has as revised -- by its Status, the one way a disposition is read. */
+function isRevisedInReport_(entry) {
+  return !!entry && !entry.conflict && entry.label === 'revised';
+}
+
 /**
- * Pure: the TDocs the report has as revised whose revision 3GU does not have
- * (see the section comment), as [{ tdoc, title, source, revision,
- * reportStatus, state3gu, action, kind }]. `entries` from
- * readReportDispositions_(..., { revisions: true }); `allTdocs` the rows of
- * the TDoc list (downloadAndGroupTdocs_()). Nothing is changed.
+ * Pure: what 3GU (the TDoc list) says about the revision of each TDoc the
+ * report has as revised, for those whose revision is not complete (see the
+ * section comment): [{ tdoc, title, source, revision, reportStatus, kind,
+ * label, action, state3gu, reason }], in the order of `entries` (from
+ * readReportDispositions_(..., { revisions: true })). `allTdocs`: the rows of
+ * the TDoc list (downloadAndGroupTdocs_()), or null when it could not be read
+ * -- `listProblem` says why. Nothing is changed.
  */
-function findRevisionsMissingIn3gu_(entries, allTdocs) {
+function checkRevisionsIn3gu_(entries, allTdocs, listProblem) {
   const list = {};
+  let revisedToColumn = false;
   (allTdocs || []).forEach(function (td) {
+    if (td.revisedToCol >= 0) revisedToColumn = true;
     const raw = String(td.row[td.tdocCol] === null || td.row[td.tdocCol] === undefined ? '' : td.row[td.tdocCol]).trim();
     const parsed = parseExactSA4DocumentId_(raw);
     const number = parsed.isValid ? parsed.raw : raw;
     if (number && !list[number]) list[number] = td;
   });
   const out = [];
-  (entries || []).forEach(function (entry) {
-    if (entry.conflict || entry.label !== 'revised') return;
-    const base = { tdoc: entry.tdoc, title: entry.title, source: entry.source, revision: (entry.revisionIds || []).join(', '), reportStatus: entry.status };
+  (entries || []).filter(isRevisedInReport_).forEach(function (entry) {
+    const add = function (kind, state3gu, reason, revision) {
+      const state = REVISION_CHECK_STATES_.filter(function (s) { return s.kind === kind; })[0];
+      out.push({ tdoc: entry.tdoc, title: entry.title, source: entry.source, revision: revision || (entry.revisionIds || []).join(', '), reportStatus: entry.status,
+        kind: kind, label: state.label, action: state.action, state3gu: state3gu, reason: reason || '' });
+    };
+    if (!allTdocs) return add('revision-not-verified', 'TDoc list not read', listProblem || 'the TDoc list could not be read');
+    if (!revisedToColumn) return add('revision-not-verified', 'no "Revised to" column', 'the TDoc list has no "Revised to" column');
     const row = list[entry.tdoc];
-    if (!row) {
-      out.push(Object.assign(base, { kind: 'not-in-tdoc-list', state3gu: 'not in the TDoc list', action: 'Check the TDoc in 3GU: the report has it as revised, the TDoc list of this report does not have it.' }));
-      return;
-    }
+    if (!row) return add('revision-not-verified', 'not in the TDoc list', 'the TDoc list of this report does not have it');
     const portal = tdocListStatus_(row);
+    const portalLabel = statusDropdownLabel_(portal);
     const target = getRevisedTo_(row);
+    const targetText = String(row.row[row.revisedToCol] === null || row.row[row.revisedToCol] === undefined ? '' : row.row[row.revisedToCol]).trim();
     if (!target) {
-      if (statusDropdownLabel_(portal) === 'revised') return;
-      out.push(Object.assign(base, { kind: 'revision-not-reserved', state3gu: portal || '(no status)', action: 'Author needs to reserve/upload the revision in 3GU.' }));
-      return;
+      if (targetText) return add('revision-not-verified', portal + ', revised to "' + targetText + '"', 'its "Revised to" is not a TDoc number');
+      if (portalLabel === 'available' || portalLabel === 'reserved') return add('revision-not-reserved', portal, '');
+      if (portalLabel === 'revised') return add('revision-not-verified', portal + ', no "Revised to"', 'the TDoc list has it as revised but names no revision');
+      return add('revision-not-verified', portal || '(no status)', portal ? 'the TDoc list has another decision for it' : 'the TDoc list has no status for it');
     }
+    const state3gu = (portal || '(no status)') + ', revised to ' + target;
     const revision = list[target];
-    if (!revision) return;
-    const notUploaded = tdocListLinkIsKnown_(revision) ? !tdocListLinkUrl_(revision) : statusDropdownLabel_(tdocListStatus_(revision)) === 'reserved';
-    if (!notUploaded) return;
-    out.push(Object.assign(base, { revision: target, kind: 'revision-not-uploaded', state3gu: (portal || '(no status)') + ', revised to ' + target + ' (' + (tdocListStatus_(revision) || 'no status') + ', not uploaded)',
-      action: 'Author needs to upload the revision ' + target + ' in 3GU.' }));
+    if (!revision) return add('revision-not-verified', state3gu, 'the revision ' + target + ' is not in the TDoc list', target);
+    if (!tdocListLinkIsKnown_(revision)) return add('revision-not-verified', state3gu, 'the links of the TDoc list could not be read', target);
+    if (!tdocListLinkUrl_(revision)) return add('revision-not-uploaded', state3gu + ' (' + (tdocListStatus_(revision) || 'no status') + ', not uploaded)', '', target);
+    // Reserved, and uploaded: complete.
   });
   return out;
 }
@@ -20550,24 +20611,30 @@ function closeReportCore_() {
   if (summary.state === 'unreadable') {
     result.problems.push('The Status of ' + summary.read.unreadable.join(', ') + ' could not be read, so the report could not be checked and the Disposition Summary was not written. Run Close Report again.');
   } else if (summary.state === 'refused') {
-    result.problems.push('The Disposition Summary was not updated: its section holds text it did not write ("' + summary.foreign.join('", "') + '"). Move that text out of the section and run Close Report again.');
+    result.problems.push('The Disposition Summary was not updated: text was typed into it ("' + summary.foreign.join('", "') + '"). Move that text below the summary and run Close Report again.');
   }
 
-  let allTdocs = null;
-  try {
-    assertMeetingConfigured_();
-    const cfg = getReportConfig_();
-    if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');
-    const groups = downloadAndGroupTdocs_(cfg);
-    allTdocs = [];
-    Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });
-  } catch (e) {
-    result.problems.push('The revisions could not be checked against 3GU: ' + e.message);
+  // The TDoc list is read only for a TDoc the report has as revised; one it cannot be had for is not verified, never clean.
+  if (summary.read.entries.some(isRevisedInReport_)) {
+    let allTdocs = null;
+    let listProblem = '';
+    try {
+      assertMeetingConfigured_();
+      const cfg = getReportConfig_();
+      if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');
+      const groups = downloadAndGroupTdocs_(cfg);
+      allTdocs = [];
+      Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });
+    } catch (e) {
+      listProblem = 'the TDoc list could not be read: ' + e.message;
+    }
+    result.revisions = checkRevisionsIn3gu_(summary.read.entries, allTdocs, listProblem);
   }
-  if (allTdocs) result.revisions = findRevisionsMissingIn3gu_(summary.read.entries, allTdocs);
+  REVISION_CHECK_STATES_.forEach(function (s) { result.counts[s.kind] = result.revisions.filter(function (r) { return r.kind === s.kind; }).length; });
 
   result.ready = summary.state !== 'unreadable' && result.problems.length === 0 && result.unresolved.length === 0 && result.revisions.length === 0;
-  Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.unresolved.length + ' not yet disposed, ' + result.revisions.length + ' revision/3GU inconsistencies, ' + result.problems.length + ' problem(s); summary ' + result.summaryState);
+  Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.unresolved.length + ' not yet disposed, ' +
+    REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState);
   return result;
 }
 
@@ -20593,7 +20660,7 @@ function formatCloseReportResult_(result) {
   const lines = [result.ready ? 'Report ready to close.' : 'Report NOT READY TO CLOSE.', ''];
   lines.push(result.checked + ' TDocs checked.');
   DISPOSITION_CLASSES_.forEach(function (c) { lines.push((result.counts[c.key] || 0) + ' ' + c.short + '.'); });
-  lines.push(result.revisions.length + ' revision/3GU inconsistenc' + (result.revisions.length === 1 ? 'y' : 'ies') + '.');
+  REVISION_CHECK_STATES_.forEach(function (s) { lines.push(s.label.replace(/\.$/, '') + ': ' + (result.counts[s.kind] || 0) + '.'); });
   lines.push('');
   lines.push(describeDispositionSummaryState_(result.summaryState));
   if (result.unresolved.length) {
@@ -20604,14 +20671,16 @@ function formatCloseReportResult_(result) {
     });
     if (result.unresolved.length > CLOSE_REPORT_LIST_LIMIT_) lines.push('… and ' + (result.unresolved.length - CLOSE_REPORT_LIST_LIMIT_) + ' more: see "Documents Not Yet Disposed" in the Disposition Summary.');
   }
-  if (result.revisions.length) {
+  REVISION_CHECK_STATES_.forEach(function (s) {
+    const listed = result.revisions.filter(function (r) { return r.kind === s.kind; });
+    if (!listed.length) return;
     lines.push('');
-    lines.push('REVISED IN THE REPORT, NOT IN 3GU (' + result.revisions.length + ') -- Original TDoc | Revision | Source | Report state | 3GU state:');
-    result.revisions.forEach(function (r) {
+    lines.push(s.label.replace(/\.$/, '').toUpperCase() + ' (' + listed.length + ') -- Original TDoc | Revision | Source | Report state | 3GU state:');
+    listed.forEach(function (r) {
       lines.push('• ' + r.tdoc + ' | ' + (r.revision || '–') + ' | ' + (r.source || '') + ' | ' + r.reportStatus + ' | ' + r.state3gu);
-      lines.push('   → ' + r.action);
+      lines.push('   → ' + r.action + (r.reason ? ' (' + r.reason.charAt(0).toUpperCase() + r.reason.slice(1) + '.)' : ''));
     });
-  }
+  });
   if (result.problems.length) {
     lines.push('');
     result.problems.forEach(function (p) { lines.push('⚠️ ' + p); });
@@ -20626,7 +20695,7 @@ function formatCloseReportResult_(result) {
 /** Pure: the text of the Update Disposition Summary dialog. */
 function formatDispositionSummaryResult_(done) {
   if (done.state === 'unreadable') return 'The Disposition Summary was not written: the Status of ' + done.read.unreadable.join(', ') + ' could not be read. Try again in a minute.';
-  if (done.state === 'refused') return 'The Disposition Summary was not updated: its section holds text it did not write ("' + done.foreign.join('", "') + '").\n\nMove that text out of the section (above its heading, or below a new heading after it) and run Update Disposition Summary again.';
+  if (done.state === 'refused') return 'The Disposition Summary was not updated: text was typed into it ("' + done.foreign.join('", "') + '"), above a part of the summary.\n\nMove that text below the summary (or above its heading) and run Update Disposition Summary again. Nothing was changed.';
   return describeDispositionSummaryState_(done.state) + '\n\n' + done.read.entries.length + ' TDocs: ' + dispositionCountsText_(done.model) + '.';
 }
 
