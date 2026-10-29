@@ -135,12 +135,17 @@ const GUARD_CREATOR_CHANGED_FUNCTIONS = ['describeUpdateReportNowFailure_'];
 const GUARD_CREATOR_CHANGE = "  // After T-2026.10.12: refused before the report was touched (no saved meeting, or an ad-hoc meeting that is not ready).\n" +
    "  if (result && result.success !== true && result.notUpdated) return 'The report was not updated: ' + (result.error || 'it is not ready to be updated.');\n";
 
-/** template/ReportCreator.js without the guard's change: { code, problems }. */
+/**
+ * template/ReportCreator.js without the guard's change: { code, problems }.
+ * The two menu items of the Disposition Summary (after T-2026.10.15), which
+ * came later, are taken out first.
+ */
 function creatorWithoutConfigurationGuard(code) {
-  const text = String(code).replace(/\r/g, '');
+  const later = creatorWithoutDispositionSummary(code);
+  const text = later.code;
   const at = text.indexOf(GUARD_CREATOR_CHANGE);
-  if (at === -1 || text.indexOf(GUARD_CREATOR_CHANGE, at + 1) !== -1) return { code: text, problems: ['the CONFIGURATION GUARD change of ReportCreator.js is not in it exactly once'] };
-  return { code: text.slice(0, at) + text.slice(at + GUARD_CREATOR_CHANGE.length), problems: [] };
+  if (at === -1 || text.indexOf(GUARD_CREATOR_CHANGE, at + 1) !== -1) return { code: text, problems: later.problems.concat(['the CONFIGURATION GUARD change of ReportCreator.js is not in it exactly once']) };
+  return { code: text.slice(0, at) + text.slice(at + GUARD_CREATOR_CHANGE.length), problems: later.problems };
 }
 
 function codeWithoutConfigurationGuard(code) {
@@ -227,14 +232,83 @@ function codeWithoutAttendanceEmptyTextFix(code) {
   return takeOut(code, null, null, ATTENDANCE_EMPTY_TEXT_CHANGES, 'ATTENDANCE EMPTY TEXT');
 }
 
+/**
+ * The Disposition Summary and Close Report after T-2026.10.15: one new
+ * section, and six released functions that keep the agenda, the close and
+ * the Attendance section before the summary, keep a summary up to date on an
+ * update, leave its tables out of Report Status Summary, and say after a
+ * rebuild that it was cleared. [now, before] pairs.
+ * tests/disposition-summary-close-report.test.js pins the behaviour.
+ */
+const DISPOSITION_SECTION_START = BAR + '// DISPOSITION SUMMARY AND CLOSE REPORT (after T-2026.10.15)\n' + BAR;
+const DISPOSITION_SECTION_END = BAR + '// END OF DISPOSITION SUMMARY AND CLOSE REPORT\n' + BAR + '\n';
+const DISPOSITION_SECTION_FUNCTIONS = ['classifyTdocDisposition_', 'isDispositionSummaryHeadingText_', 'tdocCellLinkUrl_', 'readReportDispositions_', 'buildDispositionSummaryModel_', 'dispositionSummaryStatusText_',
+  'dispositionSummaryContent_', 'isDispositionSummaryParagraphText_', 'isDispositionSummaryTable_', 'findDispositionSummarySection_', 'readDispositionSummaryContent_', 'formatDispositionSummaryTable_',
+  'renderDispositionSummary_', 'writeDispositionSummary_', 'syncDispositionSummaryOnUpdate_', 'dispositionSummaryRebuildNote_', 'dispositionCountsText_', 'findRevisionsMissingIn3gu_', 'closeReportCore_',
+  'dispositionDialogTitle_', 'describeDispositionSummaryState_', 'formatCloseReportResult_', 'formatDispositionSummaryResult_', 'withDispositionLock_', 'updateDispositionSummary', 'closeReport'];
+const DISPOSITION_CHANGED_FUNCTIONS = ['continuousUpdateCore_', 'findReportTerminalBoundary_', 'findAgendaSectionEndIndex_', 'analyzeReportStatus', 'buildSkeletonWithTdocTables', 'findAdhocAttendanceInsertIndex_'];
+const DISPOSITION_CHANGES = [
+  // continuousUpdateCore_(): a summary that is there is kept up to date.
+  ["\n    // After T-2026.10.15: a Disposition Summary that is there is kept up to\n" +
+   "    // date; a report without one is not given one. Not in a background run\n" +
+   "    // (no status dropdowns can be read there). Never fails the update.\n" +
+   "    if (!context) {\n" +
+   "      const summary = syncDispositionSummaryOnUpdate_(body);\n" +
+   "      if (summary.state !== 'absent') result.dispositionSummary = summary.state;\n" +
+   "    }\n", ''],
+  // findReportTerminalBoundary_(): without a close and an Attendance section, the summary ends the agenda part.
+  ["  let attendance = -1;\n  let summary = -1;\n", "  let attendance = -1;\n"],
+  ["    else if (summary === -1 && isDispositionSummaryHeadingText_(text)) summary = i;\n", ''],
+  ["  // After T-2026.10.15: without either, the Disposition Summary ends the agenda part.\n" +
+   "  if (summary !== -1) return { index: summary, closeNumber: '' };\n", ''],
+  // findAgendaSectionEndIndex_(): a TDoc of the closing item goes before the summary.
+  ["      // After T-2026.10.15: nor after the Disposition Summary.\n" +
+   "      if (isDispositionSummaryHeadingText_(nextText)) return j;\n", ''],
+  // analyzeReportStatus(): the summary tables are not counted as TDocs.
+  ["    // After T-2026.10.15: the tables of the Disposition Summary list TDocs; they are not TDoc tables.\n" +
+   "    if (isDispositionSummaryTable_(t)) return;\n", ''],
+  // buildSkeletonWithTdocTables(): the rebuild says that the summary was cleared.
+  ["  // After T-2026.10.15: the Disposition Summary is not rebuilt; the result says how to write it again.\n" +
+   "  const dispositionSummaryNote = dispositionSummaryRebuildNote_(DocumentApp.getActiveDocument().getBody());\n", ''],
+  ["  reallocationRestoreNote += dispositionSummaryNote;\n", ''],
+  // findAdhocAttendanceInsertIndex_(): without a close, a new Attendance section goes before the summary.
+  ["  if (closing === -1) {\n" +
+   "    // After T-2026.10.15: never after the Disposition Summary.\n" +
+   "    const summary = findDispositionSummarySection_(body);\n" +
+   "    return { index: summary ? summary.start : count, inClosingSection: false };\n" +
+   "  }\n", "  if (closing === -1) return { index: count, inClosingSection: false };\n"]
+];
+
+/** Code.js without the Disposition Summary and Close Report: { code, problems }. */
+function codeWithoutDispositionSummary(code) {
+  return takeOut(code, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_CHANGES, 'DISPOSITION SUMMARY');
+}
+
+/** The one change of the Disposition Summary in template/ReportCreator.js: its two menu items, a group of their own. */
+const DISPOSITION_CREATOR_CHANGED_FUNCTIONS = ['buildTemplateReportMenu_'];
+const DISPOSITION_CREATOR_CHANGE = "    // After T-2026.10.15: the Disposition Summary at the end of the report, and the checks before it is closed.\n" +
+   "    .addItem('Update Disposition Summary', 'updateDispositionSummary')\n" +
+   "    .addItem('Close Report', 'closeReport')\n" +
+   "    .addSeparator()\n";
+
+/** template/ReportCreator.js without the two menu items of the Disposition Summary: { code, problems }. */
+function creatorWithoutDispositionSummary(code) {
+  const text = String(code).replace(/\r/g, '');
+  const at = text.indexOf(DISPOSITION_CREATOR_CHANGE);
+  if (at === -1 || text.indexOf(DISPOSITION_CREATOR_CHANGE, at + 1) !== -1) return { code: text, problems: ['the DISPOSITION SUMMARY change of ReportCreator.js is not in it exactly once'] };
+  return { code: text.slice(0, at) + text.slice(at + DISPOSITION_CREATOR_CHANGE.length), problems: [] };
+}
+
 function codeBeforeStructureFix(code) {
-  const attendanceless = codeWithoutAttendanceEmptyTextFix(code);
+  const dispositionless = codeWithoutDispositionSummary(code);
+  const attendanceless = codeWithoutAttendanceEmptyTextFix(dispositionless.code);
   const abstractless = codeWithoutAbstractCacheChange(attendanceless.code);
   const unreleased = codeWithoutReleaseHeader(abstractless.code);
   const guardless = codeWithoutConfigurationGuard(unreleased.code);
   const view = takeOut(guardless.code, SECTION_START, SECTION_END, CHANGES, 'REPORT STRUCTURE');
-  return { code: view.code, problems: attendanceless.problems.concat(abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
+  return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeBeforeStructureFix, codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
+module.exports = { codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+  codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

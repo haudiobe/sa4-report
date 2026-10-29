@@ -140,6 +140,10 @@ const REPORT_TREE_AFTER_SETUP = [
   '    Update TDoc Revisions -> collectRevisionsOnly',
   '    Update Abstracts -> addAbstractsOnly',
   '    ---',
+  // After T-2026.10.15: tests/disposition-summary-close-report.test.js.
+  '    Update Disposition Summary -> updateDispositionSummary',
+  '    Close Report -> closeReport',
+  '    ---',
   '    Report Status Summary -> analyzeReportStatus',
   '    Convert Status Fields to Dropdowns… -> convertStatusFieldsToDropdowns',
   '  💬 Prepare Discussion E-mails… -> prepareTdocDiscussionEmails',
@@ -205,13 +209,13 @@ console.log('1. report menu after setup');
   check('every item calls an existing public function (a menu cannot call a private one)',
     reportTargets.filter((f) => typeof r.s[f] !== 'function' || /_$/.test(f)), []);
   check('no label is used twice', t.filter((l, i) => / -> /.test(l) && t.indexOf(l) !== i), []);
-  check('ad-hoc report: 26 items after setup, 4 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
-    [26, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
+  check('ad-hoc report: 28 items after setup (two of the Disposition Summary, after T-2026.10.15), 4 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [28, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
   const main = runtime({ docId: REPORT_ID, props: SET_UP_MAIN });
   main.s.onOpen();
   check('main-meeting report: exact tree, without the Sessions and Attendance submenu', tree(main.ui), REPORT_TREE_AFTER_SETUP);
-  check('main-meeting report: 20 items after setup, 3 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
-    [20, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
+  check('main-meeting report: 22 items after setup (two of the Disposition Summary, after T-2026.10.15), 3 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [22, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
   check('a document configured by hand (state "manual") gets the same menu',
     (() => { const m = runtime({ docId: REPORT_ID, props: { SA4_BOOTSTRAP_STATE: 'manual' } }); m.s.onOpen(); return tree(m.ui); })(), REPORT_TREE_AFTER_SETUP);
 }

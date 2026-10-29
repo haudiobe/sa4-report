@@ -1333,6 +1333,14 @@ function continuousUpdateCore_(context) {
     const failures = (sessionColumnFailure ? [sessionColumnFailure] : []).concat((collected && collected.failures) || []);
     if (failures.length) result.collectorFailures = failures;
 
+    // After T-2026.10.15: a Disposition Summary that is there is kept up to
+    // date; a report without one is not given one. Not in a background run
+    // (no status dropdowns can be read there). Never fails the update.
+    if (!context) {
+      const summary = syncDispositionSummaryOnUpdate_(body);
+      if (summary.state !== 'absent') result.dispositionSummary = summary.state;
+    }
+
     // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
     // full-document formatting pass is only actually needed when this run
     // inserted or moved a TABLE, or inserted a ROW into an existing table
@@ -4608,6 +4616,7 @@ function findReportTerminalBoundary_(body) {
   let close = -1;
   let closeNumber = '';
   let attendance = -1;
+  let summary = -1;
   for (let i = 0; i < count; i++) {
     const child = body.getChild(i);
     if (child.getType() !== PARAGRAPH) continue;
@@ -4616,9 +4625,12 @@ function findReportTerminalBoundary_(body) {
     const text = p.getText().trim();
     if (isClosingHeadingText_(text)) { close = i; closeNumber = agendaNumberOfHeadingText_(text); }
     else if (attendance === -1 && text === ADHOC_ATTENDANCE_HEADING_) attendance = i;
+    else if (summary === -1 && isDispositionSummaryHeadingText_(text)) summary = i;
   }
   if (close !== -1) return { index: close, closeNumber: closeNumber };
   if (attendance !== -1) return { index: attendance, closeNumber: '' };
+  // After T-2026.10.15: without either, the Disposition Summary ends the agenda part.
+  if (summary !== -1) return { index: summary, closeNumber: '' };
   return { index: count, closeNumber: '' };
 }
 
@@ -4878,6 +4890,8 @@ function findAgendaSectionEndIndex_(body, agendaItem) {
       // The Attendance section closes the report: nothing of an agenda item
       // goes after it, also not of the item it stands in.
       if (nextText === ADHOC_ATTENDANCE_HEADING_) return j;
+      // After T-2026.10.15: nor after the Disposition Summary.
+      if (isDispositionSummaryHeadingText_(nextText)) return j;
       const nextLevel = (nextText.match(/^(\d+(?:\.\d+)*)/) || ['', ''])[1];
       const nextDots = nextLevel ? (nextLevel.match(/\./g) || []).length + 1 : 99;
       
@@ -9465,6 +9479,8 @@ function analyzeReportStatus() {
   
   tables.forEach(t => {
     if (!isTDocTable_(t)) return;
+    // After T-2026.10.15: the tables of the Disposition Summary list TDocs; they are not TDoc tables.
+    if (isDispositionSummaryTable_(t)) return;
     
     stats.total++;
     
@@ -10713,6 +10729,8 @@ function buildSkeletonWithTdocTables(options) {
   // Ad-hoc sessions (stage B): what the Session column is computed from; null
   // unless this ad-hoc report has sessions.
   const tdocSessions = makeAdhocTdocSessionResolverSafely_();
+  // After T-2026.10.15: the Disposition Summary is not rebuilt; the result says how to write it again.
+  const dispositionSummaryNote = dispositionSummaryRebuildNote_(DocumentApp.getActiveDocument().getBody());
 
   // T-2026.10.7: what the status dropdowns say now is kept for the end of this build (nothing is read unless the
   // report has status dropdowns).
@@ -11134,6 +11152,7 @@ function buildSkeletonWithTdocTables(options) {
   // Shared minutes (template reports): the link to them, from what is stored ('' and nothing done without a
   // verified record of this report). Nothing is created or shared here, and Drive is not asked.
   if (templateRuntimeRelease_() && typeof finishSharedMinutesRebuild_ === 'function') reallocationRestoreNote += finishSharedMinutesRebuild_(body);
+  reallocationRestoreNote += dispositionSummaryNote;
 
   // TEMPLATE-002C: Full Build formats once, after its enrichment phases.
   if (!(options && options.skipFormatting)) removeRowHeightAndSpacing();
@@ -15770,7 +15789,11 @@ function findAdhocAttendanceInsertIndex_(body) {
     const text = child.asParagraph().getText().toLowerCase();
     if (text.indexOf('close of') !== -1 || text.indexOf('closing') !== -1) closing = i;
   }
-  if (closing === -1) return { index: count, inClosingSection: false };
+  if (closing === -1) {
+    // After T-2026.10.15: never after the Disposition Summary.
+    const summary = findDispositionSummarySection_(body);
+    return { index: summary ? summary.start : count, inClosingSection: false };
+  }
   let index = closing + 1;
   while (index < count) {
     const next = body.getChild(index);
@@ -20065,6 +20088,579 @@ function assertMeetingConfigured_(context) {
 
 // =========================================================
 // END OF CONFIGURATION GUARD
+// =========================================================
+
+// =========================================================
+// DISPOSITION SUMMARY AND CLOSE REPORT (after T-2026.10.15)
+// =========================================================
+//
+// docs/DISPOSITION_SUMMARY.md.
+//
+// THE DISPOSITION of a TDoc is the Status of its TDoc table, read the way
+// every reader reads it (detectTdocTablesInDocument_() and readTdocStatus_():
+// the text of the cell, else the value selected in its dropdown). Each status
+// is in exactly one of three classes, DISPOSITION_OF_STATUS_, which names the
+// fourteen options of the "Document Status" dropdown of the master template
+// (and the Portal wording "replied to", STATUS_DROPDOWN_ALIASES_):
+//   AGREED_OR_ENDORSED  agreed, endorsed
+//   DISPOSED_OTHER      noted, revised, merged, approved, withdrawn, replied, postponed
+//   UNRESOLVED          available, reserved, parked, Plenary, other
+// Any other status -- none, a typed text such as "agreed, see minutes", a
+// Portal status without an option -- is UNRESOLVED and named as not
+// recognised. Nothing counts as disposed that is not listed.
+//
+// THE SUMMARY is one section: the heading "Disposition Summary", a note, and
+// for each class a bold line with its count and a table TDoc | Title |
+// Source | Status ("None." without TDocs), in the order of the report. The
+// TDoc number keeps the link of its TDoc table. Only Update Disposition
+// Summary and Close Report write one where there is none; every update keeps
+// one that is there up to date (not in a background run, which cannot read
+// status dropdowns) and never adds one. Build Report from Scratch clears it
+// with the rest of the report and says so.
+//
+// WHERE: a new summary is appended at the end of the document -- after
+// "Close of ..." and after the Attendance section. Nothing of the agenda goes
+// after it: it ends the agenda part of a report that has neither
+// (findReportTerminalBoundary_()), a TDoc of the closing item goes before it
+// (findAgendaSectionEndIndex_()), and so does an Attendance section written
+// after it.
+//
+// ITS SECTION runs from its heading to the next heading. It is rewritten only
+// when what it would say differs from what it says, and only when it holds
+// nothing but what it writes and empty paragraphs: text typed into it is
+// never removed -- the summary is then not written, and the user is told
+// why. The empty paragraphs at its end are left as they are, so a rewrite
+// adds none.
+//
+// CLOSE REPORT writes the summary and says whether the report is ready to
+// close. It changes nothing else -- no status, no revision, nothing in 3GU,
+// no trigger, no sharing -- and stores nothing; it can be run again at any
+// time. It is not ready while:
+//   1. a TDoc is UNRESOLVED;
+//   2. a TDoc the report has as revised has no revision in the TDoc list
+//      (3GU): no "Revised to" and a status other than revised -- the author
+//      still has to reserve/upload the revision; or its "Revised to" is not
+//      uploaded yet (the sign of the upload completion: no hyperlink in the
+//      list, else the status reserved); or the list does not have it at all;
+//   3. something could not be checked (a status, the TDoc list, the summary).
+
+const DISPOSITION_SUMMARY_HEADING_ = 'Disposition Summary';
+const DISPOSITION_SUMMARY_NOTE_ = 'Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition Summary, and kept up to date by every update. Text typed into this section stops it from being updated.';
+const DISPOSITION_SUMMARY_NONE_ = 'None.';
+const DISPOSITION_SUMMARY_TABLE_HEADER_ = ['TDoc', 'Title', 'Source', 'Status'];
+const DISPOSITION_SUMMARY_TABLE_WIDTHS_ = [0.19, 0.47, 0.20, 0.14];
+const DISPOSITION_SUMMARY_MENU_HINT_ = 'SA4 Report > Report > Update Disposition Summary';
+// The classes, in the order of the summary.
+const DISPOSITION_CLASSES_ = [
+  { key: 'AGREED_OR_ENDORSED', title: 'Agreed and Endorsed Documents', short: 'agreed/endorsed' },
+  { key: 'DISPOSED_OTHER', title: 'Other Disposed Documents', short: 'other disposed' },
+  { key: 'UNRESOLVED', title: 'Documents Not Yet Disposed', short: 'not yet disposed' }
+];
+// THE classification: every option of the "Document Status" dropdown, by its label (statusDropdownLabel_()).
+const DISPOSITION_OF_STATUS_ = {
+  'agreed': 'AGREED_OR_ENDORSED',
+  'endorsed': 'AGREED_OR_ENDORSED',
+  'noted': 'DISPOSED_OTHER',
+  'revised': 'DISPOSED_OTHER',
+  'merged': 'DISPOSED_OTHER',
+  'approved': 'DISPOSED_OTHER',
+  'withdrawn': 'DISPOSED_OTHER',
+  'replied': 'DISPOSED_OTHER',
+  'postponed': 'DISPOSED_OTHER',
+  'available': 'UNRESOLVED',
+  'reserved': 'UNRESOLVED',
+  'parked': 'UNRESOLVED',
+  'plenary': 'UNRESOLVED',
+  'other': 'UNRESOLVED'
+};
+// Lines of one list in the Close Report dialog; the summary in the report has all of them.
+const CLOSE_REPORT_LIST_LIMIT_ = 40;
+
+/**
+ * Pure: the class of a status -- { label, known, disposition }. `label` is
+ * the status as it is compared (an alias as its option); `known` is false
+ * for a status that is not an option, and its disposition is then UNRESOLVED.
+ */
+function classifyTdocDisposition_(status) {
+  const label = statusDropdownLabel_(status);
+  const canonical = Object.prototype.hasOwnProperty.call(STATUS_DROPDOWN_ALIASES_, label) ? STATUS_DROPDOWN_ALIASES_[label] : label;
+  const known = Object.prototype.hasOwnProperty.call(DISPOSITION_OF_STATUS_, canonical);
+  return { label: canonical, known: known, disposition: known ? DISPOSITION_OF_STATUS_[canonical] : 'UNRESOLVED' };
+}
+
+/** True for the text of the heading of the summary. */
+function isDispositionSummaryHeadingText_(text) {
+  return String(text === null || text === undefined ? '' : text).trim() === DISPOSITION_SUMMARY_HEADING_;
+}
+
+/** The link on the TDoc number of a TDoc table, or ''. Never throws. */
+function tdocCellLinkUrl_(table, tdoc) {
+  try {
+    const text = table.getRow(0).getCell(1).editAsText();
+    const at = Math.max(0, text.getText().indexOf(tdoc));
+    return text.getLinkUrl(at) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * The TDocs of the report and their dispositions, in the order of the
+ * report: { entries, unreadable }. One entry per TDoc number: { tdoc, title,
+ * source, agendaItem, status, link, tables, label, known, disposition,
+ * conflict, revisionIds }. A TDoc with two tables of different statuses is
+ * UNRESOLVED (conflict). `unreadable`: TDocs whose Status is a dropdown that
+ * could not be read -- their disposition is not known. `revisionIds` (only
+ * with options.revisions): the other TDoc numbers its Disposition and
+ * Revisions cells name. Read-only.
+ */
+function readReportDispositions_(body, options) {
+  const tables = body.getTables();
+  const entries = [];
+  const byTdoc = {};
+  const unreadable = [];
+  detectTdocTablesInDocument_(body).forEach(function (found) {
+    const table = tables[found.tableIndex];
+    const status = String(found.status || '').trim();
+    if (!status) {
+      const info = findStatusInDocTable_(table);
+      if (info && statusCellHoldsDropdown_(info.cell) && unreadable.indexOf(found.tdoc) === -1) unreadable.push(found.tdoc);
+    }
+    if (byTdoc[found.tdoc]) {
+      byTdoc[found.tdoc].statuses.push(status);
+      return;
+    }
+    const entry = { tdoc: found.tdoc, title: found.title, source: found.source, agendaItem: found.agendaItem, status: status, link: tdocCellLinkUrl_(table, found.tdoc), statuses: [status] };
+    if (options && options.revisions) {
+      entry.revisionIds = findSA4DocumentIdsInText_(findCellText_(table, 'Disposition') + '\n' + findCellText_(table, 'Revisions')).filter(function (id) { return id !== found.tdoc; });
+    }
+    byTdoc[found.tdoc] = entry;
+    entries.push(entry);
+  });
+  entries.forEach(function (entry) {
+    const labels = entry.statuses.map(statusDropdownLabel_).filter(function (label, i, list) { return list.indexOf(label) === i; });
+    entry.tables = entry.statuses.length;
+    entry.conflict = labels.length > 1;
+    if (entry.conflict) {
+      entry.status = entry.statuses.map(function (s) { return s || '(no status)'; }).join(' / ');
+      Object.assign(entry, { label: '', known: false, disposition: 'UNRESOLVED' });
+    } else {
+      Object.assign(entry, classifyTdocDisposition_(entry.status));
+    }
+    delete entry.statuses;
+  });
+  return { entries: entries, unreadable: unreadable };
+}
+
+/** Pure: the classes of the summary with their TDocs: [{ key, title, short, entries }], in the order of DISPOSITION_CLASSES_. */
+function buildDispositionSummaryModel_(entries) {
+  return DISPOSITION_CLASSES_.map(function (c) {
+    return { key: c.key, title: c.title, short: c.short, entries: (entries || []).filter(function (e) { return e.disposition === c.key; }) };
+  });
+}
+
+/** Pure: the Status cell of a TDoc in the summary. */
+function dispositionSummaryStatusText_(entry) {
+  if (entry.conflict) return 'conflicting: ' + entry.status;
+  if (!entry.status) return '(no status)';
+  return entry.known ? entry.status : entry.status + ' (not a known status)';
+}
+
+/**
+ * Pure: what the section says below its heading, in order: [['p', text]] for
+ * a paragraph and ['t', rows, links] for a table (rows with the header;
+ * links: the link of each TDoc, '' for none). The same form
+ * readDispositionSummaryContent_() reads, so the two can be compared.
+ */
+function dispositionSummaryContent_(model) {
+  const out = [['p', DISPOSITION_SUMMARY_NOTE_]];
+  model.forEach(function (c) {
+    out.push(['p', c.title + ' (' + c.entries.length + ')']);
+    if (!c.entries.length) {
+      out.push(['p', DISPOSITION_SUMMARY_NONE_]);
+      return;
+    }
+    // One line per cell: a line break in a title would not read back as it was written.
+    const line = function (text) { return String(text === null || text === undefined ? '' : text).replace(/\s+/g, ' ').trim(); };
+    const rows = [DISPOSITION_SUMMARY_TABLE_HEADER_.slice()].concat(c.entries.map(function (e) { return [e.tdoc, line(e.title), line(e.source), line(dispositionSummaryStatusText_(e))]; }));
+    out.push(['t', rows, c.entries.map(function (e) { return e.link || ''; })]);
+  });
+  return out;
+}
+
+/** True for a paragraph the summary writes (the note, a class line, "None."). */
+function isDispositionSummaryParagraphText_(text) {
+  if (text === DISPOSITION_SUMMARY_NOTE_ || text === DISPOSITION_SUMMARY_NONE_) return true;
+  return DISPOSITION_CLASSES_.some(function (c) { return new RegExp('^' + c.title + ' \\(\\d+\\)$').test(text); });
+}
+
+/** True for a table the summary writes: its first row is the header of the summary. */
+function isDispositionSummaryTable_(table) {
+  try {
+    if (table.getNumRows() < 1) return false;
+    const row = table.getRow(0);
+    if (row.getNumCells() !== DISPOSITION_SUMMARY_TABLE_HEADER_.length) return false;
+    for (let c = 0; c < row.getNumCells(); c++) if (row.getCell(c).getText().trim() !== DISPOSITION_SUMMARY_TABLE_HEADER_[c]) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The section of the summary: { start, end, contentEnd, foreign, count }, or
+ * null. `start` is its heading, `end` the next heading (or the end of the
+ * document), `contentEnd` the end without the empty paragraphs at its end.
+ * `foreign`: what stands in it that the summary does not write (the start of
+ * its text). `count`: how many summary headings the report has. Read-only.
+ */
+function findDispositionSummarySection_(body) {
+  const PARAGRAPH = DocumentApp.ElementType.PARAGRAPH;
+  const TABLE = DocumentApp.ElementType.TABLE;
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const total = body.getNumChildren();
+  let start = -1;
+  let count = 0;
+  for (let i = 0; i < total; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== PARAGRAPH || child.asParagraph().getHeading() === NORMAL) continue;
+    if (!isDispositionSummaryHeadingText_(child.asParagraph().getText())) continue;
+    count++;
+    if (start === -1) start = i;
+  }
+  if (start === -1) return null;
+  let end = start + 1;
+  while (end < total) {
+    const next = body.getChild(end);
+    if (next.getType() === PARAGRAPH && next.asParagraph().getHeading() !== NORMAL) break;
+    end++;
+  }
+  let contentEnd = end;
+  while (contentEnd > start + 1 && isEmptyBodyParagraph_(body.getChild(contentEnd - 1))) contentEnd--;
+  const foreign = [];
+  for (let i = start + 1; i < contentEnd; i++) {
+    const child = body.getChild(i);
+    if (isEmptyBodyParagraph_(child)) continue;
+    if (child.getType() === TABLE && isDispositionSummaryTable_(child.asTable())) continue;
+    if (child.getType() === PARAGRAPH && isDispositionSummaryParagraphText_(child.asParagraph().getText())) continue;
+    const text = child.getType() === PARAGRAPH ? child.asParagraph().getText() : child.getType() === TABLE ? 'a table' : 'an element of type ' + child.getType();
+    foreign.push(String(text).slice(0, 60));
+  }
+  return { start: start, end: end, contentEnd: contentEnd, foreign: foreign, count: count };
+}
+
+/** What the section says now, in the form of dispositionSummaryContent_(). Read-only. */
+function readDispositionSummaryContent_(body, section) {
+  const TABLE = DocumentApp.ElementType.TABLE;
+  const out = [];
+  for (let i = section.start + 1; i < section.contentEnd; i++) {
+    const child = body.getChild(i);
+    if (isEmptyBodyParagraph_(child)) continue;
+    if (child.getType() !== TABLE) {
+      out.push(['p', child.asParagraph().getText()]);
+      continue;
+    }
+    const table = child.asTable();
+    const rows = [];
+    const links = [];
+    for (let r = 0; r < table.getNumRows(); r++) {
+      const row = table.getRow(r);
+      const cells = [];
+      for (let c = 0; c < row.getNumCells(); c++) cells.push(row.getCell(c).getText());
+      rows.push(cells);
+      if (r === 0) continue;
+      let link = '';
+      try { link = row.getCell(0).editAsText().getLinkUrl(0) || ''; } catch (e) { link = ''; }
+      links.push(link);
+    }
+    out.push(['t', rows, links]);
+  }
+  return out;
+}
+
+/** The look of a summary table, set explicitly (a table takes the look of the bold line before it). */
+function formatDispositionSummaryTable_(table) {
+  let page = 468;
+  try { page = parseInt(getConfig_().TDOC_PAGE_USABLE_WIDTH || '468', 10) || 468; } catch (e) { page = 468; }
+  const widths = DISPOSITION_SUMMARY_TABLE_WIDTHS_.map(function (share) { return Math.round(page * share); });
+  for (let r = 0; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    row.setMinimumHeight(0);
+    for (let c = 0; c < row.getNumCells(); c++) {
+      const cell = row.getCell(c);
+      cell.editAsText().setBold(r === 0);
+      if (r === 0) cell.setBackgroundColor(ADHOC_TABLE_HEADER_BACKGROUND_);
+      if (c < widths.length) cell.setWidth(widths[c]);
+      for (let k = 0; k < cell.getNumChildren(); k++) {
+        const child = cell.getChild(k);
+        if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+        child.asParagraph().setSpacingBefore(0);
+        child.asParagraph().setSpacingAfter(0);
+      }
+    }
+  }
+}
+
+/**
+ * Writes the summary for `model` and nothing else. Returns { state }:
+ * 'created' (appended at the end of the document), 'replaced', 'unchanged'
+ * (it already says this; nothing written), or 'refused' (its section holds
+ * something it does not write; nothing written; `foreign` names it).
+ */
+function renderDispositionSummary_(body, model) {
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  const wanted = dispositionSummaryContent_(model);
+  const section = findDispositionSummarySection_(body);
+  if (section && section.foreign.length) return { state: 'refused', foreign: section.foreign };
+  if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged' };
+
+  let at;
+  if (section) {
+    for (let i = section.contentEnd - 1; i > section.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    at = section.start + 1;
+  } else {
+    body.appendParagraph(DISPOSITION_SUMMARY_HEADING_).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+    at = body.getNumChildren();
+  }
+  wanted.forEach(function (item, k) {
+    if (item[0] === 'p') {
+      const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
+      p.setHeading(NORMAL);
+      // The line of a class is bold; the note and "None." are not.
+      p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);
+      at++;
+      return;
+    }
+    const table = at >= body.getNumChildren() ? body.appendTable(item[1]) : body.insertTable(at, item[1]);
+    at = body.getChildIndex(table) + 1;
+    // The look never decides whether the summary is written.
+    try {
+      formatDispositionSummaryTable_(table);
+    } catch (e) {
+      Logger.log('Disposition Summary: a table could not be formatted: ' + e.message);
+    }
+    item[2].forEach(function (link, i) {
+      const tdoc = item[1][i + 1][0];
+      if (link) table.getRow(i + 1).getCell(0).editAsText().setLinkUrl(0, tdoc.length - 1, link);
+    });
+  });
+  return { state: section ? 'replaced' : 'created' };
+}
+
+/**
+ * Reads the TDocs of the report and writes the summary for them (creating it
+ * when there is none). Returns { state, read, model, foreign }; state
+ * 'unreadable' -- and nothing written -- when a status could not be read.
+ */
+function writeDispositionSummary_(body, options) {
+  const read = readReportDispositions_(body, options);
+  const model = buildDispositionSummaryModel_(read.entries);
+  if (read.unreadable.length) return { state: 'unreadable', read: read, model: model, foreign: [] };
+  const rendered = renderDispositionSummary_(body, model);
+  return { state: rendered.state, read: read, model: model, foreign: rendered.foreign || [] };
+}
+
+/**
+ * The update: a summary that is there is brought up to date; a report
+ * without one is not given one. Never throws. Returns { state }.
+ */
+function syncDispositionSummaryOnUpdate_(body) {
+  try {
+    if (!findDispositionSummarySection_(body)) return { state: 'absent' };
+    const done = writeDispositionSummary_(body);
+    if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
+    else if (done.state === 'refused') Logger.log('Disposition Summary: not updated -- its section holds text it did not write: ' + done.foreign.join(' | '));
+    else Logger.log('Disposition Summary: ' + done.state + ' (' + dispositionCountsText_(done.model) + ')');
+    return { state: done.state };
+  } catch (e) {
+    Logger.log('Disposition Summary: could not be updated: ' + e.message);
+    return { state: 'failed', error: e.message };
+  }
+}
+
+/** Build Report from Scratch, before the document is cleared: what its result says when the report had a summary, else ''. Never throws. */
+function dispositionSummaryRebuildNote_(body) {
+  try {
+    return findDispositionSummarySection_(body) ? '\n\nThe Disposition Summary was cleared with the report. Use ' + DISPOSITION_SUMMARY_MENU_HINT_ + ' to write it again.' : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/** Pure: "17 agreed/endorsed, 9 other disposed, 2 not yet disposed". */
+function dispositionCountsText_(model) {
+  return model.map(function (c) { return c.entries.length + ' ' + c.short; }).join(', ');
+}
+
+/**
+ * Pure: the TDocs the report has as revised whose revision 3GU does not have
+ * (see the section comment), as [{ tdoc, title, source, revision,
+ * reportStatus, state3gu, action, kind }]. `entries` from
+ * readReportDispositions_(..., { revisions: true }); `allTdocs` the rows of
+ * the TDoc list (downloadAndGroupTdocs_()). Nothing is changed.
+ */
+function findRevisionsMissingIn3gu_(entries, allTdocs) {
+  const list = {};
+  (allTdocs || []).forEach(function (td) {
+    const raw = String(td.row[td.tdocCol] === null || td.row[td.tdocCol] === undefined ? '' : td.row[td.tdocCol]).trim();
+    const parsed = parseExactSA4DocumentId_(raw);
+    const number = parsed.isValid ? parsed.raw : raw;
+    if (number && !list[number]) list[number] = td;
+  });
+  const out = [];
+  (entries || []).forEach(function (entry) {
+    if (entry.conflict || entry.label !== 'revised') return;
+    const base = { tdoc: entry.tdoc, title: entry.title, source: entry.source, revision: (entry.revisionIds || []).join(', '), reportStatus: entry.status };
+    const row = list[entry.tdoc];
+    if (!row) {
+      out.push(Object.assign(base, { kind: 'not-in-tdoc-list', state3gu: 'not in the TDoc list', action: 'Check the TDoc in 3GU: the report has it as revised, the TDoc list of this report does not have it.' }));
+      return;
+    }
+    const portal = tdocListStatus_(row);
+    const target = getRevisedTo_(row);
+    if (!target) {
+      if (statusDropdownLabel_(portal) === 'revised') return;
+      out.push(Object.assign(base, { kind: 'revision-not-reserved', state3gu: portal || '(no status)', action: 'Author needs to reserve/upload the revision in 3GU.' }));
+      return;
+    }
+    const revision = list[target];
+    if (!revision) return;
+    const notUploaded = tdocListLinkIsKnown_(revision) ? !tdocListLinkUrl_(revision) : statusDropdownLabel_(tdocListStatus_(revision)) === 'reserved';
+    if (!notUploaded) return;
+    out.push(Object.assign(base, { revision: target, kind: 'revision-not-uploaded', state3gu: (portal || '(no status)') + ', revised to ' + target + ' (' + (tdocListStatus_(revision) || 'no status') + ', not uploaded)',
+      action: 'Author needs to upload the revision ' + target + ' in 3GU.' }));
+  });
+  return out;
+}
+
+/**
+ * Close Report, without the dialog: writes the summary and runs the checks.
+ * Returns { ready, checked, counts, unresolved, revisions, problems,
+ * summaryState }. Never changes a status, a revision, 3GU or anything
+ * stored; the summary is the only thing written.
+ */
+function closeReportCore_() {
+  const body = DocumentApp.getActiveDocument().getBody();
+  const result = { ready: false, checked: 0, counts: {}, unresolved: [], revisions: [], problems: [], summaryState: '' };
+  const summary = writeDispositionSummary_(body, { revisions: true });
+  result.summaryState = summary.state;
+  result.checked = summary.read.entries.length;
+  summary.model.forEach(function (c) { result.counts[c.key] = c.entries.length; });
+  result.unresolved = summary.model.filter(function (c) { return c.key === 'UNRESOLVED'; })[0].entries;
+  if (summary.state === 'unreadable') {
+    result.problems.push('The Status of ' + summary.read.unreadable.join(', ') + ' could not be read, so the report could not be checked and the Disposition Summary was not written. Run Close Report again.');
+  } else if (summary.state === 'refused') {
+    result.problems.push('The Disposition Summary was not updated: its section holds text it did not write ("' + summary.foreign.join('", "') + '"). Move that text out of the section and run Close Report again.');
+  }
+
+  let allTdocs = null;
+  try {
+    assertMeetingConfigured_();
+    const cfg = getReportConfig_();
+    if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');
+    const groups = downloadAndGroupTdocs_(cfg);
+    allTdocs = [];
+    Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });
+  } catch (e) {
+    result.problems.push('The revisions could not be checked against 3GU: ' + e.message);
+  }
+  if (allTdocs) result.revisions = findRevisionsMissingIn3gu_(summary.read.entries, allTdocs);
+
+  result.ready = summary.state !== 'unreadable' && result.problems.length === 0 && result.unresolved.length === 0 && result.revisions.length === 0;
+  Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.unresolved.length + ' not yet disposed, ' + result.revisions.length + ' revision/3GU inconsistencies, ' + result.problems.length + ' problem(s); summary ' + result.summaryState);
+  return result;
+}
+
+/** Pure: a title as one line of a dialog. */
+function dispositionDialogTitle_(title) {
+  const text = String(title || '').replace(/\s+/g, ' ').trim();
+  return text.length > 60 ? text.slice(0, 59) + '…' : text;
+}
+
+/** Pure: what the Disposition Summary says it did, for a dialog. */
+function describeDispositionSummaryState_(state) {
+  return {
+    created: 'Disposition Summary written at the end of the report.',
+    replaced: 'Disposition Summary updated.',
+    unchanged: 'Disposition Summary was already up to date.',
+    refused: 'Disposition Summary NOT updated.',
+    unreadable: 'Disposition Summary NOT written.'
+  }[state] || 'Disposition Summary: ' + state;
+}
+
+/** Pure: the text of the Close Report dialog. */
+function formatCloseReportResult_(result) {
+  const lines = [result.ready ? 'Report ready to close.' : 'Report NOT READY TO CLOSE.', ''];
+  lines.push(result.checked + ' TDocs checked.');
+  DISPOSITION_CLASSES_.forEach(function (c) { lines.push((result.counts[c.key] || 0) + ' ' + c.short + '.'); });
+  lines.push(result.revisions.length + ' revision/3GU inconsistenc' + (result.revisions.length === 1 ? 'y' : 'ies') + '.');
+  lines.push('');
+  lines.push(describeDispositionSummaryState_(result.summaryState));
+  if (result.unresolved.length) {
+    lines.push('');
+    lines.push('NOT YET DISPOSED (' + result.unresolved.length + ') -- TDoc | Title | Source | Current Status:');
+    result.unresolved.slice(0, CLOSE_REPORT_LIST_LIMIT_).forEach(function (e) {
+      lines.push('• ' + e.tdoc + ' | ' + dispositionDialogTitle_(e.title) + ' | ' + (e.source || '') + ' | ' + dispositionSummaryStatusText_(e));
+    });
+    if (result.unresolved.length > CLOSE_REPORT_LIST_LIMIT_) lines.push('… and ' + (result.unresolved.length - CLOSE_REPORT_LIST_LIMIT_) + ' more: see "Documents Not Yet Disposed" in the Disposition Summary.');
+  }
+  if (result.revisions.length) {
+    lines.push('');
+    lines.push('REVISED IN THE REPORT, NOT IN 3GU (' + result.revisions.length + ') -- Original TDoc | Revision | Source | Report state | 3GU state:');
+    result.revisions.forEach(function (r) {
+      lines.push('• ' + r.tdoc + ' | ' + (r.revision || '–') + ' | ' + (r.source || '') + ' | ' + r.reportStatus + ' | ' + r.state3gu);
+      lines.push('   → ' + r.action);
+    });
+  }
+  if (result.problems.length) {
+    lines.push('');
+    result.problems.forEach(function (p) { lines.push('⚠️ ' + p); });
+  }
+  if (!result.ready) {
+    lines.push('');
+    lines.push('Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.');
+  }
+  return lines.join('\n');
+}
+
+/** Pure: the text of the Update Disposition Summary dialog. */
+function formatDispositionSummaryResult_(done) {
+  if (done.state === 'unreadable') return 'The Disposition Summary was not written: the Status of ' + done.read.unreadable.join(', ') + ' could not be read. Try again in a minute.';
+  if (done.state === 'refused') return 'The Disposition Summary was not updated: its section holds text it did not write ("' + done.foreign.join('", "') + '").\n\nMove that text out of the section (above its heading, or below a new heading after it) and run Update Disposition Summary again.';
+  return describeDispositionSummaryState_(done.state) + '\n\n' + done.read.entries.length + ' TDocs: ' + dispositionCountsText_(done.model) + '.';
+}
+
+/** Runs `fn` under the document lock, as Update Report Now does. */
+function withDispositionLock_(what, fn) {
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) throw new Error(what + ': an update of this report is running right now. Try again in a minute.');
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Menu: Report > Update Disposition Summary. Writes the summary (creating it where there is none) and nothing else. */
+function updateDispositionSummary() {
+  assertNotTemplateMaster_();
+  const done = withDispositionLock_('Update Disposition Summary', function () { return writeDispositionSummary_(DocumentApp.getActiveDocument().getBody()); });
+  const ui = DocumentApp.getUi();
+  ui.alert('Disposition Summary', formatDispositionSummaryResult_(done), ui.ButtonSet.OK);
+  return done;
+}
+
+/** Menu: Report > Close Report. Checks the report, writes the summary and says whether it is ready to close. Nothing is locked or stored. */
+function closeReport() {
+  assertNotTemplateMaster_();
+  const result = withDispositionLock_('Close Report', closeReportCore_);
+  const ui = DocumentApp.getUi();
+  ui.alert(result.ready ? 'Report ready to close' : 'Report NOT ready to close', formatCloseReportResult_(result), ui.ButtonSet.OK);
+  return result;
+}
+
+// =========================================================
+// END OF DISPOSITION SUMMARY AND CLOSE REPORT
 // =========================================================
 
 /**

@@ -32,7 +32,7 @@ const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { REPORT_CREATOR_PATH } = require('./helpers/load-template.js');
 const { templateReport, PROPS } = require('./helpers/template-report.js');
 const { makeFakeDrive } = require('./helpers/fake-drive-files.js');
-const { codeWithoutConfigurationGuard, creatorWithoutConfigurationGuard, GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS, GUARD_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutConfigurationGuard, creatorWithoutConfigurationGuard, creatorWithoutDispositionSummary,GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS, GUARD_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -208,7 +208,9 @@ console.log('I. what the guard changed');
   check('Code.js: one section with these functions and one message constant, nothing else at top level', [functionNames(section), section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm)], [GUARD_SECTION_FUNCTIONS, ['const MEETING_NOT_CONFIGURED_MESSAGE_']]);
   check('Code.js: of the functions there were, these changed; none was removed', [functionNames(code.code).filter((n) => functionSource(CODE, n) !== functionSource(code.code, n)), functionNames(code.code).filter((n) => functionNames(CODE).indexOf(n) === -1)],
     [GUARD_CHANGED_FUNCTIONS, []]);
-  check('ReportCreator.js: one function changed, none added or removed', [functionNames(CREATOR).filter((n) => functionSource(CREATOR, n) !== functionSource(creator.code, n)), functionNames(CREATOR).length === functionNames(creator.code).length],
+  // The two menu items of the Disposition Summary, a later change, are not the guard's (tests/disposition-summary-close-report.test.js).
+  const LATER = creatorWithoutDispositionSummary(CREATOR).code;
+  check('ReportCreator.js: one function changed, none added or removed', [functionNames(LATER).filter((n) => functionSource(LATER, n) !== functionSource(creator.code, n)), functionNames(LATER).length === functionNames(creator.code).length],
     [GUARD_CREATOR_CHANGED_FUNCTIONS, true]);
   check('getReportConfig_() and its defaults are unchanged: the guard decides whether to run, not what the defaults are', functionSource(CODE, 'getReportConfig_') === functionSource(code.code, 'getReportConfig_'), true);
 }

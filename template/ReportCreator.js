@@ -751,6 +751,10 @@ function buildTemplateReportMenu_(ui) {
     .addItem('Update TDoc Revisions', 'collectRevisionsOnly')
     .addItem('Update Abstracts', 'addAbstractsOnly')
     .addSeparator()
+    // After T-2026.10.15: the Disposition Summary at the end of the report, and the checks before it is closed.
+    .addItem('Update Disposition Summary', 'updateDispositionSummary')
+    .addItem('Close Report', 'closeReport')
+    .addSeparator()
     .addItem('Report Status Summary', 'analyzeReportStatus')
     // T-2026.10.8: an existing report gets its status dropdowns without a rebuild.
     .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns'));
