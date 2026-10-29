@@ -3,7 +3,8 @@
 **Status: CANDIDATE — not released, not deployed.** Branch
 `feature/disposition-summary-close-report`, based on `origin/master` `e2ceddc` (release
 T-2026.10.15, `Code.js` 2.25.0): candidate `4276161`, refined afterwards (postponed, the four
-revision states, the end of the summary; then approved with agreed and endorsed). `Code.js` keeps its version line; a release adds it.
+revision states, the end of the summary; then approved with agreed and endorsed; then the
+rewrite of a summary an earlier candidate wrote). `Code.js` keeps its version line; a release adds it.
 
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
@@ -88,7 +89,18 @@ the table (or "None.") of the last class. That end is the boundary:
 | into it — between its heading and its last table, so that a part of it stands below the text | the summary is not written, nothing is removed; the dialog (or the update log) names the text and says to move it |
 | above its heading | outside it |
 
-A summary table deleted by hand is written again whole. Named ranges, the other way to mark a
+A summary table deleted by hand is written again whole.
+
+**A summary an earlier candidate wrote** is the summary's own too: the lines that candidate wrote
+differently — the first class line "Agreed and Endorsed Documents (N)" (`4276161`, `00a50c5`) and the
+note of `4276161` — are recognised by exactly those texts (`DISPOSITION_SUMMARY_EARLIER_TITLES_`,
+`DISPOSITION_SUMMARY_EARLIER_NOTES_`), and the next update rewrites the summary in the current
+form, in place. Without this, the 6G smoke copy (written by `00a50c5`) was refused by `ed43e37`: the
+old first line was taken for text typed into the summary. The summary's own tables are never read
+as data: every update classifies the TDoc tables again, with the current rules.
+
+A summary that is not written — refused, or a status that cannot be read — is reported under the
+title **"Disposition Summary NOT updated"**, never under the title of a success. Named ranges, the other way to mark a
 boundary, are used nowhere in this project; the summary is bounded the way the Attendance
 section and the registration table are, by what it writes.
 

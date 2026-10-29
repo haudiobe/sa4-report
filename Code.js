@@ -20188,6 +20188,10 @@ const DISPOSITION_OF_STATUS_ = {
   'plenary': 'UNRESOLVED',
   'other': 'UNRESOLVED'
 };
+// What earlier candidates wrote that this one writes differently: still the summary's own, so a summary they wrote is
+// rewritten in the current form instead of being taken for text typed into it. Exactly these texts, nothing broader.
+const DISPOSITION_SUMMARY_EARLIER_NOTES_ = ['Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition Summary, and kept up to date by every update. Text typed into this section stops it from being updated.'];
+const DISPOSITION_SUMMARY_EARLIER_TITLES_ = ['Agreed and Endorsed Documents'];
 // Lines of one list in the Close Report dialog; the summary in the report has all of them.
 const CLOSE_REPORT_LIST_LIMIT_ = 40;
 // What Close Report says about a TDoc the report has as revised whose revision is not complete in 3GU, in the order of its dialog.
@@ -20309,10 +20313,12 @@ function dispositionSummaryContent_(model) {
   return out;
 }
 
-/** True for a paragraph the summary writes (the note, a class line, "None."). */
+/** True for a paragraph the summary writes (the note, a class line, "None.") -- or one an earlier candidate wrote. */
 function isDispositionSummaryParagraphText_(text) {
-  if (text === DISPOSITION_SUMMARY_NOTE_ || text === DISPOSITION_SUMMARY_NONE_) return true;
-  return DISPOSITION_CLASSES_.some(function (c) { return new RegExp('^' + c.title + ' \\(\\d+\\)$').test(text); });
+  if (text === DISPOSITION_SUMMARY_NOTE_ || text === DISPOSITION_SUMMARY_NONE_ || DISPOSITION_SUMMARY_EARLIER_NOTES_.indexOf(text) !== -1) return true;
+  return DISPOSITION_CLASSES_.map(function (c) { return c.title; }).concat(DISPOSITION_SUMMARY_EARLIER_TITLES_).some(function (title) {
+    return text.length > title.length && text.slice(0, title.length) === title && /^ \(\d+\)$/.test(text.slice(title.length));
+  });
 }
 
 /** True for a table the summary writes: its first row is the header of the summary. */
@@ -20715,7 +20721,8 @@ function updateDispositionSummary() {
   assertNotTemplateMaster_();
   const done = withDispositionLock_('Update Disposition Summary', function () { return writeDispositionSummary_(DocumentApp.getActiveDocument().getBody()); });
   const ui = DocumentApp.getUi();
-  ui.alert('Disposition Summary', formatDispositionSummaryResult_(done), ui.ButtonSet.OK);
+  // A summary that was not written never shows under the title of one that was.
+  ui.alert(done.state === 'refused' || done.state === 'unreadable' ? 'Disposition Summary NOT updated' : 'Disposition Summary', formatDispositionSummaryResult_(done), ui.ButtonSet.OK);
   return done;
 }
 

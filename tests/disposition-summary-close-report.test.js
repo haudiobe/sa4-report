@@ -28,6 +28,7 @@
  *   H.  backward safety: a report without a summary is never given one;
  *       Build Report from Scratch
  *   I.  what changed in Code.js and ReportCreator.js, and nothing else
+ *   J.  a summary an earlier candidate wrote (00a50c5, 4276161) is rewritten in the current form
  *
  * Run: node tests/disposition-summary-close-report.test.js
  */
@@ -690,6 +691,114 @@ console.log('H. backward safety: a report without a summary is never given one; 
   check('the update keeps a summary only in a run with the document open (not in a background run)', /\n    if \(!context\) \{\n      const summary = syncDispositionSummaryOnUpdate_\(body\);/.test(src), true);
 }
 
+// ====================================================================== J
+console.log('J. a summary written by an earlier candidate (00a50c5, 4276161) is brought to the current form');
+{
+  // The 6G smoke copy, 2026-10-29: its summary was written by 00a50c5 (approved in "Other Disposed Documents", the first
+  // table "Agreed and Endorsed Documents"). Update Disposition Summary of ed43e37 took that first line for text typed into
+  // the summary, refused, and left the summary as it was. The fixture below is that form, literally.
+  const NOTE_00A50C5 = 'Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition Summary, and kept up to date by every update. Text typed between this line and its last table stops it from being updated; text below it is kept.';
+  const NOTE_4276161 = 'Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition Summary, and kept up to date by every update. Text typed into this section stops it from being updated.';
+  const OLD_FIRST = 'Agreed and Endorsed Documents';
+  const HEADER = ['TDoc', 'Title', 'Source', 'Status'];
+  // 01 agreed, 02 approved, 03 noted, 04 available, 05 endorsed, 06 postponed (postponed: not yet disposed since 00a50c5).
+  const DECISIONS = { 1: 'agreed', 2: 'approved', 3: 'noted', 4: 'available', 5: 'endorsed', 6: 'postponed' };
+  const TDOCS = [t(1, '4.3'), t(2, '4.3'), t(3, '4.4'), t(4, '4.4'), t(5, '4.5'), t(6, '4.5')];
+  const oldRow = (n) => [id(n), 'Synthetic title of ' + id(n), 'ExampleCorp', DECISIONS[n]];
+  /**
+   * Writes the summary exactly as the earlier candidate wrote it: the heading appended at the end of the document, then
+   * each part inserted in its turn -- in front of the empty paragraph Google Docs keeps after a table that ends the
+   * document, as renderDispositionSummary_() of that candidate did.
+   */
+  function writeEarlierSummary(r, note, classes) {
+    r.user(() => {
+      const b = r.body;
+      b.appendParagraph(SUMMARY).setHeading('H1');
+      let at = b.getNumChildren();
+      const paragraph = (text, bold) => { const x = at >= b.getNumChildren() ? b.appendParagraph(text) : b.insertParagraph(at, text); x.setHeading('NORMAL'); x.editAsText().setBold(bold); at++; };
+      paragraph(note, false);
+      classes.forEach(([title, rows]) => {
+        paragraph(title + ' (' + rows.length + ')', true);
+        if (!rows.length) { paragraph('None.', false); return; }
+        const cells = [HEADER].concat(rows);
+        const table = at >= b.getNumChildren() ? b.appendTable(cells) : b.insertTable(at, cells);
+        at = b.getChildIndex(table) + 1;
+        rows.forEach((row, i) => table.getRow(i + 1).getCell(0).editAsText().setLinkUrl(0, row[0].length - 1, zip(row[0])));
+      });
+    });
+  }
+  const OLD_CLASSES = [[OLD_FIRST, [oldRow(1), oldRow(5)]], ['Other Disposed Documents', [oldRow(2), oldRow(3)]], ['Documents Not Yet Disposed', [oldRow(4), oldRow(6)]]];
+  const fresh = () => built(TDOCS, DECISIONS);
+
+  // The fixture is what 00a50c5 really writes (when its commit is in this checkout).
+  let old = null;
+  try { old = execFileSync('git', ['show', '00a50c5:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8'); } catch (e) { old = null; }
+  if (old === null) {
+    console.log('  note: 00a50c5 is not available in this checkout; the fixture is not compared with its real output.');
+  } else {
+    const real = fresh();
+    const vm = require('vm');
+    const ctx = vm.createContext(Object.assign({}, real.s));
+    vm.runInContext(old, ctx);
+    real.exec(() => ctx.writeDispositionSummary_(real.body));
+    const literal = fresh();
+    writeEarlierSummary(literal, NOTE_00A50C5, OLD_CLASSES);
+    // Every element from the summary heading to the end of the document: type, heading, text, bold; every cell's text and link.
+    const region = (x) => { const all = JSON.parse(snapshot(x.body)); const at = all.findIndex((e) => e[0] === 'P' && e[2] === SUMMARY); return JSON.stringify(all.slice(at).map((e) => (e[0] === 'T' ? ['T', e[1].map((row) => row.map((c) => [c[0], c[2]]))] : e))); };
+    check('the fixture is, element for element (empty paragraphs and bold included), the summary the real 00a50c5 code writes for this report (approved in "Other Disposed")', region(literal), region(real));
+  }
+
+  const r = fresh();
+  writeEarlierSummary(r, NOTE_00A50C5, OLD_CLASSES);
+  const PROSE = 'Prose typed below the summary of the earlier candidate.';
+  r.user(() => r.body.appendParagraph(PROSE));
+  const section = r.s.findDispositionSummarySection_(r.body);
+  check('the earlier summary is recognised as the summary\'s own: complete, nothing foreign', [section.complete, section.foreign, section.count], [true, [], 1]);
+  const before = outsideSummary(r);
+  const count = r.body._children.length;
+  updateSummary(r);
+  const sum = summaryOf(r.body);
+  check('Update Disposition Summary: "updated", under the normal title', lastAlert(r).slice(0, 2),
+    [SUMMARY, 'Disposition Summary updated.\n\n6 TDocs: 3 agreed/endorsed/approved, 1 other disposed, 2 not yet disposed.']);
+  check('the new first heading is there, the old one is gone', [sum.map((c) => c[0]), r.body._children.filter((c) => c.getType() === 'PARAGRAPH' && c.getText().indexOf(OLD_FIRST) === 0).length],
+    [[TITLES[0] + ' (3)', TITLES[1] + ' (1)', TITLES[2] + ' (2)'], 0]);
+  check('approved moved to the first table; it is no longer in Other Disposed', [sum[0][1].map((x) => x[0] + ' ' + x[3]), sum[1][1].some((x) => x[0] === id(2))],
+    [[id(1) + ' agreed', id(2) + ' approved', id(5) + ' endorsed'], false]);
+  check('every other TDoc where it belongs, each once, with its link', [sum[1][1].map((x) => x[0] + ' ' + x[3]), sum[2][1].map((x) => x[0] + ' ' + x[3]), sum.reduce((a, c) => a.concat(c[1].map((x) => x[0])), []).sort(), sum[0][1].map((x) => x[4] === zip(x[0]))],
+    [[id(3) + ' noted'], [id(4) + ' available', id(6) + ' postponed'], [1, 2, 3, 4, 5, 6].map(id), [true, true, true]]);
+  check('one summary, rewritten in place: the prose below kept, the rest of the report as it was, no element more', [summaryHeadings(r.body), outsideSummary(r) === before, r.body._children.length - count,
+    r.body._children.findIndex((c) => c.getType() === 'PARAGRAPH' && c.getText() === PROSE) > r.body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY)], [1, true, 0, true]);
+  check('the note is the current one', r.body._children.filter((c) => c.getType() === 'PARAGRAPH' && /^Written from the Status/.test(c.getText())).map((c) => c.getText() === NOTE_00A50C5), [true]);
+  const once = snapshot(r.body);
+  updateSummary(r);
+  check('a second update: "already up to date", the document identical', [lastAlert(r)[1].split('\n')[0], snapshot(r.body) === once], ['Disposition Summary was already up to date.', true]);
+  check('an update keeps it so', [r.update().dispositionSummary, snapshot(r.body) === once], ['unchanged', true]);
+
+  // The form of 4276161 (another note) is brought to the current form too.
+  const r2 = fresh();
+  writeEarlierSummary(r2, NOTE_4276161, OLD_CLASSES);
+  updateSummary(r2);
+  check('a summary of 4276161 (its note) is rewritten in the current form as well', [lastAlert(r2)[1].split('\n')[0], summaryOf(r2.body).map((c) => c[0]), summaryHeadings(r2.body)],
+    ['Disposition Summary updated.', [TITLES[0] + ' (3)', TITLES[1] + ' (1)', TITLES[2] + ' (2)'], 1]);
+
+  // Text typed INTO an earlier summary is still refused: the earlier lines are recognised, nothing broader.
+  const r3 = fresh();
+  writeEarlierSummary(r3, NOTE_00A50C5, OLD_CLASSES);
+  r3.user(() => { const tables = r3.body._children.filter(isSummaryTable); r3.body.insertParagraph(r3.body.getChildIndex(tables[0]) + 1, 'A remark typed into the earlier summary.'); });
+  const typed = snapshot(r3.body);
+  updateSummary(r3);
+  check('text typed into an earlier summary: refused, nothing changed, under a title that says so', [snapshot(r3.body) === typed, lastAlert(r3)[0], /text was typed into it \("A remark typed into the earlier summary\."\)/.test(lastAlert(r3)[1])],
+    [true, 'Disposition Summary NOT updated', true]);
+  check('a line only like an earlier one ("Agreed and Endorsed Documents" without its count) is not the summary\'s', ['Agreed and Endorsed Documents', 'Agreed and Endorsed Documents (x)', 'Agreed and Endorsed Documents (3) and more', OLD_FIRST + ' (3)'].map((x) => r3.s.isDispositionSummaryParagraphText_(x)),
+    [false, false, false, true]);
+  // A refusal of the current form, too, never shows under the title of a success.
+  const r4 = fresh();
+  updateSummary(r4);
+  r4.user(() => { const tables = r4.body._children.filter(isSummaryTable); r4.body.insertParagraph(r4.body.getChildIndex(tables[0]) + 1, 'Typed.'); });
+  updateSummary(r4);
+  check('a refusal is titled "Disposition Summary NOT updated"', lastAlert(r4)[0], 'Disposition Summary NOT updated');
+}
+
 // ====================================================================== I
 console.log('I. what changed in Code.js and template/ReportCreator.js');
 {
@@ -705,7 +814,8 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
   check('the section stands directly after the configuration guard', CODE.indexOf('// END OF CONFIGURATION GUARD\n// =========================================================\n\n' + DISPOSITION_SECTION_START) !== -1, true);
   check('it declares its constants and nothing else at top level', section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm) || [],
     ['const DISPOSITION_SUMMARY_HEADING_', 'const DISPOSITION_SUMMARY_NOTE_', 'const DISPOSITION_SUMMARY_NONE_', 'const DISPOSITION_SUMMARY_TABLE_HEADER_', 'const DISPOSITION_SUMMARY_TABLE_WIDTHS_', 'const DISPOSITION_SUMMARY_MENU_HINT_',
-      'const DISPOSITION_CLASSES_', 'const DISPOSITION_OF_STATUS_', 'const CLOSE_REPORT_LIST_LIMIT_', 'const REVISION_CHECK_STATES_']);
+      'const DISPOSITION_CLASSES_', 'const DISPOSITION_OF_STATUS_', 'const DISPOSITION_SUMMARY_EARLIER_NOTES_', 'const DISPOSITION_SUMMARY_EARLIER_TITLES_', 'const CLOSE_REPORT_LIST_LIMIT_',
+      'const REVISION_CHECK_STATES_']);
   check('Code.js is still version 2.25.0 (not released)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.25.0');
   let released = null;
   let releasedCreator = null;
