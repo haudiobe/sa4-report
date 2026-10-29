@@ -56,7 +56,7 @@ function check(name, actual, expected) {
 const ROOT = path.join(__dirname, '..');
 const SUMMARY = 'Disposition Summary';
 const ATTENDANCE = 'Attendance';
-const TITLES = ['Agreed and Endorsed Documents', 'Other Disposed Documents', 'Documents Not Yet Disposed'];
+const TITLES = ['Agreed, Endorsed and Approved Documents', 'Other Disposed Documents', 'Documents Not Yet Disposed'];
 // The fourteen options of the "Document Status" dropdown of the master template, in its order
 // (docs/STATUS_DROPDOWN_RELEASE_CANDIDATE.md, the template seeding).
 const OPTIONS = ['available', 'noted', 'agreed', 'revised', 'parked', 'merged', 'approved', 'reserved', 'endorsed', 'withdrawn', 'other', 'replied', 'Plenary', 'postponed'];
@@ -132,9 +132,11 @@ console.log('A. the classification of the statuses');
 {
   const { sandbox: s } = loadCode();
   const cls = (status) => s.classifyTdocDisposition_(status).disposition;
-  check('agreed and endorsed: AGREED_OR_ENDORSED, as two statuses', ['agreed', 'endorsed'].map(cls), ['AGREED_OR_ENDORSED', 'AGREED_OR_ENDORSED']);
-  check('noted, revised, merged, approved, withdrawn, replied: DISPOSED_OTHER (approved is not in the agreed/endorsed table)',
-    ['noted', 'revised', 'merged', 'approved', 'withdrawn', 'replied'].map(cls), Array(6).fill('DISPOSED_OTHER'));
+  check('agreed, endorsed and approved: AGREED_ENDORSED_APPROVED, as three statuses', ['agreed', 'endorsed', 'approved'].map(cls), Array(3).fill('AGREED_ENDORSED_APPROVED'));
+  check('approved is in the first class, and not other disposed', [cls('approved'), cls('Approved'), cls('approved') === 'DISPOSED_OTHER'], ['AGREED_ENDORSED_APPROVED', 'AGREED_ENDORSED_APPROVED', false]);
+  check('noted, revised, merged, withdrawn, replied: DISPOSED_OTHER',
+    ['noted', 'revised', 'merged', 'withdrawn', 'replied'].map(cls), Array(5).fill('DISPOSED_OTHER'));
+  check('every option is in exactly one class: 3 + 5 + 6 = 14', ['AGREED_ENDORSED_APPROVED', 'DISPOSED_OTHER', 'UNRESOLVED'].map((k) => OPTIONS.filter((o) => cls(o) === k).length), [3, 5, 6]);
   check('available, reserved, parked, postponed, Plenary, other: UNRESOLVED', ['available', 'reserved', 'parked', 'postponed', 'Plenary', 'other'].map(cls), Array(6).fill('UNRESOLVED'));
   check('postponed: no final decision at this meeting -- not yet disposed, a known status', s.classifyTdocDisposition_('Postponed'), { label: 'postponed', known: true, disposition: 'UNRESOLVED' });
   check('every one of the fourteen options of the template is classified', OPTIONS.filter((o) => !s.classifyTdocDisposition_(o).known), []);
@@ -145,12 +147,12 @@ console.log('A. the classification of the statuses');
   check('the options are those of the template definition the test report is built with', JSON.parse(helper.match(/const STATUS_NAMES = (\[[^\]]*\]);/)[1].replace(/'/g, '"')), OPTIONS);
   check('case, outer and inner whitespace do not matter; the Portal wording "Replied to" is replied',
     ['  AGREED ', 'Endorsed', 'Replied to', 'replied  to', 'PLENARY'].map((x) => s.classifyTdocDisposition_(x)),
-    [{ label: 'agreed', known: true, disposition: 'AGREED_OR_ENDORSED' }, { label: 'endorsed', known: true, disposition: 'AGREED_OR_ENDORSED' }, { label: 'replied', known: true, disposition: 'DISPOSED_OTHER' },
+    [{ label: 'agreed', known: true, disposition: 'AGREED_ENDORSED_APPROVED' }, { label: 'endorsed', known: true, disposition: 'AGREED_ENDORSED_APPROVED' }, { label: 'replied', known: true, disposition: 'DISPOSED_OTHER' },
       { label: 'replied', known: true, disposition: 'DISPOSED_OTHER' }, { label: 'plenary', known: true, disposition: 'UNRESOLVED' }]);
   check('a status it does not know is UNRESOLVED and not known: fail safe, never disposed',
     ['agreed, see minutes', 'not pursued', 'rejected', 'technically endorsed', '', null, undefined].map((x) => [cls(x), s.classifyTdocDisposition_(x).known]), Array(7).fill(['UNRESOLVED', false]));
   check('the three classes in the order of the summary', JSON.parse(JSON.stringify(s.buildDispositionSummaryModel_([]))).map((c) => [c.key, c.title]),
-    [['AGREED_OR_ENDORSED', TITLES[0]], ['DISPOSED_OTHER', TITLES[1]], ['UNRESOLVED', TITLES[2]]]);
+    [['AGREED_ENDORSED_APPROVED', TITLES[0]], ['DISPOSED_OTHER', TITLES[1]], ['UNRESOLVED', TITLES[2]]]);
 }
 
 // ====================================================================== B
@@ -170,13 +172,15 @@ console.log('B. the summary: every TDoc once, counts, order, links, title, sourc
   const sum = summaryOf(r.body);
   const row = (n, status, link) => [id(n), 'Synthetic title of ' + id(n), 'ExampleCorp', status, link === false ? '' : zip(id(n))];
   check('three tables with counts; the TDocs in the order of the report; title, source, status as in their tables; the TDoc linked as in its table', sum, [
-    [TITLES[0] + ' (3)', [row(1, 'agreed'), row(3, 'agreed'), row(5, 'endorsed')]],
-    [TITLES[1] + ' (5)', [row(2, 'revised'), row(6, 'noted', false), row(8, 'withdrawn'), row(10, 'merged'), row(11, 'approved')]],
+    [TITLES[0] + ' (4)', [row(1, 'agreed'), row(3, 'agreed'), row(5, 'endorsed'), row(11, 'approved')]],
+    [TITLES[1] + ' (4)', [row(2, 'revised'), row(6, 'noted', false), row(8, 'withdrawn'), row(10, 'merged')]],
     [TITLES[2] + ' (3)', [row(4, 'parked'), row(7, 'available'), row(9, 'reserved', false)]]]);
   const listed = sum.reduce((all, c) => all.concat(c[1].map((x) => x[0])), []);
   check('every TDoc of the report exactly once', [listed.slice().sort(), listed.length], [order.slice().sort(), order.length]);
-  check('Agreed and Endorsed keep their own status', sum[0][1].map((x) => x[3]), ['agreed', 'agreed', 'endorsed']);
-  check('the dialog says what was done and the counts', lastAlert(r).slice(0, 2), [SUMMARY, 'Disposition Summary written at the end of the report.\n\n11 TDocs: 3 agreed/endorsed, 5 other disposed, 3 not yet disposed.']);
+  check('Agreed, Endorsed and Approved keep their own status', sum[0][1].map((x) => x[3]), ['agreed', 'agreed', 'endorsed', 'approved']);
+  check('the approved TDoc is in the first table and in no other', sum.map((c) => c[1].some((x) => x[0] === id(11))), [true, false, false]);
+  check('the three tables are mutually exclusive: no TDoc in two of them', listed.filter((n, i) => listed.indexOf(n) !== i), []);
+  check('the dialog says what was done and the counts', lastAlert(r).slice(0, 2), [SUMMARY, 'Disposition Summary written at the end of the report.\n\n11 TDocs: 4 agreed/endorsed/approved, 4 other disposed, 3 not yet disposed.']);
   const at = r.body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY);
   const heading = r.body._children[at];
   const lines = r.body._children.slice(at + 1).filter((c) => c.getType() === 'PARAGRAPH' && c.getText());
@@ -275,13 +279,18 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
   const result = closeReport(clean);
   check('a clean report: ready to close', [result.ready, lastAlert(clean)[0]], [true, 'Report ready to close']);
   check('the dialog: counts and the summary', lastAlert(clean)[1],
-    'Report ready to close.\n\n5 TDocs checked.\n2 agreed/endorsed.\n3 other disposed.\n0 not yet disposed.\nRevision not reserved in 3GU: 0.\nRevision reserved but not uploaded in 3GU: 0.\n' +
+    'Report ready to close.\n\n5 TDocs checked.\n2 agreed/endorsed/approved.\n3 other disposed.\n0 not yet disposed.\nRevision not reserved in 3GU: 0.\nRevision reserved but not uploaded in 3GU: 0.\n' +
     'Revision state could not be verified in 3GU: 0.\n\nDisposition Summary written at the end of the report.');
   check('it wrote the summary, and changed no status, nothing in 3GU and nothing through the Docs API', [summaryHeadings(clean.body), shownAll(clean), JSON.stringify(clean.tdocs) === tdocList, clean.api.count('batchUpdate') - writesBefore],
     [1, statuses, true, 0]);
   check('it stored nothing', Object.keys(clean.docProps._store).filter((k) => /CLOSE|DISPOSITION|CLOSED/i.test(k)), []);
   closeReport(clean);
   check('run again: ready, the summary already up to date', [lastAlert(clean)[0], lastAlert(clean)[1].split('\n').slice(-1)[0], summaryHeadings(clean.body)], ['Report ready to close', 'Disposition Summary was already up to date.', 1]);
+
+  const approvedOnly = built([t(1, '4.3'), t(2, '4.3')], { 1: 'approved', 2: 'agreed' });
+  const ares = closeReport(approvedOnly);
+  check('approved does not block: ready, counted with agreed/endorsed', [ares.ready, lastAlert(approvedOnly)[1].split('\n').slice(2, 6)],
+    [true, ['2 TDocs checked.', '2 agreed/endorsed/approved.', '0 other disposed.', '0 not yet disposed.']]);
 
   ['available', 'reserved', 'parked', 'postponed'].forEach((status) => {
     const r = built([t(1, '4.3'), t(2, '4.3')], { 1: 'agreed', 2: status });
@@ -298,7 +307,7 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
     [false, [id(1), id(2), id(4), id(5)], [id(1), id(2), id(4), id(5)]]);
   check('the dialog says NOT READY TO CLOSE, the counts, and what to do', [text.split('\n')[0], text.split('\n').slice(2, 9), /NOT YET DISPOSED \(4\) -- TDoc \| Title \| Source \| Current Status:/.test(text),
     text.split('\n').slice(-1)[0]],
-    ['Report NOT READY TO CLOSE.', ['5 TDocs checked.', '1 agreed/endorsed.', '0 other disposed.', '4 not yet disposed.', 'Revision not reserved in 3GU: 0.', 'Revision reserved but not uploaded in 3GU: 0.',
+    ['Report NOT READY TO CLOSE.', ['5 TDocs checked.', '1 agreed/endorsed/approved.', '0 other disposed.', '4 not yet disposed.', 'Revision not reserved in 3GU: 0.', 'Revision reserved but not uploaded in 3GU: 0.',
       'Revision state could not be verified in 3GU: 0.'], true,
       'Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.']);
 
@@ -376,7 +385,7 @@ console.log('E. revised in the report: not reserved, reserved but not uploaded, 
   check('A. the dialog: its own list, Original TDoc | Revision | Source | Report state | 3GU state, and the action', lastAlert(pending)[1].split('\n').filter((l) => /^(• |   → |REVISION )/.test(l)),
     ['REVISION NOT RESERVED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '• ' + id(1) + ' | – | ExampleCorp | revised | available', '   → ' + RESERVE]);
   check('A. a revised TDoc counts as disposed; the counts of each revision state', lastAlert(pending)[1].split('\n').slice(2, 9),
-    ['2 TDocs checked.', '1 agreed/endorsed.', '1 other disposed.', '0 not yet disposed.', 'Revision not reserved in 3GU: 1.', 'Revision reserved but not uploaded in 3GU: 0.', 'Revision state could not be verified in 3GU: 0.']);
+    ['2 TDocs checked.', '1 agreed/endorsed/approved.', '1 other disposed.', '0 not yet disposed.', 'Revision not reserved in 3GU: 1.', 'Revision reserved but not uploaded in 3GU: 0.', 'Revision state could not be verified in 3GU: 0.']);
   // The report knows the revision (named in its Disposition by hand): shown, but it decides nothing.
   pending.user(() => { const table = pending.table(id(1)); for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Disposition') table.getRow(i).getCell(1).setText('Revised to ' + id(9) + ' (to be reserved)'); });
   check('A. a revision the report names in its Disposition is shown; the state is the same (3GU decides)', closeReport(pending).revisions.map((x) => [x.revision, x.kind]), [[id(9), 'revision-not-reserved']]);
@@ -632,7 +641,7 @@ console.log('G. the MBS report: the three tables as Close Report leaves them');
     [outline(b).filter((x) => x[0] === '#').slice(-3), afterSummary(b)], [['# 2.8 Close of the session', '# ' + ATTENDANCE, '# ' + SUMMARY], []]);
   check('the report outside the summary is as it was: every minute typed by hand, the registration table, the attendees',
     [outsideBefore === outsideSummary(r), r.tdocTables().map((x) => r.field(x.getRow(0).getCell(1).getText(), 'Minutes'))], [true, minutesBefore]);
-  check('29 TDocs, each once: 11 agreed/endorsed, 15 other disposed, 3 not yet disposed', [res.checked, summaryOf(b).map((c) => c[0]), summaryOf(b).reduce((n, c) => n + (c[1] === 'None.' ? 0 : c[1].length), 0)],
+  check('29 TDocs, each once: 11 agreed/endorsed/approved, 15 other disposed, 3 not yet disposed', [res.checked, summaryOf(b).map((c) => c[0]), summaryOf(b).reduce((n, c) => n + (c[1] === 'None.' ? 0 : c[1].length), 0)],
     [29, [TITLES[0] + ' (11)', TITLES[1] + ' (15)', TITLES[2] + ' (3)'], 29]);
   check('not ready: S4aI260101 available, S4aI260097 postponed, S4aI260103 parked; S4aI260089 revised in the minutes, not reserved in 3GU; the five other revisions complete',
     [res.ready, res.unresolved.map((e) => e.tdoc + ' ' + e.status), res.revisions.map((x) => [x.tdoc, x.kind, x.state3gu, x.action])],

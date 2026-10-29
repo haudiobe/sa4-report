@@ -3,7 +3,7 @@
 **Status: CANDIDATE — not released, not deployed.** Branch
 `feature/disposition-summary-close-report`, based on `origin/master` `e2ceddc` (release
 T-2026.10.15, `Code.js` 2.25.0): candidate `4276161`, refined afterwards (postponed, the four
-revision states, the end of the summary). `Code.js` keeps its version line; a release adds it.
+revision states, the end of the summary; then approved with agreed and endorsed). `Code.js` keeps its version line; a release adds it.
 
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
@@ -17,7 +17,7 @@ Disposition Summary                                   (Heading 1)
 Written from the Status of the TDoc tables by SA4 Report > Report > Update Disposition
 Summary, and kept up to date by every update. Text typed between this line and its last
 table stops it from being updated; text below it is kept.
-Agreed and Endorsed Documents (17)                    (bold)
+Agreed, Endorsed and Approved Documents (17)          (bold)
   TDoc | Title | Source | Status                      (table; "None." without TDocs)
 Other Disposed Documents (12)
   TDoc | Title | Source | Status
@@ -28,7 +28,7 @@ Documents Not Yet Disposed (0)
 - Every TDoc table of the report is one row in exactly one table, in the order of the report.
   A TDoc with two tables is one row.
 - Title, Source and Status are those of its TDoc table; the TDoc number has the link of its
-  TDoc table. Agreed and Endorsed keep their own status.
+  TDoc table. Agreed, Endorsed and Approved keep their own status.
 - Nothing else is written: no status, no revision, nothing in 3GU, no minutes.
 
 **Close Report** writes the same summary (creating it where there is none), checks the report
@@ -45,16 +45,17 @@ them, and the summary, Close Report and its dialog all use it:
 
 | Class | Statuses | Why |
 |---|---|---|
-| Agreed and Endorsed | agreed, endorsed | as asked |
-| Other disposed | noted, revised, merged, approved, withdrawn, replied | a final decision of the meeting on the document; a revised document is disposed and its revision has a row of its own |
+| Agreed, Endorsed and Approved | agreed, endorsed, approved | the positive decisions of the meeting |
+| Other disposed | noted, revised, merged, withdrawn, replied | a final decision of the meeting on the document; a revised document is disposed and its revision has a row of its own |
 | Not yet disposed | available, reserved, parked, postponed, Plenary, other | no decision yet (available, reserved), deferred within the meeting (parked), no final substantive decision at this meeting (postponed), left to the plenary (Plenary), or no meaning (other) |
 | Not yet disposed, "not a known status" | anything else: no status, a typed text such as "agreed, see minutes", a Portal status without an option ("not pursued"), two tables with different statuses | fail safe: nothing counts as disposed unless it is listed |
 
 Case and whitespace are ignored ("  AGREED " is agreed).
 
-Confirmed (refinement of `4276161`): **approved** is "other disposed" (only agreed and endorsed
-are in the first table); **Plenary** and **postponed** are "not yet disposed", so Close Report
-shows them instead of letting the report look clean.
+Confirmed: **approved** is in the first table with agreed and endorsed (it was "other disposed"
+in the first candidates); **Plenary** and **postponed** are "not yet disposed", so Close Report
+shows them instead of letting the report look clean. The key of the first class is
+`AGREED_ENDORSED_APPROVED`; its count reads "agreed/endorsed/approved".
 
 ## Where it stands
 

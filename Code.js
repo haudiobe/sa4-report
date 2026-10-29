@@ -20102,9 +20102,9 @@ function assertMeetingConfigured_(context) {
 // is in exactly one of three classes, DISPOSITION_OF_STATUS_, which names the
 // fourteen options of the "Document Status" dropdown of the master template
 // (and the Portal wording "replied to", STATUS_DROPDOWN_ALIASES_):
-//   AGREED_OR_ENDORSED  agreed, endorsed
-//   DISPOSED_OTHER      noted, revised, merged, approved, withdrawn, replied
-//   UNRESOLVED          available, reserved, parked, postponed, Plenary, other
+//   AGREED_ENDORSED_APPROVED  agreed, endorsed, approved
+//   DISPOSED_OTHER            noted, revised, merged, withdrawn, replied
+//   UNRESOLVED                available, reserved, parked, postponed, Plenary, other
 // (postponed: no final decision at this meeting, so Close Report shows it.)
 // Any other status -- none, a typed text such as "agreed, see minutes", a
 // Portal status without an option -- is UNRESOLVED and named as not
@@ -20167,18 +20167,18 @@ const DISPOSITION_SUMMARY_TABLE_WIDTHS_ = [0.19, 0.47, 0.20, 0.14];
 const DISPOSITION_SUMMARY_MENU_HINT_ = 'SA4 Report > Report > Update Disposition Summary';
 // The classes, in the order of the summary.
 const DISPOSITION_CLASSES_ = [
-  { key: 'AGREED_OR_ENDORSED', title: 'Agreed and Endorsed Documents', short: 'agreed/endorsed' },
+  { key: 'AGREED_ENDORSED_APPROVED', title: 'Agreed, Endorsed and Approved Documents', short: 'agreed/endorsed/approved' },
   { key: 'DISPOSED_OTHER', title: 'Other Disposed Documents', short: 'other disposed' },
   { key: 'UNRESOLVED', title: 'Documents Not Yet Disposed', short: 'not yet disposed' }
 ];
 // THE classification: every option of the "Document Status" dropdown, by its label (statusDropdownLabel_()).
 const DISPOSITION_OF_STATUS_ = {
-  'agreed': 'AGREED_OR_ENDORSED',
-  'endorsed': 'AGREED_OR_ENDORSED',
+  'agreed': 'AGREED_ENDORSED_APPROVED',
+  'endorsed': 'AGREED_ENDORSED_APPROVED',
+  'approved': 'AGREED_ENDORSED_APPROVED',
   'noted': 'DISPOSED_OTHER',
   'revised': 'DISPOSED_OTHER',
   'merged': 'DISPOSED_OTHER',
-  'approved': 'DISPOSED_OTHER',
   'withdrawn': 'DISPOSED_OTHER',
   'replied': 'DISPOSED_OTHER',
   'available': 'UNRESOLVED',
@@ -20534,7 +20534,7 @@ function dispositionSummaryRebuildNote_(body) {
   }
 }
 
-/** Pure: "17 agreed/endorsed, 9 other disposed, 2 not yet disposed". */
+/** Pure: "17 agreed/endorsed/approved, 9 other disposed, 2 not yet disposed". */
 function dispositionCountsText_(model) {
   return model.map(function (c) { return c.entries.length + ' ' + c.short; }).join(', ');
 }
