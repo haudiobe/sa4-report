@@ -29,6 +29,7 @@
  *       Build Report from Scratch
  *   I.  what changed in Code.js and ReportCreator.js, and nothing else
  *   J.  a summary an earlier candidate wrote (00a50c5, 4276161) is rewritten in the current form
+ *   K.  Close Report shows its result at once and in full, in a dialog the execution does not wait on
  *
  * Run: node tests/disposition-summary-close-report.test.js
  */
@@ -109,9 +110,22 @@ const afterSummary = (body) => {
   return at === -1 ? ['(no summary)'] : body._children.slice(at + 1).map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : isHeading(c) ? '# ' + c.getText() : null)).filter(Boolean);
 };
 
+/**
+ * Close Report shows its result in a modal HTML dialog, not an alert (an alert keeps the execution waiting until it is
+ * dismissed: the 6G smoke copy ran out of execution time with one open). The dialog is recorded as an entry of
+ * r.ui.alerts -- [title, the result as text (logged by closeReport() just before), 'dialog', its HTML] -- and in
+ * r.ui.dialogs; r.ui.blocking counts the alerts Close Report would wait on.
+ */
+function withDialogs(r) {
+  r.s.HtmlService = { createHtmlOutput: (html) => { const o = { setWidth: () => o, setHeight: () => o, getContent: () => html }; return o; } };
+  r.ui.dialogs = [];
+  r.ui.showModalDialog = (output, title) => { r.ui.dialogs.push([title, output.getContent()]); r.ui.alerts.push([title, r.logs[r.logs.length - 1], 'dialog', output.getContent()]); };
+  return r;
+}
+
 /** A built template report with status dropdowns; `decisions` { n: option } are picked in the dropdowns by hand. */
 function built(tdocs, decisions, options) {
-  const r = templateReport(Object.assign({ tdocs: tdocs, tableSeparators: true, endParagraph: true }, options || {}));
+  const r = withDialogs(templateReport(Object.assign({ tdocs: tdocs, tableSeparators: true, endParagraph: true }, options || {})));
   const b = r.build();
   if (!b.ok) throw new Error('build failed: ' + b.error);
   // The build writes the TDocs of the agenda it was built from; the first update adds those of the closing item.
@@ -198,7 +212,7 @@ console.log('B. the summary: every TDoc once, counts, order, links, title, sourc
   check('a class without TDocs says "None."', summaryOf(r2.body).map((c) => [c[0], c[1] === 'None.' ? 'None.' : c[1].length]), [[TITLES[0] + ' (1)', 1], [TITLES[1] + ' (1)', 1], [TITLES[2] + ' (0)', 'None.']]);
 
   // Statuses as text (a report without status dropdowns), a status the classification does not know, and two tables of one TDoc.
-  const r3 = templateReport({ tdocs: [t(1, '4.3'), t(2, '4.3'), t(3, '4.4')], tableSeparators: true, release: false, docs: false });
+  const r3 = withDialogs(templateReport({ tdocs: [t(1, '4.3'), t(2, '4.3'), t(3, '4.4')], tableSeparators: true, release: false, docs: false }));
   r3.build();
   const setStatus = (n, text, which) => r3.user(() => { const table = r3.tdocTables().filter((x) => x.getRow(0).getCell(1).getText() === id(n))[which || 0]; for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Status') table.getRow(i).getCell(1).setText(text); });
   setStatus(1, 'Agreed');
@@ -312,7 +326,7 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
       'Revision state could not be verified in 3GU: 0.'], true,
       'Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.']);
 
-  const unknown = templateReport({ tdocs: [t(1, '4.3'), t(2, '4.3')], tableSeparators: true, release: false, docs: false });
+  const unknown = withDialogs(templateReport({ tdocs: [t(1, '4.3'), t(2, '4.3')], tableSeparators: true, release: false, docs: false }));
   unknown.build();
   unknown.user(() => ['Agreed', 'Agreed with changes'].forEach((status, k) => { const table = unknown.table(id(k + 1)); for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Status') table.getRow(i).getCell(1).setText(status); }));
   const u = closeReport(unknown);
@@ -616,7 +630,7 @@ console.log('G. the MBS report: the three tables as Close Report leaves them');
     S4aI260081: 'revised', S4aI260090: 'agreed', S4aI260103: 'parked', S4aI260104: 'noted' };
   const listStatus = (tdoc) => (revisedTo[tdoc] ? 'revised' : decisions[tdoc] === 'revised' ? 'available' : (tdocsOfFixture.filter((e) => e.tdoc === tdoc)[0] || {}).status);
   const list = registration.map(([tdoc, agenda]) => ({ id: tdoc, agenda: tdoc === 'S4aI260081' ? '3.7' : agenda, status: listStatus(tdoc), revisedTo: revisedTo[tdoc] || '', uploaded: true }));
-  const r = templateReport({ tdocs: list, tableSeparators: true, props: { REPORT_SUFFIX: 'MBS' } });
+  const r = withDialogs(templateReport({ tdocs: list, tableSeparators: true, props: { REPORT_SUFFIX: 'MBS' } }));
   r.user(() => {
     const b = r.body;
     fixture.forEach((e) => {
@@ -797,6 +811,60 @@ console.log('J. a summary written by an earlier candidate (00a50c5, 4276161) is 
   r4.user(() => { const tables = r4.body._children.filter(isSummaryTable); r4.body.insertParagraph(r4.body.getChildIndex(tables[0]) + 1, 'Typed.'); });
   updateSummary(r4);
   check('a refusal is titled "Disposition Summary NOT updated"', lastAlert(r4)[0], 'Disposition Summary NOT updated');
+}
+
+// ====================================================================== K
+console.log('K. Close Report shows its result at once, in full, and the execution does not wait on it');
+{
+  // The 6G smoke copy (c723b62, 2026-10-30): 114 TDocs, 15 not yet disposed, 1 + 7 + 1 revision findings. The result was
+  // computed and logged at 00:01:29; the execution then waited on ui.alert() and ended at 00:06:12 in "Exceeded maximum
+  // execution time". The same shape here: 30 TDocs, every list long, long titles.
+  const N = 30;
+  const tdocs = Array.from({ length: N }, (x, i) => t(i + 1, i < 10 ? '4.3' : i < 20 ? '4.4' : '4.5', 'available', { title: 'A long title ' + 'x'.repeat(80) }));
+  // 1-10 available, 11-12 reserved, 13 parked, 14 postponed, 15 Plenary; 16 revised (not reserved); 17-18 revised to 19-20 (not uploaded);
+  // 21 revised to 29, which the list does not have (not verified); the rest agreed.
+  tdocs[16].status = 'revised'; tdocs[16].revisedTo = id(19); tdocs[18].status = 'reserved'; tdocs[18].uploaded = false;
+  tdocs[17].status = 'revised'; tdocs[17].revisedTo = id(20); tdocs[19].status = 'reserved'; tdocs[19].uploaded = false;
+  tdocs[20].status = 'revised'; tdocs[20].revisedTo = id(29);
+  const decisions = { 11: 'reserved', 12: 'reserved', 13: 'parked', 14: 'postponed', 15: 'Plenary', 16: 'revised' };
+  for (let n = 22; n <= N; n++) decisions[n] = 'agreed';
+  const r = built(tdocs, decisions);
+  r.tdocs = r.tdocs.filter((x) => x.id !== id(29));
+  const alertsBefore = r.ui.alerts.filter((a) => a[2] !== 'dialog').length;
+  const res = closeReport(r);
+  const [title, html] = r.ui.dialogs[r.ui.dialogs.length - 1] || ['(no dialog)', ''];
+  check('Close Report waits on no alert: its result is one modal HTML dialog, shown after the lock is released', [r.ui.alerts.filter((a) => a[2] !== 'dialog').length - alertsBefore, r.ui.dialogs.length, title],
+    [0, 1, 'Report NOT ready to close']);
+  check('the counts of the real shape: not yet disposed, and each revision state', [res.unresolved.length, res.counts['revision-not-reserved'], res.counts['revision-not-uploaded'], res.counts['revision-not-verified']],
+    [17, 1, 2, 1]);
+  const rowsOf = (heading) => { const at = html.indexOf('<h3>' + heading); if (at === -1) return null; const tableEnd = html.indexOf('</table>', at); return (html.slice(at, tableEnd).match(/<tr>/g) || []).length - 1; };
+  check('the dialog lists every TDoc of every list in full -- no cap', [rowsOf('Not yet disposed (17)'), rowsOf('Revision not reserved in 3GU (1)'), rowsOf('Revision reserved but not uploaded in 3GU (2)'),
+    rowsOf('Revision state could not be verified in 3GU (1)')], [17, 1, 2, 1]);
+  check('every finding is in it, with its action and reason', [res.unresolved.every((e) => html.indexOf('<td>' + e.tdoc + '</td>') !== -1), res.revisions.every((x) => html.indexOf(x.action) !== -1),
+    html.indexOf('(The revision ' + id(29) + ' is not in the TDoc list.)') !== -1], [true, true, true]);
+  check('the dialog has the counts and a Close button', [html.indexOf('Report NOT READY TO CLOSE.') !== -1, html.indexOf('30 TDocs checked.') !== -1, html.indexOf('Revision reserved but not uploaded in 3GU: 2.') !== -1,
+    html.indexOf('google.script.host.close()') !== -1], [true, true, true, true]);
+  check('the whole result is in the execution log as text too', /^Report NOT READY TO CLOSE\.\n\n30 TDocs checked\./.test(r.logs.filter((l) => /^Report (NOT READY TO CLOSE|ready to close)\./.test(l)).slice(-1)[0] || ''), true);
+  // Text from the report is escaped: a title with markup is shown as text.
+  const { sandbox: s } = loadCode();
+  const page = s.closeReportResultHtml_({ ready: false, checked: 1, counts: { UNRESOLVED: 1 }, summaryState: 'unchanged', problems: ['<b>x</b>'], revisions: [],
+    unresolved: [{ tdoc: id(1), title: '<script>alert(1)</script> & "q"', source: 'A<B', status: 'available', known: true }] });
+  check('text of the report is escaped in the dialog', [page.indexOf('<script>alert(1)') === -1, page.indexOf('&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;q&quot;') !== -1, page.indexOf('A&lt;B') !== -1, page.indexOf('&lt;b&gt;x&lt;/b&gt;') !== -1],
+    [true, true, true, true]);
+  // Large: 300 open TDocs and 60 revision findings -- every row is there, and the page is built at once.
+  const many = { ready: false, checked: 360, counts: { UNRESOLVED: 300 }, summaryState: 'unchanged', problems: [],
+    unresolved: Array.from({ length: 300 }, (x, i) => ({ tdoc: 'S4aP26' + String(1000 + i).slice(-4), title: 'T'.repeat(120), source: 'ExampleCorp', status: 'available', known: true })),
+    revisions: Array.from({ length: 60 }, (x, i) => ({ tdoc: 'S4aP26' + String(2000 + i).slice(-4), revision: '', source: 'S', reportStatus: 'revised', state3gu: 'available', kind: 'revision-not-reserved', action: 'Author needs to reserve the revision in 3GU.', reason: '' })) };
+  const t0 = Date.now();
+  const big = s.closeReportResultHtml_(many);
+  const ms = Date.now() - t0;
+  check('300 open TDocs and 60 revision findings: all 360 rows in the page, built in well under a second (' + ms + ' ms, ' + Math.round(big.length / 1024) + ' KB)',
+    [(big.match(/<tr>/g) || []).length - 2, ms < 1000, big.length < 512 * 1024], [360, true, true]);
+  // The source: closeReport() releases the lock before the dialog, and never calls ui.alert().
+  const src = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // Without its comments (which name the alert it no longer uses).
+  const body = src.slice(src.indexOf('\nfunction closeReport() {'), src.indexOf('\n}\n', src.indexOf('\nfunction closeReport() {'))).replace(/^\s*\/\/.*$/gm, '');
+  check('closeReport(): the lock around the work only, then the dialog; no ui.alert()', [/withDispositionLock_\('Close Report', closeReportCore_\)[\s\S]*showModalDialog/.test(body), /\.alert\(/.test(body)], [true, false]);
 }
 
 // ====================================================================== I

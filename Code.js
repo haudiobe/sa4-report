@@ -20730,9 +20730,51 @@ function updateDispositionSummary() {
 function closeReport() {
   assertNotTemplateMaster_();
   const result = withDispositionLock_('Close Report', closeReportCore_);
-  const ui = DocumentApp.getUi();
-  ui.alert(result.ready ? 'Report ready to close' : 'Report NOT ready to close', formatCloseReportResult_(result), ui.ButtonSet.OK);
+  // The whole result, also in the execution log.
+  Logger.log(formatCloseReportResult_(result));
+  // Not ui.alert(): an alert keeps the execution waiting until it is dismissed, and that wait counts against the
+  // maximum execution time -- on the 6G smoke copy (114 TDocs, 24 findings) the result was computed and logged, and
+  // the execution then ended in "Exceeded maximum execution time" with the alert. A modal HTML dialog returns at once,
+  // scrolls, and shows every list in full. The lock is released before it.
+  const html = HtmlService.createHtmlOutput(closeReportResultHtml_(result)).setWidth(960).setHeight(640);
+  DocumentApp.getUi().showModalDialog(html, result.ready ? 'Report ready to close' : 'Report NOT ready to close');
   return result;
+}
+
+/** Pure: the Close Report result as the page of its dialog -- the counts, then every list in full, as tables. */
+function closeReportResultHtml_(result) {
+  const esc = escapeHtmlForEmailExport_;
+  const table = function (header, rows) {
+    return '<table><tr>' + header.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr>' +
+      rows.map(function (row) { return '<tr>' + row.map(function (cell) { return '<td>' + esc(cell) + '</td>'; }).join('') + '</tr>'; }).join('') + '</table>';
+  };
+  const out = ['<!DOCTYPE html><html><head><base target="_top"><style>',
+    'body{font-family:Arial,sans-serif;font-size:13px;margin:12px;}h2{margin:0 0 8px 0;}h3{margin:16px 0 6px 0;font-size:14px;}',
+    '.notready{color:#b00020;}.ready{color:#137333;}ul{margin:4px 0 8px 18px;padding:0;}',
+    'table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ccc;padding:3px 6px;text-align:left;vertical-align:top;}th{background:#D9EAF7;}',
+    '.note{margin-top:14px;}button{margin-top:14px;}</style></head><body>'];
+  out.push('<h2 class="' + (result.ready ? 'ready' : 'notready') + '">' + (result.ready ? 'Report ready to close.' : 'Report NOT READY TO CLOSE.') + '</h2>');
+  const counts = [result.checked + ' TDocs checked.'];
+  DISPOSITION_CLASSES_.forEach(function (c) { counts.push((result.counts[c.key] || 0) + ' ' + c.short + '.'); });
+  REVISION_CHECK_STATES_.forEach(function (s) { counts.push(s.label.replace(/\.$/, '') + ': ' + (result.counts[s.kind] || 0) + '.'); });
+  out.push('<ul>' + counts.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul>');
+  out.push('<div>' + esc(describeDispositionSummaryState_(result.summaryState)) + '</div>');
+  if (result.unresolved.length) {
+    out.push('<h3>Not yet disposed (' + result.unresolved.length + ')</h3>');
+    out.push(table(['TDoc', 'Title', 'Source', 'Current Status'], result.unresolved.map(function (e) { return [e.tdoc, e.title || '', e.source || '', dispositionSummaryStatusText_(e)]; })));
+  }
+  REVISION_CHECK_STATES_.forEach(function (s) {
+    const listed = result.revisions.filter(function (r) { return r.kind === s.kind; });
+    if (!listed.length) return;
+    out.push('<h3>' + esc(s.label.replace(/\.$/, '')) + ' (' + listed.length + ')</h3>');
+    out.push(table(['Original TDoc', 'Revision', 'Source', 'Report state', '3GU state', 'Action'], listed.map(function (r) {
+      return [r.tdoc, r.revision || '–', r.source || '', r.reportStatus, r.state3gu, r.action + (r.reason ? ' (' + r.reason.charAt(0).toUpperCase() + r.reason.slice(1) + '.)' : '')];
+    })));
+  });
+  if (result.problems.length) out.push('<h3>Could not be checked</h3><ul>' + result.problems.map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('') + '</ul>');
+  if (!result.ready) out.push('<div class="note">Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.</div>');
+  out.push('<button onclick="google.script.host.close()">Close</button></body></html>');
+  return out.join('');
 }
 
 // =========================================================

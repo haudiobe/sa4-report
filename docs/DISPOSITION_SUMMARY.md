@@ -4,7 +4,8 @@
 `feature/disposition-summary-close-report`, based on `origin/master` `e2ceddc` (release
 T-2026.10.15, `Code.js` 2.25.0): candidate `4276161`, refined afterwards (postponed, the four
 revision states, the end of the summary; then approved with agreed and endorsed; then the
-rewrite of a summary an earlier candidate wrote). `Code.js` keeps its version line; a release adds it.
+rewrite of a summary an earlier candidate wrote; then the result of Close Report in a dialog the
+execution does not wait on). `Code.js` keeps its version line; a release adds it.
 
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
@@ -139,6 +140,15 @@ It:
    `downloadAndGroupTdocs_()` as an update; after the configuration guard, so never the
    built-in SA4#136 defaults). Without such a TDoc nothing is downloaded;
 3. says **Report ready to close** or **Report NOT READY TO CLOSE**, with the counts.
+
+**How the result is shown.** In a modal HTML dialog: the counts, then every list in full, as
+tables (TDoc | Title | Source | Current Status; Original TDoc | Revision | Source | Report state |
+3GU state | Action), scrollable, with a Close button. Text from the report is escaped. The same
+result is written to the execution log as text. The dialog is opened after the document lock is
+released, and the execution ends with it: unlike an alert, a modal HTML dialog does not keep the
+execution waiting. (With an alert, the 6G smoke copy — 114 TDocs, 15 not yet disposed, 9 revision
+findings — computed and logged the result at 00:01:29 and then waited on the alert until "Exceeded
+maximum execution time" at 00:06:12.)
 
 Not ready while any of these holds — each is listed with what to do:
 
