@@ -199,13 +199,21 @@ anywhere else — Disposition, Minutes — decides nothing):
 | every live revision of "Revised to" has its hyperlink in the list (the upload sign of the upload completion, `tdocListLinkUrl_()`); withdrawn ones aside | complete | nothing | — |
 | no "Revised to", and the TDoc is still available or reserved; **or** every revision of "Revised to" is withdrawn | not reserved | Revision not reserved in 3GU (with "No live revision is reserved in 3GU; revision … is withdrawn" when so) | Author needs to reserve the revision in 3GU. |
 | a live revision of "Revised to" has no hyperlink in the list | reserved, not uploaded (naming the live, unuploaded revisions only) | Revision reserved but not uploaded in 3GU. | Author needs to upload the reserved revision in 3GU. |
-| the list could not be read (or the meeting is not saved); it has no "Revised to" column; it does not have the TDoc; it has it as revised without naming a revision; it has another decision (agreed, noted, …) or no status; the "Revised to" is not a TDoc number; **any** revision it names is not in the list; the links of a live revision cannot be read | not verified | Revision state could not be verified in 3GU. | Check the TDoc and its revision in 3GU (with the reason). |
+| the list could not be read (or the meeting is not saved); it has no "Revised to" column; it does not have the TDoc; it has it as revised without naming a revision; it has another decision (agreed, noted, …) or no status; the "Revised to" is not a TDoc number; a revision it names is not in the list — unless a **later** live revision is uploaded and every live revision is (below); the links of a live revision cannot be read | not verified | Revision state could not be verified in 3GU. | Check the TDoc and its revision in 3GU (with the reason). |
 
 "Revised to" can name several revisions: 3GU keeps every revision ever reserved, also those withdrawn
 since (6G: S4aP260140 "revised to S4aP260174, S4aP260175", 174 withdrawn, 175 reserved). Every number
 is read (`findSA4DocumentIdsInText_()`); a withdrawn revision is an abandoned reservation, not a live
 one, and can no longer be uploaded. The older readers of "Revised to" (revision placement, the
 auto-written disposition) still read the first number only: BUGS_AND_ISSUES.md, out of scope here.
+
+A number of "Revised to" that the report's TDoc list does not have is set aside only when the rest
+proves the revision complete: every live revision the list has is uploaded (links readable), and one
+of them comes after every missing number in "Revised to" (3GU appends reservations in their order).
+6G: S4aP260074 "revised to S4aP260099, S4aP260148" -- 099 is withdrawn in 3GU and was removed from
+the report by a reallocation, so the list the report reads does not have it; 148 is agreed and
+uploaded: complete. A missing number alone, with a live revision not uploaded or unreadable, with
+only withdrawn revisions, or listed after the uploaded one: could not verify.
 
 Each of the last three blocks the close. Nothing is ever written to 3GU.
 

@@ -20595,16 +20595,26 @@ function checkRevisionsIn3gu_(entries, allTdocs, listProblem) {
       return add('revision-not-verified', portal || '(no status)', portal ? 'the TDoc list has another decision for it' : 'the TDoc list has no status for it');
     }
     const named = function (numbers, one, many) { return (numbers.length === 1 ? one : many) + ' ' + numbers.join(', '); };
-    // A number the list does not have: its state is not known, so nothing is concluded without it.
+    // A number the list does not have: its state is not known. It is set aside only when the rest proves the revision
+    // complete -- every live revision the list has is uploaded (links readable), and one of them comes after every missing
+    // number in "Revised to" (3GU appends reservations in their order): the missing one is then an earlier reservation,
+    // e.g. a withdrawn revision the report removed by a reallocation (6G: S4aP260074 -> 099, 148). Otherwise not verified.
     const missing = targets.filter(function (n) { return !list[n]; });
-    if (missing.length) {
-      return add('revision-not-verified', (portal || '(no status)') + ', revised to ' + targets.join(', '),
-        named(missing, 'the revision', 'the revisions') + (missing.length === 1 ? ' is' : ' are') + ' not in the TDoc list', targets.join(', '));
-    }
+    const present = targets.filter(function (n) { return !!list[n]; });
     // A withdrawn revision is an abandoned reservation, not a live revision; it can no longer be uploaded.
-    const withdrawn = targets.filter(function (n) { return isWithdrawnStatus_(tdocListStatus_(list[n])); });
-    const live = targets.filter(function (n) { return withdrawn.indexOf(n) === -1; });
+    const withdrawn = present.filter(function (n) { return isWithdrawnStatus_(tdocListStatus_(list[n])); });
+    const live = present.filter(function (n) { return withdrawn.indexOf(n) === -1; });
+    if (missing.length) {
+      const uploaded = live.filter(function (n) { return tdocListLinkIsKnown_(list[n]) && !!tdocListLinkUrl_(list[n]); });
+      const lastUploaded = Math.max.apply(null, [-1].concat(uploaded.map(function (n) { return targets.indexOf(n); })));
+      const proven = live.length > 0 && uploaded.length === live.length && missing.every(function (n) { return targets.indexOf(n) < lastUploaded; });
+      if (!proven) {
+        return add('revision-not-verified', (portal || '(no status)') + ', revised to ' + targets.join(', '),
+          named(missing, 'the revision', 'the revisions') + (missing.length === 1 ? ' is' : ' are') + ' not in the TDoc list', targets.join(', '));
+      }
+    }
     const describe = function (n) {
+      if (!list[n]) return n + ' (not in the TDoc list)';
       if (withdrawn.indexOf(n) !== -1) return n + ' (withdrawn)';
       const st = tdocListStatus_(list[n]) || 'no status';
       return tdocListLinkIsKnown_(list[n]) ? n + ' (' + st + ', ' + (tdocListLinkUrl_(list[n]) ? 'uploaded' : 'not uploaded') + ')' : n + ' (' + st + ')';

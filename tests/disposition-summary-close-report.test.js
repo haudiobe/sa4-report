@@ -932,6 +932,33 @@ console.log('L. partially agreed, and every revision 3GU names in "Revised to" (
   check('pure: a withdrawn revision whose links cannot be read is still only withdrawn', run(1, list(P(2), [unreadable(row(2, 'withdrawn'))])),
     [['revision-not-reserved', P(2), 'No live revision is reserved in 3GU; revision ' + P(2) + ' is withdrawn']]);
   check('pure: the original itself in its own "Revised to" is not a revision of it', run(1, list(P(1) + ', ' + P(2), [row(2, 'agreed')])), []);
+
+  // A number the report's list does not have (6G, f7d735b smoke: S4aP260074 -> 099, 148; 099 withdrawn in 3GU, removed from
+  // the report by a reallocation, so not in the list the report reads): set aside only when a later live revision is
+  // positively uploaded and every live revision is.
+  check('pure, 6G: S4aP260074 -> 099 not in the list, 148 agreed and uploaded: complete', run(74, [row(74, 'revised', P(99) + ', ' + P(148)), row(148, 'agreed')]), []);
+  check('pure: two earlier numbers not in the list, a later uploaded revision: complete', run(1, list(P(2) + ', ' + P(3) + ', ' + P(4), [row(4, 'available')])), []);
+  check('pure: a number not in the list and nothing else: not verified', run(1, list(P(2), [])), [['revision-not-verified', P(2), 'the revision ' + P(2) + ' is not in the TDoc list']]);
+  check('pure: not in the list + a live revision not uploaded: blocking (not verified), never complete',
+    run(1, list(P(2) + ', ' + P(3), [row(3, 'reserved', '', false)])), [['revision-not-verified', P(2) + ', ' + P(3), 'the revision ' + P(2) + ' is not in the TDoc list']]);
+  check('pure: not in the list + a live revision whose links cannot be read: not verified',
+    run(1, list(P(2) + ', ' + P(3), [unreadable(row(3, 'agreed'))])), [['revision-not-verified', P(2) + ', ' + P(3), 'the revision ' + P(2) + ' is not in the TDoc list']]);
+  check('pure: not in the list + one live uploaded and one live not uploaded: blocking, never complete',
+    run(1, list(P(2) + ', ' + P(3) + ', ' + P(4), [row(3, 'reserved', '', false), row(4, 'agreed')])).map((x) => x[0]), ['revision-not-verified']);
+  check('pure: not in the list + only withdrawn revisions: not verified (nothing live is proven)',
+    run(1, list(P(2) + ', ' + P(3), [row(3, 'withdrawn', '', false)])).map((x) => x[0]), ['revision-not-verified']);
+  check('pure: a number not in the list AFTER the uploaded revision (a newer reservation?): not verified',
+    run(1, list(P(2) + ', ' + P(3), [row(2, 'agreed')])), [['revision-not-verified', P(2) + ', ' + P(3), 'the revision ' + P(3) + ' is not in the TDoc list']]);
+  // The same, on the real update: 074's shape with 099 not in the list.
+  const r74 = built([t(1, '4.3', 'revised', { revisedTo: id(2) + ', ' + id(3) }), t(2, '4.3', 'withdrawn', { uploaded: false }), t(3, '4.3', 'agreed')], { 3: 'agreed' });
+  r74.tdocs = r74.tdocs.filter((x) => x.id !== id(2));
+  const res74 = closeReport(r74);
+  check('real update, 074 shape (earlier revision not in the list, later one agreed and uploaded): no revision finding', res74.revisions.filter((x) => x.tdoc === id(1)), []);
+  // 083 and 140 unchanged.
+  check('083 and 140 are unchanged: not reserved (withdrawn); not uploaded, naming the live revision', [
+    run(83, [row(83, 'revised', P(172)), row(172, 'withdrawn', '', false)]).map((x) => [x[0], x[1]]),
+    run(140, [row(140, 'revised', P(174) + ', ' + P(175)), row(174, 'withdrawn', '', false), row(175, 'reserved', '', false)]).map((x) => [x[0], x[1]])],
+  [[['revision-not-reserved', P(172)]], [['revision-not-uploaded', P(175)]]]);
 }
 
 // ====================================================================== I
