@@ -1,7 +1,9 @@
 # TDoc list identity
 
-**Status: RELEASED, NOT YET DEPLOYED. Template release T-2026.10.17 (`Code.js` 2.26.1), tag
-`template-release/T-2026.10.17`; developed on branch `fix/disposition-meeting-scope` (`d09649c`).** Section TDOC LIST IDENTITY of `Code.js`; tests `tests/tdoc-list-identity.test.js`.
+**Status: RELEASED AND DEPLOYED. Template release T-2026.10.17 (`Code.js` 2.26.1), release commit
+`24c583a4a55c1ffdd219063b02c4dab10d09512e`, tag `template-release/T-2026.10.17`. Deployed to the master
+template, MBS and 6G on 2026-10-30 (§ Release and deployment). Developed on branch
+`fix/disposition-meeting-scope` (`d09649c`).** Section TDOC LIST IDENTITY of `Code.js`; tests `tests/tdoc-list-identity.test.js`.
 
 A downloaded TDoc list is used only when it is shown to be the list of the configured meeting. Before, a
 list was trusted because it could be downloaded.
@@ -137,3 +139,46 @@ running a script in the document.
   S4aI260080, uploaded and the lowest.
 - **To be confirmed on live MBS before the release:** every TDoc table of the report is in the raw
   list.
+
+## Release and deployment
+
+Release T-2026.10.17, 2026-10-30. It contains this guard and the meeting scope of the Disposition
+Summary (docs/DISPOSITION_SUMMARY.md).
+
+| Step | Result |
+|---|---|
+| Release commit | `24c583a4a55c1ffdd219063b02c4dab10d09512e`, on the accepted candidate `d09649c` (with the documentation commit `b0739c3`). It adds the version line 2.26.1 (2026-10-30) and its changelog entry; without them, `Code.js` is the candidate's. The ledger takes the 2.26.1 header out with the identity change, and the version-pinned tests say 2.26.1 |
+| Tests on the release commit | 112 files, 7,657 checks, 0 failures. Among them: tdoc-list-identity 52, disposition 222, release-file-set 48, template-release 26, after-10-8-ledger 38, report-structure-fix 75, configuration-guard 32, template003-menu 116, abstract-cache-retry 36, meeting-86178-production 118 |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.17` on the release commit. One atomic push, without force: `origin/master` fast-forwarded `3b0638f` → `24c583a`, and the tag published. Every older tag is unchanged (T-2026.10.16 still `5d5699d`) |
+| Release bundle | `tools/template-release.js --release T-2026.10.17` from the tagged, clean commit: the five production files; the four source files equal to the tag (line ends aside); `Release.js` naming T-2026.10.17, template, 2.26.1, the release commit and the tag |
+| Master template runtime | Container "SA4 Report Template" and its runtime (T-2026.10.16, `5d5699d`) proven. One normal push, no `--force`, at 20:00:30. Read back: exactly five files, four byte-identical, the manifest identical as JSON; it runs T-2026.10.17 |
+| MBS runtime | The adoption bundle from the tag. Proven: container "MBS SWG Minutes – SA4-e (AH) MBS SWG post 137-e", on T-2026.10.16. Pushed at 20:00:58 and read back as above. Script files only |
+| 6G runtime | The adoption bundle with `--allow-legacy-target`, authorised for T-2026.10.17 only. Proven: container "6G Media Minutes – SA4-e (AH) on FS_6G_MED", on T-2026.10.16. Pushed at 20:01:26 and read back as above. Script files only |
+
+All three pushes were made with `clasp --user haudiobe.ts@gmail.com`, each from its own scratch folder,
+never from the repository root and never with `--force`. **The deployment ran nothing in the
+reports:** no update, no Update Disposition Summary, no Close Report, no build, no repair. No trigger
+was created, started or stopped, and 3GU was not touched.
+
+**Gates before the release:**
+
+- **MBS (no agenda TDoc, so its first update sets up the anchor from the report).** Checked on a DOCX
+  export of live MBS from 2026-10-30 against the raw Portal list of `meetingId=86172` from the same
+  day:
+  - 34 TDoc tables against 34 list TDocs (S4aI260080 … 113), 34 in common, none on one side only.
+    S4aI260084 … 088, revisions of main-meeting TDocs, are TDocs of its own list.
+  - `evaluateTdocListIdentity_` accepts this data.
+  - Expected at its next normal update: `TDoc list identity: the list of this meeting (report; anchor
+    S4aI260080 recorded)`. A different list is refused.
+- **6G, the real negative smoke** (§ Evidence on the 6G smoke copy). With `d09649c`, the wrong
+  36-TDoc Portal list was refused for want of S4aP260098, although the copy already held the 36.
+
+**Live 6G after the deployment:**
+
+- **Its automatic updates are intentionally paused,** and stay so until the recovery is decided.
+  The deployment did not change any trigger.
+- **Its content is contaminated and not yet repaired:** the 36 TDocs of the earlier calls, inserted
+  by updates under T-2026.10.16 from the wrong Portal list, with what those updates also wrote.
+- **Its Disposition Summary of 150 TDocs is kept as evidence** and has not been regenerated.
+- While the Portal returns the wrong list, any update of 6G is refused (no row for S4aP260098).
+- The runtime to roll back to is T-2026.10.16 (its bundles in `dist/`).
