@@ -50,8 +50,9 @@ grouping, and before anything is changed (`assertTdocListIdentity_()`, called by
 The anchor is written only by an update or a build, after the list passed. It is a TDoc in the list
 and, unless this is a build, in the report: an uploaded one first (an uploaded document is not taken
 back), the lowest number of those. It is kept until it stops applying (another meeting ID or URL).
-Update Disposition Summary, Close Report and the session dialogs check the same way and store
-nothing. `TDOC_LIST_ANCHOR` is not among the keys copied when a report is adopted for the add-on
+Close Report and the session dialogs check the same way and store nothing. (Update Disposition
+Summary read the list here too until the candidate after T-2026.10.17. It now reads no list: its scope
+is the report's registration table, docs/DISPOSITION_SUMMARY.md § Which TDocs.) `TDOC_LIST_ANCHOR` is not among the keys copied when a report is adopted for the add-on
 background runs (`ADDON003_ADOPTION_FIXED_KEYS_`); there the report is the evidence again (rule 3).
 
 ## When a list is refused
@@ -63,8 +64,8 @@ The error starts "The TDoc list was not used: it could not be shown to be the li
 |---|---|
 | Update (manual and automatic) | `{ success: false, notUpdated: true }` before anything: no TDoc table or agenda heading, no status or upload metadata, no registration table or registered-documents summary, no Session column, no revision moved, no Disposition cell, no `REVISION_MAP`, no abstract request, no structure repair, no Disposition Summary sync |
 | Build Report from Scratch | refused before the document is cleared |
-| Update Disposition Summary | "Disposition Summary NOT updated", with the reason |
-| Close Report | NOT READY TO CLOSE; nothing checked, no revision check, nothing written |
+| Update Disposition Summary | after T-2026.10.17 (candidate): not affected. It reads no TDoc list; the summary is written from the report's registered TDocs. (T-2026.10.17: "Disposition Summary NOT updated", with the reason) |
+| Close Report | NOT READY TO CLOSE. After T-2026.10.17 (candidate), the summary is written from the report; "External verification could not be completed", with the reason; every revised TDoc "could not be verified". (T-2026.10.17: nothing checked, nothing written) |
 | Enable Session Column / Assign TDoc Sessions | nothing written; a saved assignment is kept, the Session column is not refreshed (the notice says so) |
 | `downloadAndProcessFromWeb()` (legacy) | the error, the temporary file trashed, no table written |
 
@@ -76,9 +77,11 @@ Summary (`writeDispositionSummary_()`, `c48ba94`) stays as a second line.
 `tests/tdoc-list-identity.test.js`:
 
 - **A**, the contamination case: report X already holds TDocs of meeting Y, and the Portal returns
-  Y's list, which overlaps the report. The update, Update Disposition Summary, Close Report and Build
-  all refuse, and the document and its properties stay identical. Against the code without the
-  guard, the update inserts and synchronises from Y.
+  Y's list, which overlaps the report. The update, Close Report and Build all refuse, and the document
+  and its properties stay identical. Against the code without the guard, the update inserts and
+  synchronises from Y. (After T-2026.10.17, candidate: Update Disposition Summary reads no list and
+  leaves the summary of the report as it is; Close Report is not ready, "External verification could
+  not be completed".)
 - **B**, the agenda TDoc: its row reserved, withdrawn or revised is accepted; reallocated to Removed is
   accepted; a list without it is refused.
 - **C**, the anchor:

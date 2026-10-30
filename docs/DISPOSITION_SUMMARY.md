@@ -16,6 +16,12 @@ frozen in production: no Update Disposition Summary and no Close Report in live 
 The same candidate refuses a TDoc list that is not shown to be the meeting's before any change (docs/TDOC_LIST_IDENTITY.md):
 the 36 "earlier-call" TDocs in live 6G came from the Portal list of 86178 on 2026-10-30, not from the series.
 
+**Candidate after T-2026.10.17, not released (branch `fix/disposition-report-local-scope`): the summary is
+report-local.** It reads the TDocs the report has registered, not the Portal TDoc list (§ Which TDocs), so
+Update Disposition Summary works while the Portal returns a list that is not the meeting's (6G, 86178, since
+2026-10-30). Close Report checks the TDoc list on top and is never ready without it (§ Close Report). The
+update and its TDoc list identity are unchanged (docs/TDOC_LIST_IDENTITY.md).
+
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
 
@@ -45,46 +51,73 @@ Documents Not Yet Disposed (0)
 **Close Report** writes the same summary (creating it where there is none), checks the report
 and says whether it is ready to close. See § Close Report.
 
-### Which TDocs: those of the configured meeting (after T-2026.10.16)
+### Which TDocs: those the report has registered (after T-2026.10.17, candidate)
 
-A report can hold TDoc tables of other meetings: an update only adds and updates the TDocs of the
-list it reads and removes nothing, so a report kept across the calls of a series (6G) keeps the
-tables of the earlier calls. The summary and Close Report read **only the TDocs of the configured
-meeting** — the same set an update writes:
+**Report → Disposition Summary; Portal → synchronisation; Close Report → summary + external check.**
+The summary is derived from the report alone. It does not read the TDoc list, so a Portal list that
+cannot be read or is not the meeting's neither stops it nor gets into it.
 
-- the meeting's TDoc list, read by `downloadAndGroupTdocs_(getReportConfig_())` after the
-  configuration guard (`assertMeetingConfigured_()`; never the built-in SA4#136 defaults), with the
-  agenda selector of the meeting and the report's Document Reallocations (a TDoc reallocated to
-  Removed is not in it);
-- `meetingTdocScope_()` turns it into the set of canonical TDoc numbers; a TDoc table whose number
-  is not in that set is left out — of the summary, of the not-yet-disposed check and of the
-  revision check — and counted: "N TDoc tables of other meetings (not in this meeting's TDoc
-  list) left out." Their tables are not touched.
+The scope (`reportTdocScope_(body)`) is the set of canonical TDoc numbers that
+
+1. have a row in the report's own **Registration of Documents** table (header `TDoc | Title | Source |
+   Agenda Item`, with or without `Session`; every such table of the report), and
+2. are not reallocated to removed / withdrawn / n/a in the report's own **Document Reallocations**
+   table (`interpretReallocationTarget_()`).
+
+A TDoc table whose number is not in the scope is left out — of the summary, of the not-yet-disposed
+check and of the revision check — and counted: "N TDoc tables not registered in this report (not in
+its Registration of Documents table, or reallocated to Removed) left out." Its table is not touched.
+
+Why the registration table is the report's scope:
+
+- **Every build writes it** from the list it builds from: main meetings, ad-hoc meetings, the 6G
+  branch of `buildSkeletonWithTdocTables()`, and the legacy `downloadAndProcessFromWeb()`
+  (`createSummaryTable_()`).
+- **Every update appends to it.** The TDocs of its list that the table does not have are added
+  (`updateRegisteredDocumentsTable_()`), in the same run that inserts their TDoc tables and before the
+  summary is kept up to date.
+- **Nothing removes a row.** No code deletes one, so the table is the report's record of every TDoc
+  it took on. That covers every call of a continuing report: in 6G, the call of S4aP260098 and the
+  later one of S4aP260149. "Only the latest agenda" would be wrong.
+- **It is written only after the list passed** the TDoc list identity (T-2026.10.17), by the same
+  writes that insert the TDoc tables. It needs no agenda TDoc (MBS works the same), and it follows the
+  agenda selector of a main meeting (only the selected TDocs are registered).
+- **Tables pasted by hand are not registered.** A TDoc table pasted from another report is in no
+  registration row, so it is left out.
+
+What it does **not** protect against: a report contaminated before T-2026.10.17 (an update from a
+wrong list wrote both the tables and their registration rows). Such a report must be repaired in the
+document (live 6G was restored from its version history).
 
 Where the scope comes from:
 
 | Entry | Scope |
 |---|---|
-| Report › Update Disposition Summary | `readMeetingTdocScope_()`: the list read for it |
-| an update (keeping a summary that is there) | the list the update has just read (`allTdocs` in `continuousUpdateCore_`), not read twice |
-| Report › Close Report | `readMeetingTdocScope_()`, read once; the revision check uses the same list |
+| Report › Update Disposition Summary | `reportTdocScope_()`; no TDoc list is read |
+| an update (keeping a summary that is there) | `reportTdocScope_()`, after the update has registered the TDocs of its list |
+| Report › Close Report | `reportTdocScope_()` for the summary and the TDocs checked; the TDoc list (`readMeetingTdocScope_()`) for the external check |
 
-**Fail closed.** Without a scope — the meeting is not saved, there is no TDoc list URL, the list
-cannot be read, it has no TDoc, or it has **none of the TDocs of the report's TDoc tables** (it does
-not describe this report) — nothing falls back to every TDoc table of the document, and no summary of
-nothing replaces the one that is there. (6G smoke copy, 2026-10-30, candidate `3e820ea`: the Portal
-list of meeting ID 86178 gave 36 TDocs of another call, S4aP260008…043 in 4 agenda items, instead of
-the 116 of this one, S4aP260067…182, read at 06:09; none had a table in the report, and the summary of
-114 TDocs became 0/0/0.) A report without TDoc tables leaves nothing out and is no failure:
+**Fail closed.** There is no scope, and nothing falls back to every TDoc table of the document, when:
+
+- the report has no Registration of Documents table;
+- the table has no TDoc;
+- the table has **none of the TDocs of the report's TDoc tables**, so it does not describe them.
+
+In those cases no summary of nothing replaces the one that is there. A report without TDoc tables
+leaves nothing out and is no failure.
 
 - Update Disposition Summary writes nothing: "Disposition Summary NOT updated", with the reason;
-- an update leaves the summary as it is (`dispositionSummary: 'no-scope'`, logged); the update
-  itself already fails when its list cannot be read;
+- an update leaves the summary as it is (`dispositionSummary: 'no-scope'`, logged);
 - Close Report writes nothing and says NOT READY TO CLOSE: "The report could not be checked and the
-  Disposition Summary was not written: … Run Close Report again once the TDoc list can be read."
+  Disposition Summary was not written: … Check the Registration of Documents table of the report and
+  run Close Report again."
 
 `writeDispositionSummary_()` itself refuses without a scope (`no-scope`), and
 `readReportDispositions_()` throws without one, so no caller can read the whole document.
+
+**Before (T-2026.10.17):** the scope was the meeting's TDoc list, read for the summary. A list that
+could not be read or was refused by its identity (6G, 2026-10-30: the Portal list of 86178 without
+S4aP260098) stopped Update Disposition Summary.
 
 ## The classification
 
@@ -190,13 +223,24 @@ change sharing, remove data, store a "closed" flag, change any status, or touch 
 run any number of times; the report can be corrected afterwards. (There is no report-state
 concept in the project to record a close in, and none was added.)
 
-It:
-1. downloads the TDoc list of the meeting (the same `downloadAndGroupTdocs_()` as an update; after
-   the configuration guard, so never the built-in SA4#136 defaults), always and once: it is the
-   scope of everything it checks (§ Which TDocs) and the 3GU state of the revisions. Before
-   T-2026.10.17 it was downloaded only when the report had a TDoc as revised;
-2. reads the TDocs of the meeting and writes the summary;
-3. says **Report ready to close** or **Report NOT READY TO CLOSE**, with the counts.
+It (after T-2026.10.17, candidate):
+1. reads the TDocs the report has registered (§ Which TDocs) and writes the summary from them;
+2. takes the TDocs not yet disposed from the same entries;
+3. **the external check**, always and once: it downloads the TDoc list of the meeting
+   (`readMeetingTdocScope_()`). That is the same `downloadAndGroupTdocs_()` as an update, after the
+   configuration guard (never the built-in SA4#136 defaults) and the TDoc list identity, and it stores
+   nothing. It then checks the revisions of the TDocs of step 1 against that list.
+   - If the list cannot be read, or is not shown to be the meeting's, the summary of step 1 still
+     stands.
+   - Every TDoc revised in the report is then "Revision state could not be verified in 3GU".
+   - The dialog says "External verification (TDoc list of this meeting, 3GU): NOT completed",
+     followed by "External verification could not be completed: <reason> …".
+   - The report is **never** ready without this check, also when no TDoc is revised.
+4. says **Report ready to close** only when all of these hold: every TDoc is disposed, no revision
+   finding, nothing could not be checked, and the external check is completed. Otherwise it says
+   **Report NOT READY TO CLOSE**, with the counts.
+
+Before, under T-2026.10.17, the list was the scope of everything: without it, nothing was written or checked.
 
 **How the result is shown.** In a modal HTML dialog: the counts, then every list in full, as
 tables (TDoc | Title | Source | Current Status; Original TDoc | Revision | Source | Report state |
@@ -291,7 +335,27 @@ revised TDocs fully checked; idempotent; the list followed; fail closed for an u
 list on all three entries); and that without this change `Code.js` and `ReportCreator.js` are those
 of T-2026.10.15, byte for byte, and that against T-2026.10.16 only `continuousUpdateCore_` changed
 outside the section. The ledger view `codeWithoutDispositionSummary()` in
-`tests/helpers/before-structure-fix.js` takes it out for the older ledgers.
+`tests/helpers/before-structure-fix.js` takes it out for the older ledgers. Section M is, after
+T-2026.10.17, a continuing report with two calls, tables pasted by hand and one reallocated to Removed.
+
+`tests/disposition-report-local-scope.test.js` (after T-2026.10.17) runs 17 scenarios, once on this
+`Code.js` and once on the `Code.js` of T-2026.10.17 (from git):
+
+- **Normal reports:** the correct list, the Portal unavailable (HTTP 503), and the list of another
+  meeting (with and without TDocs in common).
+- **Continuing and MBS-style reports:** a continuing report of two calls with two agenda TDocs; an
+  MBS-style report without an agenda TDoc (anchor), with a wrong list that overlaps it.
+- **The summary's own section:** idempotence; a deleted summary or summary table written again; prose
+  below it kept; text typed into it refused.
+- **Update Report Now** still refuses a wrong list, with zero mutation.
+- **Close Report** writes the summary but is not ready without the external check, and ready with it.
+- **Fail closed:** no registration table; a registration table without the report's TDocs; tables
+  that are not registered.
+
+The released code fails exactly the 11 scenarios this change is for and passes the other six. The
+ledger `codeWithoutReportLocalScope()` gives the `Code.js` of T-2026.10.17 byte for byte. Against it:
+the identity section, `downloadAndGroupTdocs_`, `downloadAndProcessFromWeb`, the classification and
+the summary's renderer are unchanged; `continuousUpdateCore_` changed in its one call of the sync only.
 
 ## Release and deployment
 

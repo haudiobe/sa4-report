@@ -43,6 +43,7 @@ const CACHE = (id) => 'REVIEWER_NO_SUMMARY_CACHE_' + id;
  *   release   false: not a template report (so: text statuses, no Docs API use)
  *   docs      false: no Google Docs API service
  *   agenda    another agenda
+ *   code      another Code.js to run (its source text; without a Drive only), e.g. a released one
  *   drive     a fake Drive of tests/helpers/fake-drive-files.js: the Drive of the user the report runs as
  *   tableSeparators  true: the document keeps a paragraph between two tables and its last paragraph, as Google Docs does
  *   endParagraph     true (with tableSeparators): a table placed last gets the empty paragraph Google Docs keeps after it
@@ -52,7 +53,7 @@ function templateReport(options) {
   const props = Object.assign({}, PROPS, o.props || {});
   Object.keys(props).forEach((k) => { if (props[k] === null) delete props[k]; });
   // With a Drive (the personal settings of the user) the report is a whole template bundle: Code.js and ReportCreator.js.
-  const loaded = (o.drive ? loadTemplateRuntime : loadCode)({ documentProperties: props, scriptProperties: o.token === false ? {} : { REVIEWER_API_TOKEN: 'synthetic-test-token' } });
+  const loaded = (o.drive ? loadTemplateRuntime : loadCode)({ documentProperties: props, scriptProperties: o.token === false ? {} : { REVIEWER_API_TOKEN: 'synthetic-test-token' }, code: o.code });
   const s = loaded.sandbox;
   const body = makeFakeDocumentBody(s, { tableSeparators: !!o.tableSeparators, endParagraph: !!o.endParagraph });
   const api = makeFakeDocsApi({ body: body, reportId: REPORT_ID });

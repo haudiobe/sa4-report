@@ -24,7 +24,7 @@ const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutReportLocalScope, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -109,12 +109,16 @@ console.log('A. the contamination case: report X holds TDocs of meeting Y; the P
   check('... the list read once, nothing else asked (no abstract request)', [listFetches(r, f), r.requests.length], [1, 0]);
 
   const f2 = r.fetches.length;
+  // After T-2026.10.17 the summary is the report's (its registration table): Update Disposition Summary reads no TDoc list, so
+  // Y's list neither stops it nor gets into it. Close Report reads the list for its external check, refuses it, and is not ready.
   r.exec(() => r.s.updateDispositionSummary());
-  check('Update Disposition Summary: "NOT updated", nothing written, the reason', [lastAlert(r)[0], snapshot(r.body) === doc, /could not be shown to be the list of this meeting/.test(lastAlert(r)[1])], ['Disposition Summary NOT updated', true, true]);
+  check('Update Disposition Summary: from the report -- already up to date, the document identical; Y\'s list not read', [lastAlert(r)[0], snapshot(r.body) === doc, lastAlert(r)[1].split('\n')[0], listFetches(r, f2)],
+    ['Disposition Summary', true, 'Disposition Summary was already up to date.', 0]);
   const c = r.exec(() => r.s.closeReportCore_());
-  check('Close Report: NOT READY, nothing checked, no revision validation, nothing written', [c.ready, c.summaryState, c.checked, c.revisions.length, snapshot(r.body) === doc, /could not be shown to be the list of this meeting/.test(c.problems[0] || '')],
-    [false, 'no-scope', 0, 0, true, true]);
-  check('... the list read once per run, nothing else fetched', [listFetches(r, f2), r.fetches.length - f2], [2, 2]);
+  check('Close Report: NOT READY, external verification not completed (Y\'s list refused), the revised TDoc not verified, nothing written',
+    [c.ready, c.externalVerified, c.summaryState, c.checked, c.revisions.map((x) => [x.tdoc, x.kind]), snapshot(r.body) === doc, /^External verification could not be completed: .*could not be shown to be the list of this meeting/.test(c.problems[0] || '')],
+    [false, false, 'unchanged', 6, [[id(2), 'revision-not-verified']], true, true]);
+  check('... the list read once, by Close Report; nothing else fetched', [listFetches(r, f2), r.fetches.length - f2], [1, 1]);
 
   const b = r.build();
   check('Build Report from Scratch: refused before the document is cleared', [b.ok, snapshot(r.body) === doc, props(r) === store], [false, true, true]);
@@ -241,10 +245,13 @@ console.log('D. the rules, pure');
 // ====================================================================== E
 console.log('E. what changed in Code.js');
 {
-  const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // The report-local scope of the Disposition Summary came after it (tests/disposition-report-local-scope.test.js): this is
+  // Code.js without that, the Code.js of T-2026.10.17.
+  const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  const CODE = codeWithoutReportLocalScope(FULL).code;
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
-  const view = codeWithoutListIdentity(CODE);
+  const view = codeWithoutListIdentity(FULL);
   check('the change is in Code.js exactly once: one section, four call sites', view.problems, []);
   const section = CODE.slice(CODE.indexOf(IDENTITY_SECTION_START), CODE.indexOf(IDENTITY_SECTION_END) + IDENTITY_SECTION_END.length);
   check('the section: these functions, in this order', functionNames(section), IDENTITY_SECTION_FUNCTIONS);

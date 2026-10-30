@@ -87,7 +87,8 @@ function loadCode(options) {
   };
 
   vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(CODE_JS_PATH, 'utf8'), sandbox, { filename: 'Code.js' });
+  // opts.code: another Code.js (e.g. a released one, from git) to run the same tests against.
+  vm.runInContext(opts.code || fs.readFileSync(CODE_JS_PATH, 'utf8'), sandbox, { filename: 'Code.js' });
 
   return { sandbox, docProps, scriptProps };
 }
