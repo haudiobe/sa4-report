@@ -27,7 +27,7 @@
 const fs = require('fs');
 const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport, CACHE } = require('./helpers/template-report.js');
-const { codeWithoutAbstractCacheChange, codeWithoutAttendanceEmptyTextFix, ABSTRACT_CACHE_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutAbstractCacheChange, codeWithoutAttendanceEmptyTextFix, codeWithoutDispositionSummary, ABSTRACT_CACHE_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -151,8 +151,11 @@ console.log('5. key, value and place as before; an entry written by the earlier 
 // ====================================================================== 6
 console.log('6. what the change is');
 {
-  // The attendance-rendering fix after T-2026.10.14 is taken out first (tests/adhoc-attendance-empty-paragraph.test.js pins it).
-  const attendanceless = codeWithoutAttendanceEmptyTextFix(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, ''));
+  // The attendance-rendering fix after T-2026.10.14 is taken out first (tests/adhoc-attendance-empty-paragraph.test.js pins it),
+  // and before it the Disposition Summary of T-2026.10.16 with its release header (tests/disposition-summary-close-report.test.js).
+  const dispositionless = codeWithoutDispositionSummary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, ''));
+  const attendanceless = codeWithoutAttendanceEmptyTextFix(dispositionless.code);
+  attendanceless.problems = dispositionless.problems.concat(attendanceless.problems);
   const CODE = attendanceless.code;
   const before = codeWithoutAbstractCacheChange(CODE);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, '')).filter((n, i, list) => list.indexOf(n) === i);

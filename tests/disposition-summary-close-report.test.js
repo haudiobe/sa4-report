@@ -978,7 +978,7 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
     ['const DISPOSITION_SUMMARY_HEADING_', 'const DISPOSITION_SUMMARY_NOTE_', 'const DISPOSITION_SUMMARY_NONE_', 'const DISPOSITION_SUMMARY_TABLE_HEADER_', 'const DISPOSITION_SUMMARY_TABLE_WIDTHS_', 'const DISPOSITION_SUMMARY_MENU_HINT_',
       'const DISPOSITION_CLASSES_', 'const DISPOSITION_OF_STATUS_', 'const DISPOSITION_SUMMARY_EARLIER_NOTES_', 'const DISPOSITION_SUMMARY_EARLIER_TITLES_', 'const CLOSE_REPORT_LIST_LIMIT_',
       'const REVISION_CHECK_STATES_']);
-  check('Code.js is still version 2.25.0 (not released)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.25.0');
+  check('Code.js is version 2.26.0: the release of this feature, T-2026.10.16 (tests/helpers/before-structure-fix.js takes its header out with it)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.0');
   let released = null;
   let releasedCreator = null;
   try {

@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.25.0 (2026-10-16)
+ * Version: 2.26.0 (2026-10-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,25 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.0 (2026-10-30)
+ *   - Added (template reports): Report > Update Disposition Summary writes a
+ *     managed section at the end of the report -- after the close and the
+ *     Attendance section -- with every TDoc once in one of three tables by
+ *     its Status: Agreed, Endorsed and Approved (agreed, partially agreed,
+ *     endorsed, approved); Other Disposed (noted, revised, merged,
+ *     withdrawn, replied); Not Yet Disposed (available, reserved, parked,
+ *     postponed, Plenary, other, and any status it does not know). Updates
+ *     keep a summary that is there up to date and never add one; text typed
+ *     below it is kept, text typed into it stops it from being written.
+ *   - Added: Report > Close Report checks the report and says whether it is
+ *     ready to close: no TDoc not yet disposed, and for every TDoc revised
+ *     in the report a complete revision in 3GU (every revision of "Revised
+ *     to" read; withdrawn ones aside): not reserved, reserved but not
+ *     uploaded, and could not verify are reported apart, with what to do.
+ *     It writes the summary and nothing else, stores nothing, and shows the
+ *     whole result in a dialog the execution does not wait on.
+ *     (DISPOSITION SUMMARY AND CLOSE REPORT section;
+ *     docs/DISPOSITION_SUMMARY.md.)
  * 2.25.0 (2026-10-16)
  *   - Fixed: Refresh Attendance, and every import that replaced an existing
  *     Attendance section, failed with "Cannot insert an empty text element."
