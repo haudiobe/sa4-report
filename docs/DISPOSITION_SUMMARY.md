@@ -16,7 +16,9 @@ frozen in production: no Update Disposition Summary and no Close Report in live 
 The same candidate refuses a TDoc list that is not shown to be the meeting's before any change (docs/TDOC_LIST_IDENTITY.md):
 the 36 "earlier-call" TDocs in live 6G came from the Portal list of 86178 on 2026-10-30, not from the series.
 
-**Candidate after T-2026.10.17, not released (branch `fix/disposition-report-local-scope`): the summary is
+**T-2026.10.18 (`Code.js` 2.26.2), tag `template-release/T-2026.10.18`: RELEASED, NOT YET DEPLOYED**
+(branch `fix/disposition-report-local-scope`, accepted candidate `b55e67e`; read-only release gate on the
+exports of 2026-10-30: 6G 115 TDocs in scope, no S4aP260008…043; MBS 34, S4aI260080…113). **The summary is
 report-local.** It reads the TDocs the report has registered, not the Portal TDoc list (§ Which TDocs), so
 Update Disposition Summary works while the Portal returns a list that is not the meeting's (6G, 86178, since
 2026-10-30). Close Report checks the TDoc list on top and is never ready without it (§ Close Report). The

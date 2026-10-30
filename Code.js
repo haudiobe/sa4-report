@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.1 (2026-10-30)
+ * Version: 2.26.2 (2026-10-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,18 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.2 (2026-10-30)
+ *   - Changed (template reports): the Disposition Summary is report-local.
+ *     It lists the TDoc tables whose TDoc the report has registered (its
+ *     Registration of Documents table), less those its Document
+ *     Reallocations remove; no TDoc list is read for it, so a Portal list
+ *     that cannot be read or is not the meeting's neither stops it nor gets
+ *     into it. Without a registration table nothing is written.
+ *   - Changed: Close Report writes that summary, then always checks the
+ *     TDoc list of the meeting (3GU) for the revisions; without that check
+ *     it is never ready and says "External verification ... NOT
+ *     completed". The update and its TDoc list identity are unchanged.
+ *     (docs/DISPOSITION_SUMMARY.md § Which TDocs.)
  * 2.26.1 (2026-10-30)
  *   - Fixed (template reports): the Disposition Summary and Close Report
  *     read only the TDocs of this meeting -- its TDoc list as an update
