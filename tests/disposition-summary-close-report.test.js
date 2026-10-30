@@ -30,6 +30,7 @@
  *   I.  what changed in Code.js and ReportCreator.js, and nothing else
  *   J.  a summary an earlier candidate wrote (00a50c5, 4276161) is rewritten in the current form
  *   K.  Close Report shows its result at once and in full, in a dialog the execution does not wait on
+ *   L.  partially agreed; every revision 3GU names in "Revised to" (the real 6G shapes)
  *
  * Run: node tests/disposition-summary-close-report.test.js
  */
@@ -156,8 +157,10 @@ console.log('A. the classification of the statuses');
   check('postponed: no final decision at this meeting -- not yet disposed, a known status', s.classifyTdocDisposition_('Postponed'), { label: 'postponed', known: true, disposition: 'UNRESOLVED' });
   check('every one of the fourteen options of the template is classified', OPTIONS.filter((o) => !s.classifyTdocDisposition_(o).known), []);
   const constant = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '').match(/const DISPOSITION_OF_STATUS_ = \{([\s\S]*?)\};/)[1];
-  check('DISPOSITION_OF_STATUS_ names exactly the options of the template, by their label',
-    (constant.match(/'([a-z ]+)':/g) || []).map((m) => m.slice(1, -2)).sort(), OPTIONS.map((o) => o.toLowerCase()).sort());
+  check('DISPOSITION_OF_STATUS_ names exactly the options of the template, by their label, and "partially agreed"',
+    (constant.match(/'([a-z ]+)':/g) || []).map((m) => m.slice(1, -2)).sort(), OPTIONS.map((o) => o.toLowerCase()).concat(['partially agreed']).sort());
+  check('partially agreed: a known final status in the first class, with its own label (not "agreed"); case and whitespace as for every status',
+    ['partially agreed', 'Partially Agreed', '  PARTIALLY   agreed '].map((x) => s.classifyTdocDisposition_(x)), Array(3).fill({ label: 'partially agreed', known: true, disposition: 'AGREED_ENDORSED_APPROVED' }));
   const helper = fs.readFileSync(path.join(__dirname, 'helpers', 'template-report.js'), 'utf8');
   check('the options are those of the template definition the test report is built with', JSON.parse(helper.match(/const STATUS_NAMES = (\[[^\]]*\]);/)[1].replace(/'/g, '"')), OPTIONS);
   check('case, outer and inner whitespace do not matter; the Portal wording "Replied to" is replied',
@@ -628,7 +631,12 @@ console.log('G. the MBS report: the three tables as Close Report leaves them');
     S4aI260089: 'revised', S4aI260082: 'revised', S4aI260102: 'revised', S4aI260105: 'agreed', S4aI260083: 'revised', S4aI260092: 'endorsed', S4aI260084: 'agreed', S4aI260085: 'noted', S4aI260086: 'merged',
     S4aI260087: 'agreed', S4aI260088: 'noted', S4aI260093: 'withdrawn', S4aI260101: 'available', S4aI260106: 'endorsed', S4aI260107: 'noted', S4aI260095: 'agreed', S4aI260097: 'postponed',
     S4aI260081: 'revised', S4aI260090: 'agreed', S4aI260103: 'parked', S4aI260104: 'noted' };
-  const listStatus = (tdoc) => (revisedTo[tdoc] ? 'revised' : decisions[tdoc] === 'revised' ? 'available' : (tdocsOfFixture.filter((e) => e.tdoc === tdoc)[0] || {}).status);
+  // The 3GU list of this scenario: revised where it names a revision, withdrawn where the scenario withdrew the TDoc, the
+  // fixture's own status otherwise -- except "withdrawn": the fixture's statuses are the 2026-10-13 report's, and there
+  // S4aI260100 (the revision of S4aI260091) was withdrawn; in this scenario it is agreed, so 3GU has it as available.
+  const fixtureStatus = (tdoc) => (tdocsOfFixture.filter((e) => e.tdoc === tdoc)[0] || {}).status;
+  const listStatus = (tdoc) => (revisedTo[tdoc] ? 'revised' : decisions[tdoc] === 'revised' ? 'available' : decisions[tdoc] === 'withdrawn' ? 'withdrawn'
+    : fixtureStatus(tdoc) === 'withdrawn' ? 'available' : fixtureStatus(tdoc));
   const list = registration.map(([tdoc, agenda]) => ({ id: tdoc, agenda: tdoc === 'S4aI260081' ? '3.7' : agenda, status: listStatus(tdoc), revisedTo: revisedTo[tdoc] || '', uploaded: true }));
   const r = withDialogs(templateReport({ tdocs: list, tableSeparators: true, props: { REPORT_SUFFIX: 'MBS' } }));
   r.user(() => {
@@ -865,6 +873,65 @@ console.log('K. Close Report shows its result at once, in full, and the executio
   // Without its comments (which name the alert it no longer uses).
   const body = src.slice(src.indexOf('\nfunction closeReport() {'), src.indexOf('\n}\n', src.indexOf('\nfunction closeReport() {'))).replace(/^\s*\/\/.*$/gm, '');
   check('closeReport(): the lock around the work only, then the dialog; no ui.alert()', [/withDispositionLock_\('Close Report', closeReportCore_\)[\s\S]*showModalDialog/.test(body), /\.alert\(/.test(body)], [true, false]);
+}
+
+// ====================================================================== L
+console.log('L. partially agreed, and every revision 3GU names in "Revised to" (the real 6G shapes)');
+{
+  // partially agreed: in the first table with its own Status, and it does not block.
+  const pa = built([t(1, '4.3'), t(2, '4.3'), t(3, '4.4')], { 1: 'agreed', 3: 'noted' });
+  pa.user(() => { const table = pa.table(id(2)); for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Status') table.getRow(i).getCell(1).setText('partially agreed'); });
+  const pres = closeReport(pa);
+  check('partially agreed (typed): in the first table, shown as "partially agreed", distinct from agreed; not a blocker',
+    [summaryOf(pa.body)[0][1].map((x) => x[0] + ' ' + x[3]), summaryOf(pa.body)[2][0], pres.ready, pres.unresolved.length],
+    [[id(1) + ' agreed', id(2) + ' partially agreed'], TITLES[2] + ' (0)', true, 0]);
+  check('the first heading is unchanged', summaryOf(pa.body)[0][0], TITLES[0] + ' (2)');
+
+  // The real 6G shapes, on the real update and Close Report (the numbers are this harness's).
+  //   A. 83 -> 172 withdrawn                          => not reserved, 172 named as withdrawn
+  //   B. 40 -> 174 withdrawn, 175 reserved             => reserved but not uploaded, 175 (not 174)
+  //   C. 74 -> 99 withdrawn, 148 agreed and uploaded   => complete
+  const r = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3', 'withdrawn', { uploaded: false }),
+    t(3, '4.4', 'revised', { revisedTo: id(4) + ', ' + id(5) }), t(4, '4.4', 'withdrawn', { uploaded: false }), t(5, '4.4', 'reserved', { uploaded: false }),
+    t(6, '4.5', 'revised', { revisedTo: id(7) + ', ' + id(8) }), t(7, '4.5', 'withdrawn', { uploaded: false }), t(8, '4.5', 'agreed')], { 8: 'agreed', 5: 'agreed' });
+  const res = closeReport(r);
+  const by = (n) => res.revisions.filter((x) => x.tdoc === id(n)).map((x) => [x.kind, x.revision, x.state3gu, x.reason, x.action]);
+  check('A. the only revision withdrawn: NOT RESERVED, saying the revision is withdrawn; reserve it', by(1),
+    [['revision-not-reserved', id(2), 'revised, revised to ' + id(2) + ' (withdrawn)', 'No live revision is reserved in 3GU; revision ' + id(2) + ' is withdrawn', 'Author needs to reserve the revision in 3GU.']]);
+  check('B. a withdrawn and a reserved revision: RESERVED BUT NOT UPLOADED, naming the live one only', by(3),
+    [['revision-not-uploaded', id(5), 'revised, revised to ' + id(4) + ' (withdrawn), ' + id(5) + ' (reserved, not uploaded)', '', 'Author needs to upload the reserved revision in 3GU.']]);
+  check('C. a withdrawn and an uploaded revision: complete -- the withdrawn one is no blocker', by(6), []);
+  check('a withdrawn revision is never reported as "reserved but not uploaded"', res.revisions.filter((x) => x.kind === 'revision-not-uploaded' && [id(2), id(4), id(7)].indexOf(x.revision) !== -1), []);
+  check('the dialog says it', [lastAlert(r)[1].indexOf('(No live revision is reserved in 3GU; revision ' + id(2) + ' is withdrawn.)') !== -1, (r.ui.dialogs.slice(-1)[0] || ['', ''])[1].indexOf('<td>' + id(5) + '</td>') !== -1],
+    [true, true]);
+
+  // The same rules, pure: the real numbers of the 6G list.
+  const { sandbox: s } = loadCode();
+  const P = (n) => 'S4aP26' + String(n).padStart(4, '0');
+  const row = (n, status, revisedTo, link) => ({ row: [P(n), status, revisedTo || ''], tdocCol: 0, statusCol: 1, revisedToCol: 2, richTextRow: [{ getLinkUrl: () => (link === false ? null : 'https://example.org/' + P(n)) }] });
+  const unreadable = (x) => Object.assign(x, { richTextRow: null });
+  const entry = (n) => Object.assign({ tdoc: P(n), title: 'T', source: 'S', status: 'revised', revisionIds: [] }, s.classifyTdocDisposition_('revised'));
+  const run = (n, rows) => JSON.parse(JSON.stringify(s.checkRevisionsIn3gu_([entry(n)], rows))).map((x) => [x.kind, x.revision, x.reason]);
+  const list = (to, revs) => [row(1, 'revised', to)].concat(revs);
+  check('pure, 6G: S4aP260083 -> 172 withdrawn: not reserved', run(83, [row(83, 'revised', P(172)), row(172, 'withdrawn', '', false)]),
+    [['revision-not-reserved', P(172), 'No live revision is reserved in 3GU; revision ' + P(172) + ' is withdrawn']]);
+  check('pure, 6G: S4aP260140 -> 174 withdrawn, 175 reserved: not uploaded, 175', run(140, [row(140, 'revised', P(174) + ', ' + P(175)), row(174, 'withdrawn', '', false), row(175, 'reserved', '', false)]),
+    [['revision-not-uploaded', P(175), '']]);
+  check('pure, 6G: S4aP260074 -> 099 withdrawn, 148 agreed and uploaded: complete', run(74, [row(74, 'revised', P(99) + ', ' + P(148)), row(99, 'withdrawn', '', false), row(148, 'agreed')]), []);
+  check('pure: two live revisions, both uploaded: complete', run(1, list(P(2) + ', ' + P(3), [row(2, 'available'), row(3, 'agreed')])), []);
+  check('pure: two live revisions, one not uploaded: not uploaded, naming that one', run(1, list(P(2) + ', ' + P(3), [row(2, 'available'), row(3, 'reserved', '', false)])), [['revision-not-uploaded', P(3), '']]);
+  check('pure: two live revisions, neither uploaded: not uploaded, naming both', run(1, list(P(2) + '; ' + P(3), [row(2, 'reserved', '', false), row(3, 'reserved', '', false)])), [['revision-not-uploaded', P(2) + ', ' + P(3), '']]);
+  check('pure: only withdrawn revisions: not reserved, naming them', run(1, list(P(2) + ', ' + P(3), [row(2, 'withdrawn', '', false), row(3, 'Withdrawn', '', false)])),
+    [['revision-not-reserved', P(2) + ', ' + P(3), 'No live revision is reserved in 3GU; revisions ' + P(2) + ', ' + P(3) + ' are withdrawn']]);
+  check('pure: one number among several not in the list: not verified, never ignored (also when another is uploaded)', [
+    run(1, list(P(2) + ', ' + P(3), [row(2, 'agreed')])), run(1, list(P(2) + ', ' + P(3) + ', ' + P(4), [row(2, 'withdrawn', '', false)]))],
+  [[['revision-not-verified', P(2) + ', ' + P(3), 'the revision ' + P(3) + ' is not in the TDoc list']],
+    [['revision-not-verified', P(2) + ', ' + P(3) + ', ' + P(4), 'the revisions ' + P(3) + ', ' + P(4) + ' are not in the TDoc list']]]);
+  check('pure: the links of a live revision cannot be read: not verified', run(1, list(P(2) + ', ' + P(3), [row(2, 'withdrawn', '', false), unreadable(row(3, 'reserved'))])),
+    [['revision-not-verified', P(3), 'the links of the TDoc list could not be read']]);
+  check('pure: a withdrawn revision whose links cannot be read is still only withdrawn', run(1, list(P(2), [unreadable(row(2, 'withdrawn'))])),
+    [['revision-not-reserved', P(2), 'No live revision is reserved in 3GU; revision ' + P(2) + ' is withdrawn']]);
+  check('pure: the original itself in its own "Revised to" is not a revision of it', run(1, list(P(1) + ', ' + P(2), [row(2, 'agreed')])), []);
 }
 
 // ====================================================================== I

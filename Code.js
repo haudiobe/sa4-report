@@ -20102,10 +20102,12 @@ function assertMeetingConfigured_(context) {
 // is in exactly one of three classes, DISPOSITION_OF_STATUS_, which names the
 // fourteen options of the "Document Status" dropdown of the master template
 // (and the Portal wording "replied to", STATUS_DROPDOWN_ALIASES_):
-//   AGREED_ENDORSED_APPROVED  agreed, endorsed, approved
+//   AGREED_ENDORSED_APPROVED  agreed, partially agreed, endorsed, approved
 //   DISPOSED_OTHER            noted, revised, merged, withdrawn, replied
 //   UNRESOLVED                available, reserved, parked, postponed, Plenary, other
-// (postponed: no final decision at this meeting, so Close Report shows it.)
+// (postponed: no final decision at this meeting, so Close Report shows it. "partially agreed" is no
+// option of the template's dropdown, but a final decision SA4 reports use, typed or added to a
+// report's own dropdown; it is shown as it is, in the first table.)
 // Any other status -- none, a typed text such as "agreed, see minutes", a
 // Portal status without an option -- is UNRESOLVED and named as not
 // recognised. Nothing counts as disposed that is not listed.
@@ -20174,6 +20176,7 @@ const DISPOSITION_CLASSES_ = [
 // THE classification: every option of the "Document Status" dropdown, by its label (statusDropdownLabel_()).
 const DISPOSITION_OF_STATUS_ = {
   'agreed': 'AGREED_ENDORSED_APPROVED',
+  'partially agreed': 'AGREED_ENDORSED_APPROVED',
   'endorsed': 'AGREED_ENDORSED_APPROVED',
   'approved': 'AGREED_ENDORSED_APPROVED',
   'noted': 'DISPOSED_OTHER',
@@ -20582,20 +20585,38 @@ function checkRevisionsIn3gu_(entries, allTdocs, listProblem) {
     if (!row) return add('revision-not-verified', 'not in the TDoc list', 'the TDoc list of this report does not have it');
     const portal = tdocListStatus_(row);
     const portalLabel = statusDropdownLabel_(portal);
-    const target = getRevisedTo_(row);
     const targetText = String(row.row[row.revisedToCol] === null || row.row[row.revisedToCol] === undefined ? '' : row.row[row.revisedToCol]).trim();
-    if (!target) {
+    // Every revision 3GU names -- it keeps the ones withdrawn since ("S4aP260174, S4aP260175") -- not only the first.
+    const targets = findSA4DocumentIdsInText_(targetText).filter(function (n) { return n !== entry.tdoc; });
+    if (!targets.length) {
       if (targetText) return add('revision-not-verified', portal + ', revised to "' + targetText + '"', 'its "Revised to" is not a TDoc number');
       if (portalLabel === 'available' || portalLabel === 'reserved') return add('revision-not-reserved', portal, '');
       if (portalLabel === 'revised') return add('revision-not-verified', portal + ', no "Revised to"', 'the TDoc list has it as revised but names no revision');
       return add('revision-not-verified', portal || '(no status)', portal ? 'the TDoc list has another decision for it' : 'the TDoc list has no status for it');
     }
-    const state3gu = (portal || '(no status)') + ', revised to ' + target;
-    const revision = list[target];
-    if (!revision) return add('revision-not-verified', state3gu, 'the revision ' + target + ' is not in the TDoc list', target);
-    if (!tdocListLinkIsKnown_(revision)) return add('revision-not-verified', state3gu, 'the links of the TDoc list could not be read', target);
-    if (!tdocListLinkUrl_(revision)) return add('revision-not-uploaded', state3gu + ' (' + (tdocListStatus_(revision) || 'no status') + ', not uploaded)', '', target);
-    // Reserved, and uploaded: complete.
+    const named = function (numbers, one, many) { return (numbers.length === 1 ? one : many) + ' ' + numbers.join(', '); };
+    // A number the list does not have: its state is not known, so nothing is concluded without it.
+    const missing = targets.filter(function (n) { return !list[n]; });
+    if (missing.length) {
+      return add('revision-not-verified', (portal || '(no status)') + ', revised to ' + targets.join(', '),
+        named(missing, 'the revision', 'the revisions') + (missing.length === 1 ? ' is' : ' are') + ' not in the TDoc list', targets.join(', '));
+    }
+    // A withdrawn revision is an abandoned reservation, not a live revision; it can no longer be uploaded.
+    const withdrawn = targets.filter(function (n) { return isWithdrawnStatus_(tdocListStatus_(list[n])); });
+    const live = targets.filter(function (n) { return withdrawn.indexOf(n) === -1; });
+    const describe = function (n) {
+      if (withdrawn.indexOf(n) !== -1) return n + ' (withdrawn)';
+      const st = tdocListStatus_(list[n]) || 'no status';
+      return tdocListLinkIsKnown_(list[n]) ? n + ' (' + st + ', ' + (tdocListLinkUrl_(list[n]) ? 'uploaded' : 'not uploaded') + ')' : n + ' (' + st + ')';
+    };
+    const state3gu = (portal || '(no status)') + ', revised to ' + targets.map(describe).join(', ');
+    if (!live.length) {
+      return add('revision-not-reserved', state3gu, 'No live revision is reserved in 3GU; ' + named(withdrawn, 'revision', 'revisions') + (withdrawn.length === 1 ? ' is' : ' are') + ' withdrawn', targets.join(', '));
+    }
+    if (live.some(function (n) { return !tdocListLinkIsKnown_(list[n]); })) return add('revision-not-verified', state3gu, 'the links of the TDoc list could not be read', live.join(', '));
+    const notUploaded = live.filter(function (n) { return !tdocListLinkUrl_(list[n]); });
+    if (notUploaded.length) return add('revision-not-uploaded', state3gu, '', notUploaded.join(', '));
+    // Every live revision reserved and uploaded (withdrawn ones aside): complete.
   });
   return out;
 }

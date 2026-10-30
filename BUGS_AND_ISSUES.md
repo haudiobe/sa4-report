@@ -457,6 +457,30 @@ before it instead of appending after it.
 **Related Files:**
 - Code.js (`renderAdhocAttendanceSection_()`, `findAdhocAttendanceInsertIndex_()`)
 
+### 🟡 "Revised to" with several revisions: only the first is read by revision placement and the auto-written disposition
+
+**Status:** 🟡 (follow-up; not fixed; explicitly out of scope of the Disposition Summary / Close Report candidate)
+
+**Description:**
+3GU keeps every revision ever reserved for a TDoc in its "Revised to", comma-separated, also those
+withdrawn since. In the 6G TDoc list (meeting 86178, read 2026-10-30) S4aP260140 is "revised to
+S4aP260174, S4aP260175" (174 withdrawn, 175 reserved) and S4aP260074 "revised to S4aP260099,
+S4aP260148" (099 withdrawn, 148 agreed). `getRevisedTo_()` returns the first TDoc number of that
+cell only. Close Report no longer uses it: `checkRevisionsIn3gu_()` reads every number and leaves
+withdrawn revisions aside (docs/DISPOSITION_SUMMARY.md). Its other users still read the first only:
+- the revision placement (`orderTdocsByRevision_()`, `buildRevisionMapFromTdocList_()`,
+  `rearrangeRevisionTables_()`): a live revision may not be placed below its original, or a
+  withdrawn one may be;
+- the automatically written disposition "Revised to …" (`setDispositionRevisedTo_()` and the
+  creation paths): it may name a withdrawn revision and not the live one.
+
+**Proposed handling:** decide which revision these features should name (the live ones, in the
+order of the cell), and change them together, with tests on these real shapes. Existing reports
+would need a check of their written dispositions.
+
+**Related Files:**
+- Code.js (`getRevisedTo_()` and its callers)
+
 ### ℹ️ Sessions are metadata, not report structure (working as designed)
 
 The sessions of an ad-hoc report (MBS: AHG 1 on 2026-10-01, AHG 2 on 2026-10-15) assign TDocs to

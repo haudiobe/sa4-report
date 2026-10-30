@@ -5,7 +5,7 @@
 T-2026.10.15, `Code.js` 2.25.0): candidate `4276161`, refined afterwards (postponed, the four
 revision states, the end of the summary; then approved with agreed and endorsed; then the
 rewrite of a summary an earlier candidate wrote; then the result of Close Report in a dialog the
-execution does not wait on). `Code.js` keeps its version line; a release adds it.
+execution does not wait on; then every revision of "Revised to", and "partially agreed"). `Code.js` keeps its version line; a release adds it.
 
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
@@ -47,12 +47,18 @@ them, and the summary, Close Report and its dialog all use it:
 
 | Class | Statuses | Why |
 |---|---|---|
-| Agreed, Endorsed and Approved | agreed, endorsed, approved | the positive decisions of the meeting |
+| Agreed, Endorsed and Approved | agreed, partially agreed, endorsed, approved | the positive decisions of the meeting; "partially agreed" is a form of agreement here and keeps its own Status in the table |
 | Other disposed | noted, revised, merged, withdrawn, replied | a final decision of the meeting on the document; a revised document is disposed and its revision has a row of its own |
 | Not yet disposed | available, reserved, parked, postponed, Plenary, other | no decision yet (available, reserved), deferred within the meeting (parked), no final substantive decision at this meeting (postponed), left to the plenary (Plenary), or no meaning (other) |
 | Not yet disposed, "not a known status" | anything else: no status, a typed text such as "agreed, see minutes", a Portal status without an option ("not pursued"), two tables with different statuses | fail safe: nothing counts as disposed unless it is listed |
 
 Case and whitespace are ignored ("  AGREED " is agreed).
+
+"partially agreed" is no option of the template's dropdown (the template holds that definition,
+maintained by hand; the code has no option list): it comes typed, or as an option added to a
+report's own dropdown (6G: S4aP260082). It is classified in the code like the options. Adding it to
+the template's dropdown is a change of the master template document, for new reports only (a
+report keeps the definition it was built with); not part of this candidate.
 
 Confirmed: **approved** is in the first table with agreed and endorsed (it was "other disposed"
 in the first candidates); **Plenary** and **postponed** are "not yet disposed", so Close Report
@@ -190,10 +196,16 @@ anywhere else — Disposition, Minutes — decides nothing):
 
 | TDoc list (3GU) | State | Close Report says | Action |
 |---|---|---|---|
-| "Revised to" B, and B has its hyperlink in the list (the upload sign of the upload completion, `tdocListLinkUrl_()`) | complete | nothing | — |
-| no "Revised to", and the TDoc is still available or reserved | not reserved | Revision not reserved in 3GU. | Author needs to reserve the revision in 3GU. |
-| "Revised to" B, and B has no hyperlink in the list | reserved, not uploaded | Revision reserved but not uploaded in 3GU. | Author needs to upload the reserved revision in 3GU. |
-| the list could not be read (or the meeting is not saved); it has no "Revised to" column; it does not have the TDoc; it has it as revised without naming a revision; it has another decision (agreed, noted, …) or no status; the "Revised to" is not a TDoc number; B is not in the list; the links of the list cannot be read | not verified | Revision state could not be verified in 3GU. | Check the TDoc and its revision in 3GU (with the reason). |
+| every live revision of "Revised to" has its hyperlink in the list (the upload sign of the upload completion, `tdocListLinkUrl_()`); withdrawn ones aside | complete | nothing | — |
+| no "Revised to", and the TDoc is still available or reserved; **or** every revision of "Revised to" is withdrawn | not reserved | Revision not reserved in 3GU (with "No live revision is reserved in 3GU; revision … is withdrawn" when so) | Author needs to reserve the revision in 3GU. |
+| a live revision of "Revised to" has no hyperlink in the list | reserved, not uploaded (naming the live, unuploaded revisions only) | Revision reserved but not uploaded in 3GU. | Author needs to upload the reserved revision in 3GU. |
+| the list could not be read (or the meeting is not saved); it has no "Revised to" column; it does not have the TDoc; it has it as revised without naming a revision; it has another decision (agreed, noted, …) or no status; the "Revised to" is not a TDoc number; **any** revision it names is not in the list; the links of a live revision cannot be read | not verified | Revision state could not be verified in 3GU. | Check the TDoc and its revision in 3GU (with the reason). |
+
+"Revised to" can name several revisions: 3GU keeps every revision ever reserved, also those withdrawn
+since (6G: S4aP260140 "revised to S4aP260174, S4aP260175", 174 withdrawn, 175 reserved). Every number
+is read (`findSA4DocumentIdsInText_()`); a withdrawn revision is an abandoned reservation, not a live
+one, and can no longer be uploaded. The older readers of "Revised to" (revision placement, the
+auto-written disposition) still read the first number only: BUGS_AND_ISSUES.md, out of scope here.
 
 Each of the last three blocks the close. Nothing is ever written to 3GU.
 
