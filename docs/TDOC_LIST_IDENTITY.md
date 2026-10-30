@@ -92,3 +92,48 @@ Summary (`writeDispositionSummary_()`, `c48ba94`) stays as a second line.
 `tests/adhoc-tdoc-sessions.test.js` covers the Session column. The synthetic lists of the test
 harnesses now have the row of their configured agenda TDoc, as real lists do (under no agenda item,
 so no report places it).
+
+## Evidence on the 6G smoke copy
+
+The smoke copy is "SMOKE TEST 6G Media Minutes – SA4-e (AH) on FS_6G_MED", script
+`1QuKJV6BCq…`, a Drive copy of live 6G from 2026-10-29.
+
+- **19:18, 2026-10-30, still on candidate `3e820ea`, without this guard** (`d09649c` was not yet
+  pushed; the runtime was read back to prove it).
+  - Update Report Now read the Portal list of 86178 (36 TDocs of the earlier calls) into a report of
+    116 TDocs.
+  - The log said "Added 36 new, updated 0 statuses". The registered-documents structures were
+    rewritten, the revision map had 15 revised documents, and 5 revision tables were moved. The
+    collector and the formatting ran; the run took 237 s.
+  - This reproduces the contamination of live 6G. The copy is kept as it is, as a contaminated
+    fixture with an overlap that is not zero.
+- **Later the same evening, on `d09649c`** (pushed once with the guarded procedure; read back: five
+  files, byte-identical, the manifest identical as JSON).
+  - Update Report Now, with the Portal still giving the 36-TDoc list, was refused:
+    "The report was not updated: The TDoc list was not used: it could not be shown to be the list of
+    this meeting (it has no row for S4aP260098, the agenda TDoc of this meeting -- it may be the list
+    of another meeting)".
+  - The agenda TDoc decided it. The 36 tables already in the report did not make the list
+    acceptable.
+  - **Passed.**
+
+## MBS (86172), before a release: provisional
+
+Read-only, 2026-10-30. Live MBS itself could not be read: the clasp token has no Docs or Drive read
+scope, the Drive connector's authorisation has expired, and Document Properties can only be read by
+running a script in the document.
+
+- **Configuration, as recorded at its migration** (docs/EXISTING_REPORT_MIGRATION.md §5): ad-hoc,
+  family MBS, meeting 86172, the Portal list `meetingId=86172`, agenda.csv, **no agenda TDoc**. So
+  rule 3 (bootstrap from the report) decides its first update.
+- **Raw list now:** 34 TDocs, S4aI260080 … 113.
+  - The older list in tests/fixtures (10 TDocs) is entirely in it: the list has only grown.
+  - S4aI260084 … 088 are revisions of main-meeting TDocs (S4-261749 … 783). Those originals are not
+    in the list.
+- **Report structure of 2026-10-13** (tests/fixtures/mbs-report-structure-damaged.json): 29 TDoc
+  tables, all 29 in the raw list, and no table for a main-meeting TDoc. The 5 list TDocs it does not
+  have were reserved on 10-14 … 10-20.
+- **So if live MBS holds no TDoc table outside its list,** its first update bootstraps: anchor
+  S4aI260080, uploaded and the lowest.
+- **To be confirmed on live MBS before the release:** every TDoc table of the report is in the raw
+  list.
