@@ -1,11 +1,11 @@
 # Disposition Summary and Close Report
 
-**Status: CANDIDATE — not released, not deployed.** Branch
-`feature/disposition-summary-close-report`, based on `origin/master` `e2ceddc` (release
-T-2026.10.15, `Code.js` 2.25.0): candidate `4276161`, refined afterwards (postponed, the four
-revision states, the end of the summary; then approved with agreed and endorsed; then the
-rewrite of a summary an earlier candidate wrote; then the result of Close Report in a dialog the
-execution does not wait on; then every revision of "Revised to", and "partially agreed"). `Code.js` keeps its version line; a release adds it.
+**Status: RELEASED AND DEPLOYED. Template release T-2026.10.16 (`Code.js` 2.26.0), release commit
+`5d5699d68083b8677f4a28c63a19b24be932f4b8`, tag `template-release/T-2026.10.16`. Deployed to the master
+template, MBS and 6G on 2026-10-30; the template's Document Status dropdown has "partially agreed"
+(§ Release and deployment). Not yet used in a live report.** Developed on branch
+`feature/disposition-summary-close-report` from `e2ceddc` (T-2026.10.15): candidates `4276161` …
+`261106c`, smoke-tested on a Drive copy of the 6G report.
 
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
@@ -236,6 +236,30 @@ MBS fixture end to end; a report without a summary is never given one; Build Rep
 Scratch; and that without this change `Code.js` and `ReportCreator.js` are those of T-2026.10.15,
 byte for byte. The ledger view `codeWithoutDispositionSummary()` in
 `tests/helpers/before-structure-fix.js` takes it out for the older ledgers.
+
+## Release and deployment
+
+Release T-2026.10.16, 2026-10-30.
+
+| Step | Result |
+|---|---|
+| Release commit | `5d5699d68083b8677f4a28c63a19b24be932f4b8` on the accepted candidate `261106c`: the version line 2.26.0 (2026-10-30) and its changelog entry; without them, `Code.js` is the candidate's. The plain version checks of the tests say 2.26.0; the ledger views take the header out with the feature |
+| Tests on the release commit | 111 files, 7,573 checks, 0 failures; the release-integrity suites pass |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.16` on the release commit. `origin/master` fast-forwarded `e2ceddc` → `5d5699d` and the tag pushed in one atomic push, without force. Every older tag is where it was |
+| Release bundle | `tools/template-release.js --release T-2026.10.16` from the tagged commit: the five production files; the four source files equal to the tag (line ends aside); `Release.js` T-2026.10.16, template, 2.26.0, the release commit, the tag, the template's document and script |
+| Master template runtime | Container and current runtime (T-2026.10.15) proven, one normal push, no `--force`; read back: exactly five files, four byte-identical, the manifest identical as JSON, runs T-2026.10.16 |
+| MBS runtime | The adoption bundle from the tag; proven (its container "MBS SWG Minutes – SA4-e (AH) MBS SWG post 137-e", T-2026.10.15); pushed and read back as above. Script files only: no report content, Document Property, trigger or sharing was touched |
+| 6G runtime | The adoption bundle with `--allow-legacy-target`, authorised for this release only; proven immediately before the write (its container "6G Media Minutes – SA4-e (AH) on FS_6G_MED", T-2026.10.15); pushed and read back as above. Script files only |
+| Template dropdown | "partially agreed" added to the template's one "Document Status" definition with the colours of "agreed" (`updateDropdownDefinitionProperties`, options only, tied to the revision read). By a one-off standalone helper project, not a production file. Rehearsal on a Drive copy of the template: passed (the copy kept its definition). The template: passed. A separate read-only verification: one definition, 15 options, "partially agreed" once with its own option ID and the colours of "agreed", the revision of the apply. As run and reported by the person who started the helper's functions in the script editor |
+
+Not changed: the dropdowns of existing reports (a report keeps the definition it was built with:
+6G and MBS keep theirs); no report was built, updated or closed by the release. No Update
+Disposition Summary and no Close Report has run in a live report yet. The runtime to roll back to
+is T-2026.10.15 (its bundles in `dist/`).
+
+Left for cleanup, not deleted: the helper project "ONE-OFF Dropdown Helper T-2026.10.16 – DELETE
+AFTER" and the rehearsal copy "DROPDOWN REHEARSAL – SA4 Report Template copy – T-2026.10.16 –
+DELETE AFTER" (with the copy of the template's script it carries), in the releasing user's Drive.
 
 ## MBS, after a release
 

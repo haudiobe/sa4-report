@@ -199,6 +199,8 @@ code sends when it builds a report. No dropdown was inserted into the template's
 request was tied to the revision of the template that had just been read.
 
 Verified afterwards, by a read through the API: exactly one definition titled "Document Status";
+(*since T-2026.10.16 the template's definition has a fifteenth option, "partially agreed", with the colours
+of "agreed": docs/DISPOSITION_SUMMARY.md, § Release and deployment*)
 fourteen options, in this order and spelling — available, noted, agreed, revised, parked, merged,
 approved, reserved, endorsed, withdrawn, other, replied, Plenary, postponed; the foreground and
 background colour of every option equal to the source; no dropdown visible in the template; and
