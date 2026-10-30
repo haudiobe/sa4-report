@@ -70,7 +70,10 @@ const TITLE_0091 = '[FS_6G_MED] Clarification of AI-native Traffic Characteristi
 const SHEET = [HEADER,
   ['S4aP260074', 'Draft TR 26.870 FS_6G_MED v0.6.0', 'VODAFONE Group Plc', 'Elmira Ramazanirend', 'draft TR', 'Agreement', '5.4', 'FS_6G_MED - General and working documents', 'revised', 'S4-261521', 'S4aP260099'],
   ['S4aP260099', 'Draft TR 26.870 FS_6G_MED v0.6.2', 'VODAFONE Group Plc', 'Elmira Ramazanirend', 'draft TR', 'Agreement', '5.4', 'FS_6G_MED - General and working documents', 'reserved', 'S4aP260074', ''],
-  ['S4aP260091', TITLE_0091, 'Qualcomm Germany', '', 'pCR', 'Agreement', '5.6.1', 'FS_6G_MED - WT#2.1: AI Traffic Characteristics', 'available', '', '']];
+  ['S4aP260091', TITLE_0091, 'Qualcomm Germany', '', 'pCR', 'Agreement', '5.6.1', 'FS_6G_MED - WT#2.1: AI Traffic Characteristics', 'available', '', ''],
+  // The agenda TDoc's own row (real: agenda item 5.1), as every real list has it (after T-2026.10.16 a list without it is
+  // refused); under no agenda item here, so the report keeps the TDocs this test is about.
+  ['S4aP260098', 'Proposed agenda for SA4 AH conf. call on FS_6G_MED (22nd September, 2026)', 'SA4 FS_6G_MED SWG Chair', '', 'agenda', 'Approval', '', '', 'available', '', '']];
 
 // The accepted Legacy exporter subject (asserted against the real exporter
 // in tests/legacy-adhoc-email-collection.test.js).

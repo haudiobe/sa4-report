@@ -99,10 +99,13 @@ function report(props) {
   s.UrlFetchApp = { fetch: () => ({ getResponseCode: () => 200, getBlob: () => ({ getBytes: () => [0x50, 0x4B, 3, 4], setName() { return this; } }) }) };
   s.DriveApp = { createFile: () => ({ setTrashed() {} }) };
   s.SpreadsheetApp = { open: () => {
-    const values = [HEADER].concat(r.tdocs.map(([id, agenda, status, uploaded]) => [id, 'Synthetic title of ' + id, 'ExampleCorp', 'Sam Rivera', 'discussion', 'Agreement', agenda, 'Synthetic item', status, '',
+    // The agenda TDoc of the meeting, as every real list has it (after T-2026.10.16 a list without it is refused); under
+    // no agenda item, so no report places it. r.agendaRow = false: a list without it.
+    const tdocs = r.tdocs.concat(r.agendaRow === false ? [] : [['S4aA260090', '', 'available', '']]);
+    const values = [HEADER].concat(tdocs.map(([id, agenda, status, uploaded]) => [id, 'Synthetic title of ' + id, 'ExampleCorp', 'Sam Rivera', 'discussion', 'Agreement', agenda, 'Synthetic item', status, '',
       uploaded ? new Date(uploaded.replace(' ', 'T') + 'Z') : '', '', '']));
     const sheet = { getDataRange: () => ({ getValues: () => values, getRichTextValues: () => values.map((row) => row.map(() => null)) }),
-      getRange: (row, col, rows) => ({ getDisplayValues: () => [['Uploaded']].concat(r.tdocs.map((t) => [t[3]])).slice(row - 1, row - 1 + rows) }) };
+      getRange: (row, col, rows) => ({ getDisplayValues: () => [['Uploaded']].concat(tdocs.map((t) => [t[3]])).slice(row - 1, row - 1 + rows) }) };
     return { getSheets: () => [sheet], getSpreadsheetTimeZone: () => 'UTC' };
   } };
 

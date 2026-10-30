@@ -58,7 +58,10 @@ function templateReport(options) {
   const api = makeFakeDocsApi({ body: body, reportId: REPORT_ID });
   api.addSource(TEMPLATE_ID, [STATUS_DEFINITION]);
   const r = { s: s, body: body, api: api, docProps: loaded.docProps, scriptProps: loaded.scriptProps, logs: [], requests: [], fetches: [], reviewer: Object.assign({}, o.reviewer || {}),
-    tdocs: (o.tdocs || []).map((t) => Object.assign({}, t)) };
+    tdocs: (o.tdocs || []).map((t) => Object.assign({}, t)),
+    // The agenda TDoc of the meeting, as every real list has it (after T-2026.10.16 a list without it is refused). It is under
+    // no agenda item, so no report places it; null: a list without it (the list of another meeting).
+    listAgenda: props.AGENDA_TDOC || null };
   s.Logger = { log: (m) => r.logs.push(String(m)) };
   s.DocumentApp.ElementType.TEXT = 'TEXT';
   s.DocumentApp.ElementType.UNSUPPORTED = 'UNSUPPORTED';
@@ -94,11 +97,12 @@ function templateReport(options) {
   if (o.drive) o.drive.install(s);
   r.drive = o.drive || null;
   s.SpreadsheetApp = { open: () => {
-    const values = [HEADER].concat(r.tdocs.map((t) => [t.id, 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', '', '', '', t.revisedTo || '']));
+    const listed = r.tdocs.concat(r.listAgenda && !r.tdoc(r.listAgenda) ? [{ id: r.listAgenda, agenda: '', status: 'available', type: 'agenda' }] : []);
+    const values = [HEADER].concat(listed.map((t) => [t.id, 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', t.type || 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', '', '', '', t.revisedTo || '']));
     const noLink = { getLinkUrl: () => null };
-    const rich = [HEADER.map(() => noLink)].concat(r.tdocs.map((t) => HEADER.map((h, col) => (col === 0 && t.uploaded ? { getLinkUrl: () => zip(t.id) } : noLink))));
+    const rich = [HEADER.map(() => noLink)].concat(listed.map((t) => HEADER.map((h, col) => (col === 0 && t.uploaded ? { getLinkUrl: () => zip(t.id) } : noLink))));
     const sheet = { getDataRange: () => ({ getValues: () => values, getRichTextValues: () => rich }),
-      getRange: (row, col, rows) => ({ getDisplayValues: () => [['Uploaded']].concat(r.tdocs.map(() => [''])).slice(row - 1, row - 1 + rows) }) };
+      getRange: (row, col, rows) => ({ getDisplayValues: () => [['Uploaded']].concat(listed.map(() => [''])).slice(row - 1, row - 1 + rows) }) };
     return { getSheets: () => [sheet], getSpreadsheetTimeZone: () => 'UTC' };
   } };
 

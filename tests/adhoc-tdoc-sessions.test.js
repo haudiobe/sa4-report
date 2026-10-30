@@ -147,10 +147,13 @@ function report(opts) {
   s.UrlFetchApp = { fetch: () => { r.downloads++; return { getResponseCode: () => 200, getBlob: () => ({ getBytes: () => [0x50, 0x4B, 3, 4], setName() { return this; } }) }; } };
   s.DriveApp = { createFile: () => ({ setTrashed() {} }) };
   s.SpreadsheetApp = { open: () => {
-    const values = listValues(r.tdocs, { header: r.header });
+    // The agenda TDoc of the meeting, as every real list has it (after T-2026.10.16 a list without it is refused); under
+    // no agenda item, so no report places it. r.agendaRow = false: a list without it.
+    const tdocs = r.tdocs.concat(r.agendaRow === false ? [] : [['S4aA260090', '', 'available', '']]);
+    const values = listValues(tdocs, { header: r.header });
     const sheet = { getDataRange: () => ({ getValues: () => values, getRichTextValues: () => values.map((row) => row.map(() => null)) }) };
     if (r.display !== false) {
-      sheet.getRange = (row, col, rows, cols) => ({ getDisplayValues: () => { r.displayReads++; r.lastRange = [row, col, rows, cols]; return (r.display || listDisplay(r.tdocs)).slice(row - 1, row - 1 + rows); } });
+      sheet.getRange = (row, col, rows, cols) => ({ getDisplayValues: () => { r.displayReads++; r.lastRange = [row, col, rows, cols]; return (r.display || listDisplay(tdocs)).slice(row - 1, row - 1 + rows); } });
     }
     const book = { getSheets: () => [sheet] };
     if (r.zone !== null) book.getSpreadsheetTimeZone = () => r.zone;
@@ -211,7 +214,8 @@ console.log('1. the "Uploaded" column of the TDoc list (stage B0)');
   // Through the real list reader.
   const r = report();
   const all = r.all();
-  check('the list is read once per call, the Uploaded column once more as shown text, for exactly its rows', [r.downloads, r.displayReads, r.lastRange], [1, 1, [1, UP + 1, TDOCS.length + 1, 1]]);
+  // Its rows: the header, the TDocs and the agenda TDoc of the meeting (every real list has it; after T-2026.10.16 a list without it is refused).
+  check('the list is read once per call, the Uploaded column once more as shown text, for exactly its rows', [r.downloads, r.displayReads, r.lastRange], [1, 1, [1, UP + 1, TDOCS.length + 2, 1]]);
   check('every TDoc carries its upload time', all.map((td) => [td.row[0], td.uploaded.at || (td.uploaded.unreadable ? 'unreadable' : 'none')]), [
     ['S4aA269001', '2026-09-18T07:26:14'], ['S4aA269002', '2026-09-22T14:00:00'], ['S4aA269003', '2026-09-22T16:00:00'], ['S4aA269004', '2026-09-22T16:00:01'], ['S4aA269005', '2026-09-23T21:59:59'],
     ['S4aA269006', '2026-09-23T22:00:00'], ['S4aA269007', '2026-09-25T09:00:00'], ['S4aA269008', 'none'], ['S4aA269009', 'unreadable'], ['S4aA269010', '2026-09-23T08:00:00']]);
@@ -553,6 +557,21 @@ console.log('7. an existing report: updates, and the explicit action');
   r.update();
   r.update();
   check('further updates without a change leave the report as it is', r.snapshot() === steady, true);
+  // After T-2026.10.16: the list of another meeting (no row for the agenda TDoc), with other upload times and a TDoc of its
+  // own: no Session cell is written from it -- not by the update, not by a save of the assignments.
+  {
+    const tdocsBefore = r.tdocs;
+    const assignmentsBefore = r.docProps.getProperty(KEY);
+    r.agendaRow = false;
+    r.tdocs = tdocsBefore.map((t) => [t[0], t[1], t[2], '2026-02-19 09:00:00', '', '']).concat([['S4aA269031', '4.3', 'available', '2026-02-19 09:00:00', '', '']]);
+    const refused = r.update();
+    check('the list of another meeting: the update is refused; the registration table and its Session cells are unchanged', [refused.success, refused.notUpdated, r.snapshot() === steady], [false, true, true]);
+    const saved = r.save('utc', { S4aA269002: { mode: 'add', sessions: ['s2'] } });
+    check('... a save keeps the assignment, writes no Session cell, and says so', [saved.ok, r.snapshot() === steady, /The Session column could not be updated now \(The TDoc list was not used/.test(saved.notice || '')], [true, true, true]);
+    r.agendaRow = true;
+    r.tdocs = tdocsBefore;
+    r.docProps.setProperty(KEY, assignmentsBefore);
+  }
   check('an update never writes the manual assignments or the sessions', r.writes.filter((k) => /ADHOC_/.test(k)).length, (() => { const n = r.writes.filter((k) => /ADHOC_/.test(k)).length; r.update(); return r.writes.filter((k) => /ADHOC_/.test(k)).length === n ? n : -1; })());
 
   // Session cells follow the manual assignments and the sessions.
@@ -1015,6 +1034,9 @@ console.log('11. menu, adoption, and nothing else changed');
   [['a main-meeting report', MAIN], ['a main-meeting report with session properties left in it', Object.assign({}, MAIN, { ADHOC_SESSIONS: sessionsProperty(SESSIONS), [KEY]: '{"v":1,"clock":"utc","add":{},"set":{}}' })], ['an ad-hoc report without sessions', ADHOC]].forEach(([what, props]) => {
     const x = report({ props: props });
     x.body.appendTable([['TDoc', 'Title', 'Source', 'Agenda Item'], ['S4aA269001', 'Synthetic title of S4aA269001', 'ExampleCorp', '4.3']]);
+    // After T-2026.10.16: a main-meeting report has no agenda TDoc; one that was updated before has the TDoc list of its meeting
+    // accepted before -- its anchor.
+    if (props.MEETING_TYPE === 'main') { const cfg = x.s.getReportConfig_(); x.docProps.setProperty('TDOC_LIST_ANCHOR', JSON.stringify({ tdoc: 'S4aA269001', meetingId: cfg.MEETING_ID, tdocListUrl: cfg.TDOC_LIST_URL })); }
     const reads = [];
     const get = x.docProps.getProperty;
     x.docProps.getProperty = (k) => { reads.push(k); return get(k); };

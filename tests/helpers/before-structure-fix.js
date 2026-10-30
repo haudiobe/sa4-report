@@ -286,8 +286,57 @@ const DISPOSITION_CHANGES = [
 ];
 
 /** Code.js without the Disposition Summary and Close Report: { code, problems }. */
+/**
+ * The TDoc list identity (after T-2026.10.16): a downloaded TDoc list is used
+ * only when it is shown to be the meeting's. One section after the Disposition
+ * Summary, and its calls in the four places a TDoc list is acquired. It came
+ * after the Disposition Summary, so codeWithoutDispositionSummary() takes it
+ * out first. codeWithoutListIdentity(code) -> { code, problems }.
+ */
+const IDENTITY_SECTION_START = BAR + '// TDOC LIST IDENTITY (after T-2026.10.16)\n' + BAR;
+const IDENTITY_SECTION_END = BAR + '// END OF TDOC LIST IDENTITY\n' + BAR + '\n';
+const IDENTITY_SECTION_FUNCTIONS = ['tdocListRawNumbers_', 'tdocListAnchorFor_', 'chooseTdocListAnchor_', 'evaluateTdocListIdentity_', 'assertTdocListIdentity_'];
+const IDENTITY_CHANGED_FUNCTIONS = ['continuousUpdateCore_', 'downloadAndProcessFromWeb', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_'];
+const IDENTITY_CHANGES = [
+  // continuousUpdateCore_(): a refused list is a run that changed nothing.
+  ["    // After T-2026.10.16: a list that is not the meeting's changes nothing.\n" +
+   "    let tdocGroups;\n" +
+   "    try {\n" +
+   "      tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context, undefined, 'update'));\n" +
+   "    } catch (e) {\n" +
+   "      if (e && e.tdocListIdentity) result.notUpdated = true;\n" +
+   "      throw e;\n" +
+   "    }\n",
+   "    const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context));\n"],
+  // downloadAndProcessFromWeb()
+  ["    // After T-2026.10.16: the list of this meeting, or nothing.\n" +
+   "    try {\n" +
+   "      assertTdocListIdentity_(sheet.getDataRange().getValues(), cfg, undefined, 'read');\n" +
+   "    } catch (e) {\n" +
+   "      tempFile.setTrashed(true);\n" +
+   "      throw e;\n" +
+   "    }\n    \n", ''],
+  // buildSkeletonWithTdocTables()
+  ["  // After T-2026.10.16: refused here, before the document is cleared, when it is not the meeting's list.\n" +
+   "  const tdocGroups = downloadAndGroupTdocs_(cfg, undefined, savedReallocations, 'build');\n",
+   "  const tdocGroups = downloadAndGroupTdocs_(cfg, undefined, savedReallocations);\n"],
+  // downloadAndGroupTdocs_(): its header, its signature and the check.
+  [" * After T-2026.10.16: only a list shown to be the meeting's (assertTdocListIdentity_(); `use` 'update' |\n" +
+   " * 'build' | 'read', default 'read'); else it throws before anything is grouped.\n */\n" +
+   "function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot, use) {",
+   " */\nfunction downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {"],
+  ["    // After T-2026.10.16: the list of this meeting, on its raw rows, or nothing.\n" +
+   "    assertTdocListIdentity_(data, cfg, context, use);\n", '']
+];
+
+function codeWithoutListIdentity(code) {
+  return takeOut(code, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_CHANGES, 'TDOC LIST IDENTITY');
+}
+
 function codeWithoutDispositionSummary(code) {
-  return takeOut(code, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_CHANGES, 'DISPOSITION SUMMARY');
+  const later = codeWithoutListIdentity(code);
+  const view = takeOut(later.code, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_CHANGES, 'DISPOSITION SUMMARY');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 /** The one change of the Disposition Summary in template/ReportCreator.js: its two menu items, a group of their own. */
@@ -315,6 +364,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

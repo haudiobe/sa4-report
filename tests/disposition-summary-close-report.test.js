@@ -41,7 +41,7 @@ const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { makeFakeDocumentBody } = require('./helpers/fake-document.js');
 const { templateReport, zip } = require('./helpers/template-report.js');
-const { codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS,
+const { codeWithoutListIdentity, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS,
   DISPOSITION_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
@@ -1100,11 +1100,16 @@ console.log('N. the scope, as downloadAndGroupTdocs_() returns it, against the r
 // ====================================================================== I
 console.log('I. what changed in Code.js and template/ReportCreator.js');
 {
-  const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // The TDoc list identity (after T-2026.10.16) came later: it has its own ledger (tests/tdoc-list-identity.test.js); this one
+  // is about Code.js without it.
+  const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const withoutIdentity = codeWithoutListIdentity(FULL);
+  check('the TDoc list identity is in Code.js exactly once, and can be taken out', withoutIdentity.problems, []);
+  const CODE = withoutIdentity.code;
   const CREATOR = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
-  const view = codeWithoutDispositionSummary(CODE);
+  const view = codeWithoutDispositionSummary(FULL);
   const creatorView = creatorWithoutDispositionSummary(CREATOR);
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const section = CODE.slice(CODE.indexOf(DISPOSITION_SECTION_START), CODE.indexOf(DISPOSITION_SECTION_END) + DISPOSITION_SECTION_END.length);

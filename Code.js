@@ -1217,7 +1217,14 @@ function continuousUpdateCore_(context) {
     }
 
     // Download latest TDOC list
-    const tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context));
+    // After T-2026.10.16: a list that is not the meeting's changes nothing.
+    let tdocGroups;
+    try {
+      tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context, undefined, 'update'));
+    } catch (e) {
+      if (e && e.tdocListIdentity) result.notUpdated = true;
+      throw e;
+    }
     const allTdocs = [];
     Object.keys(tdocGroups).forEach(key => {
       tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
@@ -4236,6 +4243,14 @@ function downloadAndProcessFromWeb() {
     // Open as Sheets and process
     const spreadsheet = SpreadsheetApp.open(DriveApp.getFileById(tempFileId));
     const sheet = spreadsheet.getSheets()[0];
+    
+    // After T-2026.10.16: the list of this meeting, or nothing.
+    try {
+      assertTdocListIdentity_(sheet.getDataRange().getValues(), cfg, undefined, 'read');
+    } catch (e) {
+      tempFile.setTrashed(true);
+      throw e;
+    }
     
     // Process the sheet
     processWebDownloadedSheet_(sheet);
@@ -10740,7 +10755,8 @@ function buildSkeletonWithTdocTables(options) {
     isAdhocForParentFilter && !preparedAgendaItems ? filteredAgendaItems.map(item => item.number) : null);
   if (reallocationProblems.length > 0) refuseBuildForReallocations_(reallocationProblems);
 
-  const tdocGroups = downloadAndGroupTdocs_(cfg, undefined, savedReallocations);
+  // After T-2026.10.16: refused here, before the document is cleared, when it is not the meeting's list.
+  const tdocGroups = downloadAndGroupTdocs_(cfg, undefined, savedReallocations, 'build');
 
   // Ad-hoc attendance (stage D): the Company cells typed into the attendee
   // tables are kept before the document is cleared. null, and nothing read
@@ -11194,8 +11210,10 @@ function buildSkeletonWithTdocTables(options) {
 /**
  * Download TDOC list and group by agenda item.
  * Returns: { '9.1': { tdocs: [...] }, '9.2': { tdocs: [...] }, ... }
+ * After T-2026.10.16: only a list shown to be the meeting's (assertTdocListIdentity_(); `use` 'update' |
+ * 'build' | 'read', default 'read'); else it throws before anything is grouped.
  */
-function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {
+function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot, use) {
   const meetingUrl = cfg.TDOC_LIST_URL;
   if (!meetingUrl) return {};
 
@@ -11243,6 +11261,8 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot) {
     if (revisedToCol === -1) {
       Logger.log('Warning: no "Revised to" column in the TDOC list; revision placement is skipped');
     }
+    // After T-2026.10.16: the list of this meeting, on its raw rows, or nothing.
+    assertTdocListIdentity_(data, cfg, context, use);
     // Ad-hoc sessions (stage B): the upload time of each TDoc. null, and
     // nothing read, unless this is an ad-hoc report with sessions.
     const uploadTimes = readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, context);
@@ -20904,6 +20924,145 @@ function closeReportResultHtml_(result) {
 
 // =========================================================
 // END OF DISPOSITION SUMMARY AND CLOSE REPORT
+// =========================================================
+
+// =========================================================
+// TDOC LIST IDENTITY (after T-2026.10.16)
+// =========================================================
+//
+// docs/TDOC_LIST_IDENTITY.md.
+//
+// A downloaded TDoc list is not trusted because it could be downloaded. 6G,
+// 2026-10-30: the Portal list of the configured meeting ID (86178) gave, for
+// hours, a well-formed workbook with the 36 TDocs of earlier calls of the
+// series instead of the 116 of this one; nothing in the workbook names its
+// meeting, and every update inserted the 36 into the report. A list is used
+// only when it is shown to be the meeting's, on its raw rows -- before the
+// agenda selector, the Document Reallocations and the grouping, and before
+// anything is changed:
+//
+// 1. AGENDA TDOC. When the saved AGENDA_TDOC is a valid TDoc number, the list
+//    must have a row for it (any status: reserved, withdrawn ... a row is a
+//    row). It is the meeting's own document, taken from its own list. With
+//    it, nothing else is asked.
+// 2. ANCHOR. Otherwise (MBS: agenda.csv; main meetings: an agenda document),
+//    TDOC_LIST_ANCHOR (report state) holds a TDoc of a list accepted before,
+//    with the meeting ID and the TDoc list URL it was accepted for; a later
+//    list from the same meeting and URL must still have its row (a Portal
+//    list keeps every TDoc it ever listed: a withdrawn one stays, as
+//    withdrawn). An anchor of another meeting ID or URL -- Meeting Setup
+//    changed them -- is no anchor.
+// 3. NO ANCHOR YET. The first one is established from the report: every TDoc
+//    table of the report must be in the list (an update writes only TDocs of
+//    its list, so a report the list does not account for is either not this
+//    list's or not clean -- refused either way, never guessed), and there
+//    must be one. Build Report from Scratch, an explicit start on a meeting
+//    just set up, takes the list it is given. A list without that evidence
+//    is refused.
+// The anchor is written only by an update or a build, after the list passed;
+// it is a TDoc that is in the list and, unless this is a build, in the
+// report: an uploaded one first (an uploaded document is not taken back),
+// the lowest number of those. Readers (Update Disposition Summary, Close
+// Report, the session dialogs) check the same way and store nothing.
+// A refused list throws (error.tdocListIdentity); its callers stop before
+// any change, as for a list that could not be downloaded.
+
+const TDOC_LIST_IDENTITY_ERROR_ = 'The TDoc list was not used: it could not be shown to be the list of this meeting';
+const TDOC_LIST_ANCHOR_KEY_ = 'TDOC_LIST_ANCHOR';
+
+/** Pure: { canonical TDoc number: row index } of the rows of a TDoc list (row 0 the header). */
+function tdocListRawNumbers_(data, tdocCol) {
+  const numbers = {};
+  for (let i = 1; i < (data || []).length; i++) {
+    const parsed = parseExactSA4DocumentId_(String(data[i][tdocCol] === null || data[i][tdocCol] === undefined ? '' : data[i][tdocCol]).trim());
+    if (parsed.isValid && numbers[parsed.raw] === undefined) numbers[parsed.raw] = i;
+  }
+  return numbers;
+}
+
+/** Pure: the saved anchor if it is one for this meeting ID and TDoc list URL, else null. */
+function tdocListAnchorFor_(saved, cfg) {
+  let anchor = null;
+  try {
+    anchor = saved ? JSON.parse(saved) : null;
+  } catch (e) {
+    return null;
+  }
+  if (!anchor || !parseExactSA4DocumentId_(String(anchor.tdoc || '')).isValid) return null;
+  return String(anchor.meetingId || '') === String(cfg.MEETING_ID || '') && String(anchor.tdocListUrl || '') === String(cfg.TDOC_LIST_URL || '') ? anchor : null;
+}
+
+/** Pure: the anchor among `candidates` (canonical numbers in the list): an uploaded one first, the lowest number of those. */
+function chooseTdocListAnchor_(candidates, data, numbers, uploadedCol) {
+  const uploaded = (n) => uploadedCol !== -1 && String(data[numbers[n]][uploadedCol] === null || data[numbers[n]][uploadedCol] === undefined ? '' : data[numbers[n]][uploadedCol]).trim() !== '';
+  const sorted = candidates.slice().sort();
+  return sorted.filter(uploaded)[0] || sorted[0] || '';
+}
+
+/**
+ * Pure: whether the raw rows `data` (header first) are the list of this
+ * meeting. `use`: 'update' | 'build' | 'read'. `reportTdocs`: the canonical
+ * numbers of the TDoc tables of the report (only needed without an agenda
+ * TDoc and without an anchor). { ok, via: 'agenda' | 'anchor' | 'report' |
+ * 'build', anchor (the one to write, or null), error }.
+ */
+function evaluateTdocListIdentity_(data, cfg, savedAnchor, reportTdocs, use) {
+  const headers = (data && data[0]) || [];
+  const numbers = tdocListRawNumbers_(data, headers.indexOf('TDoc'));
+  const listed = Object.keys(numbers);
+  const refuse = (reason) => ({ ok: false, via: '', anchor: null, error: TDOC_LIST_IDENTITY_ERROR_ + ' (' + reason + ')' });
+  if (!listed.length) return refuse('it has no TDoc');
+  const agenda = parseExactSA4DocumentId_(String(cfg.AGENDA_TDOC || '').trim());
+  if (agenda.isValid) {
+    return numbers[agenda.raw] !== undefined ? { ok: true, via: 'agenda', anchor: null, error: '' }
+      : refuse('it has no row for ' + agenda.raw + ', the agenda TDoc of this meeting -- it may be the list of another meeting');
+  }
+  const record = (tdoc, via) => ({ ok: true, via: via, anchor: use === 'read' ? null : { tdoc: tdoc, meetingId: String(cfg.MEETING_ID || ''), tdocListUrl: String(cfg.TDOC_LIST_URL || '') }, error: '' });
+  const anchor = tdocListAnchorFor_(savedAnchor, cfg);
+  if (anchor) {
+    return numbers[anchor.tdoc] !== undefined ? { ok: true, via: 'anchor', anchor: null, error: '' }
+      : refuse('it has no row for ' + anchor.tdoc + ', a TDoc of the list this meeting had before -- it may be the list of another meeting');
+  }
+  const uploadedCol = headers.indexOf('Uploaded');
+  if (use === 'build') return record(chooseTdocListAnchor_(listed, data, numbers, uploadedCol), 'build');
+  const inReport = (reportTdocs || []).filter((n, i, all) => all.indexOf(n) === i);
+  if (!inReport.length) return refuse('this meeting has no agenda TDoc and no TDoc list accepted before, and the report has no TDoc table to compare it with -- Build Report from Scratch takes the list');
+  const missing = inReport.filter((n) => numbers[n] === undefined);
+  if (missing.length) {
+    return refuse(missing.length + ' of the ' + inReport.length + ' TDocs of the report\'s TDoc tables are not in it (' + missing.slice(0, 5).join(', ') + (missing.length > 5 ? ', ...' : '') +
+      '), so it cannot be shown to be the list of this report');
+  }
+  return record(chooseTdocListAnchor_(inReport, data, numbers, uploadedCol), 'report');
+}
+
+/**
+ * The list `data` (raw rows, header first) of the configured meeting, or a
+ * throw (error.tdocListIdentity) before anything is changed. An update or a
+ * build writes the anchor it established. The report's TDoc tables are read
+ * only when they are the evidence (no agenda TDoc, no anchor, not a build).
+ */
+function assertTdocListIdentity_(data, cfg, context, use) {
+  const store = getReportStateStore_(context);
+  const saved = store.getProperty(TDOC_LIST_ANCHOR_KEY_);
+  const needsReport = use !== 'build' && !parseExactSA4DocumentId_(String(cfg.AGENDA_TDOC || '').trim()).isValid && !tdocListAnchorFor_(saved, cfg);
+  const reportTdocs = needsReport ? detectTdocTablesInDocument_(getReportBody_(context)).map(function (f) { return f.tdoc; }) : [];
+  const result = evaluateTdocListIdentity_(data, cfg, saved, reportTdocs, use || 'read');
+  if (!result.ok) {
+    Logger.log('TDoc list identity: REFUSED -- ' + result.error);
+    const error = new Error(result.error);
+    error.tdocListIdentity = true;
+    throw error;
+  }
+  if (result.anchor) {
+    result.anchor.acceptedAt = new Date().toISOString();
+    store.setProperty(TDOC_LIST_ANCHOR_KEY_, JSON.stringify(result.anchor));
+  }
+  Logger.log('TDoc list identity: the list of this meeting (' + result.via + (result.anchor ? '; anchor ' + result.anchor.tdoc + ' recorded' : '') + ')');
+  return result;
+}
+
+// =========================================================
+// END OF TDOC LIST IDENTITY
 // =========================================================
 
 /**

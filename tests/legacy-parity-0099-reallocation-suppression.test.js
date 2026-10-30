@@ -64,7 +64,10 @@ const HEADER = ['TDoc', 'Title', 'Source', 'Contact', 'Type', 'For', 'Agenda ite
 const ROW_0074 = ['S4aP260074', 'Draft TR 26.870 FS_6G_MED v0.6.0', 'VODAFONE Group Plc', 'Elmira Ramazanirend', 'draft TR', 'Agreement', '5.4', 'FS_6G_MED - General and working documents', 'revised', 'S4-261521', 'S4aP260099'];
 const ROW_0099 = ['S4aP260099', 'Draft TR 26.870 FS_6G_MED v0.6.2', 'VODAFONE Group Plc', 'Elmira Ramazanirend', 'draft TR', 'Agreement', '5.4', 'FS_6G_MED - General and working documents', 'reserved', 'S4aP260074', ''];
 const ROW_0088 = ['S4aP260088', 'Proposed Planning for AHG and SA4#138', 'Qualcomm Germany', '', 'discussion', '-', '5.4', 'FS_6G_MED - General and working documents', 'available', '', ''];
-const SHEET_86178 = [HEADER, ROW_0074, ROW_0099, ROW_0088];
+// The agenda TDoc's own row (real: agenda item 5.1), as every real list has it (after T-2026.10.16 a list without it is
+// refused); under no agenda item here, so the report keeps the TDocs this test is about.
+const ROW_0098 = HEADER.map((h) => ({ TDoc: 'S4aP260098', Title: 'Proposed agenda for SA4 AH conf. call on FS_6G_MED (22nd September, 2026)', Type: 'agenda', 'TDoc Status': 'available' }[h] || ''));
+const SHEET_86178 = [HEADER, ROW_0074, ROW_0099, ROW_0088, ROW_0098];
 
 const PROPS_86178 = {
   MEETING_TYPE: 'adhoc', MEETING_NAME: 'SA4-e (AH) on FS_6G_MED', REPORT_SUFFIX: '6G',
@@ -447,7 +450,9 @@ console.log('\nK. main-meeting reallocation behavior unchanged');
   // TEMPLATE-002A harness adaptation: in sa4-report the reallocation
   // snapshot is the third parameter (the second is the execution context,
   // ADDON-004); Legacy's signature is (cfg, snapshot).
-  const groups = env.sandbox.downloadAndGroupTdocs_(env.sandbox.getReportConfig_(), undefined, snap);
+  // The snapshot is the build's (it reads the reallocations before the document is cleared), so this is a build's list ('build', after
+  // T-2026.10.16: a main meeting without an agenda TDoc, a document without TDoc tables).
+  const groups = env.sandbox.downloadAndGroupTdocs_(env.sandbox.getReportConfig_(), undefined, snap, 'build');
   check('move within the SWG, removal, move to another SWG, untouched',
     Object.keys(groups).sort().map((k) => [k, groups[k].tdocs.map((d) => d.row[0])]),
     [['7.5', ['S4-260101', 'S4-260104']]]);

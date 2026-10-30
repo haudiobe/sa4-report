@@ -12,6 +12,8 @@ DEPLOYED.** The first Update Disposition Summary in live 6G (T-2026.10.16, 2026-
 every TDoc table of the report, also those of earlier calls that the report keeps. The candidate reads
 the TDocs of the configured meeting only (§ Which TDocs). Until it is released, T-2026.10.16 stays
 frozen in production: no Update Disposition Summary and no Close Report in live 6G.
+The same candidate refuses a TDoc list that is not shown to be the meeting's before any change (docs/TDOC_LIST_IDENTITY.md):
+the 36 "earlier-call" TDocs in live 6G came from the Portal list of 86178 on 2026-10-30, not from the series.
 
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
