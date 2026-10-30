@@ -1058,6 +1058,45 @@ console.log('M. the TDocs of the configured meeting only (after T-2026.10.16): a
     [true, ['S4aP260082', 'S4aP260083'], false, false]);
 }
 
+// ====================================================================== N
+console.log('N. the scope, as downloadAndGroupTdocs_() returns it, against the report; a list that does not describe the report');
+{
+  // 6G smoke copy, 2026-10-30, candidate 3e820ea: the summary of 114 TDocs became 0/0/0. The Portal list of the meeting ID
+  // (GenerateDocumentList.aspx?meetingId=86178) gave 36 TDocs of another call (S4aP260008..043, 4 agenda items) instead of the
+  // 116 of this one (S4aP260067..182, read at 06:09); none of them had a table in the report. The scope was "not empty", so
+  // the summary was written for the intersection: nothing.
+  const r = built([t(1, '4.3'), t(2, '4.3'), t(3, '4.4', 'revised', { revisedTo: id(4) }), t(4, '4.4')], { 1: 'agreed', 2: 'noted' });
+  // The real path: readMeetingTdocScope_() -> downloadAndGroupTdocs_(getReportConfig_()) -> { '<agenda item>': { tdocs: [{ row, tdocCol, ... }] } }.
+  const groups = r.exec(() => r.s.downloadAndGroupTdocs_(r.s.getReportConfig_()));
+  check('downloadAndGroupTdocs_(): an object of agenda items, each { tdocs: [records] }; the number is row[tdocCol]',
+    [Object.keys(groups).sort(), Object.keys(groups).map((k) => groups[k].tdocs.map((td) => td.row[td.tdocCol]))], [['4.3', '4.4'], [[id(1), id(2)], [id(3), id(4)]]]);
+  const scope = r.exec(() => r.s.readMeetingTdocScope_());
+  check('readMeetingTdocScope_(): ok, the canonical numbers of every record of every group', [scope.ok, Object.keys(scope.numbers).sort(), scope.allTdocs.length], [true, [1, 2, 3, 4].map(id), 4]);
+  const read = r.exec(() => r.s.readReportDispositions_(r.body, { scope }));
+  check('the scope meets the report: the list has TDocs, the report has their tables, the intersection is exactly the meeting\'s set',
+    [Object.keys(scope.numbers).length > 0, r.order().length > 0, read.entries.map((e) => e.tdoc), read.otherMeetings], [true, true, [1, 2, 3, 4].map(id), []]);
+
+  updateSummary(r);
+  const populated = snapshot(r.body);
+  check('a summary of the meeting\'s 4 TDocs', summaryOf(r.body).map((c) => c[0]), [TITLES[0] + ' (1)', TITLES[1] + ' (2)', TITLES[2] + ' (1)']);
+
+  // The list now gives TDocs of another call, none with a table in the report.
+  r.tdocs = [t(31, '5.5'), t(32, '5.1'), t(33, '4.7', 'withdrawn')];
+  updateSummary(r);
+  check('Update Disposition Summary, a list with none of the report\'s TDocs: the summary NOT replaced by 0/0/0, "NOT updated", the reason',
+    [snapshot(r.body) === populated, lastAlert(r)[0], lastAlert(r)[1].split('\n')[0]],
+    [true, 'Disposition Summary NOT updated', "The Disposition Summary was not written: none of the 4 TDocs of the report's TDoc tables is in the TDoc list of this meeting (3 TDocs): the list does not describe this report. Nothing was changed."]);
+  const c = closeReport(r);
+  check('Close Report, the same: NOT READY, nothing written, nothing checked, the reason', [c.ready, c.summaryState, c.checked, c.otherMeetings, snapshot(r.body) === populated, /does not describe this report/.test(c.problems[0] || '')],
+    [false, 'no-scope', 0, 4, true, true]);
+  const otherCall = r.exec(() => { const g = r.s.downloadAndGroupTdocs_(r.s.getReportConfig_()); return Object.keys(g).reduce((a, k) => a.concat(g[k].tdocs), []); });
+  check('the automatic sync, handed that list: the summary left as it is', [r.exec(() => r.s.syncDispositionSummaryOnUpdate_(r.body, otherCall)).state, snapshot(r.body) === populated], ['no-scope', true]);
+  // Not every zero is a failure: a report without TDoc tables has nothing to summarise.
+  const { sandbox: s } = loadCode();
+  const empty = { getTables: () => [] };
+  check('pure: a report without a TDoc table leaves nothing out, so a list with TDocs is no failure there', s.readReportDispositions_(empty, { scope: s.meetingTdocScope_([{ row: [id(1)], tdocCol: 0 }]) }).otherMeetings, []);
+}
+
 // ====================================================================== I
 console.log('I. what changed in Code.js and template/ReportCreator.js');
 {

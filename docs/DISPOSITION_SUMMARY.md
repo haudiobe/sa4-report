@@ -67,7 +67,12 @@ Where the scope comes from:
 | Report › Close Report | `readMeetingTdocScope_()`, read once; the revision check uses the same list |
 
 **Fail closed.** Without a scope — the meeting is not saved, there is no TDoc list URL, the list
-cannot be read, or it has no TDoc — nothing falls back to every TDoc table of the document:
+cannot be read, it has no TDoc, or it has **none of the TDocs of the report's TDoc tables** (it does
+not describe this report) — nothing falls back to every TDoc table of the document, and no summary of
+nothing replaces the one that is there. (6G smoke copy, 2026-10-30, candidate `3e820ea`: the Portal
+list of meeting ID 86178 gave 36 TDocs of another call, S4aP260008…043 in 4 agenda items, instead of
+the 116 of this one, S4aP260067…182, read at 06:09; none had a table in the report, and the summary of
+114 TDocs became 0/0/0.) A report without TDoc tables leaves nothing out and is no failure:
 
 - Update Disposition Summary writes nothing: "Disposition Summary NOT updated", with the reason;
 - an update leaves the summary as it is (`dispositionSummary: 'no-scope'`, logged); the update

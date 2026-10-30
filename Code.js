@@ -20589,6 +20589,14 @@ function writeDispositionSummary_(body, options) {
       model: buildDispositionSummaryModel_([]), foreign: [] };
   }
   const read = readReportDispositions_(body, options);
+  // A list that has none of the TDocs of the report's TDoc tables does not
+  // describe this report (6G smoke copy, 2026-10-30: the Portal list of the
+  // meeting ID gave 36 TDocs of another call, the report had 114 others):
+  // no scope either -- never a summary of nothing over the one that is there.
+  if (!read.entries.length && read.otherMeetings.length) {
+    return { state: 'no-scope', error: 'none of the ' + read.otherMeetings.length + ' TDocs of the report\'s TDoc tables is in the TDoc list of this meeting (' +
+      Object.keys(scope.numbers).length + ' TDocs): the list does not describe this report', read: read, model: buildDispositionSummaryModel_([]), foreign: [] };
+  }
   const model = buildDispositionSummaryModel_(read.entries);
   if (read.unreadable.length) return { state: 'unreadable', read: read, model: model, foreign: [] };
   const rendered = renderDispositionSummary_(body, model);
