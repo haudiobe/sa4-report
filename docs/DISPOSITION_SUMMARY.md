@@ -7,6 +7,12 @@ template, MBS and 6G on 2026-10-30; the template's Document Status dropdown has 
 `feature/disposition-summary-close-report` from `e2ceddc` (T-2026.10.15): candidates `4276161` …
 `261106c`, smoke-tested on a Drive copy of the 6G report.
 
+**Candidate T-2026.10.17 (`Code.js` 2.26.1), branch `fix/disposition-meeting-scope`: NOT RELEASED, NOT
+DEPLOYED.** The first Update Disposition Summary in live 6G (T-2026.10.16, 2026-10-30) listed 150 TDocs:
+every TDoc table of the report, also those of earlier calls that the report keeps. The candidate reads
+the TDocs of the configured meeting only (§ Which TDocs). Until it is released, T-2026.10.16 stays
+frozen in production: no Update Disposition Summary and no Close Report in live 6G.
+
 Template reports only have the two menu items (SA4 Report › 📄 Report). The functions exist in
 CENTRAL and Legacy too, but nothing there calls them.
 
@@ -27,14 +33,50 @@ Documents Not Yet Disposed (0)
   None.
 ```
 
-- Every TDoc table of the report is one row in exactly one table, in the order of the report.
-  A TDoc with two tables is one row.
+- Every TDoc table **of the meeting** (§ Which TDocs) is one row in exactly one table, in the order of
+  the report. A TDoc with two tables is one row.
 - Title, Source and Status are those of its TDoc table; the TDoc number has the link of its
   TDoc table. Agreed, Endorsed and Approved keep their own status.
 - Nothing else is written: no status, no revision, nothing in 3GU, no minutes.
 
 **Close Report** writes the same summary (creating it where there is none), checks the report
 and says whether it is ready to close. See § Close Report.
+
+### Which TDocs: those of the configured meeting (after T-2026.10.16)
+
+A report can hold TDoc tables of other meetings: an update only adds and updates the TDocs of the
+list it reads and removes nothing, so a report kept across the calls of a series (6G) keeps the
+tables of the earlier calls. The summary and Close Report read **only the TDocs of the configured
+meeting** — the same set an update writes:
+
+- the meeting's TDoc list, read by `downloadAndGroupTdocs_(getReportConfig_())` after the
+  configuration guard (`assertMeetingConfigured_()`; never the built-in SA4#136 defaults), with the
+  agenda selector of the meeting and the report's Document Reallocations (a TDoc reallocated to
+  Removed is not in it);
+- `meetingTdocScope_()` turns it into the set of canonical TDoc numbers; a TDoc table whose number
+  is not in that set is left out — of the summary, of the not-yet-disposed check and of the
+  revision check — and counted: "N TDoc tables of other meetings (not in this meeting's TDoc
+  list) left out." Their tables are not touched.
+
+Where the scope comes from:
+
+| Entry | Scope |
+|---|---|
+| Report › Update Disposition Summary | `readMeetingTdocScope_()`: the list read for it |
+| an update (keeping a summary that is there) | the list the update has just read (`allTdocs` in `continuousUpdateCore_`), not read twice |
+| Report › Close Report | `readMeetingTdocScope_()`, read once; the revision check uses the same list |
+
+**Fail closed.** Without a scope — the meeting is not saved, there is no TDoc list URL, the list
+cannot be read, or it has no TDoc — nothing falls back to every TDoc table of the document:
+
+- Update Disposition Summary writes nothing: "Disposition Summary NOT updated", with the reason;
+- an update leaves the summary as it is (`dispositionSummary: 'no-scope'`, logged); the update
+  itself already fails when its list cannot be read;
+- Close Report writes nothing and says NOT READY TO CLOSE: "The report could not be checked and the
+  Disposition Summary was not written: … Run Close Report again once the TDoc list can be read."
+
+`writeDispositionSummary_()` itself refuses without a scope (`no-scope`), and
+`readReportDispositions_()` throws without one, so no caller can read the whole document.
 
 ## The classification
 
@@ -141,10 +183,11 @@ run any number of times; the report can be corrected afterwards. (There is no re
 concept in the project to record a close in, and none was added.)
 
 It:
-1. reads the TDocs and writes the summary;
-2. when the report has a TDoc as revised: downloads the TDoc list of the meeting (the same
-   `downloadAndGroupTdocs_()` as an update; after the configuration guard, so never the
-   built-in SA4#136 defaults). Without such a TDoc nothing is downloaded;
+1. downloads the TDoc list of the meeting (the same `downloadAndGroupTdocs_()` as an update; after
+   the configuration guard, so never the built-in SA4#136 defaults), always and once: it is the
+   scope of everything it checks (§ Which TDocs) and the 3GU state of the revisions. Before
+   T-2026.10.17 it was downloaded only when the report had a TDoc as revised;
+2. reads the TDocs of the meeting and writes the summary;
 3. says **Report ready to close** or **Report NOT READY TO CLOSE**, with the counts.
 
 **How the result is shown.** In a modal HTML dialog: the counts, then every list in full, as
@@ -228,13 +271,18 @@ source, status, "None.", text statuses, duplicates); idempotence (5 runs and 5 u
 element-for-element identical; seven status changes back and forth, each followed by an
 update: no element and no empty paragraph more); text typed into it never removed; prose typed below it (also "None.") kept through updates;
 a summary table deleted by hand; an unreadable status; Close Report (clean, available, reserved,
-parked, postponed, several, unknown, 45 open, no revised TDoc: no list read, TDoc list unreadable,
+parked, postponed, several, unknown, 45 open, no revised TDoc: the list read once, TDoc list unreadable,
 no saved meeting, master template, nothing changed but the summary, nothing stored); the four
 revision states, each in its own list, on the real update and as pure rules; placement (ad-hoc with and without Attendance, Attendance
 imported later, no close, text typed at the end, an annex heading after it, main meeting); the
 MBS fixture end to end; a report without a summary is never given one; Build Report from
-Scratch; and that without this change `Code.js` and `ReportCreator.js` are those of T-2026.10.15,
-byte for byte. The ledger view `codeWithoutDispositionSummary()` in
+Scratch; the meeting scope (section M: an accumulated report with TDoc tables of earlier calls —
+available, reserved, parked, postponed, revised, agreed — and one reallocated to Removed: only the
+meeting's TDocs, once each; the earlier ones neither block nor are revision-checked; the meeting's
+revised TDocs fully checked; idempotent; the list followed; fail closed for an unreadable and an empty
+list on all three entries); and that without this change `Code.js` and `ReportCreator.js` are those
+of T-2026.10.15, byte for byte, and that against T-2026.10.16 only `continuousUpdateCore_` changed
+outside the section. The ledger view `codeWithoutDispositionSummary()` in
 `tests/helpers/before-structure-fix.js` takes it out for the older ledgers.
 
 ## Release and deployment

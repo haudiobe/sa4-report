@@ -1355,8 +1355,9 @@ function continuousUpdateCore_(context) {
     // After T-2026.10.15: a Disposition Summary that is there is kept up to
     // date; a report without one is not given one. Not in a background run
     // (no status dropdowns can be read there). Never fails the update.
+    // After T-2026.10.16: for the TDocs of the meeting -- the list read above.
     if (!context) {
-      const summary = syncDispositionSummaryOnUpdate_(body);
+      const summary = syncDispositionSummaryOnUpdate_(body, allTdocs);
       if (summary.state !== 'absent') result.dispositionSummary = summary.state;
     }
 
@@ -20252,21 +20253,73 @@ function tdocCellLinkUrl_(table, tdoc) {
 }
 
 /**
- * The TDocs of the report and their dispositions, in the order of the
- * report: { entries, unreadable }. One entry per TDoc number: { tdoc, title,
- * source, agendaItem, status, link, tables, label, known, disposition,
- * conflict, revisionIds }. A TDoc with two tables of different statuses is
- * UNRESOLVED (conflict). `unreadable`: TDocs whose Status is a dropdown that
- * could not be read -- their disposition is not known. `revisionIds` (only
+ * Pure: THE scope of the summary and of Close Report -- the TDocs of the
+ * configured meeting, as the update reads them: the rows of its TDoc list
+ * (downloadAndGroupTdocs_(): the meeting's list, its agenda selector, its
+ * Document Reallocations). { ok, allTdocs, numbers: { canonical number: row },
+ * error }. A report of an ad-hoc series keeps the TDoc tables of earlier
+ * calls; they are not in it. Not ok -- and so nothing is concluded -- when the
+ * list gives no TDoc.
+ */
+function meetingTdocScope_(allTdocs) {
+  const numbers = {};
+  (allTdocs || []).forEach(function (td) {
+    const raw = String(td.row[td.tdocCol] === null || td.row[td.tdocCol] === undefined ? '' : td.row[td.tdocCol]).trim();
+    const parsed = parseExactSA4DocumentId_(raw);
+    const number = parsed.isValid ? parsed.raw : raw;
+    if (number && !numbers[number]) numbers[number] = td;
+  });
+  const ok = Object.keys(numbers).length > 0;
+  return { ok: ok, allTdocs: allTdocs || [], numbers: numbers, error: ok ? '' : 'the TDoc list of this meeting has no TDoc' };
+}
+
+/**
+ * Reads the scope of the configured meeting (meetingTdocScope_()): the
+ * configuration guard first -- never the built-in defaults -- then the
+ * meeting's TDoc list, once. Never throws: { ok: false, error } when it
+ * cannot be had.
+ */
+function readMeetingTdocScope_() {
+  try {
+    assertMeetingConfigured_();
+    const cfg = getReportConfig_();
+    if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');
+    const groups = downloadAndGroupTdocs_(cfg);
+    const allTdocs = [];
+    Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });
+    return meetingTdocScope_(allTdocs);
+  } catch (e) {
+    return { ok: false, allTdocs: [], numbers: {}, error: 'the TDoc list of this meeting could not be read: ' + e.message };
+  }
+}
+
+/**
+ * The TDocs of the report that are TDocs of the meeting (options.scope, from
+ * meetingTdocScope_(); required), and their dispositions, in the order of the
+ * report: { entries, unreadable, otherMeetings }. One entry per TDoc number:
+ * { tdoc, title, source, agendaItem, status, link, tables, label, known,
+ * disposition, conflict, revisionIds }. A TDoc with two tables of different
+ * statuses is UNRESOLVED (conflict). `unreadable`: TDocs whose Status is a
+ * dropdown that could not be read -- their disposition is not known.
+ * `otherMeetings`: the TDoc numbers of the tables left out because the
+ * meeting's list does not have them (earlier calls of the series, removed by
+ * a reallocation); their tables are not read further. `revisionIds` (only
  * with options.revisions): the other TDoc numbers its Disposition and
  * Revisions cells name. Read-only.
  */
 function readReportDispositions_(body, options) {
+  const scope = options && options.scope;
+  if (!scope || !scope.ok) throw new Error('the TDocs of this meeting are not known' + (scope && scope.error ? ' (' + scope.error + ')' : ''));
   const tables = body.getTables();
   const entries = [];
   const byTdoc = {};
   const unreadable = [];
+  const otherMeetings = [];
   detectTdocTablesInDocument_(body).forEach(function (found) {
+    if (!scope.numbers[found.tdoc]) {
+      if (otherMeetings.indexOf(found.tdoc) === -1) otherMeetings.push(found.tdoc);
+      return;
+    }
     const table = tables[found.tableIndex];
     const status = String(found.status || '').trim();
     if (!status) {
@@ -20296,7 +20349,7 @@ function readReportDispositions_(body, options) {
     }
     delete entry.statuses;
   });
-  return { entries: entries, unreadable: unreadable };
+  return { entries: entries, unreadable: unreadable, otherMeetings: otherMeetings };
 }
 
 /** Pure: the classes of the summary with their TDocs: [{ key, title, short, entries }], in the order of DISPOSITION_CLASSES_. */
@@ -20523,11 +20576,18 @@ function renderDispositionSummary_(body, model) {
 }
 
 /**
- * Reads the TDocs of the report and writes the summary for them (creating it
- * when there is none). Returns { state, read, model, foreign }; state
- * 'unreadable' -- and nothing written -- when a status could not be read.
+ * Reads the TDocs of the report that are the meeting's (options.scope) and
+ * writes the summary for them (creating it when there is none). Returns
+ * { state, read, model, foreign, error }; nothing is written in the states
+ * 'no-scope' (the TDocs of the meeting are not known: never every table of
+ * the document instead) and 'unreadable' (a status could not be read).
  */
 function writeDispositionSummary_(body, options) {
+  const scope = options && options.scope;
+  if (!scope || !scope.ok) {
+    return { state: 'no-scope', error: (scope && scope.error) || 'the TDocs of this meeting are not known', read: { entries: [], unreadable: [], otherMeetings: [] },
+      model: buildDispositionSummaryModel_([]), foreign: [] };
+  }
   const read = readReportDispositions_(body, options);
   const model = buildDispositionSummaryModel_(read.entries);
   if (read.unreadable.length) return { state: 'unreadable', read: read, model: model, foreign: [] };
@@ -20536,16 +20596,19 @@ function writeDispositionSummary_(body, options) {
 }
 
 /**
- * The update: a summary that is there is brought up to date; a report
- * without one is not given one. Never throws. Returns { state }.
+ * The update: a summary that is there is brought up to date, for the TDocs of
+ * the meeting -- `allTdocs`, the TDoc list the update has just read; nothing
+ * is downloaded again. A report without one is not given one; with no TDoc
+ * in the list the summary is left as it is. Never throws. Returns { state }.
  */
-function syncDispositionSummaryOnUpdate_(body) {
+function syncDispositionSummaryOnUpdate_(body, allTdocs) {
   try {
     if (!findDispositionSummarySection_(body)) return { state: 'absent' };
-    const done = writeDispositionSummary_(body);
-    if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
+    const done = writeDispositionSummary_(body, { scope: meetingTdocScope_(allTdocs) });
+    if (done.state === 'no-scope') Logger.log('Disposition Summary: not updated -- ' + done.error + '.');
+    else if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
     else if (done.state === 'refused') Logger.log('Disposition Summary: not updated -- text was typed into it, above a part of it: ' + done.foreign.join(' | '));
-    else Logger.log('Disposition Summary: ' + done.state + ' (' + dispositionCountsText_(done.model) + ')');
+    else Logger.log('Disposition Summary: ' + done.state + ' (' + dispositionCountsText_(done.model) + '; ' + done.read.otherMeetings.length + ' TDoc table(s) of other meetings left out)');
     return { state: done.state };
   } catch (e) {
     Logger.log('Disposition Summary: could not be updated: ' + e.message);
@@ -20658,37 +20721,28 @@ function checkRevisionsIn3gu_(entries, allTdocs, listProblem) {
  */
 function closeReportCore_() {
   const body = DocumentApp.getActiveDocument().getBody();
-  const result = { ready: false, checked: 0, counts: {}, unresolved: [], revisions: [], problems: [], summaryState: '' };
-  const summary = writeDispositionSummary_(body, { revisions: true });
+  const result = { ready: false, checked: 0, counts: {}, unresolved: [], revisions: [], problems: [], summaryState: '', otherMeetings: 0 };
+  // ONE scope for everything below: the summary, the TDocs not yet disposed, the revision check.
+  const scope = readMeetingTdocScope_();
+  const summary = writeDispositionSummary_(body, { revisions: true, scope: scope });
   result.summaryState = summary.state;
   result.checked = summary.read.entries.length;
+  result.otherMeetings = summary.read.otherMeetings.length;
   summary.model.forEach(function (c) { result.counts[c.key] = c.entries.length; });
   result.unresolved = summary.model.filter(function (c) { return c.key === 'UNRESOLVED'; })[0].entries;
-  if (summary.state === 'unreadable') {
+  if (summary.state === 'no-scope') {
+    result.problems.push('The report could not be checked and the Disposition Summary was not written: ' + summary.error + '. Run Close Report again once the TDoc list can be read.');
+  } else if (summary.state === 'unreadable') {
     result.problems.push('The Status of ' + summary.read.unreadable.join(', ') + ' could not be read, so the report could not be checked and the Disposition Summary was not written. Run Close Report again.');
   } else if (summary.state === 'refused') {
     result.problems.push('The Disposition Summary was not updated: text was typed into it ("' + summary.foreign.join('", "') + '"). Move that text below the summary and run Close Report again.');
   }
 
-  // The TDoc list is read only for a TDoc the report has as revised; one it cannot be had for is not verified, never clean.
-  if (summary.read.entries.some(isRevisedInReport_)) {
-    let allTdocs = null;
-    let listProblem = '';
-    try {
-      assertMeetingConfigured_();
-      const cfg = getReportConfig_();
-      if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');
-      const groups = downloadAndGroupTdocs_(cfg);
-      allTdocs = [];
-      Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });
-    } catch (e) {
-      listProblem = 'the TDoc list could not be read: ' + e.message;
-    }
-    result.revisions = checkRevisionsIn3gu_(summary.read.entries, allTdocs, listProblem);
-  }
+  // The revision check: the TDocs of the meeting only (the entries above), against the same TDoc list -- not read again.
+  if (scope.ok) result.revisions = checkRevisionsIn3gu_(summary.read.entries, scope.allTdocs, '');
   REVISION_CHECK_STATES_.forEach(function (s) { result.counts[s.kind] = result.revisions.filter(function (r) { return r.kind === s.kind; }).length; });
 
-  result.ready = summary.state !== 'unreadable' && result.problems.length === 0 && result.unresolved.length === 0 && result.revisions.length === 0;
+  result.ready = summary.state !== 'unreadable' && summary.state !== 'no-scope' && result.problems.length === 0 && result.unresolved.length === 0 && result.revisions.length === 0;
   Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.unresolved.length + ' not yet disposed, ' +
     REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState);
   return result;
@@ -20707,8 +20761,14 @@ function describeDispositionSummaryState_(state) {
     replaced: 'Disposition Summary updated.',
     unchanged: 'Disposition Summary was already up to date.',
     refused: 'Disposition Summary NOT updated.',
-    unreadable: 'Disposition Summary NOT written.'
+    unreadable: 'Disposition Summary NOT written.',
+    'no-scope': 'Disposition Summary NOT written.'
   }[state] || 'Disposition Summary: ' + state;
+}
+
+/** Pure: the line that says how many TDoc tables of other meetings were left out ('' for none). */
+function otherMeetingsText_(count) {
+  return count ? count + ' TDoc table' + (count === 1 ? '' : 's') + ' of other meetings (not in this meeting\'s TDoc list) left out.' : '';
 }
 
 /** Pure: the text of the Close Report dialog. */
@@ -20719,6 +20779,7 @@ function formatCloseReportResult_(result) {
   REVISION_CHECK_STATES_.forEach(function (s) { lines.push(s.label.replace(/\.$/, '') + ': ' + (result.counts[s.kind] || 0) + '.'); });
   lines.push('');
   lines.push(describeDispositionSummaryState_(result.summaryState));
+  if (result.otherMeetings) lines.push(otherMeetingsText_(result.otherMeetings));
   if (result.unresolved.length) {
     lines.push('');
     lines.push('NOT YET DISPOSED (' + result.unresolved.length + ') -- TDoc | Title | Source | Current Status:');
@@ -20750,9 +20811,11 @@ function formatCloseReportResult_(result) {
 
 /** Pure: the text of the Update Disposition Summary dialog. */
 function formatDispositionSummaryResult_(done) {
+  if (done.state === 'no-scope') return 'The Disposition Summary was not written: ' + done.error + '. Nothing was changed.\n\nThe summary lists the TDocs of the configured meeting only; without its TDoc list it is not written.';
   if (done.state === 'unreadable') return 'The Disposition Summary was not written: the Status of ' + done.read.unreadable.join(', ') + ' could not be read. Try again in a minute.';
   if (done.state === 'refused') return 'The Disposition Summary was not updated: text was typed into it ("' + done.foreign.join('", "') + '"), above a part of the summary.\n\nMove that text below the summary (or above its heading) and run Update Disposition Summary again. Nothing was changed.';
-  return describeDispositionSummaryState_(done.state) + '\n\n' + done.read.entries.length + ' TDocs: ' + dispositionCountsText_(done.model) + '.';
+  const other = otherMeetingsText_(done.read.otherMeetings.length);
+  return describeDispositionSummaryState_(done.state) + '\n\n' + done.read.entries.length + ' TDocs: ' + dispositionCountsText_(done.model) + '.' + (other ? '\n' + other : '');
 }
 
 /** Runs `fn` under the document lock, as Update Report Now does. */
@@ -20769,10 +20832,13 @@ function withDispositionLock_(what, fn) {
 /** Menu: Report > Update Disposition Summary. Writes the summary (creating it where there is none) and nothing else. */
 function updateDispositionSummary() {
   assertNotTemplateMaster_();
-  const done = withDispositionLock_('Update Disposition Summary', function () { return writeDispositionSummary_(DocumentApp.getActiveDocument().getBody()); });
+  const done = withDispositionLock_('Update Disposition Summary', function () {
+    // The TDocs of the configured meeting: its TDoc list, read once.
+    return writeDispositionSummary_(DocumentApp.getActiveDocument().getBody(), { scope: readMeetingTdocScope_() });
+  });
   const ui = DocumentApp.getUi();
   // A summary that was not written never shows under the title of one that was.
-  ui.alert(done.state === 'refused' || done.state === 'unreadable' ? 'Disposition Summary NOT updated' : 'Disposition Summary', formatDispositionSummaryResult_(done), ui.ButtonSet.OK);
+  ui.alert(done.state === 'refused' || done.state === 'unreadable' || done.state === 'no-scope' ? 'Disposition Summary NOT updated' : 'Disposition Summary', formatDispositionSummaryResult_(done), ui.ButtonSet.OK);
   return done;
 }
 
@@ -20809,6 +20875,7 @@ function closeReportResultHtml_(result) {
   REVISION_CHECK_STATES_.forEach(function (s) { counts.push(s.label.replace(/\.$/, '') + ': ' + (result.counts[s.kind] || 0) + '.'); });
   out.push('<ul>' + counts.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul>');
   out.push('<div>' + esc(describeDispositionSummaryState_(result.summaryState)) + '</div>');
+  if (result.otherMeetings) out.push('<div>' + esc(otherMeetingsText_(result.otherMeetings)) + '</div>');
   if (result.unresolved.length) {
     out.push('<h3>Not yet disposed (' + result.unresolved.length + ')</h3>');
     out.push(table(['TDoc', 'Title', 'Source', 'Current Status'], result.unresolved.map(function (e) { return [e.tdoc, e.title || '', e.source || '', dispositionSummaryStatusText_(e)]; })));

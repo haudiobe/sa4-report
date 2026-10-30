@@ -343,30 +343,29 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
   check('45 not yet disposed: the dialog lists forty and points to the summary; the summary lists all',
     [m.unresolved.length, ml.filter((l) => /^• /.test(l)).length, ml.filter((l) => /^… and 5 more: see "Documents Not Yet Disposed" in the Disposition Summary\.$/.test(l)).length, summaryOf(many.body)[2][1].length], [45, 40, 1, 45]);
 
-  // The TDoc list is read only when the report has a TDoc as revised: without one, a list that cannot be read does not matter.
-  const norevision = built([t(1, '4.3')], { 1: 'agreed' });
-  norevision.s.SpreadsheetApp = { open: () => { throw new Error('Spreadsheet conversion failed'); } };
+  // After T-2026.10.16: Close Report always reads the TDoc list of the meeting -- it is the scope of everything it checks (the
+  // TDocs of this meeting, not every TDoc table of the document) -- and without it nothing is concluded and nothing written.
   const listFetches = (r, from) => r.fetches.slice(from).filter((f) => /GenerateDocumentList/.test(f)).length;
+  const norevision = built([t(1, '4.3')], { 1: 'agreed' });
   const nf = norevision.fetches.length;
-  check('no TDoc revised in the report: the TDoc list is not read, and the report is ready', [closeReport(norevision).ready, listFetches(norevision, nf)], [true, 0]);
-  // What cannot be checked blocks: the TDoc list cannot be read, with a TDoc revised in the report.
+  check('no TDoc revised in the report: the TDoc list is read all the same (once), and the report is ready', [closeReport(norevision).ready, listFetches(norevision, nf)], [true, 1]);
+  // What cannot be checked blocks: the TDoc list cannot be read.
   const broken = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 2: 'agreed' });
   broken.s.SpreadsheetApp = { open: () => { throw new Error('Spreadsheet conversion failed'); } };
   const bres = closeReport(broken);
-  check('the TDoc list cannot be read: not ready, the summary written, the revised TDoc "could not be verified", with the reason',
-    [bres.ready, summaryHeadings(broken.body), bres.revisions.map((x) => [x.tdoc, x.kind, x.reason]), lastAlert(broken)[1].split('\n').filter((l) => /^(REVISION STATE|   → )/.test(l))],
-    [false, 1, [[id(1), 'revision-not-verified', 'the TDoc list could not be read: Spreadsheet conversion failed']],
-      ['REVISION STATE COULD NOT BE VERIFIED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '   → Check the TDoc and its revision in 3GU. (The TDoc list could not be read: Spreadsheet conversion failed.)']]);
+  check('the TDoc list cannot be read: not ready, no summary written, nothing classified or revision-checked, the reason given',
+    [bres.ready, summaryHeadings(broken.body), bres.checked, bres.revisions.length, bres.summaryState, lastAlert(broken)[1].split('\n').filter((l) => /^⚠️/.test(l))],
+    [false, 0, 0, 0, 'no-scope', ['⚠️ The report could not be checked and the Disposition Summary was not written: the TDoc list of this meeting could not be read: Spreadsheet conversion failed. Run Close Report again once the TDoc list can be read.']]);
   // A Drive copy of a report, or Resolve without Save: no saved meeting (the configuration guard). The TDoc list is not read --
-  // never the built-in SA4#136 defaults -- and the revision is not verified.
+  // never the built-in SA4#136 defaults -- and nothing is concluded.
   const unsaved = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 2: 'agreed' });
   delete unsaved.docProps._store.MEETING_TYPE;
   delete unsaved.docProps._store.REPORT_SUFFIX;
   const fetchesBefore = unsaved.fetches.length;
   const ures = closeReport(unsaved);
-  check('a report with no saved meeting: not ready, the revision not verified, and no TDoc list read',
-    [ures.ready, ures.revisions.map((x) => x.kind), /^the TDoc list could not be read: /.test(ures.revisions[0].reason), listFetches(unsaved, fetchesBefore)],
-    [false, ['revision-not-verified'], true, 0]);
+  check('a report with no saved meeting: not ready, no summary, no TDoc list read, the reason given',
+    [ures.ready, ures.summaryState, summaryHeadings(unsaved.body), listFetches(unsaved, fetchesBefore), /could not be read/.test(ures.problems[0] || '')],
+    [false, 'no-scope', 0, 0, true]);
   const unreadable = built([t(1, '4.3')], { 1: 'agreed' });
   unreadable.api.fail.get = () => 'Service unavailable';
   const nres = closeReport(unreadable);
@@ -440,13 +439,15 @@ console.log('E. revised in the report: not reserved, reserved but not uploaded, 
     { 1: 'revised', 2: 'revised', 4: 'revised', 5: 'agreed', 6: 'available' });
   multi.tdocs = multi.tdocs.filter((x) => x.id !== id(4));
   const mres = closeReport(multi);
-  check('several: every one is reported with its own state', mres.revisions.map((x) => [x.tdoc, x.kind, x.state3gu]),
-    [[id(1), 'revision-not-reserved', 'available'], [id(2), 'revision-not-reserved', 'available'], [id(3), 'revision-not-uploaded', 'revised, revised to ' + id(5) + ' (reserved, not uploaded)'], [id(4), 'revision-not-verified', 'not in the TDoc list']]);
+  // 04 is not in the meeting's TDoc list any more: after T-2026.10.16 it is a TDoc of another meeting -- left out of the summary
+  // and of every check, and named as left out (before, the revision check called it "not in the TDoc list").
+  check('several: every one of the meeting is reported with its own state; the TDoc not in the meeting\'s list is not checked', [mres.revisions.map((x) => [x.tdoc, x.kind, x.state3gu]), mres.otherMeetings, mres.checked],
+    [[[id(1), 'revision-not-reserved', 'available'], [id(2), 'revision-not-reserved', 'available'], [id(3), 'revision-not-uploaded', 'revised, revised to ' + id(5) + ' (reserved, not uploaded)']], 1, 5]);
   const mtext = lastAlert(multi)[1].split('\n');
-  check('the dialog distinguishes the four: not yet disposed, not reserved, reserved but not uploaded, not verified -- counts and lists',
-    [mtext.slice(5, 9), mtext.filter((l) => /^(NOT YET DISPOSED|REVISION )/.test(l)).map((l) => l.split(' -- ')[0])],
-    [['1 not yet disposed.', 'Revision not reserved in 3GU: 2.', 'Revision reserved but not uploaded in 3GU: 1.', 'Revision state could not be verified in 3GU: 1.'],
-      ['NOT YET DISPOSED (1)', 'REVISION NOT RESERVED IN 3GU (2)', 'REVISION RESERVED BUT NOT UPLOADED IN 3GU (1)', 'REVISION STATE COULD NOT BE VERIFIED IN 3GU (1)']]);
+  check('the dialog distinguishes them: not yet disposed, not reserved, reserved but not uploaded -- counts and lists; the TDoc of another meeting is named as left out',
+    [mtext.slice(5, 9), mtext.filter((l) => /^(NOT YET DISPOSED|REVISION )/.test(l)).map((l) => l.split(' -- ')[0]), mtext.indexOf('1 TDoc table of other meetings (not in this meeting\'s TDoc list) left out.') !== -1],
+    [['1 not yet disposed.', 'Revision not reserved in 3GU: 2.', 'Revision reserved but not uploaded in 3GU: 1.', 'Revision state could not be verified in 3GU: 0.'],
+      ['NOT YET DISPOSED (1)', 'REVISION NOT RESERVED IN 3GU (2)', 'REVISION RESERVED BUT NOT UPLOADED IN 3GU (1)'], true]);
 
   // Nothing is changed: not the statuses, not the list, not a revision; nothing is reserved.
   const before = [shownAll(multi), JSON.stringify(multi.tdocs), multi.api.count('batchUpdate')];
@@ -605,12 +606,15 @@ console.log('F. where the summary stands; the agenda, the close and the Attendan
   const tdocRow = (tdoc, agenda, status) => ({ row: [tdoc, 'Title of ' + tdoc, 'Source Co', agenda, status], richTextRow: null, tdocCol: 0, titleCol: 1, sourceCol: 2, contactCol: -1, agendaCol: 3, agendaTopicCol: -1, statusCol: 4, typeCol: -1, forCol: -1, revisedToCol: -1, agendaItem: agenda });
   [['9 Video SWG', 'H1'], ['9.1 Opening of the session', 'H2'], ['9.5 Item five', 'H2'], ['9.12 Close of the session', 'H2']].forEach(([text, heading]) => body.appendParagraph(text).setHeading(heading));
   body.appendParagraph('The session was closed.');
-  [['S4-269001', '9.5', 'agreed'], ['S4-269002', '9.5', 'available'], ['S4-269003', '9.12', 'noted']].forEach(([n2, a, st]) => s.insertNewTdoc_(body, tdocRow(n2, a, st), null, null));
-  s.writeDispositionSummary_(body);
+  const mainRows = [['S4-269001', '9.5', 'agreed'], ['S4-269002', '9.5', 'available'], ['S4-269003', '9.12', 'noted']].map(([n2, a, st]) => tdocRow(n2, a, st));
+  mainRows.forEach((row) => s.insertNewTdoc_(body, row, null, null));
+  // The meeting's TDocs: its list, every TDoc inserted here.
+  s.writeDispositionSummary_(body, { scope: s.meetingTdocScope_(mainRows) });
   const mo = () => outline(body);
   check('main meeting: the summary after the close and its text', mo().slice(-6), ['# 9.12 Close of the session', 'S4-269003', '# ' + SUMMARY, '[summary 1]', '[summary 1]', '[summary 1]']);
-  [['S4-269004', '9.12', 'noted'], ['S4-269005', '9.13', 'noted'], ['S4-269006', '9.6', 'noted'], ['S4-269007', '9.5', 'noted']].forEach(([n2, a, st]) => s.insertNewTdoc_(body, tdocRow(n2, a, st), null, null));
-  s.writeDispositionSummary_(body);
+  const moreRows = [['S4-269004', '9.12', 'noted'], ['S4-269005', '9.13', 'noted'], ['S4-269006', '9.6', 'noted'], ['S4-269007', '9.5', 'noted']].map(([n2, a, st]) => tdocRow(n2, a, st));
+  moreRows.forEach((row) => s.insertNewTdoc_(body, row, null, null));
+  s.writeDispositionSummary_(body, { scope: s.meetingTdocScope_(mainRows.concat(moreRows)) });
   check('main meeting: new TDocs of the close, of 9.13, 9.6 and 9.5 all before the summary; 9.6 and 9.13 in the order of the agenda', [mo().filter((x) => x[0] === '#'), afterSummary(body)],
     [['# 9 Video SWG', '# 9.1 Opening of the session', '# 9.5 Item five', '# 9.6', '# 9.13', '# 9.12 Close of the session', '# ' + SUMMARY], []]);
   check('main meeting: the summary counts', summaryOf(body).map((c) => c[0]), [TITLES[0] + ' (1)', TITLES[1] + ' (5)', TITLES[2] + ' (1)']);
@@ -710,7 +714,7 @@ console.log('H. backward safety: a report without a summary is never given one; 
   check('a rebuild of a report that had none says nothing about it', /Disposition Summary/.test(plain.phases[0].detail), false);
   // The update path keeps a summary only where there is no background context (pinned by the ledger in I as well).
   const src = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
-  check('the update keeps a summary only in a run with the document open (not in a background run)', /\n    if \(!context\) \{\n      const summary = syncDispositionSummaryOnUpdate_\(body\);/.test(src), true);
+  check('the update keeps a summary only in a run with the document open (not in a background run), for the TDocs of the list it has read', /\n    if \(!context\) \{\n      const summary = syncDispositionSummaryOnUpdate_\(body, allTdocs\);/.test(src), true);
 }
 
 // ====================================================================== J
@@ -850,9 +854,11 @@ console.log('K. Close Report shows its result at once, in full, and the executio
     rowsOf('Revision state could not be verified in 3GU (1)')], [17, 1, 2, 1]);
   check('every finding is in it, with its action and reason', [res.unresolved.every((e) => html.indexOf('<td>' + e.tdoc + '</td>') !== -1), res.revisions.every((x) => html.indexOf(x.action) !== -1),
     html.indexOf('(The revision ' + id(29) + ' is not in the TDoc list.)') !== -1], [true, true, true]);
-  check('the dialog has the counts and a Close button', [html.indexOf('Report NOT READY TO CLOSE.') !== -1, html.indexOf('30 TDocs checked.') !== -1, html.indexOf('Revision reserved but not uploaded in 3GU: 2.') !== -1,
-    html.indexOf('google.script.host.close()') !== -1], [true, true, true, true]);
-  check('the whole result is in the execution log as text too', /^Report NOT READY TO CLOSE\.\n\n30 TDocs checked\./.test(r.logs.filter((l) => /^Report (NOT READY TO CLOSE|ready to close)\./.test(l)).slice(-1)[0] || ''), true);
+  // 29 is not in the meeting's TDoc list any more, so its own table is another meeting's (after T-2026.10.16): 29 TDocs checked,
+  // one left out -- while 21, which is this meeting's, is still "could not be verified" for its revision 29.
+  check('the dialog has the counts, the TDoc of another meeting left out, and a Close button', [html.indexOf('Report NOT READY TO CLOSE.') !== -1, html.indexOf('29 TDocs checked.') !== -1, html.indexOf('Revision reserved but not uploaded in 3GU: 2.') !== -1,
+    html.indexOf('1 TDoc table of other meetings (not in this meeting&#39;s TDoc list) left out.') !== -1 || html.indexOf("1 TDoc table of other meetings (not in this meeting's TDoc list) left out.") !== -1, html.indexOf('google.script.host.close()') !== -1], [true, true, true, true, true]);
+  check('the whole result is in the execution log as text too', /^Report NOT READY TO CLOSE\.\n\n29 TDocs checked\./.test(r.logs.filter((l) => /^Report (NOT READY TO CLOSE|ready to close)\./.test(l)).slice(-1)[0] || ''), true);
   // Text from the report is escaped: a title with markup is shown as text.
   const { sandbox: s } = loadCode();
   const page = s.closeReportResultHtml_({ ready: false, checked: 1, counts: { UNRESOLVED: 1 }, summaryState: 'unchanged', problems: ['<b>x</b>'], revisions: [],
@@ -961,6 +967,97 @@ console.log('L. partially agreed, and every revision 3GU names in "Revised to" (
   [[['revision-not-reserved', P(172)]], [['revision-not-uploaded', P(175)]]]);
 }
 
+// ====================================================================== M
+console.log('M. the TDocs of the configured meeting only (after T-2026.10.16): an accumulated report');
+{
+  // Live 6G, 2026-10-30, T-2026.10.16: the first Update Disposition Summary listed 150 TDocs -- every TDoc table of a report
+  // that keeps the tables of earlier calls of its series. The scope is the configured meeting's TDoc list as the update reads
+  // it (downloadAndGroupTdocs_(): the list, the agenda selector, the Document Reallocations).
+  //
+  // THIS MEETING: 01 agreed, 02 partially agreed (typed), 03 noted, 04 available, 05 parked, 06 revised to 07 (07 reserved, not
+  // uploaded), 08 revised in the minutes (3GU: available), 09 reallocated to Removed.
+  // EARLIER CALLS (in the report, no longer in the list): 21 available, 22 reserved, 23 parked, 24 postponed, 25 revised (3GU of
+  // its own meeting), 26 agreed.
+  const tdocs = [t(1, '4.3'), t(2, '4.3'), t(3, '4.3'), t(4, '4.4'), t(5, '4.4'), t(6, '4.4', 'revised', { revisedTo: id(7) }), t(7, '4.4', 'reserved', { uploaded: false }),
+    t(8, '4.5'), t(9, '4.5'), t(21, '4.3'), t(22, '4.3', 'reserved', { uploaded: false }), t(23, '4.4'), t(24, '4.4'), t(25, '4.5'), t(26, '4.5')];
+  const r = built(tdocs, { 1: 'agreed', 3: 'noted', 5: 'parked', 8: 'revised', 9: 'agreed', 23: 'parked', 24: 'postponed', 25: 'revised', 26: 'agreed' });
+  const setStatus = (n, text) => r.user(() => { const table = r.table(id(n)); for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === 'Status') table.getRow(i).getCell(1).setText(text); });
+  setStatus(2, 'partially agreed');
+  // The series moves on: the configured meeting's list no longer has the earlier calls' TDocs; their tables stay in the report.
+  const HISTORICAL = [21, 22, 23, 24, 25, 26];
+  r.tdocs = r.tdocs.filter((x) => HISTORICAL.map(id).indexOf(x.id) === -1);
+  // 09 is reallocated to Removed in the report's Document Reallocations table.
+  r.user(() => { r.body.appendParagraph('Document Reallocations'); r.body.appendTable([['TDoc', 'Original Agenda', 'New Agenda', 'Reason'], [id(9), '4.5', 'Removed', 'Synthetic: removed for the test']]); });
+  const historicalTables = () => JSON.stringify(HISTORICAL.concat([9]).map((n) => { const x = r.table(id(n)); return x ? Array.from({ length: x.getNumRows() }, (y, i) => [x.getRow(i).getCell(0).getText(), x.getRow(i).getCell(1).getText(), x.getRow(i).getCell(1)._dropdown && x.getRow(i).getCell(1)._dropdown.optionId]) : null; }));
+  const before = historicalTables();
+  const allTables = r.order().length;
+
+  updateSummary(r);
+  const sum = summaryOf(r.body);
+  const listed = sum.reduce((a, c) => a.concat(c[1] === 'None.' ? [] : c[1].map((x) => x[0])), []);
+  check('the summary lists exactly the TDocs of this meeting, each once (not the earlier calls, not the TDoc reallocated to Removed)', [listed.slice().sort(), listed.length, allTables],
+    [[1, 2, 3, 4, 5, 6, 7, 8].map(id), 8, 15]);
+  check('the three tables: totals equal the meeting\'s set; partially agreed in the first table, as itself', sum.map((c) => [c[0], c[1] === 'None.' ? [] : c[1].map((x) => x[0] + ' ' + x[3])]),
+    [[TITLES[0] + ' (2)', [id(1) + ' agreed', id(2) + ' partially agreed']], [TITLES[1] + ' (3)', [id(3) + ' noted', id(6) + ' revised', id(8) + ' revised']],
+      [TITLES[2] + ' (3)', [id(4) + ' available', id(5) + ' parked', id(7) + ' reserved']]]);
+  check('the dialog names the tables of other meetings left out (six earlier, one removed)', lastAlert(r)[1].split('\n').slice(-1)[0], "7 TDoc tables of other meetings (not in this meeting's TDoc list) left out.");
+  check('the tables of other meetings are untouched, still in the report', [historicalTables() === before, r.order().length], [true, 15]);
+
+  const res = closeReport(r);
+  check('Close Report: the TDocs of this meeting only -- 8 checked, 7 left out', [res.checked, res.otherMeetings], [8, 7]);
+  check('the earlier calls\' available, reserved, parked and postponed TDocs do not block; this meeting\'s do', res.unresolved.map((e) => e.tdoc + ' ' + e.status),
+    [id(4) + ' available', id(5) + ' parked', id(7) + ' reserved']);
+  check('revision check: this meeting\'s revised TDocs, fully (06: not uploaded, 07; 08: not reserved); the earlier call\'s revised 25 never',
+    res.revisions.map((x) => [x.tdoc, x.kind, x.revision]), [[id(6), 'revision-not-uploaded', id(7)], [id(8), 'revision-not-reserved', '']]);
+  check('the summary is unchanged by Close Report (already up to date), and the earlier tables still untouched', [res.summaryState, historicalTables() === before], ['unchanged', true]);
+  const once = snapshot(r.body);
+  check('the update keeps the summary for the same scope -- the list it has read -- and changes nothing', [r.update().dispositionSummary, snapshot(r.body) === once], ['unchanged', true]);
+  check('... and a second update too', [r.update().dispositionSummary, snapshot(r.body) === once], ['unchanged', true]);
+
+  // A TDoc of this meeting added to the list -- it is in the summary after the next update; one dropped from it leaves the summary.
+  r.tdocs.push(t(10, '4.5'));
+  r.tdocs = r.tdocs.filter((x) => x.id !== id(3));
+  check('the next update follows the list: 10 added, 03 left out', [r.update().dispositionSummary, summaryOf(r.body).reduce((a, c) => a.concat(c[1] === 'None.' ? [] : c[1].map((x) => x[0])), []).sort()],
+    ['replaced', [1, 2, 4, 5, 6, 7, 8, 10].map(id)]);
+
+  // FAIL CLOSED, for all three entry paths: never every table of the document instead.
+  const f = built([t(1, '4.3'), t(2, '4.3')], { 1: 'agreed', 2: 'noted' });
+  updateSummary(f);
+  const kept = snapshot(f.body);
+  // 1. Update Disposition Summary, the list cannot be read.
+  f.s.SpreadsheetApp = { open: () => { throw new Error('Spreadsheet conversion failed'); } };
+  updateSummary(f);
+  check('Update Disposition Summary, the list cannot be read: nothing written, "NOT updated", the reason', [snapshot(f.body) === kept, lastAlert(f)[0], lastAlert(f)[1].split('\n')[0]],
+    [true, 'Disposition Summary NOT updated', 'The Disposition Summary was not written: the TDoc list of this meeting could not be read: Spreadsheet conversion failed. Nothing was changed.']);
+  // 2. The update, the list cannot be read: the update fails before anything, the summary as it was.
+  const u1 = f.update();
+  check('the automatic update, the list cannot be read: the summary as it was', [u1.success, snapshot(f.body) === kept], [false, true]);
+  // 3. Close Report, the list cannot be read.
+  const c1 = closeReport(f);
+  check('Close Report, the list cannot be read: NOT READY, nothing written, nothing checked', [c1.ready, c1.summaryState, c1.checked, snapshot(f.body) === kept], [false, 'no-scope', 0, true]);
+  // The same three with a list that has no TDoc (empty, or everything filtered out).
+  const g = built([t(1, '4.3'), t(2, '4.3')], { 1: 'agreed', 2: 'noted' });
+  updateSummary(g);
+  const gk = snapshot(g.body);
+  g.tdocs = [];
+  updateSummary(g);
+  check('Update Disposition Summary, a list without TDocs: nothing written, the reason', [snapshot(g.body) === gk, lastAlert(g)[0], /the TDoc list of this meeting has no TDoc/.test(lastAlert(g)[1])],
+    [true, 'Disposition Summary NOT updated', true]);
+  const u2 = g.update();
+  check('the automatic update, a list without TDocs: the summary left as it is ("no-scope")', [u2.dispositionSummary, snapshot(g.body) === gk], ['no-scope', true]);
+  const c2 = closeReport(g);
+  check('Close Report, a list without TDocs: NOT READY, nothing written', [c2.ready, c2.summaryState, snapshot(g.body) === gk], [false, 'no-scope', true]);
+  // The writer itself refuses without a scope: no caller can fall back to every table.
+  check('writeDispositionSummary_() without a scope writes nothing ("no-scope")', [g.exec(() => g.s.writeDispositionSummary_(g.body)).state, snapshot(g.body) === gk], ['no-scope', true]);
+
+  // Pure: the scope.
+  const { sandbox: s } = loadCode();
+  const row = (n) => ({ row: [n], tdocCol: 0 });
+  const sc = s.meetingTdocScope_([row('S4aP260082'), row(' S4aP260083 '), row('S4aP260082'), row('')]);
+  check('pure: the scope is the canonical numbers of the list, each once; empty -> not ok', [sc.ok, Object.keys(sc.numbers).sort(), s.meetingTdocScope_([]).ok, s.meetingTdocScope_(null).ok],
+    [true, ['S4aP260082', 'S4aP260083'], false, false]);
+}
+
 // ====================================================================== I
 console.log('I. what changed in Code.js and template/ReportCreator.js');
 {
@@ -1000,6 +1097,25 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
     check('the one function of ReportCreator.js that changed is the report menu', functionNames(releasedCreator).filter((name) => functionSource(CREATOR, name) !== functionSource(releasedCreator, name)), DISPOSITION_CREATOR_CHANGED_FUNCTIONS);
     check('HyperLink.js and the manifest are the released files', ['HyperLink.js', 'appsscript.json'].filter((file) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r/g, '') !==
       execFileSync('git', ['show', 'template-release/T-2026.10.15:' + file], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '')), []);
+  }
+  // T-2026.10.17 candidate: the TDocs of the configured meeting only. Against T-2026.10.16, the one released function outside the
+  // section that changed is continuousUpdateCore_ (it hands the TDoc list it has read to the summary); the rest is in the section.
+  let released16 = null;
+  try {
+    released16 = execFileSync('git', ['show', 'template-release/T-2026.10.16:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
+  } catch (e) {
+    released16 = null;
+  }
+  if (released16 === null) {
+    console.log('  note: template-release/T-2026.10.16 is not available in this checkout; the comparison with it is skipped.');
+  } else {
+    const section16 = released16.slice(released16.indexOf(DISPOSITION_SECTION_START), released16.indexOf(DISPOSITION_SECTION_END) + DISPOSITION_SECTION_END.length);
+    check('against T-2026.10.16: outside the section only continuousUpdateCore_ changed; meetingTdocScope_, readMeetingTdocScope_ and otherMeetingsText_ are new; none removed',
+      [functionNames(released16).filter((name, i, list) => list.indexOf(name) === i && functionNames(section16).indexOf(name) === -1).filter((name) => functionSource(CODE, name) !== functionSource(released16, name)),
+        functionNames(CODE).filter((name) => functionNames(released16).indexOf(name) === -1).sort(), functionNames(released16).filter((name) => functionNames(CODE).indexOf(name) === -1)],
+      [['continuousUpdateCore_'], ['meetingTdocScope_', 'otherMeetingsText_', 'readMeetingTdocScope_'], []]);
+    check('against T-2026.10.16: outside the section and continuousUpdateCore_, Code.js is byte for byte the release',
+      CODE.replace(section, '').replace(functionSource(CODE, 'continuousUpdateCore_'), '') === released16.replace(section16, '').replace(functionSource(released16, 'continuousUpdateCore_'), ''), true);
   }
 }
 

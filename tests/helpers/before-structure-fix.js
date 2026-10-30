@@ -242,10 +242,10 @@ function codeWithoutAttendanceEmptyTextFix(code) {
  */
 const DISPOSITION_SECTION_START = BAR + '// DISPOSITION SUMMARY AND CLOSE REPORT (after T-2026.10.15)\n' + BAR;
 const DISPOSITION_SECTION_END = BAR + '// END OF DISPOSITION SUMMARY AND CLOSE REPORT\n' + BAR + '\n';
-const DISPOSITION_SECTION_FUNCTIONS = ['classifyTdocDisposition_', 'isDispositionSummaryHeadingText_', 'tdocCellLinkUrl_', 'readReportDispositions_', 'buildDispositionSummaryModel_', 'dispositionSummaryStatusText_',
+const DISPOSITION_SECTION_FUNCTIONS = ['classifyTdocDisposition_', 'isDispositionSummaryHeadingText_', 'tdocCellLinkUrl_', 'meetingTdocScope_', 'readMeetingTdocScope_', 'readReportDispositions_', 'buildDispositionSummaryModel_', 'dispositionSummaryStatusText_',
   'dispositionSummaryContent_', 'isDispositionSummaryParagraphText_', 'isDispositionSummaryTable_', 'findDispositionSummarySection_', 'readDispositionSummaryContent_', 'formatDispositionSummaryTable_',
   'renderDispositionSummary_', 'writeDispositionSummary_', 'syncDispositionSummaryOnUpdate_', 'dispositionSummaryRebuildNote_', 'dispositionCountsText_', 'isRevisedInReport_', 'checkRevisionsIn3gu_', 'closeReportCore_',
-  'dispositionDialogTitle_', 'describeDispositionSummaryState_', 'formatCloseReportResult_', 'formatDispositionSummaryResult_', 'withDispositionLock_', 'updateDispositionSummary', 'closeReport', 'closeReportResultHtml_'];
+  'dispositionDialogTitle_', 'describeDispositionSummaryState_', 'otherMeetingsText_', 'formatCloseReportResult_', 'formatDispositionSummaryResult_', 'withDispositionLock_', 'updateDispositionSummary', 'closeReport', 'closeReportResultHtml_'];
 const DISPOSITION_CHANGED_FUNCTIONS = ['continuousUpdateCore_', 'findReportTerminalBoundary_', 'findAgendaSectionEndIndex_', 'analyzeReportStatus', 'buildSkeletonWithTdocTables', 'findAdhocAttendanceInsertIndex_'];
 const DISPOSITION_CHANGES = [
   // The release of it (T-2026.10.16): the version line and the changelog entry of 2.26.0.
@@ -253,11 +253,13 @@ const DISPOSITION_CHANGES = [
   [" * CHANGELOG\n * 2.26.0 (2026-10-30)\n *   - Added (template reports): Report > Update Disposition Summary writes a\n *     managed section at the end of the report -- after the close and the\n *     Attendance section -- with every TDoc once in one of three tables by\n *     its Status: Agreed, Endorsed and Approved (agreed, partially agreed,\n *     endorsed, approved); Other Disposed (noted, revised, merged,\n *     withdrawn, replied); Not Yet Disposed (available, reserved, parked,\n *     postponed, Plenary, other, and any status it does not know). Updates\n *     keep a summary that is there up to date and never add one; text typed\n *     below it is kept, text typed into it stops it from being written.\n *   - Added: Report > Close Report checks the report and says whether it is\n *     ready to close: no TDoc not yet disposed, and for every TDoc revised\n *     in the report a complete revision in 3GU (every revision of \"Revised\n *     to\" read; withdrawn ones aside): not reserved, reserved but not\n *     uploaded, and could not verify are reported apart, with what to do.\n *     It writes the summary and nothing else, stores nothing, and shows the\n *     whole result in a dialog the execution does not wait on.\n *     (DISPOSITION SUMMARY AND CLOSE REPORT section;\n *     docs/DISPOSITION_SUMMARY.md.)\n",
    " * CHANGELOG\n"],
   // continuousUpdateCore_(): a summary that is there is kept up to date.
+  // (After T-2026.10.16: for the TDocs of the meeting -- the list the update has read.)
   ["\n    // After T-2026.10.15: a Disposition Summary that is there is kept up to\n" +
    "    // date; a report without one is not given one. Not in a background run\n" +
    "    // (no status dropdowns can be read there). Never fails the update.\n" +
+   "    // After T-2026.10.16: for the TDocs of the meeting -- the list read above.\n" +
    "    if (!context) {\n" +
-   "      const summary = syncDispositionSummaryOnUpdate_(body);\n" +
+   "      const summary = syncDispositionSummaryOnUpdate_(body, allTdocs);\n" +
    "      if (summary.state !== 'absent') result.dispositionSummary = summary.state;\n" +
    "    }\n", ''],
   // findReportTerminalBoundary_(): without a close and an Attendance section, the summary ends the agenda part.
