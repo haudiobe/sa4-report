@@ -16,7 +16,8 @@ frozen in production: no Update Disposition Summary and no Close Report in live 
 The same candidate refuses a TDoc list that is not shown to be the meeting's before any change (docs/TDOC_LIST_IDENTITY.md):
 the 36 "earlier-call" TDocs in live 6G came from the Portal list of 86178 on 2026-10-30, not from the series.
 
-**T-2026.10.18 (`Code.js` 2.26.2), tag `template-release/T-2026.10.18`: RELEASED, NOT YET DEPLOYED**
+**T-2026.10.18 (`Code.js` 2.26.2), release commit `c34a122`, tag `template-release/T-2026.10.18`: RELEASED AND
+DEPLOYED** to the master template, MBS and 6G on 2026-10-30 (§ Release and deployment of T-2026.10.18)
 (branch `fix/disposition-report-local-scope`, accepted candidate `b55e67e`; read-only release gate on the
 exports of 2026-10-30: 6G 115 TDocs in scope, no S4aP260008…043; MBS 34, S4aI260080…113). **The summary is
 report-local.** It reads the TDocs the report has registered, not the Portal TDoc list (§ Which TDocs), so
@@ -382,6 +383,42 @@ is T-2026.10.15 (its bundles in `dist/`).
 Left for cleanup, not deleted: the helper project "ONE-OFF Dropdown Helper T-2026.10.16 – DELETE
 AFTER" and the rehearsal copy "DROPDOWN REHEARSAL – SA4 Report Template copy – T-2026.10.16 –
 DELETE AFTER" (with the copy of the template's script it carries), in the releasing user's Drive.
+
+## Release and deployment of T-2026.10.18
+
+Release T-2026.10.18, 2026-10-30: the report-local Disposition Summary (§ Which TDocs) and Close Report's
+external check (§ Close Report).
+
+| Step | Result |
+|---|---|
+| Release commit | `c34a122fcb3414c98c0cd6a6f54467be14ac3efa`, on the accepted candidate `b55e67e`. It adds the version line 2.26.2 (2026-10-30) and its changelog entry; without them, `Code.js` is the candidate's. The ledger (`codeWithoutReportLocalScope()`) takes the 2.26.2 header out with the change and gives the `Code.js` of T-2026.10.17 byte for byte; the version-pinned tests say 2.26.2 |
+| Release gate (read-only) | On the exports of 2026-10-30, with the candidate's own functions. 6G (20:35): 115 TDoc tables, 116 registered (S4aP260067…182; 099 reallocated to removed, no table), scope 115, none of S4aP260008…043, S4aP260098 and S4aP260149 included. MBS (19:47): 34 tables = 34 registered = S4aI260080…113, scope 34 |
+| Tests on the release commit | 113 files, 7,708 checks, 0 failures. Among them: disposition-report-local-scope 50, disposition 223, tdoc-list-identity 52, release-file-set 48, template-release 26 |
+| TDoc list identity | Not weakened: against T-2026.10.17 the identity section, `downloadAndGroupTdocs_`, `downloadAndProcessFromWeb` and `buildSkeletonWithTdocTables` are byte-identical; `continuousUpdateCore_` changed in its one call of the summary sync only |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.18` on the release commit. One atomic push, without force: `origin/master` fast-forwarded `d19e52d` → `c34a122`, and the tag published. Every older tag is unchanged (T-2026.10.16 `5d5699d`, T-2026.10.17 `24c583a`) |
+| Release bundle | `tools/template-release.js --release T-2026.10.18` from the tagged, clean commit: the five production files. The four source files are equal to the tag (line ends aside). `Release.js` names T-2026.10.18, template, 2.26.2, the release commit and the tag |
+| Adoption bundles | `--adopt T-2026.10.18` for `mbs-live`, and for `6g-live` with `--allow-legacy-target`, authorised for T-2026.10.18 only. Both are byte-identical to the release bundle |
+| Before the pushes | Each target was pulled read-only into its own scratch folder: all three ran T-2026.10.17 (`24c583a`). Each container was proven with the Apps Script API (`projects.get`, read-only): "SA4 Report Template", "MBS SWG Minutes – SA4-e (AH) MBS SWG post 137-e", "6G Media Minutes – SA4-e (AH) on FS_6G_MED". Their last update was the T-2026.10.17 push |
+| Master template runtime | Pushed at 21:48:50 (CET) |
+| MBS runtime | Pushed at 21:49:14. Script files only |
+| 6G runtime | Pushed at 21:49:26. Script files only |
+| Read-back | A fresh pull of each of the three targets: exactly five files, four byte-identical (line ends aside), the manifest identical as JSON. `Release.js`: T-2026.10.18, 2.26.2, `c34a122`, tag `template-release/T-2026.10.18` |
+
+Every clasp command used `--user haudiobe.ts@gmail.com` and ran from its own scratch folder. None ran
+from the repository root, and none used `--force`.
+
+**The deployment ran nothing in the reports:** no update, no Update Disposition Summary, no Close
+Report, no build, no session action. No trigger was created, started or stopped; the 6G automatic
+update stays off. 3GU was not touched. The runtime to roll back to is T-2026.10.17 (its bundles in
+`dist/`).
+
+**The one live smoke, by Thomas:** SA4 Report › Report › Update Disposition Summary in live 6G. The
+Portal still returns a list that is not the meeting's; the summary does not read it. Expected:
+
+- "Disposition Summary written at the end of the report."
+- 115 TDocs: 16 / 84 / 15, unless a status changed after the 20:35 export.
+- None of S4aP260008…043.
+- Nothing outside the summary changed.
 
 ## MBS, after a release
 
