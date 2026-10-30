@@ -7,8 +7,8 @@ template, MBS and 6G on 2026-10-30; the template's Document Status dropdown has 
 `feature/disposition-summary-close-report` from `e2ceddc` (T-2026.10.15): candidates `4276161` …
 `261106c`, smoke-tested on a Drive copy of the 6G report.
 
-**Candidate T-2026.10.17 (`Code.js` 2.26.1), branch `fix/disposition-meeting-scope`: NOT RELEASED, NOT
-DEPLOYED.** The first Update Disposition Summary in live 6G (T-2026.10.16, 2026-10-30) listed 150 TDocs:
+**T-2026.10.17 (`Code.js` 2.26.1), tag `template-release/T-2026.10.17`: RELEASED, NOT YET DEPLOYED** (branch
+`fix/disposition-meeting-scope`). The first Update Disposition Summary in live 6G (T-2026.10.16, 2026-10-30) listed 150 TDocs:
 every TDoc table of the report, also those of earlier calls that the report keeps. The candidate reads
 the TDocs of the configured meeting only (§ Which TDocs). Until it is released, T-2026.10.16 stays
 frozen in production: no Update Disposition Summary and no Close Report in live 6G.

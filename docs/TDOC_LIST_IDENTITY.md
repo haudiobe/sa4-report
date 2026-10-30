@@ -1,7 +1,7 @@
 # TDoc list identity
 
-**Status: CANDIDATE for T-2026.10.17 (`Code.js` 2.26.1), branch `fix/disposition-meeting-scope`. NOT RELEASED,
-NOT DEPLOYED.** Section TDOC LIST IDENTITY of `Code.js`; tests `tests/tdoc-list-identity.test.js`.
+**Status: RELEASED, NOT YET DEPLOYED. Template release T-2026.10.17 (`Code.js` 2.26.1), tag
+`template-release/T-2026.10.17`; developed on branch `fix/disposition-meeting-scope` (`d09649c`).** Section TDOC LIST IDENTITY of `Code.js`; tests `tests/tdoc-list-identity.test.js`.
 
 A downloaded TDoc list is used only when it is shown to be the list of the configured meeting. Before, a
 list was trusted because it could be downloaded.

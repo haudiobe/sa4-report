@@ -298,6 +298,11 @@ const IDENTITY_SECTION_END = BAR + '// END OF TDOC LIST IDENTITY\n' + BAR + '\n'
 const IDENTITY_SECTION_FUNCTIONS = ['tdocListRawNumbers_', 'tdocListAnchorFor_', 'chooseTdocListAnchor_', 'evaluateTdocListIdentity_', 'assertTdocListIdentity_'];
 const IDENTITY_CHANGED_FUNCTIONS = ['continuousUpdateCore_', 'downloadAndProcessFromWeb', 'buildSkeletonWithTdocTables', 'downloadAndGroupTdocs_'];
 const IDENTITY_CHANGES = [
+  // The release of it and of the meeting scope of the Disposition Summary (T-2026.10.17): the version line and the
+  // changelog entry of 2.26.1.
+  [" * Version: 2.26.1 (2026-10-30)\n", " * Version: 2.26.0 (2026-10-30)\n"],
+  [" * CHANGELOG\n * 2.26.1 (2026-10-30)\n *   - Fixed (template reports): the Disposition Summary and Close Report\n *     read only the TDocs of this meeting -- its TDoc list as an update\n *     reads it (agenda selector, Document Reallocations) -- not every TDoc\n *     table of the document; tables of other meetings are left out,\n *     counted and not touched. Without that list (not readable, empty, or\n *     with none of the report's TDocs) nothing is written and Close Report\n *     is not ready. (docs/DISPOSITION_SUMMARY.md.)\n *   - Fixed: a downloaded TDoc list is used only when it is shown to be the\n *     list of this meeting: the saved agenda TDoc has a row in it, else a\n *     TDoc of a list accepted before (TDOC_LIST_ANCHOR), else -- the first\n *     time -- every TDoc table of the report is in it. Otherwise the\n *     update, the build, the summary, Close Report and the session actions\n *     change nothing. (6G, 2026-10-30: the Portal list of the meeting ID\n *     gave the TDocs of earlier calls, and updates inserted them.) (TDOC\n *     LIST IDENTITY section; docs/TDOC_LIST_IDENTITY.md.)\n",
+   " * CHANGELOG\n"],
   // continuousUpdateCore_(): a refused list is a run that changed nothing.
   ["    // After T-2026.10.16: a list that is not the meeting's changes nothing.\n" +
    "    let tdocGroups;\n" +

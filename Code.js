@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.0 (2026-10-30)
+ * Version: 2.26.1 (2026-10-30)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,22 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.1 (2026-10-30)
+ *   - Fixed (template reports): the Disposition Summary and Close Report
+ *     read only the TDocs of this meeting -- its TDoc list as an update
+ *     reads it (agenda selector, Document Reallocations) -- not every TDoc
+ *     table of the document; tables of other meetings are left out,
+ *     counted and not touched. Without that list (not readable, empty, or
+ *     with none of the report's TDocs) nothing is written and Close Report
+ *     is not ready. (docs/DISPOSITION_SUMMARY.md.)
+ *   - Fixed: a downloaded TDoc list is used only when it is shown to be the
+ *     list of this meeting: the saved agenda TDoc has a row in it, else a
+ *     TDoc of a list accepted before (TDOC_LIST_ANCHOR), else -- the first
+ *     time -- every TDoc table of the report is in it. Otherwise the
+ *     update, the build, the summary, Close Report and the session actions
+ *     change nothing. (6G, 2026-10-30: the Portal list of the meeting ID
+ *     gave the TDocs of earlier calls, and updates inserted them.) (TDOC
+ *     LIST IDENTITY section; docs/TDOC_LIST_IDENTITY.md.)
  * 2.26.0 (2026-10-30)
  *   - Added (template reports): Report > Update Disposition Summary writes a
  *     managed section at the end of the report -- after the close and the
