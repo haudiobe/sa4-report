@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.2 (2026-10-30)
+ * Version: 2.26.3 (2026-11-01)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,21 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.3 (2026-11-01)
+ *   - Added (template reports): Close Report's external check has a second
+ *     source of evidence. When the configured TDoc list (the Portal's Excel
+ *     export) cannot be had or is not shown to be the meeting's, Close
+ *     Report -- and nothing else -- reads the Portal's TDoc list page
+ *     (TdocList.aspx?meetingId=...), through the SAME identity guard, the
+ *     same agenda selector and Document Reallocations, and the same
+ *     revision check. The page is used only when it is one complete list
+ *     (every row, the reserved TDocs as disabled links, every number of
+ *     "Revised To"); the two sources are never combined; the dialog and the
+ *     log name the source. The update, the build, the legacy import and the
+ *     Disposition Summary are unchanged. (6G, 2026-10-30: the export served
+ *     the TDocs of earlier calls while the page showed the meeting's 116.)
+ *     (CLOSE REPORT: THE PORTAL TDOC LIST PAGE AS FALLBACK EVIDENCE
+ *     section; docs/DISPOSITION_SUMMARY.md.)
  * 2.26.2 (2026-10-30)
  *   - Changed (template reports): the Disposition Summary is report-local.
  *     It lists the TDoc tables whose TDoc the report has registered (its

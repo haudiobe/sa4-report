@@ -55,7 +55,7 @@ Summary read the list here too until the candidate after T-2026.10.17. It now re
 is the report's registration table, docs/DISPOSITION_SUMMARY.md § Which TDocs.) `TDOC_LIST_ANCHOR` is not among the keys copied when a report is adopted for the add-on
 background runs (`ADDON003_ADOPTION_FIXED_KEYS_`); there the report is the evidence again (rule 3).
 
-**The Portal's TDoc list page (candidate after T-2026.10.18).** When the configured Excel list is refused
+**The Portal's TDoc list page (T-2026.10.19, `Code.js` 2.26.3).** When the configured Excel list is refused
 here, or cannot be had, Close Report — and only Close Report — reads `TdocList.aspx?meetingId=<MEETING_ID>`
 and puts its rows through this same `assertTdocListIdentity_()` (`'read'`: nothing stored), with the same
 three rules; the rows of the two sources are never combined. docs/DISPOSITION_SUMMARY.md § Close Report, "The

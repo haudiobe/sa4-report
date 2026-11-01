@@ -10,7 +10,7 @@
  * identity -- and only through the same guard, the same filtering and the same revision check. Nothing else reads it: not
  * the update, not the build, not the Disposition Summary.
  *
- *   A.  the parser on the real page of 86178 (tests/fixtures/meeting-86178-tdoclist-page-2026-10-30.html): every row,
+ *   A.  the parser on the real page of 86178 (tests/fixtures/meeting-86178-tdoclist-page-2026-10-30.html.txt): every row,
  *       the disabled rows, every number of "Revised To"; and what it refuses (fail closed)
  *   B.  the real case: the wrong Excel export (tests/fixtures/meeting-86178-tdoc-list-wrong-2026-10-30.json) and the real
  *       page, on a report built from the meeting's 116 TDocs -- the fallback verifies the revisions (083, 140, 074)
@@ -44,7 +44,8 @@ function check(name, actual, expected) {
 }
 
 const ROOT = path.join(__dirname, '..');
-const PAGE_86178 = fs.readFileSync(path.join(__dirname, 'fixtures', 'meeting-86178-tdoclist-page-2026-10-30.html'), 'utf8');
+// The captured page, as .html.txt: the release file-set guard admits no tracked .html file (tests/release-file-set.test.js).
+const PAGE_86178 = fs.readFileSync(path.join(__dirname, 'fixtures', 'meeting-86178-tdoclist-page-2026-10-30.html.txt'), 'utf8');
 const WRONG_EXCEL_86178 = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'meeting-86178-tdoc-list-wrong-2026-10-30.json'), 'utf8')).values;
 const SUMMARY = 'Disposition Summary';
 const AGENDA = 'S4aA260090';

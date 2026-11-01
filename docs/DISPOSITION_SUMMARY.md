@@ -245,10 +245,11 @@ It (after T-2026.10.17, candidate):
 
 Before, under T-2026.10.17, the list was the scope of everything: without it, nothing was written or checked.
 
-#### The second source of the external check: the Portal's TDoc list page (candidate after T-2026.10.18)
+#### The second source of the external check: the Portal's TDoc list page (T-2026.10.19)
 
-Section CLOSE REPORT: THE PORTAL TDOC LIST PAGE AS FALLBACK EVIDENCE of `Code.js`;
-`tests/close-report-portal-page-fallback.test.js`. Branch `fix/close-report-html-fallback`.
+**T-2026.10.19 (`Code.js` 2.26.3), tag `template-release/T-2026.10.19`: RELEASED, NOT YET DEPLOYED** (branch
+`fix/close-report-html-fallback`, accepted candidate `23a5319`). Section CLOSE REPORT: THE PORTAL TDOC LIST
+PAGE AS FALLBACK EVIDENCE of `Code.js`; `tests/close-report-portal-page-fallback.test.js`.
 
 **Why.** 6G, 2026-10-30: the Excel export of the meeting's TDoc list,
 `GenerateDocumentList.aspx?meetingId=86178` — the configured source, the same URL the Portal's "Download
@@ -296,8 +297,9 @@ TDoc list page (TdocList.aspx) could not be used either: <reason>." When it is u
 verification … completed. Source: the Portal TDoc list page (TdocList.aspx); the configured TDoc list could not
 be used.", and the log "External TDoc verification source: Portal HTML fallback (…)" (else "… source: Excel").
 
-**On the real page of 86178** (`tests/fixtures/meeting-86178-tdoclist-page-2026-10-30.html`, the captured
-page with the view state blanked and the meeting combo trimmed; `…-tdoc-list-wrong-2026-10-30.json`, the
+**On the real page of 86178** (`tests/fixtures/meeting-86178-tdoclist-page-2026-10-30.html.txt`, the captured
+page with the view state blanked and the meeting combo trimmed — as `.html.txt`, since the release file-set
+guard admits no tracked `.html` file; `…-tdoc-list-wrong-2026-10-30.json`, the
 wrong export of the same evening): 116 rows, the 10 disabled ones among them (S4aP260099, 172, 173, 174, 175
 …), S4aP260140 revised to "S4aP260174 , S4aP260175", identity by S4aP260098. On a report built from them, with
 099 reallocated to removed as live 6G has it: S4aP260083 → 172 withdrawn: not reserved; S4aP260140 → 174
