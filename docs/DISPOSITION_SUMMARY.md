@@ -247,7 +247,8 @@ Before, under T-2026.10.17, the list was the scope of everything: without it, no
 
 #### The second source of the external check: the Portal's TDoc list page (T-2026.10.19)
 
-**T-2026.10.19 (`Code.js` 2.26.3), tag `template-release/T-2026.10.19`: RELEASED, NOT YET DEPLOYED** (branch
+**T-2026.10.19 (`Code.js` 2.26.3), release commit `277e5a5`, tag `template-release/T-2026.10.19`: RELEASED AND
+DEPLOYED** to the master template, MBS and 6G on 2026-11-01 (§ Release and deployment of T-2026.10.19; branch
 `fix/close-report-html-fallback`, accepted candidate `23a5319`). Section CLOSE REPORT: THE PORTAL TDOC LIST
 PAGE AS FALLBACK EVIDENCE of `Code.js`; `tests/close-report-portal-page-fallback.test.js`.
 
@@ -498,6 +499,40 @@ Portal still returns a list that is not the meeting's; the summary does not read
 - 115 TDocs: 16 / 84 / 15, unless a status changed after the 20:35 export.
 - None of S4aP260008…043.
 - Nothing outside the summary changed.
+
+## Release and deployment of T-2026.10.19
+
+Release T-2026.10.19, 2026-11-01: the Portal's TDoc list page as the second source of Close Report's external
+check (§ Close Report, "The second source of the external check").
+
+| Step | Result |
+|---|---|
+| Release commit | `277e5a57da38faee7da4d31384ac262dacebec98`, on the accepted candidate `23a5319`. It adds the version line 2.26.3 (2026-11-01) and its changelog entry; without them, `Code.js` is the candidate's. One test asset renamed: the captured page fixture is tracked as `.html.txt`, because the release file-set guard admits no tracked `.html` file (the candidate's run had it untracked, so the guard had not seen it). The ledger (`codeWithoutCloseReportPageFallback()`) takes the 2.26.3 header out with the fallback and gives the `Code.js` of T-2026.10.18 byte for byte; the version-pinned tests say 2.26.3 |
+| Tests on the release commit | 114 files, 7,763 checks, 0 failures. Among them: close-report-portal-page-fallback 55, disposition 223, disposition-report-local-scope 50, tdoc-list-identity 52, release-file-set 48, template-release 26, after-10-8-ledger 38 |
+| Unchanged against T-2026.10.18 | `continuousUpdateCore_`, `downloadAndGroupTdocs_`, `downloadAndProcessFromWeb`, `buildSkeletonWithTdocTables`, `updateDispositionSummary`, `writeDispositionSummary_`, `syncDispositionSummaryOnUpdate_`, `reportTdocScope_`, `checkRevisionsIn3gu_`, `parseMeetingTdocListHtml_`, the TDOC LIST IDENTITY section, `ReportCreator.js`, `HyperLink.js`, `appsscript.json`: byte-identical. Changed: `readMeetingTdocScope_`, `closeReportCore_`, `externalVerificationText_`; new: the fallback section's five functions. The page is fetched in one place, called from `readMeetingTdocScope_` only, called from `closeReportCore_` only |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.19` on the release commit. One atomic push, without force: `origin/master` fast-forwarded `86843a4` → `277e5a5`, and the tag published. T-2026.10.16 `5d5699d`, T-2026.10.17 `24c583a`, T-2026.10.18 `c34a122` unchanged |
+| Release bundle | `tools/template-release.js --release T-2026.10.19` from the tagged, clean commit: the five production files, the four source files equal to the tag (line ends aside); `Release.js` names T-2026.10.19, template, 2.26.3, the release commit and the tag |
+| Adoption bundles | `--adopt T-2026.10.19` for `mbs-live`, and for `6g-live` with `--allow-legacy-target`, authorised for T-2026.10.19 only. Both byte-identical to the release bundle |
+| Before the pushes | Each target pulled read-only into its own scratch folder: all three ran T-2026.10.18 (`c34a122`), last updated by the T-2026.10.18 push. Each container proven with the Apps Script API (`projects.get`, read-only): "SA4 Report Template", "MBS SWG Minutes – SA4-e (AH) MBS SWG post 137-e", "6G Media Minutes – SA4-e (AH) on FS_6G_MED" |
+| Master template runtime | Pushed at 18:40:09 (CET) |
+| MBS runtime | Pushed at 18:40:49. Script files only |
+| 6G runtime | Pushed at 18:41:18. Script files only |
+| Read-back | A fresh pull of each of the three targets: exactly five files, four byte-identical to the bundle (line ends aside), the manifest identical as JSON. `Release.js`: T-2026.10.19, 2.26.3, `277e5a5`, tag `template-release/T-2026.10.19`; `Code.js` 2.26.3 with the fallback section |
+
+Every clasp command used `--user haudiobe.ts@gmail.com` and ran from its own scratch folder; none from the
+repository root, none with `--force`.
+
+**The deployment ran nothing in the reports:** no update, no Update Disposition Summary, no Close Report, no
+build, no session action. No trigger was created, started, restarted or stopped; the 6G automatic update stays
+off. 3GU was not touched. The runtime to roll back to is T-2026.10.18 (its bundles in `dist/`).
+
+**The one live smoke, by Thomas:** SA4 Report › Report › Close Report in live 6G. Expected: the Excel export is
+refused (no row for S4aP260098); the page `TdocList.aspx?meetingId=86178` is read and accepted by S4aP260098;
+"External verification … completed. Source: the Portal TDoc list page (TdocList.aspx) …" in the dialog, and
+"External TDoc verification source: Portal HTML fallback (…116 contributions, 115 TDocs of the meeting)" in
+the log; the revised TDocs judged against that list — no "TDoc list not read" — with the genuine findings
+(e.g. S4aP260083 not reserved, S4aP260140 reserved but not uploaded). NOT READY is expected while such
+findings stand; READY is not the criterion. Nothing but the summary is written (already up to date: unchanged).
 
 ## MBS, after a release
 
