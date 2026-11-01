@@ -245,6 +245,72 @@ It (after T-2026.10.17, candidate):
 
 Before, under T-2026.10.17, the list was the scope of everything: without it, nothing was written or checked.
 
+#### The second source of the external check: the Portal's TDoc list page (candidate after T-2026.10.18)
+
+Section CLOSE REPORT: THE PORTAL TDOC LIST PAGE AS FALLBACK EVIDENCE of `Code.js`;
+`tests/close-report-portal-page-fallback.test.js`. Branch `fix/close-report-html-fallback`.
+
+**Why.** 6G, 2026-10-30: the Excel export of the meeting's TDoc list,
+`GenerateDocumentList.aspx?meetingId=86178` — the configured source, the same URL the Portal's "Download
+Tdocs to Excel" button offers — served, from the afternoon on and still on 2026-11-01, the 36 TDocs of the
+earlier calls (S4aP260008…043, reserved Feb–Mar 2026), while the Portal's TDoc list **page**
+`TdocList.aspx?meetingId=86178` showed the 116 of the meeting (S4aP260067…182, "116 contributions found,
+displaying 1 to 116"). The request makes no difference (cache-busting parameter, parameter case, a browser's
+User-Agent and Referer, a session that opened the page first: byte-identical answers). The identity guard
+refused the export, as it must; Close Report could verify none of the 39 revised TDocs. The cause is inside the
+Portal and not known. It is not tied to a closed meeting: the same day, 86172 (MBS, running) exported 34 = the
+page's 34; 85916 (ended 28 Sept) exported 95 while its page showed 101 (the six newest missing).
+
+**What.** For Close Report's external check — and for nothing else: not the update, not the build, not the
+legacy import, not the Disposition Summary — the page is a second source of evidence
+(`readMeetingTdocScope_()` → `readPortalTdocListPageScope_()`):
+
+| The configured list (Excel) | What Close Report does |
+|---|---|
+| downloaded, shown to be the meeting's | used as before; the page is not fetched. Source: Excel |
+| downloaded, refused by its identity | the page is fetched for the saved `MEETING_ID` |
+| cannot be had (download, conversion) | the page is fetched |
+| shown to be the meeting's but with no TDoc of the meeting | as before: not completed; no page |
+
+The page is read by its own adapter (`parsePortalTdocListPage_()`, not the agenda-discovery parser, which
+skips the disabled links and keeps the first revision only) and is used only when it is **one complete
+list**: the grid `rgTdocList_ctl00` is there; its pager says "N contributions found, displaying 1 to N"; there
+are exactly N rows; every row has its twelve cells and a TDoc number; no number twice; every TDoc cell is a
+link to the document (uploaded) or a disabled link (reserved, not uploaded). A login page, an error page, an
+empty answer, a paged or truncated list, a dropped cell, a mangled number: refused, with the reason. Read of a
+row: TDoc, uploaded or not (with the document's link), Title, Source, Type, For, Status, Agenda item and its
+title, "Revision of", and the **whole** "Revised To" cell ("S4aP260174 , S4aP260175"). Not read, not
+invented: Contact, reservation and upload times (the page has none; Close Report needs none).
+
+Then the **same chain** as for a downloaded list: the rows are put in the shape of the Excel rows (the header
+of the export's names; the link cell known for every TDoc) → `assertTdocListIdentity_()` on the raw rows
+(`'read'`: nothing stored; the agenda TDoc, else the anchor, else every TDoc table of the report) → the agenda
+selector and the Document Reallocations (`portalTdocListPageRecords_()`, the filter of
+`downloadAndGroupTdocs_()`) → `checkRevisionsIn3gu_()`. The rows of the two sources are never combined. A
+count proves nothing: a page of 116 other TDocs parses and is refused for want of S4aP260098; a wrong page
+with TDocs in common with the report is refused too.
+
+When the page cannot be used either, the report is NOT READY as before, and the dialog names both: "External
+verification could not be completed: the TDoc list of this meeting could not be read: <reason>; the Portal
+TDoc list page (TdocList.aspx) could not be used either: <reason>." When it is used, the dialog says "External
+verification … completed. Source: the Portal TDoc list page (TdocList.aspx); the configured TDoc list could not
+be used.", and the log "External TDoc verification source: Portal HTML fallback (…)" (else "… source: Excel").
+
+**On the real page of 86178** (`tests/fixtures/meeting-86178-tdoclist-page-2026-10-30.html`, the captured
+page with the view state blanked and the meeting combo trimmed; `…-tdoc-list-wrong-2026-10-30.json`, the
+wrong export of the same evening): 116 rows, the 10 disabled ones among them (S4aP260099, 172, 173, 174, 175
+…), S4aP260140 revised to "S4aP260174 , S4aP260175", identity by S4aP260098. On a report built from them, with
+099 reallocated to removed as live 6G has it: S4aP260083 → 172 withdrawn: not reserved; S4aP260140 → 174
+withdrawn, 175 reserved not uploaded: not uploaded, naming 175; S4aP260074 → 099 (not in the list) and 148
+agreed, uploaded: complete. None "TDoc list not read".
+
+**Residual risk, not addressed here: an export that passes the identity but is stale.** 85916 on 2026-11-01:
+the export has 95 TDocs, the page 101, and the export passes the identity (its agenda TDoc is in it). Close
+Report then uses the export and never looks at the page. A revision reserved after the export's state is "not
+in the TDoc list" (could not be verified — fail closed); a TDoc withdrawn after it could still be judged live.
+Proving freshness would need an invariant the Portal does not give (nothing in either source dates itself);
+none is invented. This change solves "the export cannot be shown to be this meeting's list", nothing more.
+
 **How the result is shown.** In a modal HTML dialog: the counts, then every list in full, as
 tables (TDoc | Title | Source | Current Status; Original TDoc | Revision | Source | Report state |
 3GU state | Action), scrollable, with a Close button. Text from the report is escaped. The same
@@ -354,6 +420,17 @@ T-2026.10.17, a continuing report with two calls, tables pasted by hand and one 
 - **Close Report** writes the summary but is not ready without the external check, and ready with it.
 - **Fail closed:** no registration table; a registration table without the report's TDocs; tables
   that are not registered.
+
+`tests/close-report-portal-page-fallback.test.js` (candidate after T-2026.10.18): the parser on the real page
+of 86178 and what it refuses (login, empty, no grid, no count, none found, paged, truncated, a TDoc twice,
+eleven cells, a mangled number, a cell that is no link; a count without the agenda TDoc); the real case (the
+wrong export, the real page, a report of the 116: the fallback, 083 / 140 / 074, nothing but the summary
+written, the two other entries never fetch the page); the conditions (Excel valid: no page; refused: page;
+unavailable: page; both wrong: not ready with both reasons and zero mutation; HTTP 503, login, paged; a
+plausible count without the agenda TDoc; a wrong page with TDocs in common); MBS without an agenda TDoc (the
+anchor accepts and refuses the page as it does a list; the report bootstrap; a reader stores nothing); the
+update never fetches the page and refuses the wrong list as before; the summary fetches nothing; and the
+ledger `codeWithoutCloseReportPageFallback()`, which gives the `Code.js` of T-2026.10.18 byte for byte.
 
 The released code fails exactly the 11 scenarios this change is for and passes the other six. The
 ledger `codeWithoutReportLocalScope()` gives the `Code.js` of T-2026.10.17 byte for byte. Against it:

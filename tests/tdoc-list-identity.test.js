@@ -118,7 +118,9 @@ console.log('A. the contamination case: report X holds TDocs of meeting Y; the P
   check('Close Report: NOT READY, external verification not completed (Y\'s list refused), the revised TDoc not verified, nothing written',
     [c.ready, c.externalVerified, c.summaryState, c.checked, c.revisions.map((x) => [x.tdoc, x.kind]), snapshot(r.body) === doc, /^External verification could not be completed: .*could not be shown to be the list of this meeting/.test(c.problems[0] || '')],
     [false, false, 'unchanged', 6, [[id(2), 'revision-not-verified']], true, true]);
-  check('... the list read once, by Close Report; nothing else fetched', [listFetches(r, f2), r.fetches.length - f2], [1, 1]);
+  // After T-2026.10.18: with the list refused, Close Report tries the Portal's TDoc list page (TdocList.aspx) through the same
+  // guard (tests/close-report-portal-page-fallback.test.js); here that page is not served, so nothing is verified.
+  check('... the list read once, by Close Report, then the Portal page tried once; nothing else fetched', [listFetches(r, f2), r.fetches.slice(f2).filter((f) => /TdocList\.aspx/.test(f)).length, r.fetches.length - f2], [1, 1, 2]);
 
   const b = r.build();
   check('Build Report from Scratch: refused before the document is cleared', [b.ok, snapshot(r.body) === doc, props(r) === store], [false, true, true]);

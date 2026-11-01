@@ -357,7 +357,8 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
   check('the TDoc list cannot be read: the summary written from the report, NOT ready, the revised TDoc not verified, the reason given',
     [bres.ready, bres.externalVerified, summaryHeadings(broken.body), bres.checked, bres.revisions.map((x) => [x.tdoc, x.kind]), bres.summaryState, lastAlert(broken)[1].split('\n').filter((l) => /^(⚠️|External)/.test(l))],
     [false, false, 1, 2, [[id(1), 'revision-not-verified']], 'created', ['External verification (TDoc list of this meeting, 3GU): NOT completed.',
-      '⚠️ External verification could not be completed: the TDoc list of this meeting could not be read: Spreadsheet conversion failed. The Disposition Summary is written from the report; the revisions were not checked in 3GU. Run Close Report again once the TDoc list of this meeting can be read.']]);
+      // After T-2026.10.18: the Portal's TDoc list page is tried too (not served here), and the dialog names both.
+      '⚠️ External verification could not be completed: the TDoc list of this meeting could not be read: Spreadsheet conversion failed; the Portal TDoc list page (TdocList.aspx) could not be used either: the page has no TDoc list grid (a login or error page, or another layout). The Disposition Summary is written from the report; the revisions were not checked in 3GU. Run Close Report again once the TDoc list of this meeting can be read.']]);
   // A Drive copy of a report, or Resolve without Save: no saved meeting (the configuration guard). The TDoc list is not read --
   // never the built-in SA4#136 defaults -- so the external check is not done and the report is not ready; the summary is the report's.
   const unsaved = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 2: 'agreed' });

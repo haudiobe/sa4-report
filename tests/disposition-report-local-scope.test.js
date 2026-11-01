@@ -28,7 +28,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutCloseReportPageFallback, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -447,6 +447,9 @@ console.log('L. what changed in Code.js: against T-2026.10.17, only the summary\
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const view = codeWithoutReportLocalScope(FULL);
+  // After T-2026.10.18: the Portal-page fallback of Close Report came later and has its own ledger (tests/close-report-portal-page-fallback.test.js);
+  // the comparisons below are made without it.
+  const CODE = codeWithoutCloseReportPageFallback(FULL).code;
   check('every change is in Code.js exactly once', view.problems, []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
@@ -457,16 +460,16 @@ console.log('L. what changed in Code.js: against T-2026.10.17, only the summary\
     const before = released.replace(/\r/g, '');
     check('without it, Code.js is the Code.js of T-2026.10.17, byte for byte', view.code === before, true);
     check('the functions that changed: the summary\'s callers and Close Report, and the one call in continuousUpdateCore_',
-      functionNames(before).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL, n) !== functionSource(before, n)).sort(), REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS.slice().sort());
+      functionNames(before).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(CODE, n) !== functionSource(before, n)).sort(), REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS.slice().sort());
     check('the new functions: reportTdocScope_ and externalVerificationText_; none removed',
-      [functionNames(FULL).filter((n) => functionNames(before).indexOf(n) === -1).sort(), functionNames(before).filter((n) => functionNames(FULL).indexOf(n) === -1)], [REPORT_LOCAL_SCOPE_NEW_FUNCTIONS.slice().sort(), []]);
+      [functionNames(CODE).filter((n) => functionNames(before).indexOf(n) === -1).sort(), functionNames(before).filter((n) => functionNames(CODE).indexOf(n) === -1)], [REPORT_LOCAL_SCOPE_NEW_FUNCTIONS.slice().sort(), []]);
     const identity = (src) => src.slice(src.indexOf('// TDOC LIST IDENTITY (after T-2026.10.16)'), src.indexOf('// END OF TDOC LIST IDENTITY'));
     check('the TDoc list identity is untouched: its section, and every place a TDoc list is acquired',
-      [identity(FULL) === identity(before)].concat(['downloadAndGroupTdocs_', 'downloadAndProcessFromWeb', 'buildSkeletonWithTdocTables', 'readMeetingTdocScope_', 'meetingTdocScope_', 'checkRevisionsIn3gu_', 'classifyTdocDisposition_',
-        'readReportDispositions_', 'renderDispositionSummary_', 'findDispositionSummarySection_'].map((n) => functionSource(FULL, n) === functionSource(before, n))), Array(11).fill(true));
-    check('the classification is untouched: DISPOSITION_OF_STATUS_ and the classes', [/const DISPOSITION_OF_STATUS_ = \{[\s\S]*?\};/, /const DISPOSITION_CLASSES_ = \[[\s\S]*?\];/].map((re) => FULL.match(re)[0] === before.match(re)[0]), [true, true]);
+      [identity(CODE) === identity(before)].concat(['downloadAndGroupTdocs_', 'downloadAndProcessFromWeb', 'buildSkeletonWithTdocTables', 'readMeetingTdocScope_', 'meetingTdocScope_', 'checkRevisionsIn3gu_', 'classifyTdocDisposition_',
+        'readReportDispositions_', 'renderDispositionSummary_', 'findDispositionSummarySection_'].map((n) => functionSource(CODE, n) === functionSource(before, n))), Array(11).fill(true));
+    check('the classification is untouched: DISPOSITION_OF_STATUS_ and the classes', [/const DISPOSITION_OF_STATUS_ = \{[\s\S]*?\};/, /const DISPOSITION_CLASSES_ = \[[\s\S]*?\];/].map((re) => CODE.match(re)[0] === before.match(re)[0]), [true, true]);
     const core = (src) => functionSource(src, 'continuousUpdateCore_').replace(/\n    \/\/ After T-2026\.10\.1[67]: for the TDocs[\s\S]*?const summary = syncDispositionSummaryOnUpdate_\([^)]*\);/, '');
-    check('continuousUpdateCore_: only the call of the summary sync changed', core(FULL) === core(before), true);
+    check('continuousUpdateCore_: only the call of the summary sync changed', core(CODE) === core(before), true);
   }
 }
 

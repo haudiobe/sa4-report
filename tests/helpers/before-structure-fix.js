@@ -395,9 +395,44 @@ const REPORT_LOCAL_SCOPE_NEW_FUNCTIONS = ['reportTdocScope_', 'externalVerificat
 const REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS = ['continuousUpdateCore_', 'writeDispositionSummary_', 'syncDispositionSummaryOnUpdate_', 'closeReportCore_', 'otherMeetingsText_', 'formatCloseReportResult_',
   'formatDispositionSummaryResult_', 'updateDispositionSummary', 'closeReportResultHtml_'];
 
+/**
+ * Close Report's Portal-page fallback (after T-2026.10.18): when the configured
+ * TDoc list cannot be had or is refused by its identity, Close Report -- and
+ * nothing else -- reads the Portal's TDoc list page through the same guard.
+ * One section after the TDoc list identity, and three functions of the
+ * Disposition Summary section (readMeetingTdocScope_, closeReportCore_,
+ * externalVerificationText_). It came after the report-local scope, so
+ * codeWithoutReportLocalScope() takes it out first. [now, before] pairs; with
+ * the section they give the Code.js of T-2026.10.18 byte for byte.
+ * tests/close-report-portal-page-fallback.test.js pins the behaviour.
+ */
+const PAGE_FALLBACK_SECTION_START = BAR + '// CLOSE REPORT: THE PORTAL TDOC LIST PAGE AS FALLBACK EVIDENCE (after T-2026.10.18)\n' + BAR;
+const PAGE_FALLBACK_SECTION_END = BAR + '// END OF CLOSE REPORT PORTAL PAGE FALLBACK\n' + BAR + '\n';
+const PAGE_FALLBACK_SECTION_FUNCTIONS = ['portalTdocListPageCellText_', 'parsePortalTdocListPage_', 'portalTdocListPageRows_', 'portalTdocListPageRecords_', 'readPortalTdocListPageScope_'];
+const PAGE_FALLBACK_CHANGED_FUNCTIONS = ['readMeetingTdocScope_', 'closeReportCore_', 'externalVerificationText_'];
+const PAGE_FALLBACK_CHANGES = [
+  ["function readMeetingTdocScope_() {\n  let cfg;\n  try {\n    assertMeetingConfigured_();\n    cfg = getReportConfig_();\n    if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');\n  } catch (e) {\n    return { ok: false, allTdocs: [], numbers: {}, error: 'the TDoc list of this meeting could not be read: ' + e.message, source: '' };\n  }\n  let excelProblem;\n  try {\n    const groups = downloadAndGroupTdocs_(cfg);\n",
+   "function readMeetingTdocScope_() {\n  try {\n    assertMeetingConfigured_();\n    const cfg = getReportConfig_();\n    if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');\n    const groups = downloadAndGroupTdocs_(cfg);\n"],
+  ["    Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });\n    const scope = meetingTdocScope_(allTdocs);\n    scope.source = EXTERNAL_SOURCE_EXCEL_;\n    Logger.log('External TDoc verification source: Excel (the configured TDoc list)');\n    return scope;\n  } catch (e) {\n    excelProblem = 'the TDoc list of this meeting could not be read: ' + e.message;\n  }\n  // After T-2026.10.18: the configured list could not be had, or is not shown to be the meeting's -- the Portal's TDoc list\n  // page is tried, through the same identity guard (CLOSE REPORT PORTAL PAGE FALLBACK section). Close Report only.\n  return readPortalTdocListPageScope_(cfg, excelProblem);\n}\n",
+   "    Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });\n    return meetingTdocScope_(allTdocs);\n  } catch (e) {\n    return { ok: false, allTdocs: [], numbers: {}, error: 'the TDoc list of this meeting could not be read: ' + e.message };\n  }\n}\n"],
+  ["  result.externalVerified = list.ok;\n  result.externalSource = list.ok ? list.source || '' : '';\n  if (!list.ok) {\n",
+   "  result.externalVerified = list.ok;\n  if (!list.ok) {\n"],
+  ["    REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState +\n    '; external verification ' + (result.externalVerified ? 'completed (' + result.externalSource + ')' : 'NOT completed'));\n  return result;\n",
+   "    REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState +\n    '; external verification ' + (result.externalVerified ? 'completed' : 'NOT completed'));\n  return result;\n"],
+  ["function externalVerificationText_(result) {\n  if (!result.externalVerified) return 'External verification (TDoc list of this meeting, 3GU): NOT completed.';\n  // After T-2026.10.18: the source is named when it is not the configured list.\n  return 'External verification (TDoc list of this meeting, 3GU): completed.' +\n    (result.externalSource === EXTERNAL_SOURCE_PORTAL_PAGE_ ? ' Source: the Portal TDoc list page (TdocList.aspx); the configured TDoc list could not be used.' : '');\n}\n",
+   "function externalVerificationText_(result) {\n  return result.externalVerified ? 'External verification (TDoc list of this meeting, 3GU): completed.' : 'External verification (TDoc list of this meeting, 3GU): NOT completed.';\n}\n"]
+];
+
+/** Code.js without the Portal-page fallback: the Code.js of T-2026.10.18. { code, problems }. */
+function codeWithoutCloseReportPageFallback(code) {
+  return takeOut(code, PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_CHANGES, 'CLOSE REPORT PAGE FALLBACK');
+}
+
 /** Code.js without the report-local scope: the Code.js of T-2026.10.17. { code, problems }. */
 function codeWithoutReportLocalScope(code) {
-  return takeOut(code, null, null, REPORT_LOCAL_SCOPE_CHANGES, 'REPORT LOCAL SCOPE');
+  const later = codeWithoutCloseReportPageFallback(code);
+  const view = takeOut(later.code, null, null, REPORT_LOCAL_SCOPE_CHANGES, 'REPORT LOCAL SCOPE');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 function codeWithoutListIdentity(code) {
@@ -437,6 +472,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutCloseReportPageFallback, PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

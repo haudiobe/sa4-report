@@ -55,6 +55,13 @@ Summary read the list here too until the candidate after T-2026.10.17. It now re
 is the report's registration table, docs/DISPOSITION_SUMMARY.md § Which TDocs.) `TDOC_LIST_ANCHOR` is not among the keys copied when a report is adopted for the add-on
 background runs (`ADDON003_ADOPTION_FIXED_KEYS_`); there the report is the evidence again (rule 3).
 
+**The Portal's TDoc list page (candidate after T-2026.10.18).** When the configured Excel list is refused
+here, or cannot be had, Close Report — and only Close Report — reads `TdocList.aspx?meetingId=<MEETING_ID>`
+and puts its rows through this same `assertTdocListIdentity_()` (`'read'`: nothing stored), with the same
+three rules; the rows of the two sources are never combined. docs/DISPOSITION_SUMMARY.md § Close Report, "The
+second source of the external check"; `tests/close-report-portal-page-fallback.test.js`. The update, the
+build, the legacy import and the session dialogs still read the Excel list only.
+
 ## When a list is refused
 
 The error starts "The TDoc list was not used: it could not be shown to be the list of this meeting

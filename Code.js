@@ -20377,17 +20377,29 @@ function reportTdocScope_(body) {
  * error } when it cannot be had.
  */
 function readMeetingTdocScope_() {
+  let cfg;
   try {
     assertMeetingConfigured_();
-    const cfg = getReportConfig_();
+    cfg = getReportConfig_();
     if (!cfg.TDOC_LIST_URL) throw new Error('this report has no TDoc list configured.');
+  } catch (e) {
+    return { ok: false, allTdocs: [], numbers: {}, error: 'the TDoc list of this meeting could not be read: ' + e.message, source: '' };
+  }
+  let excelProblem;
+  try {
     const groups = downloadAndGroupTdocs_(cfg);
     const allTdocs = [];
     Object.keys(groups).forEach(function (key) { groups[key].tdocs.forEach(function (td) { allTdocs.push(td); }); });
-    return meetingTdocScope_(allTdocs);
+    const scope = meetingTdocScope_(allTdocs);
+    scope.source = EXTERNAL_SOURCE_EXCEL_;
+    Logger.log('External TDoc verification source: Excel (the configured TDoc list)');
+    return scope;
   } catch (e) {
-    return { ok: false, allTdocs: [], numbers: {}, error: 'the TDoc list of this meeting could not be read: ' + e.message };
+    excelProblem = 'the TDoc list of this meeting could not be read: ' + e.message;
   }
+  // After T-2026.10.18: the configured list could not be had, or is not shown to be the meeting's -- the Portal's TDoc list
+  // page is tried, through the same identity guard (CLOSE REPORT PORTAL PAGE FALLBACK section). Close Report only.
+  return readPortalTdocListPageScope_(cfg, excelProblem);
 }
 
 /**
@@ -20852,6 +20864,7 @@ function closeReportCore_() {
   // A list that cannot be read or shown to be the meeting's: every revised TDoc is "could not be verified", and not ready.
   const list = readMeetingTdocScope_();
   result.externalVerified = list.ok;
+  result.externalSource = list.ok ? list.source || '' : '';
   if (!list.ok) {
     result.problems.push('External verification could not be completed: ' + list.error + '. The Disposition Summary is written from the report; the revisions were not checked in 3GU. Run Close Report again once the TDoc list of this meeting can be read.');
   }
@@ -20861,7 +20874,7 @@ function closeReportCore_() {
   result.ready = result.externalVerified && summary.state !== 'unreadable' && summary.state !== 'no-scope' && result.problems.length === 0 && result.unresolved.length === 0 && result.revisions.length === 0;
   Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.unresolved.length + ' not yet disposed, ' +
     REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState +
-    '; external verification ' + (result.externalVerified ? 'completed' : 'NOT completed'));
+    '; external verification ' + (result.externalVerified ? 'completed (' + result.externalSource + ')' : 'NOT completed'));
   return result;
 }
 
@@ -20890,7 +20903,10 @@ function otherMeetingsText_(count) {
 
 /** Pure: the line of the Close Report dialog that says whether the external check was done. */
 function externalVerificationText_(result) {
-  return result.externalVerified ? 'External verification (TDoc list of this meeting, 3GU): completed.' : 'External verification (TDoc list of this meeting, 3GU): NOT completed.';
+  if (!result.externalVerified) return 'External verification (TDoc list of this meeting, 3GU): NOT completed.';
+  // After T-2026.10.18: the source is named when it is not the configured list.
+  return 'External verification (TDoc list of this meeting, 3GU): completed.' +
+    (result.externalSource === EXTERNAL_SOURCE_PORTAL_PAGE_ ? ' Source: the Portal TDoc list page (TdocList.aspx); the configured TDoc list could not be used.' : '');
 }
 
 /** Pure: the text of the Close Report dialog. */
@@ -21160,6 +21176,217 @@ function assertTdocListIdentity_(data, cfg, context, use) {
 
 // =========================================================
 // END OF TDOC LIST IDENTITY
+// =========================================================
+
+// =========================================================
+// CLOSE REPORT: THE PORTAL TDOC LIST PAGE AS FALLBACK EVIDENCE (after T-2026.10.18)
+// =========================================================
+//
+// docs/DISPOSITION_SUMMARY.md § Close Report, "The external check".
+//
+// 6G, 2026-10-30: the Portal's Excel export of the meeting's TDoc list
+// (GenerateDocumentList.aspx?meetingId=86178) served, from that afternoon
+// on, the 36 TDocs of earlier calls instead of the 116 of this meeting --
+// while the Portal's TDoc list PAGE (TdocList.aspx?meetingId=86178) showed
+// the 116. The identity guard refused the export, as it must, so Close
+// Report could verify no revision.
+//
+// For Close Report's external check ONLY -- never for an update, a build,
+// the legacy import or the Disposition Summary -- the page is a second
+// source of evidence. It is tried only when the configured list cannot be
+// had (a download or conversion failure) or is refused by its identity. Its
+// rows are read into the shape of the Excel rows and go through the SAME
+// chain: assertTdocListIdentity_() on the raw rows ('read': nothing stored),
+// then the agenda selector and the Document Reallocations, then the
+// revision check. The rows of the two sources are never combined.
+//
+// The page is used only when it is shown to be one complete TDoc list: the
+// grid is there, the page says how many contributions it found and shows
+// all of them on one page, every row has its twelve cells and a TDoc
+// number, no number twice. A count proves nothing about WHOSE list it is:
+// the identity guard does. What is read of a row: the TDoc number, whether
+// it is a link to the document (uploaded) or a disabled link (reserved, not
+// uploaded), Title, Source, Type, For, Status, Agenda item, "Revision of",
+// and the whole "Revised To" cell (3GU names every revision ever reserved:
+// "S4aP260174 , S4aP260175"). No Contact, no reservation or upload time: the
+// page has none, and nothing is invented.
+
+const PORTAL_TDOC_LIST_PAGE_URL_ = 'https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=';
+const PORTAL_TDOC_LIST_PAGE_CELLS_ = 12;
+// The columns of the raw rows made from the page, named as in the Excel export (the readers find them by name).
+const PORTAL_TDOC_LIST_PAGE_HEADER_ = ['TDoc', 'Title', 'Source', 'Type', 'For', 'Agenda item', 'Agenda item description', 'TDoc Status', 'Is revision of', 'Revised to', 'Uploaded'];
+const EXTERNAL_SOURCE_EXCEL_ = 'Excel';
+const EXTERNAL_SOURCE_PORTAL_PAGE_ = 'Portal HTML fallback';
+
+/** Pure: a cell of the page as text -- tags removed, entities decoded, whitespace folded. */
+function portalTdocListPageCellText_(cellHtml) {
+  return decodeTdocListHtmlEntities_(String(cellHtml || '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Pure: the rows of the Portal's TDoc list page (TdocList.aspx), or why the
+ * page is not one complete TDoc list. { ok, rows: [{ tdoc, title, source,
+ * type, forAction, meetingName, agendaItem, agendaTopic, status,
+ * revisionOf, revisedTo, uploaded, url }], total, error }. Not ok, with the
+ * reason, when: the grid is not there (a login or error page, another
+ * layout); the page does not say how many contributions it found; it shows
+ * fewer than it found (paged, truncated); a row has not the twelve cells,
+ * or no TDoc number, or its TDoc cell is neither a link nor a disabled
+ * link; a number twice; fewer rows than it says. Nothing is read from a
+ * page that fails any of these.
+ */
+function parsePortalTdocListPage_(html) {
+  const text = String(html || '');
+  const fail = function (reason) { return { ok: false, rows: [], total: 0, error: reason }; };
+  const gridAt = text.indexOf('id="rgTdocList_ctl00"');
+  if (gridAt === -1) return fail(/<form[^>]*login|Login\.aspx|Sign in/i.test(text) ? 'the page asks for a login' : 'the page has no TDoc list grid (a login or error page, or another layout)');
+  const grid = text.slice(gridAt);
+  // The pager of the grid (rgTdocList_ctl00_TopPager, before the rows) says what it found and what it shows.
+  const info = text.match(/class="rgWrap rgInfoPart">\s*(\d+)\s+contributions?\s+found,\s+displaying\s+(\d+)\s+to\s+(\d+)\s*</);
+  if (!info) return fail('the page does not say how many contributions it found');
+  const total = parseInt(info[1], 10);
+  const from = parseInt(info[2], 10);
+  const to = parseInt(info[3], 10);
+  if (!total) return fail('the page lists no contribution');
+  if (from !== 1 || to !== total) return fail('the page shows ' + from + ' to ' + to
+  + ' of ' + total + ' contributions: not the whole list');
+  const rows = [];
+  const seen = {};
+  const rowRe = /<tr[^>]*class="(?:rgRow|rgAltRow)"[^>]*>([\s\S]*?)<\/tr>/g;
+  let m;
+  while ((m = rowRe.exec(grid))) {
+    const cells = extractTdocListRowCells_(m[1]);
+    const n = rows.length + 1;
+    if (cells.length !== PORTAL_TDOC_LIST_PAGE_CELLS_) return fail('row ' + n + ' has ' + cells.length + ' cells instead of ' + PORTAL_TDOC_LIST_PAGE_CELLS_);
+    const number = portalTdocListPageCellText_(cells[1]);
+    const parsed = parseExactSA4DocumentId_(number);
+    if (!parsed.isValid) return fail('row ' + n + ' has no TDoc number ("' + number.slice(0, 30) + '")');
+    if (seen[parsed.raw]) return fail('the page lists ' + parsed.raw + ' twice');
+    seen[parsed.raw] = true;
+    const link = cells[1].match(/<a[^>]*\shref="([^"]+)"[^>]*>/);
+    const disabled = /<a[^>]*\sdisabled=/.test(cells[1]);
+    if (!link && !disabled) return fail('the TDoc cell of ' + parsed.raw + ' is neither a link nor a disabled link');
+    const agendaSpan = cells[8].match(/<span[^>]*title="([^"]*)"[^>]*class="agendaItem"[^>]*>([^<]*)<\/span>/);
+    rows.push({
+      tdoc: parsed.raw,
+      title: portalTdocListPageCellText_(cells[3]),
+      source: portalTdocListPageCellText_(cells[4]),
+      type: portalTdocListPageCellText_(cells[2]),
+      forAction: portalTdocListPageCellText_(cells[6]),
+      meetingName: portalTdocListPageCellText_(cells[7]),
+      agendaItem: agendaSpan ? decodeTdocListHtmlEntities_(agendaSpan[2]).trim() : portalTdocListPageCellText_(cells[8]),
+      agendaTopic: agendaSpan ? decodeTdocListHtmlEntities_(agendaSpan[1]).trim() : '',
+      status: portalTdocListPageCellText_(cells[5]),
+      revisionOf: portalTdocListPageCellText_(cells[9]),
+      revisedTo: portalTdocListPageCellText_(cells[10]),
+      uploaded: !!link,
+      url: link ? decodeTdocListHtmlEntities_(link[1]) : ''
+    });
+  }
+  if (rows.length !== total) return fail('the page says ' + total + ' contributions but shows ' + rows.length + ' rows');
+  return { ok: true, rows: rows, total: total, error: '' };
+}
+
+/**
+ * Pure: the rows of the page as the raw rows of a TDoc list -- the header
+ * first, in the names of the Excel export -- and their link cells: the
+ * shape downloadAndGroupTdocs_() reads from the sheet, { data,
+ * richTextValues }. The link cell of every TDoc is known: the document's
+ * link for an uploaded TDoc, none for a reserved one -- so, as from the
+ * sheet, tdocListLinkIsKnown_() is true and tdocListLinkUrl_() is '' for
+ * "reserved but not uploaded". "Uploaded" holds 'yes' for an uploaded TDoc
+ * (the identity guard prefers an uploaded anchor) and '' otherwise.
+ */
+function portalTdocListPageRows_(parsed) {
+  const noLink = { getLinkUrl: function () { return null; } };
+  const data = [PORTAL_TDOC_LIST_PAGE_HEADER_.slice()];
+  const richTextValues = [PORTAL_TDOC_LIST_PAGE_HEADER_.map(function () { return noLink; })];
+  (parsed.rows || []).forEach(function (r) {
+    const row = [r.tdoc, r.title, r.source, r.type, r.forAction, r.agendaItem, r.agendaTopic, r.status, r.revisionOf, r.revisedTo, r.uploaded ? 'yes' : ''];
+    const link = r.uploaded ? { getLinkUrl: function () { return r.url; } } : noLink;
+    data.push(row);
+    richTextValues.push(row.map(function (x, i) { return i === 0 ? link : noLink; }));
+  });
+  return { data: data, richTextValues: richTextValues };
+}
+
+/**
+ * The raw rows of a list shown to be the meeting's, as the records of
+ * downloadAndGroupTdocs_(), filtered as it filters: the agenda selector of
+ * the meeting, and the report's Document Reallocations (a TDoc reallocated
+ * to removed is not among them; a moved one is under its new item). Only
+ * for Close Report's fallback; the update keeps its own loop.
+ */
+function portalTdocListPageRecords_(data, richTextValues, context) {
+  const headers = data[0];
+  const col = function (name) { return headers.indexOf(name); };
+  const tdocCol = col('TDoc');
+  const agendaCol = col('Agenda item');
+  const agendaSelector = getMeetingContext_(context).report.agendaSelector;
+  const reallocations = getReallocationMap_(context);
+  const out = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const tdoc = String(row[tdocCol] || '').trim();
+    if (!tdoc) continue;
+    let agendaItem = String(row[agendaCol] || '').trim();
+    if (reallocations[tdoc]) {
+      const target = interpretReallocationTarget_(reallocations[tdoc].new);
+      if (target.kind === 'remove') continue;
+      agendaItem = target.kind === 'move' ? target.agendaItem : reallocations[tdoc].new;
+    }
+    if (!agendaSelectorMatches_(agendaSelector, agendaItem)) continue;
+    out.push({
+      row: row, richTextRow: richTextValues[i],
+      tdocCol: tdocCol, titleCol: col('Title'), sourceCol: col('Source'), contactCol: -1, agendaCol: agendaCol, agendaTopicCol: -1,
+      statusCol: col('TDoc Status'), typeCol: col('Type'), forCol: col('For'), revisedToCol: col('Revised to'), agendaDescriptionCol: col('Agenda item description')
+    });
+  }
+  return out;
+}
+
+/**
+ * Close Report's fallback: the TDocs of the meeting from the Portal's TDoc
+ * list page, after the configured list could not be used (`excelProblem`
+ * says why). The page is fetched for the saved meeting ID, parsed
+ * (parsePortalTdocListPage_()), put through the SAME identity guard as a
+ * downloaded list (assertTdocListIdentity_(), 'read': nothing stored),
+ * filtered as the update filters, and given as the scope of
+ * meetingTdocScope_() with `source`. Never throws: { ok: false, error }
+ * names both problems when the page cannot be used either.
+ */
+function readPortalTdocListPageScope_(cfg, excelProblem, context) {
+  const notOk = function (reason) {
+    Logger.log('External TDoc verification: no source -- ' + excelProblem + '; the Portal TDoc list page: ' + reason);
+    return { ok: false, allTdocs: [], numbers: {}, error: excelProblem + '; the Portal TDoc list page (TdocList.aspx) could not be used either: ' + reason, source: '' };
+  };
+  const id = parseMeetingIdInput_(cfg.MEETING_ID);
+  if (!id.isValid) return notOk('this report has no meeting ID');
+  let html = '';
+  try {
+    const response = UrlFetchApp.fetch(PORTAL_TDOC_LIST_PAGE_URL_ + id.id, { muteHttpExceptions: true });
+    if (response.getResponseCode() >= 400) return notOk('HTTP ' + response.getResponseCode());
+    html = typeof response.getContentText === 'function' ? response.getContentText() : '';
+  } catch (e) {
+    return notOk(e.message);
+  }
+  const parsed = parsePortalTdocListPage_(html);
+  if (!parsed.ok) return notOk(parsed.error);
+  const rows = portalTdocListPageRows_(parsed);
+  try {
+    assertTdocListIdentity_(rows.data, cfg, context, 'read');
+  } catch (e) {
+    return notOk(e.message);
+  }
+  const scope = meetingTdocScope_(portalTdocListPageRecords_(rows.data, rows.richTextValues, context));
+  if (!scope.ok) return notOk(scope.error);
+  scope.source = EXTERNAL_SOURCE_PORTAL_PAGE_;
+  Logger.log('External TDoc verification source: Portal HTML fallback (TdocList.aspx?meetingId=' + id.id + ', ' + parsed.total + ' contributions, ' + scope.allTdocs.length + ' TDocs of the meeting) -- ' + excelProblem);
+  return scope;
+}
+
+// =========================================================
+// END OF CLOSE REPORT PORTAL PAGE FALLBACK
 // =========================================================
 
 /**
