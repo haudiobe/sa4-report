@@ -29,7 +29,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeWithoutCloseReportPageFallback, PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutAgendaWordConversion, codeWithoutCloseReportPageFallback, PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -386,6 +386,9 @@ console.log('L. what changed in Code.js: against T-2026.10.18, one section and t
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const view = codeWithoutCloseReportPageFallback(FULL);
+  // After T-2026.10.19: the agenda Word conversion came later and has its own ledger (tests/agenda-word-conversion.test.js);
+  // the comparisons below are made without it.
+  const CODE = codeWithoutAgendaWordConversion(FULL).code;
   check('every change is in Code.js exactly once', view.problems, []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
@@ -405,8 +408,8 @@ console.log('L. what changed in Code.js: against T-2026.10.18, one section and t
   } else {
     check('without it, Code.js is the Code.js of T-2026.10.18, byte for byte', view.code === released, true);
     check('the functions that changed: readMeetingTdocScope_ (the fallback), closeReportCore_ (the source), externalVerificationText_ (its line)',
-      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL, n) !== functionSource(released, n)).sort(), PAGE_FALLBACK_CHANGED_FUNCTIONS.slice().sort());
-    check('the new functions are those of the section; none removed', [functionNames(FULL).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(CODE, n) !== functionSource(released, n)).sort(), PAGE_FALLBACK_CHANGED_FUNCTIONS.slice().sort());
+    check('the new functions are those of the section; none removed', [functionNames(CODE).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(CODE).indexOf(n) === -1)],
       [PAGE_FALLBACK_SECTION_FUNCTIONS.slice().sort(), []]);
     const identity = (src) => src.slice(src.indexOf('// TDOC LIST IDENTITY (after T-2026.10.16)'), src.indexOf('// END OF TDOC LIST IDENTITY'));
     check('untouched: the identity section; the update, the build, the legacy import; the summary and its scope; the revision check; the agenda-discovery parser',

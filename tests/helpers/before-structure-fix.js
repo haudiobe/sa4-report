@@ -428,9 +428,44 @@ const PAGE_FALLBACK_CHANGES = [
    "function externalVerificationText_(result) {\n  return result.externalVerified ? 'External verification (TDoc list of this meeting, 3GU): completed.' : 'External verification (TDoc list of this meeting, 3GU): NOT completed.';\n}\n"]
 ];
 
+/**
+ * The agenda Word conversion (after T-2026.10.19, MBS SA4#138): the agenda
+ * TDoc's Word file is sent to Drive with a Word content type, the result is
+ * checked to be a Google Doc, it is opened with bounded retries, every step
+ * is logged and the temporary document is always trashed. One section after
+ * convertWordBlobToGoogleDoc_(), and two functions changed
+ * (parseAgendaWordBlob_, convertWordBlobToGoogleDoc_). It came after the
+ * Portal-page fallback, so codeWithoutCloseReportPageFallback() takes it out
+ * first. [now, before] pairs; with the section they give the Code.js of
+ * T-2026.10.19 byte for byte. tests/agenda-word-conversion.test.js pins the
+ * behaviour.
+ */
+const AGENDA_CONVERSION_SECTION_START = BAR + '// AGENDA WORD CONVERSION (after T-2026.10.19)\n' + BAR;
+const AGENDA_CONVERSION_SECTION_END = BAR + '// END OF AGENDA WORD CONVERSION\n' + BAR + '\n';
+const AGENDA_CONVERSION_SECTION_FUNCTIONS = ['agendaWordContentType_', 'agendaErrorForLog_', 'convertAgendaWordBlob_', 'openConvertedAgendaBody_', 'trashConvertedAgenda_', 'diagnoseAgendaConversion'];
+const AGENDA_CONVERSION_CHANGED_FUNCTIONS = ['parseAgendaWordBlob_', 'convertWordBlobToGoogleDoc_'];
+const AGENDA_CONVERSION_CHANGES = [
+  ["  // After T-2026.10.19: opened with bounded retries, trashed in every case (AGENDA WORD CONVERSION section).\n" +
+   "  try {\n    return parseAgendaStructureWithText_(openConvertedAgendaBody_(convertedDocId), '');\n  } finally {\n    trashConvertedAgenda_(convertedDocId);\n  }\n",
+   "  try {\n    const doc = DocumentApp.openById(convertedDocId);\n    return parseAgendaStructureWithText_(doc.getBody(), '');\n  } finally {\n" +
+   "    try { DriveApp.getFileById(convertedDocId).setTrashed(true); } catch (e) { }\n  }\n"],
+  ["  // After T-2026.10.19: a Word content type, a checked result, every step logged (AGENDA WORD CONVERSION section).\n" +
+   "  return convertAgendaWordBlob_(wordBlob);\n",
+   "  const resource = {\n    title: 'TEMP_Agenda_' + new Date().getTime(),\n    mimeType: MimeType.GOOGLE_DOCS\n  };\n\n" +
+   "  // The 'insert' method is from an older version of the Drive API.\n  // The modern equivalent is 'create'.\n" +
+   "  const file = Drive.Files.create(resource, wordBlob);\n  if (!file || !file.id) throw new Error('Drive conversion did not return a file ID.');\n  return file.id;\n"]
+];
+
+/** Code.js without the agenda Word conversion: the Code.js of T-2026.10.19. { code, problems }. */
+function codeWithoutAgendaWordConversion(code) {
+  return takeOut(code, AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_CHANGES, 'AGENDA WORD CONVERSION');
+}
+
 /** Code.js without the Portal-page fallback: the Code.js of T-2026.10.18. { code, problems }. */
 function codeWithoutCloseReportPageFallback(code) {
-  return takeOut(code, PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_CHANGES, 'CLOSE REPORT PAGE FALLBACK');
+  const later = codeWithoutAgendaWordConversion(code);
+  const view = takeOut(later.code, PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_CHANGES, 'CLOSE REPORT PAGE FALLBACK');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 /** Code.js without the report-local scope: the Code.js of T-2026.10.17. { code, problems }. */
@@ -477,6 +512,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutCloseReportPageFallback, PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutAgendaWordConversion, AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

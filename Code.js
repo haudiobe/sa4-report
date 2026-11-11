@@ -10321,11 +10321,11 @@ function extractWordFromZip_(zipBlob) {
 function parseAgendaWordBlob_(wordBlob) {
   const convertedDocId = convertWordBlobToGoogleDoc_(wordBlob);
 
+  // After T-2026.10.19: opened with bounded retries, trashed in every case (AGENDA WORD CONVERSION section).
   try {
-    const doc = DocumentApp.openById(convertedDocId);
-    return parseAgendaStructureWithText_(doc.getBody(), '');
+    return parseAgendaStructureWithText_(openConvertedAgendaBody_(convertedDocId), '');
   } finally {
-    try { DriveApp.getFileById(convertedDocId).setTrashed(true); } catch (e) { }
+    trashConvertedAgenda_(convertedDocId);
   }
 }
 
@@ -10338,17 +10338,142 @@ function convertWordBlobToGoogleDoc_(wordBlob) {
     );
   }
 
-  const resource = {
-    title: 'TEMP_Agenda_' + new Date().getTime(),
-    mimeType: MimeType.GOOGLE_DOCS
-  };
+  // After T-2026.10.19: a Word content type, a checked result, every step logged (AGENDA WORD CONVERSION section).
+  return convertAgendaWordBlob_(wordBlob);
+}
 
-  // The 'insert' method is from an older version of the Drive API.
-  // The modern equivalent is 'create'.
-  const file = Drive.Files.create(resource, wordBlob);
+// =========================================================
+// AGENDA WORD CONVERSION (after T-2026.10.19)
+// =========================================================
+//
+// MBS SA4#138, 2026-11-11: two Full Builds in a row failed in the skeleton
+// phase, about 4.5 s in, with "Unexpected error while getting the method or
+// property openById on object DocumentApp." The document was the Google Doc
+// that Drive had just made from the Word file of the agenda TDoc
+// (S4-261857). The report was not touched: the agenda is read before the
+// document is cleared. Nothing said which document it was, what Drive had
+// made of the Word file, or which step failed, and only the message of the
+// original error was kept.
+//
+// Now, for the agenda's Word file only:
+//   1. it goes to Drive with the content type of a Word file, named by its
+//      extension (.docx/.doc), whatever Utilities.unzip() gave the blob --
+//      Drive converts on that type; the name field is v3's "name";
+//   2. Drive is asked for id, name and mimeType; a result that is not a
+//      native Google Doc is refused at once, naming its type, and trashed;
+//   3. the Google Doc is opened with bounded retries
+//      (AGENDA_CONVERSION_OPEN_DELAYS_MS_: at most 7 s of waiting), for a
+//      document that is not readable the moment Drive returns it;
+//   4. each step is logged with the document ID ("[AGENDA]"), every failed
+//      step with its original error and stack; the error thrown names the
+//      step and the document and keeps the original message;
+//   5. the temporary Google Doc is trashed in every case.
+// How the agenda is parsed is unchanged.
+// diagnoseAgendaConversion() runs the same download and conversion for the
+// configured agenda TDoc without touching the report.
+
+var AGENDA_GOOGLE_DOC_MIME_ = 'application/vnd.google-apps.document';
+var AGENDA_WORD_CONTENT_TYPES_ = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword'
+};
+// Waits before each attempt to open the converted agenda: four attempts, 7 s in all.
+var AGENDA_CONVERSION_OPEN_DELAYS_MS_ = [0, 1000, 2000, 4000];
+
+/** Pure: the content type of a Word file by its name's extension, '' for any other name. */
+function agendaWordContentType_(name) {
+  const m = String(name || '').toLowerCase().match(/\.(docx|doc)$/);
+  return m ? AGENDA_WORD_CONTENT_TYPES_[m[1]] : '';
+}
+
+/** Pure: an error for the log -- its stack (which names the message) where there is one. */
+function agendaErrorForLog_(e) {
+  if (e && e.stack) return String(e.stack);
+  return e && e.message ? String(e.message) : String(e);
+}
+
+/** The Word blob as a native Google Doc in Drive: its ID. Refuses anything else. */
+function convertAgendaWordBlob_(wordBlob) {
+  const sourceName = String(wordBlob.getName() || '');
+  const givenType = String(wordBlob.getContentType() || '');
+  const wordType = agendaWordContentType_(sourceName);
+  if (wordType && givenType !== wordType) wordBlob.setContentType(wordType);
+  Logger.log('[AGENDA] converting "' + sourceName + '" (' + wordBlob.getBytes().length + ' bytes, content type ' + (givenType || 'none') +
+    (wordType && givenType !== wordType ? ', sent as ' + wordType : '') + ') to a Google Doc');
+
+  let file;
+  try {
+    file = Drive.Files.create({ name: 'TEMP_Agenda_' + new Date().getTime(), mimeType: AGENDA_GOOGLE_DOC_MIME_ }, wordBlob, { fields: 'id,name,mimeType' });
+  } catch (e) {
+    Logger.log('[AGENDA] Drive.Files.create failed for "' + sourceName + '": ' + agendaErrorForLog_(e));
+    throw new Error('Drive could not convert the agenda Word file "' + sourceName + '" (Drive.Files.create): ' + (e && e.message ? e.message : e));
+  }
   if (!file || !file.id) throw new Error('Drive conversion did not return a file ID.');
+  Logger.log('[AGENDA] Drive.Files.create returned ' + file.id + ' (' + (file.mimeType || 'no mimeType') + ', "' + (file.name || '') + '")');
+  if (file.mimeType !== AGENDA_GOOGLE_DOC_MIME_) {
+    trashConvertedAgenda_(file.id);
+    throw new Error('Drive did not convert the agenda Word file "' + sourceName + '" to a Google Doc: file ' + file.id +
+      ' has the type ' + (file.mimeType || 'unknown') + '.');
+  }
   return file.id;
 }
+
+/** The body of the converted agenda, with bounded retries (AGENDA_CONVERSION_OPEN_DELAYS_MS_). */
+function openConvertedAgendaBody_(docId) {
+  const delays = AGENDA_CONVERSION_OPEN_DELAYS_MS_;
+  let lastError = null;
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt] > 0) Utilities.sleep(delays[attempt]);
+    try {
+      const body = DocumentApp.openById(docId).getBody();
+      Logger.log('[AGENDA] DocumentApp.openById(' + docId + ') succeeded on attempt ' + (attempt + 1) + ' of ' + delays.length);
+      return body;
+    } catch (e) {
+      lastError = e;
+      Logger.log('[AGENDA] DocumentApp.openById(' + docId + ').getBody() failed on attempt ' + (attempt + 1) + ' of ' + delays.length + ': ' + agendaErrorForLog_(e));
+    }
+  }
+  const waited = delays.reduce(function (sum, ms) { return sum + ms; }, 0);
+  throw new Error('The agenda converted from Word (Google Doc ' + docId + ') could not be opened after ' + delays.length + ' attempts over ' +
+    (waited / 1000) + ' s (DocumentApp.openById): ' + (lastError && lastError.message ? lastError.message : lastError));
+}
+
+/** Moves the temporary agenda Google Doc to the trash; a failure is logged, never thrown. */
+function trashConvertedAgenda_(docId) {
+  try {
+    DriveApp.getFileById(docId).setTrashed(true);
+    Logger.log('[AGENDA] temporary agenda document ' + docId + ' moved to the trash');
+  } catch (e) {
+    Logger.log('[AGENDA] could not move the temporary agenda document ' + docId + ' to the trash: ' + agendaErrorForLog_(e));
+  }
+}
+
+/**
+ * Run from the Apps Script editor: downloads the configured agenda TDoc,
+ * converts it, opens it, parses it and trashes the temporary Google Doc --
+ * the build's own steps -- and logs each one. Reads the configuration;
+ * writes nothing: no property, nothing in the report.
+ */
+function diagnoseAgendaConversion() {
+  const cfg = getReportConfig_();
+  if (!cfg.AGENDA_TDOC) {
+    Logger.log('[AGENDA] diagnosis: this report has no agenda TDoc configured; nothing to convert.');
+    return 'No agenda TDoc configured.';
+  }
+  try {
+    const items = downloadMeetingAgenda_(cfg.AGENDA_TDOC, cfg.FTP_BASE);
+    const text = 'Agenda ' + cfg.AGENDA_TDOC + ': converted, opened and parsed -- ' + items.length + ' agenda item(s).';
+    Logger.log('[AGENDA] diagnosis: ' + text);
+    return text;
+  } catch (e) {
+    Logger.log('[AGENDA] diagnosis: FAILED for ' + cfg.AGENDA_TDOC + ': ' + agendaErrorForLog_(e));
+    return 'Agenda ' + cfg.AGENDA_TDOC + ': FAILED -- ' + (e && e.message ? e.message : e);
+  }
+}
+
+// =========================================================
+// END OF AGENDA WORD CONVERSION
+// =========================================================
 
 /**
  * SA4-IMPL-001: delegates to the central parseSA4DocumentId_() model instead
