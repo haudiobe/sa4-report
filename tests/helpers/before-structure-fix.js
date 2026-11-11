@@ -474,7 +474,7 @@ const AGENDA_CONVERSION_CHANGES = [
  */
 const AGENDA_READERS_SECTION_START = BAR + '// AGENDA READERS (after T-2026.10.20)\n' + BAR;
 const AGENDA_READERS_SECTION_END = BAR + '// END OF AGENDA READERS\n' + BAR + '\n';
-const AGENDA_READERS_SECTION_FUNCTIONS = ['readAgendaWithFallbacks_', 'readAgendaWith_', 'readConvertedAgendaWithDocsApi_', 'docsApiAgendaBody_', 'docsApiAgendaBlocks_', 'wordFileAgendaBody_',
+const AGENDA_READERS_SECTION_FUNCTIONS = ['readAgendaWithFallbacks_', 'readAgendaWith_', 'agendaItemsProblem_', 'readConvertedAgendaWithDocsApi_', 'docsApiAgendaBody_', 'docsApiAgendaBlocks_', 'wordFileAgendaBody_',
   'wordFileAgendaBlocks_', 'agendaWordStyles_', 'parseAgendaXml_', 'agendaXmlPrefixFor_', 'agendaXmlText_', 'agendaBodyView_', 'diagnoseAgendaReaders'];
 const AGENDA_READERS_CHANGED_FUNCTIONS = ['parseAgendaWordBlob_', 'diagnoseAgendaConversion'];
 const AGENDA_READERS_CHANGES = [

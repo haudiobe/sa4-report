@@ -225,6 +225,12 @@ only what the parser reads:
 The parser is unchanged. So the agenda items, their order, and the TDocs grouped under them by
 agenda-item number are the same whichever reader read them.
 
+**An empty or malformed agenda is not a read.** A reader counts as successful only if
+`agendaItemsProblem_()` accepts its items: at least one item, every item with a number, a title
+and a level, and at least one number like an agenda item's ("8", "8.1"). Otherwise the reader
+has failed and the next one is asked. If none succeeds, the build fails with an error that names
+each reader; it never continues with an empty agenda.
+
 **Logging.** Each reader's failure is logged with its original error and stack, and the log names
 the reader that read the agenda. The log holds counts only, never agenda text. If all three
 readers fail, the error names each one and its reason.

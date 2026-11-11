@@ -28,7 +28,9 @@
  *      content controls, nested tables, namespaces, malformed input);
  *   I. diagnoseAgendaReaders(): every reader, compared, nothing written;
  *   J. what changed in Code.js: one section and two functions, against
- *      T-2026.10.20.
+ *      T-2026.10.20;
+ *   K. an empty or malformed agenda is not a successful read: the next
+ *      reader is asked; if none reads one, the error names each.
  *
  * Fakes only: no network, no Google account. Document IDs are synthetic.
  *
@@ -114,7 +116,7 @@ function world(o) {
   sandbox.DocumentApp.openById = (id) => {
     w.events.push('DocumentApp.openById');
     if (opts.documentApp !== 'ok') throw new Error(UNEXPECTED);
-    return { getBody: () => documentAppBody(opts.items) };
+    return { getBody: () => documentAppBody(opts.documentAppItems || opts.items) };
   };
   if (opts.docs !== 'absent') {
     sandbox.Docs = { Documents: { get: (id) => {
@@ -367,6 +369,41 @@ console.log('J. what changed in Code.js: against T-2026.10.20, one section and t
         'buildSkeletonWithTdocTables', 'parseAgendaForReport_', 'downloadMeetingAgenda_', 'extractWordFromZip_', 'downloadAndGroupTdocs_', 'continuousUpdateCore_', 'closeReportCore_', 'getReportConfig_']
         .map((n) => functionSource(FULL, n) === functionSource(released, n)), Array(15).fill(true));
   }
+}
+
+// ====================================================================== K
+console.log('K. an empty or malformed agenda is not a successful read');
+{
+  const NOT_NUMBERED = [{ number: 'Note', title: 'not an agenda' }, { number: 'Annex', title: 'neither' }];
+  const da = world({ documentApp: 'ok', documentAppItems: [], docs: docsApiDocument(GOOGLE_138) });
+  const daOut = da.run();
+  check('DocumentApp opens a document with no agenda in it: the Docs API is asked and reads the 100 items',
+    [strip(daOut.result || []).length, da.sandbox.AGENDA_LAST_READER_, da.agendaLogs().some((l) => l.indexOf('[AGENDA] DocumentApp could not read the agenda (Google Doc ' + DOC_ID + '): Error: no agenda items found') === 0)],
+    [100, 'Docs API', true]);
+  const daBad = world({ documentApp: 'ok', documentAppItems: NOT_NUMBERED, docs: docsApiDocument(GOOGLE_138) });
+  check('DocumentApp reads an "A.I.#" table with no agenda numbers in it: the Docs API is asked',
+    [strip(daBad.run().result || []).length, daBad.sandbox.AGENDA_LAST_READER_, daBad.agendaLogs().some((l) => /DocumentApp could not read the agenda .*none of the 2 agenda item\(s\) is numbered like an agenda item/.test(l))],
+    [100, 'Docs API', true]);
+  const emptyDocs = world({ documentApp: 'fail', docs: { body: { content: [] } } });
+  check('the Docs API returns an empty body: the Word file is asked and reads the 100 items',
+    [strip(emptyDocs.run().result || []).length, emptyDocs.sandbox.AGENDA_LAST_READER_, emptyDocs.unzips], [100, 'Word file', 1]);
+  const headerOnly = world({ documentApp: 'fail', docs: docsApiDocument([]) });
+  check('the Docs API returns an "A.I.#" table with no rows: the Word file is asked', [strip(headerOnly.run().result || []).length, headerOnly.sandbox.AGENDA_LAST_READER_], [100, 'Word file']);
+  const nothing = world({ documentApp: 'ok', documentAppItems: [], docs: { body: { content: [] } } });
+  const nothingOut = nothing.run(Buffer.from('x'));
+  check('no reader finds an agenda: an error naming each reader, no empty agenda returned; trashed once',
+    [nothingOut.result, (nothingOut.error || '').split(' -- ')[0], /DocumentApp: no agenda items found.*; Docs API: no agenda items found.*; Word file: the Word file is not a \.docx/.test(nothingOut.error || ''), nothing.events.filter((e) => /^trash/.test(e)).length],
+    [undefined, 'The agenda could not be read', true, 1]);
+  const s = nothing.sandbox;
+  const NONE = 'no agenda items found (no numbered paragraphs, no "A.I.#" table)';
+  check('agendaItemsProblem_: an agenda; empty; not an array; incomplete items; no agenda numbers', [
+    s.agendaItemsProblem_(strip(GOOGLE_138)),
+    s.agendaItemsProblem_([]),
+    s.agendaItemsProblem_(null),
+    s.agendaItemsProblem_([{ number: '8.1', title: 'MBS', level: 2 }, { number: '8.2', title: ' ', level: 2 }, { number: '', title: 'x', level: 1 }, { number: '9', title: 'y', level: 0 }]),
+    s.agendaItemsProblem_(NOT_NUMBERED.map((i) => Object.assign({ level: 1 }, i)))
+  ], [null, NONE, NONE, '3 of 4 agenda item(s) without a number, title or level', 'none of the 2 agenda item(s) is numbered like an agenda item']);
+  check('...the real agendas pass: SA4#138 and SA4#136 as Google converts them', [s.agendaItemsProblem_(GOOGLE_138), s.agendaItemsProblem_(GOOGLE_136)], [null, null]);
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll agenda reader checks passed.');

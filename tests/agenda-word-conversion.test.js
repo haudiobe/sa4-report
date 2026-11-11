@@ -105,7 +105,7 @@ function world(o) {
   };
   sandbox.Utilities.sleep = (ms) => { w.sleeps.push(ms); };
   // The parser is not under test here: it records the body it is given.
-  sandbox.parseAgendaStructureWithText_ = (b, prefix) => { w.parsedBodies.push([b === body, prefix]); return [{ number: '1', title: 'Opening' }, { number: '8.1', title: 'MBS' }]; };
+  sandbox.parseAgendaStructureWithText_ = (b, prefix) => { w.parsedBodies.push([b === body, prefix]); return [{ number: '1', title: 'Opening', level: 1 }, { number: '8.1', title: 'MBS', level: 2 }]; };
   w.run = (blob) => {
     try { return { result: sandbox.parseAgendaWordBlob_(blob) }; } catch (e) { return { error: e.message }; }
   };
@@ -148,7 +148,7 @@ console.log('B. successful conversion');
 {
   const w = world();
   const out = w.run(wordBlob(NAME_138));
-  check('the parsed agenda comes back', out, { result: [{ number: '1', title: 'Opening' }, { number: '8.1', title: 'MBS' }] });
+  check('the parsed agenda comes back', out, { result: [{ number: '1', title: 'Opening', level: 1 }, { number: '8.1', title: 'MBS', level: 2 }] });
   check('opened once, no wait; the body of that document is parsed with prefix ""', [w.opens, w.sleeps, w.parsedBodies], [[DOC_ID], [], [[true, '']]]);
   check('the temporary document is trashed once', w.trashed, [[DOC_ID, true]]);
   check('the log: convert, Drive result with ID and type, open, trash', w.agendaLogs().slice(1), [

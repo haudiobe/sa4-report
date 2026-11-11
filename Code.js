@@ -10515,7 +10515,8 @@ function diagnoseAgendaConversion() {
 // and its tables (cell text = the cell's paragraphs joined by "\n"). That
 // is all the parser reads, and the parser is unchanged -- so the agenda
 // items, their order, and the TDocs grouped under them by number are the
-// same whichever reader read them.
+// same whichever reader read them. A reader whose items are empty or
+// malformed (agendaItemsProblem_) has failed, and the next one is asked.
 // Every reader's failure is logged with its original error and stack; the
 // log names the reader that read the agenda. Only counts are logged, never
 // the document's text. If all three fail, the error names each.
@@ -10555,11 +10556,30 @@ function readAgendaWith_(reader, docId, wordBytes) {
     else if (reader === 'Docs API') body = docsApiAgendaBody_(readConvertedAgendaWithDocsApi_(docId));
     else if (reader === 'Word file') body = wordFileAgendaBody_(wordBytes);
     else throw new Error('unknown agenda reader ' + reader);
-    return { ok: true, items: parseAgendaStructureWithText_(body, '') };
+    const items = parseAgendaStructureWithText_(body, '');
+    const problem = agendaItemsProblem_(items);
+    if (problem) throw new Error(problem);
+    return { ok: true, items: items };
   } catch (e) {
     Logger.log('[AGENDA] ' + reader + ' could not read the agenda' + (reader === 'Word file' ? '' : ' (Google Doc ' + docId + ')') + ': ' + agendaErrorForLog_(e));
     return { ok: false, error: e };
   }
+}
+
+/**
+ * Pure: why these parsed items are not an agenda, or null if they are. A
+ * reader whose items are empty or malformed has failed, so the next reader
+ * is asked: at least one item; every item with a number, a title and a
+ * level; and at least one number like an agenda item's ("8", "8.1").
+ */
+function agendaItemsProblem_(items) {
+  if (!Array.isArray(items) || !items.length) return 'no agenda items found (no numbered paragraphs, no "A.I.#" table)';
+  const incomplete = items.filter(function (i) {
+    return !i || typeof i.number !== 'string' || !i.number.trim() || typeof i.title !== 'string' || !i.title.trim() || !(Math.floor(i.level) === i.level && i.level >= 1);
+  }).length;
+  if (incomplete) return incomplete + ' of ' + items.length + ' agenda item(s) without a number, title or level';
+  if (!items.some(function (i) { return /^\d+(?:\.\d+)*$/.test(i.number.trim()); })) return 'none of the ' + items.length + ' agenda item(s) is numbered like an agenda item';
+  return null;
 }
 
 /** Docs.Documents.get on the converted document; logs its shape (counts only). */
