@@ -233,7 +233,7 @@ console.log('6. the code');
   const code = fn.replace(/^\s*\/\/.*$/gm, '');
   check('docTableToHtml_() reads a dropdown through readTdocStatus_(), once, and escapes what it reads', [(code.match(/readTdocStatus_\(table, cellText\)/g) || []).length, /escapeHtmlForEmailExport_\(selected\)/.test(code)], [1, true]);
   check('it has no way of its own to read a dropdown, and writes nothing', /Docs\.|statusDropdownIndex_|statusDropdownEntryOfTable_|displayValue|setText|batchUpdate|saveAndClose|setProperty/.test(code), false);
-  check('Code.js is version 2.26.4 (2.21.1 brought the dropdown status of a discussion e-mail; 2.22.0 the shared minutes; 2.23.0 the report structure and the configuration guard; 2.24.0 the 4-hour Reviewer cache, 2.25.0 the Attendance rendering fix, 2.26.0 the Disposition Summary and Close Report, 2.26.1 their meeting scope and the TDoc list identity, 2.26.2 the report-local Disposition Summary, 2.26.3 the Portal-page fallback of Close Report, 2.26.4 the agenda Word conversion)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.4');
+  check('Code.js is version 2.26.5 (2.21.1 brought the dropdown status of a discussion e-mail; 2.22.0 the shared minutes; 2.23.0 the report structure and the configuration guard; 2.24.0 the 4-hour Reviewer cache, 2.25.0 the Attendance rendering fix, 2.26.0 the Disposition Summary and Close Report, 2.26.1 their meeting scope and the TDoc list identity, 2.26.2 the report-local Disposition Summary, 2.26.3 the Portal-page fallback of Close Report, 2.26.4 the agenda Word conversion, 2.26.5 the agenda readers)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.5');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll e-mail status dropdown checks passed.');

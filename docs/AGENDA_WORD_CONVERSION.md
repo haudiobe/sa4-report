@@ -165,9 +165,10 @@ Build was not run.
 configuration, and the repository-root `.clasp.json`. Every clasp command used
 `--user haudiobe.ts@gmail.com` and ran from its own scratch folder.
 
-## Second failure, with T-2026.10.20: DocumentApp cannot open the converted agenda (candidate after T-2026.10.20)
+## Second failure, with T-2026.10.20: DocumentApp cannot open the converted agenda (T-2026.10.21, Code.js 2.26.5)
 
-Status: **candidate, not released, not deployed.** `Code.js` stays 2.26.4 until the release.
+Status: **released as T-2026.10.21 (Code.js 2.26.5).** Candidate commits `9559d17` and `dc2da01`,
+merged by PR #2 (`aca8ea3`). The deployment record is at the end of this document.
 
 ### Evidence
 

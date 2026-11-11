@@ -453,7 +453,7 @@ console.log('L. what changed in Code.js: against T-2026.10.17, only the summary\
   check('every change is in Code.js exactly once', view.problems, []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
-  check('Code.js is version 2.26.4 (2.26.2 released this change, T-2026.10.18; 2.26.3 the Portal-page fallback of Close Report; 2.26.4 the agenda Word conversion; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.4');
+  check('Code.js is version 2.26.5 (2.26.2 released this change, T-2026.10.18; 2.26.3 the Portal-page fallback of Close Report; 2.26.4 the agenda Word conversion; 2.26.5 the agenda readers; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.5');
   if (released === null) {
     console.log('  note: ' + RELEASED_TAG + ' is not available in this checkout; the comparison with it is skipped.');
   } else {

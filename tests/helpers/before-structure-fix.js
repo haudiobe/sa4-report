@@ -478,6 +478,11 @@ const AGENDA_READERS_SECTION_FUNCTIONS = ['readAgendaWithFallbacks_', 'readAgend
   'wordFileAgendaBlocks_', 'agendaWordStyles_', 'parseAgendaXml_', 'agendaXmlPrefixFor_', 'agendaXmlText_', 'agendaBodyView_', 'diagnoseAgendaReaders'];
 const AGENDA_READERS_CHANGED_FUNCTIONS = ['parseAgendaWordBlob_', 'diagnoseAgendaConversion'];
 const AGENDA_READERS_CHANGES = [
+  // The release of it (T-2026.10.21): the version line and the changelog entry of 2.26.5.
+  [" * Version: 2.26.5 (2026-11-11)\n",
+   " * Version: 2.26.4 (2026-11-11)\n"],
+  [" * CHANGELOG\n * 2.26.5 (2026-11-11)\n *   - Fixed: the agenda is read even when DocumentApp cannot open the\n *     Google Doc converted from it. It is read by DocumentApp, else by the\n *     Docs API on the same converted document, else from the Word file\n *     itself; all three feed the unchanged parser. A reader whose agenda\n *     is empty or malformed has failed, and the next one is asked. The log\n *     names the reader (counts only, never agenda text); if none reads it,\n *     the error names each. diagnoseAgendaReaders(), run from the editor,\n *     runs all three on the configured agenda and writes nothing. (MBS\n *     SA4#138, 2026-11-11: DocumentApp.openById failed 4 of 4 times on the\n *     converted agenda S4-261857 with T-2026.10.20.) (AGENDA READERS\n *     section; docs/AGENDA_WORD_CONVERSION.md.)\n",
+   " * CHANGELOG\n"],
   ["  // After T-2026.10.19: opened with bounded retries, trashed in every case (AGENDA WORD CONVERSION section).\n" +
    "  // After T-2026.10.20: read by DocumentApp, else the Docs API, else the Word file itself (AGENDA READERS section).\n" +
    "  try {\n    return readAgendaWithFallbacks_(convertedDocId, wordBlob.getBytes());\n",

@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.4 (2026-11-11)
+ * Version: 2.26.5 (2026-11-11)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,18 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.5 (2026-11-11)
+ *   - Fixed: the agenda is read even when DocumentApp cannot open the
+ *     Google Doc converted from it. It is read by DocumentApp, else by the
+ *     Docs API on the same converted document, else from the Word file
+ *     itself; all three feed the unchanged parser. A reader whose agenda
+ *     is empty or malformed has failed, and the next one is asked. The log
+ *     names the reader (counts only, never agenda text); if none reads it,
+ *     the error names each. diagnoseAgendaReaders(), run from the editor,
+ *     runs all three on the configured agenda and writes nothing. (MBS
+ *     SA4#138, 2026-11-11: DocumentApp.openById failed 4 of 4 times on the
+ *     converted agenda S4-261857 with T-2026.10.20.) (AGENDA READERS
+ *     section; docs/AGENDA_WORD_CONVERSION.md.)
  * 2.26.4 (2026-11-11)
  *   - Fixed: the agenda TDoc's Word file is converted reliably. It goes to
  *     Drive with the content type of a Word file (by its extension), the
