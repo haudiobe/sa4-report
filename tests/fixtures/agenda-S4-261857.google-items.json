@@ -1,0 +1,506 @@
+{
+ "source": "Drive HTML export of the Google Doc that Drive converted from this .docx (2026-11-11), read with the rules of parseAgendaStructureWithText_(body, ''). The export writes some spaces as &nbsp; (the plain-text export of the same document has none): normalised to spaces.",
+ "path": "table",
+ "items": [
+  {
+   "number": "1",
+   "title": "Opening of the meeting: Monday 16th November 2026, at 9:00 local time",
+   "level": 1
+  },
+  {
+   "number": "2",
+   "title": "Approval of the agenda and registration of documents",
+   "level": 1
+  },
+  {
+   "number": "3",
+   "title": "IPR, antitrust and consensus principles reminder",
+   "level": 1
+  },
+  {
+   "number": "4",
+   "title": "Approval of previous meeting report",
+   "level": 1
+  },
+  {
+   "number": "5",
+   "title": "Reports/Liaisons from other groups/meetings",
+   "level": 1
+  },
+  {
+   "number": "5.1",
+   "title": "SA4 and SWG ad hoc meetings",
+   "level": 2
+  },
+  {
+   "number": "5.2",
+   "title": "Other 3GPP groups",
+   "level": 2
+  },
+  {
+   "number": "5.3",
+   "title": "Other groups",
+   "level": 2
+  },
+  {
+   "number": "6",
+   "title": "Issues for immediate consideration",
+   "level": 1
+  },
+  {
+   "number": "6.1",
+   "title": "Promotion",
+   "level": 2
+  },
+  {
+   "number": "6.2",
+   "title": "Terms of reference",
+   "level": 2
+  },
+  {
+   "number": "6.3",
+   "title": "SA request on training data",
+   "level": 2
+  },
+  {
+   "number": "6.4",
+   "title": "Other issues for immediate consideration",
+   "level": 2
+  },
+  {
+   "number": "7",
+   "title": "Audio SWG",
+   "level": 1
+  },
+  {
+   "number": "7.1",
+   "title": "Opening of the session, registration of documents",
+   "level": 2
+  },
+  {
+   "number": "7.2",
+   "title": "IPR, antitrust and consensus reminder",
+   "level": 2
+  },
+  {
+   "number": "7.3",
+   "title": "Reports/Liaisons from other groups/meetings",
+   "level": 2
+  },
+  {
+   "number": "7.4",
+   "title": "Release 19 and earlier matters",
+   "level": 2
+  },
+  {
+   "number": "7.5",
+   "title": "DaCAS (Diverse audio CApturing System for UEs)",
+   "level": 2
+  },
+  {
+   "number": "7.6",
+   "title": "ATIAS_Ph3 (Terminal Audio quality performance and Test methods for Immersive Audio Services, Phase 3)",
+   "level": 2
+  },
+  {
+   "number": "7.7",
+   "title": "ULBC-MED (Ultra Low Bitrate Speech Codec for IMS Voice Call over NB-IoT NTN via GEO Satellite)",
+   "level": 2
+  },
+  {
+   "number": "7.8",
+   "title": "Other Rel-20 matters including TEI",
+   "level": 2
+  },
+  {
+   "number": "7.9",
+   "title": "Any Other Business",
+   "level": 2
+  },
+  {
+   "number": "7.10",
+   "title": "Close of the session",
+   "level": 2
+  },
+  {
+   "number": "8",
+   "title": "Multicast-Broadcast-Streaming (MBS) SWG",
+   "level": 1
+  },
+  {
+   "number": "8.1",
+   "title": "Opening of the session, registration of documents",
+   "level": 2
+  },
+  {
+   "number": "8.2",
+   "title": "IPR, antitrust and consensus reminder",
+   "level": 2
+  },
+  {
+   "number": "8.3",
+   "title": "Reports/Liaisons from other groups/meetings",
+   "level": 2
+  },
+  {
+   "number": "8.4",
+   "title": "Release 19 and earlier matters",
+   "level": 2
+  },
+  {
+   "number": "8.5",
+   "title": "AMD_ARCH_Ph2-MED (Architectural Updates for Advanced Media Delivery Phase 2)",
+   "level": 2
+  },
+  {
+   "number": "8.6",
+   "title": "Energy_PRO-MED (Protocols, network APIs and data types for application energy consumption information collection, reporting and exposure – Stage 3)",
+   "level": 2
+  },
+  {
+   "number": "8.7",
+   "title": "FS_QStream_MED (Study on evaluation of QUIC-based protocols for on-demand and live video services)",
+   "level": 2
+  },
+  {
+   "number": "8.8",
+   "title": "Other Rel-20 matters including TEI",
+   "level": 2
+  },
+  {
+   "number": "8.9",
+   "title": "Any Other Business",
+   "level": 2
+  },
+  {
+   "number": "8.10",
+   "title": "Close of the session",
+   "level": 2
+  },
+  {
+   "number": "9",
+   "title": "Video SWG",
+   "level": 1
+  },
+  {
+   "number": "9.1",
+   "title": "Opening of the session, registration of documents",
+   "level": 2
+  },
+  {
+   "number": "9.2",
+   "title": "IPR, antitrust and consensus reminder",
+   "level": 2
+  },
+  {
+   "number": "9.3",
+   "title": "Reports/Liaisons from other groups/meetings",
+   "level": 2
+  },
+  {
+   "number": "9.4",
+   "title": "Release 19 and earlier matters",
+   "level": 2
+  },
+  {
+   "number": "9.5",
+   "title": "FS_3DGS_MED (Study on 3D Gaussian splats)",
+   "level": 2
+  },
+  {
+   "number": "9.6",
+   "title": "FS_AIF_MED (Study on Advanced Image Formats)",
+   "level": 2
+  },
+  {
+   "number": "9.7",
+   "title": "Other Rel-20 matters including TEI",
+   "level": 2
+  },
+  {
+   "number": "9.8",
+   "title": "Any Other Business",
+   "level": 2
+  },
+  {
+   "number": "9.9",
+   "title": "Close of the session",
+   "level": 2
+  },
+  {
+   "number": "10",
+   "title": "Real-Time Communications (RTC) SWG",
+   "level": 1
+  },
+  {
+   "number": "10.1",
+   "title": "Opening of the session, registration of documents",
+   "level": 2
+  },
+  {
+   "number": "10.2",
+   "title": "IPR, antitrust and consensus reminder",
+   "level": 2
+  },
+  {
+   "number": "10.3",
+   "title": "Reports/Liaisons from other groups/meetings",
+   "level": 2
+  },
+  {
+   "number": "10.4",
+   "title": "Release 19 and earlier matters",
+   "level": 2
+  },
+  {
+   "number": "10.5",
+   "title": "AvCall_Ph2-MED (Avatar Communications phase 2)",
+   "level": 2
+  },
+  {
+   "number": "10.6",
+   "title": "FS_DCTC_eQOS_MED (Study on Usage of Dynamically Changing Traffic Characteristics and Enhanced QoS support in Media Applications and Services)",
+   "level": 2
+  },
+  {
+   "number": "10.7",
+   "title": "FS_Q4RTC_MED (Study on QUIC-based Media Delivery for Real-time Communication)",
+   "level": 2
+  },
+  {
+   "number": "10.8",
+   "title": "FS_DCE_MED (Study on IMS DC Enhancements)",
+   "level": 2
+  },
+  {
+   "number": "10.9",
+   "title": "Other Rel-20 matters including TEI",
+   "level": 2
+  },
+  {
+   "number": "10.10",
+   "title": "Any Other Business",
+   "level": 2
+  },
+  {
+   "number": "10.11",
+   "title": "Close of the session",
+   "level": 2
+  },
+  {
+   "number": "11",
+   "title": "FS_6G_MED (Study on Media aspects for 6G System)",
+   "level": 1
+  },
+  {
+   "number": "11.1",
+   "title": "General and working documents",
+   "level": 2
+  },
+  {
+   "number": "11.2",
+   "title": "WT#1: Media Delivery Architecture",
+   "level": 2
+  },
+  {
+   "number": "11.3",
+   "title": "WT#2: 6G Media",
+   "level": 2
+  },
+  {
+   "number": "11.3.1",
+   "title": "AI Traffic Characteristics",
+   "level": 3
+  },
+  {
+   "number": "11.3.2",
+   "title": "Other AI-Related topics",
+   "level": 3
+  },
+  {
+   "number": "11.3.3",
+   "title": "Non-AI-related topics",
+   "level": 3
+  },
+  {
+   "number": "11.4",
+   "title": "WT#3: Media Aspects related to SA2 topics",
+   "level": 2
+  },
+  {
+   "number": "11.5",
+   "title": "WT#4: Media for ubiquitous access",
+   "level": 2
+  },
+  {
+   "number": "11.6",
+   "title": "WT#5: Trusted and private media communication",
+   "level": 2
+  },
+  {
+   "number": "11.7",
+   "title": "Other issues",
+   "level": 2
+  },
+  {
+   "number": "12",
+   "title": "LSs received during the meeting and Postponed Liaisons (from A. I. 5)",
+   "level": 1
+  },
+  {
+   "number": "13",
+   "title": "Reports and general issues from sub-working-groups",
+   "level": 1
+  },
+  {
+   "number": "13.1",
+   "title": "Audio SWG",
+   "level": 2
+  },
+  {
+   "number": "13.2",
+   "title": "MBS SWG",
+   "level": 2
+  },
+  {
+   "number": "13.3",
+   "title": "Video SWG",
+   "level": 2
+  },
+  {
+   "number": "13.4",
+   "title": "RTC SWG",
+   "level": 2
+  },
+  {
+   "number": "14",
+   "title": "Release 19 and earlier matters",
+   "level": 1
+  },
+  {
+   "number": "15",
+   "title": "Release 20 Features",
+   "level": 1
+  },
+  {
+   "number": "15.1",
+   "title": "DaCAS (Diverse audio CApturing System for UEs)",
+   "level": 2
+  },
+  {
+   "number": "15.2",
+   "title": "ATIAS_Ph3 (Terminal Audio quality performance and Test methods for Immersive Audio Services, Phase 3)",
+   "level": 2
+  },
+  {
+   "number": "15.3",
+   "title": "ULBC-MED (Ultra Low Bitrate Speech Codec for IMS Voice Call over NB-IoT NTN via GEO Satellite)",
+   "level": 2
+  },
+  {
+   "number": "15.4",
+   "title": "AMD_ARCH_Ph2-MED (Architectural Updates for Advanced Media Delivery Phase 2)",
+   "level": 2
+  },
+  {
+   "number": "15.5",
+   "title": "Energy_PRO-MED (Protocols, network APIs and data types for application energy consumption information collection, reporting and exposure – Stage 3)",
+   "level": 2
+  },
+  {
+   "number": "15.6",
+   "title": "AvCall_Ph2-MED (Avatar Communications phase 2)",
+   "level": 2
+  },
+  {
+   "number": "15.7",
+   "title": "Other Rel-20 matters including TEI",
+   "level": 2
+  },
+  {
+   "number": "16",
+   "title": "Study Items",
+   "level": 1
+  },
+  {
+   "number": "16.1",
+   "title": "FS_3DGS_MED (Study on 3D Gaussian splats)",
+   "level": 2
+  },
+  {
+   "number": "16.2",
+   "title": "FS_DCTC_eQOS_MED (Study on Usage of Dynamically Changing Traffic Characteristics and Enhanced QoS support in Media Applications and Services)",
+   "level": 2
+  },
+  {
+   "number": "16.3",
+   "title": "FS_QStream_MED (Study on evaluation of QUIC-based protocols for on-demand and live video services)",
+   "level": 2
+  },
+  {
+   "number": "16.4",
+   "title": "FS_AIF_MED (Study on Advanced Image Formats)",
+   "level": 2
+  },
+  {
+   "number": "16.5",
+   "title": "FS_Q4RTC_MED (Study on QUIC-based Media Delivery for Real-time Communication)",
+   "level": 2
+  },
+  {
+   "number": "16.6",
+   "title": "FS_DCE_MED (Study on IMS DC Enhancements)",
+   "level": 2
+  },
+  {
+   "number": "16.7",
+   "title": "FS_6G_MED (Study on Media aspects for 6G System)",
+   "level": 2
+  },
+  {
+   "number": "17",
+   "title": "Work Items and Study Items under the responsibility of other TSGs/WGs impacting SA4 work",
+   "level": 1
+  },
+  {
+   "number": "18",
+   "title": "New Work / New Work Items and Study Items",
+   "level": 1
+  },
+  {
+   "number": "18.1",
+   "title": "New Work Items and Study Items for Rel-20 5G-Advanced",
+   "level": 2
+  },
+  {
+   "number": "18.2",
+   "title": "New Study Items for Rel-20 6G",
+   "level": 2
+  },
+  {
+   "number": "18.3",
+   "title": "Other",
+   "level": 2
+  },
+  {
+   "number": "19",
+   "title": "Postponed issues",
+   "level": 1
+  },
+  {
+   "number": "20",
+   "title": "Review of the future work plan (next meeting dates, hosts)",
+   "level": 1
+  },
+  {
+   "number": "21",
+   "title": "Any Other Business",
+   "level": 1
+  },
+  {
+   "number": "22",
+   "title": "Close of meeting: Friday 20th November 2026 at 16:00 local time",
+   "level": 1
+  }
+ ]
+}

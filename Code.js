@@ -10334,8 +10334,9 @@ function parseAgendaWordBlob_(wordBlob) {
   const convertedDocId = convertWordBlobToGoogleDoc_(wordBlob);
 
   // After T-2026.10.19: opened with bounded retries, trashed in every case (AGENDA WORD CONVERSION section).
+  // After T-2026.10.20: read by DocumentApp, else the Docs API, else the Word file itself (AGENDA READERS section).
   try {
-    return parseAgendaStructureWithText_(openConvertedAgendaBody_(convertedDocId), '');
+    return readAgendaWithFallbacks_(convertedDocId, wordBlob.getBytes());
   } finally {
     trashConvertedAgenda_(convertedDocId);
   }
@@ -10474,7 +10475,9 @@ function diagnoseAgendaConversion() {
   }
   try {
     const items = downloadMeetingAgenda_(cfg.AGENDA_TDOC, cfg.FTP_BASE);
-    const text = 'Agenda ' + cfg.AGENDA_TDOC + ': converted, opened and parsed -- ' + items.length + ' agenda item(s).';
+    // After T-2026.10.20: the reader that read it is named (AGENDA READERS section).
+    const text = 'Agenda ' + cfg.AGENDA_TDOC + ': converted, opened and parsed -- ' + items.length + ' agenda item(s)' +
+      (AGENDA_LAST_READER_ ? ', read by ' + AGENDA_LAST_READER_ : '') + '.';
     Logger.log('[AGENDA] diagnosis: ' + text);
     return text;
   } catch (e) {
@@ -10485,6 +10488,378 @@ function diagnoseAgendaConversion() {
 
 // =========================================================
 // END OF AGENDA WORD CONVERSION
+// =========================================================
+
+// =========================================================
+// AGENDA READERS (after T-2026.10.20)
+// =========================================================
+//
+// MBS SA4#138, 2026-11-11, with T-2026.10.20: Drive converts the agenda
+// S4-261857 to a native Google Doc, and DocumentApp.openById(...).getBody()
+// fails on all four attempts ("Unexpected error while getting the method or
+// property openById on object DocumentApp."), 7 s after the first. The
+// converted document is sound: converted again outside Apps Script, Drive
+// exports it in full (one table of 101 rows headed "A.I.#", 228
+// paragraphs), and so does the SA4#136 agenda. What fails is DocumentApp's
+// loading of it, every time, so waiting longer does not help.
+//
+// The agenda is now read by the first of three readers that succeeds:
+//   1. DocumentApp -- unchanged, with its bounded retries;
+//   2. the Docs API (Docs.Documents.get) on the SAME converted document,
+//      before it is trashed;
+//   3. the Word file itself (word/document.xml and word/styles.xml), with
+//      no Google Doc at all.
+// Each reader hands parseAgendaStructureWithText_() the same small Body
+// view (agendaBodyView_): its top-level paragraphs (a paragraph in a list
+// is a LIST_ITEM, as in DocumentApp), each paragraph's text and heading,
+// and its tables (cell text = the cell's paragraphs joined by "\n"). That
+// is all the parser reads, and the parser is unchanged -- so the agenda
+// items, their order, and the TDocs grouped under them by number are the
+// same whichever reader read them.
+// Every reader's failure is logged with its original error and stack; the
+// log names the reader that read the agenda. Only counts are logged, never
+// the document's text. If all three fail, the error names each.
+// diagnoseAgendaReaders() runs all three on the configured agenda, compares
+// their items, and writes nothing.
+
+var AGENDA_READERS_ = ['DocumentApp', 'Docs API', 'Word file'];
+// The reader that read the last agenda of this execution ('' before one did).
+var AGENDA_LAST_READER_ = '';
+var AGENDA_DOCS_API_HEADINGS_ = {
+  NORMAL_TEXT: 'NORMAL', TITLE: 'TITLE', SUBTITLE: 'SUBTITLE', HEADING_1: 'HEADING1', HEADING_2: 'HEADING2',
+  HEADING_3: 'HEADING3', HEADING_4: 'HEADING4', HEADING_5: 'HEADING5', HEADING_6: 'HEADING6'
+};
+var AGENDA_WORD_MAIN_NAMESPACES_ = ['http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'http://purl.oclc.org/ooxml/wordprocessingml/main'];
+
+/** The agenda items of the converted document: the first reader that succeeds. Throws, naming each reader, if none does. */
+function readAgendaWithFallbacks_(docId, wordBytes) {
+  const failures = [];
+  for (let i = 0; i < AGENDA_READERS_.length; i++) {
+    const reader = AGENDA_READERS_[i];
+    const result = readAgendaWith_(reader, docId, wordBytes);
+    if (result.ok) {
+      AGENDA_LAST_READER_ = reader;
+      Logger.log('[AGENDA] read by ' + reader + (i > 0 ? ' (after: ' + failures.map(function (f) { return f.reader; }).join(', ') + ')' : '') + ': ' + result.items.length + ' agenda item(s)');
+      return result.items;
+    }
+    failures.push({ reader: reader, message: result.error && result.error.message ? result.error.message : String(result.error) });
+  }
+  throw new Error('The agenda could not be read -- ' + failures.map(function (f) { return f.reader + ': ' + f.message; }).join('; '));
+}
+
+/** One reader: { ok: true, items } or { ok: false, error }. Never throws; a failure is logged. */
+function readAgendaWith_(reader, docId, wordBytes) {
+  try {
+    let body;
+    if (reader === 'DocumentApp') body = openConvertedAgendaBody_(docId);
+    else if (reader === 'Docs API') body = docsApiAgendaBody_(readConvertedAgendaWithDocsApi_(docId));
+    else if (reader === 'Word file') body = wordFileAgendaBody_(wordBytes);
+    else throw new Error('unknown agenda reader ' + reader);
+    return { ok: true, items: parseAgendaStructureWithText_(body, '') };
+  } catch (e) {
+    Logger.log('[AGENDA] ' + reader + ' could not read the agenda' + (reader === 'Word file' ? '' : ' (Google Doc ' + docId + ')') + ': ' + agendaErrorForLog_(e));
+    return { ok: false, error: e };
+  }
+}
+
+/** Docs.Documents.get on the converted document; logs its shape (counts only). */
+function readConvertedAgendaWithDocsApi_(docId) {
+  if (typeof Docs === 'undefined' || !Docs.Documents) throw new Error('the Docs advanced service is not available');
+  const doc = Docs.Documents.get(docId);
+  const content = (doc && doc.body && doc.body.content) || [];
+  const count = function (test) { return content.filter(test).length; };
+  Logger.log('[AGENDA] Docs.Documents.get(' + docId + '): ' + content.length + ' body element(s), ' +
+    count(function (c) { return c.paragraph && !c.paragraph.bullet; }) + ' paragraph(s), ' + count(function (c) { return c.paragraph && c.paragraph.bullet; }) + ' list item(s), ' +
+    count(function (c) { return c.table; }) + ' table(s) ' + JSON.stringify(content.filter(function (c) { return c.table; }).map(function (c) { return (c.table.rows || 0) + 'x' + (c.table.columns || 0); })));
+  return doc;
+}
+
+/** Pure: the Body view of a Docs API document (its first tab's body). */
+function docsApiAgendaBody_(doc) {
+  if (!doc || !doc.body) throw new Error('the Docs API returned no document body');
+  return agendaBodyView_(docsApiAgendaBlocks_(doc.body.content));
+}
+
+/** Pure: Docs API structural elements as agenda blocks. */
+function docsApiAgendaBlocks_(content) {
+  return (content || []).map(function (element) {
+    if (element.paragraph) {
+      const p = element.paragraph;
+      const text = (p.elements || []).map(function (e) { return e.textRun && e.textRun.content ? e.textRun.content : ''; }).join('')
+        .replace(/\n$/, '').replace(/\u000b/g, '\r');
+      return { type: p.bullet ? 'LIST_ITEM' : 'PARAGRAPH', text: text, heading: AGENDA_DOCS_API_HEADINGS_[(p.paragraphStyle || {}).namedStyleType] || 'NORMAL' };
+    }
+    if (element.table) {
+      return { type: 'TABLE', rows: (element.table.tableRows || []).map(function (row) {
+        return (row.tableCells || []).map(function (cell) { return docsApiAgendaBlocks_(cell.content); });
+      }) };
+    }
+    return { type: 'OTHER' };
+  });
+}
+
+/** The Body view of the agenda's Word file (.docx), read without any Google Doc. */
+function wordFileAgendaBody_(wordBytes) {
+  if (!wordBytes || !wordBytes.length) throw new Error('no Word file');
+  let parts;
+  try {
+    parts = Utilities.unzip(Utilities.newBlob(wordBytes, 'application/zip', 'agenda-docx.zip'));
+  } catch (e) {
+    throw new Error('the Word file is not a .docx (it cannot be unzipped): ' + (e && e.message ? e.message : e));
+  }
+  const byName = {};
+  parts.forEach(function (blob) { byName[blob.getName()] = blob; });
+  if (!byName['word/document.xml']) throw new Error('the Word file has no word/document.xml');
+  const read = function (name) { return byName[name] ? byName[name].getDataAsString('UTF-8') : ''; };
+  return agendaBodyView_(wordFileAgendaBlocks_(read('word/document.xml'), read('word/styles.xml')));
+}
+
+/**
+ * Pure: the blocks of word/document.xml. A paragraph with numbering (its
+ * own, or from its style) is a LIST_ITEM; its heading comes from its style's
+ * name ("heading 1".."heading 6", "Title", "Subtitle"). Text is the text of
+ * its runs (tabs as "\t", line breaks as "\r"), including inserted text,
+ * hyperlinks and field results; deleted text, field codes, drawings and text
+ * boxes are not text of the paragraph, as in DocumentApp.
+ */
+function wordFileAgendaBlocks_(documentXml, stylesXml) {
+  const doc = parseAgendaXml_(documentXml);
+  const root = doc.children.filter(function (c) { return typeof c !== 'string'; })[0];
+  if (!root) throw new Error('word/document.xml is empty');
+  const prefix = agendaXmlPrefixFor_(root, AGENDA_WORD_MAIN_NAMESPACES_);
+  if (prefix === null) throw new Error('word/document.xml is not WordprocessingML');
+  const W = function (local) { return prefix ? prefix + ':' + local : local; };
+  const kids = function (node) { return (node.children || []).filter(function (c) { return typeof c !== 'string'; }); };
+  const child = function (node, local) { return kids(node).filter(function (c) { return c.name === W(local); })[0] || null; };
+  const val = function (node) { return node ? node.attrs[W('val')] : undefined; };
+  const styles = agendaWordStyles_(stylesXml);
+
+  function styleChain(id) {
+    const chain = [];
+    for (let s = styles.byId[id], guard = 0; s && guard < 20; s = styles.byId[s.basedOn], guard++) chain.push(s);
+    return chain;
+  }
+  function paragraphBlock(p) {
+    const pPr = child(p, 'pPr');
+    const styleId = val(pPr && child(pPr, 'pStyle')) || styles.defaultParagraph;
+    const chain = styleChain(styleId);
+    const numPr = pPr && child(pPr, 'numPr');
+    let numId = numPr ? val(child(numPr, 'numId')) : undefined;
+    if (numId === undefined) numId = chain.map(function (s) { return s.numId; }).filter(function (n) { return n !== undefined; })[0];
+    const name = (chain[0] && chain[0].name || '').toLowerCase();
+    const h = name.match(/^heading ([1-6])$/);
+    return {
+      type: numId !== undefined && numId !== '0' ? 'LIST_ITEM' : 'PARAGRAPH',
+      text: runText(p),
+      heading: h ? 'HEADING' + h[1] : name === 'title' ? 'TITLE' : name === 'subtitle' ? 'SUBTITLE' : 'NORMAL'
+    };
+  }
+  function runText(node) {
+    let out = '';
+    kids(node).forEach(function (c) {
+      if (c.name === W('r')) {
+        kids(c).forEach(function (rc) {
+          if (rc.name === W('t')) out += agendaXmlText_(rc);
+          else if (rc.name === W('tab') || rc.name === W('ptab')) out += '\t';
+          else if (rc.name === W('br')) { const type = rc.attrs[W('type')]; if (!type || type === 'textWrapping') out += '\r'; }
+          else if (rc.name === W('cr')) out += '\r';
+          else if (rc.name === W('noBreakHyphen')) out += '-';
+        });
+      } else if (['hyperlink', 'ins', 'moveTo', 'smartTag', 'customXml', 'fldSimple', 'sdt', 'sdtContent', 'dir', 'bdo'].some(function (l) { return c.name === W(l); })) {
+        out += runText(c);
+      }
+    });
+    return out;
+  }
+  function blocks(container) {
+    const out = [];
+    kids(container).forEach(function (c) {
+      if (c.name === W('p')) out.push(paragraphBlock(c));
+      else if (c.name === W('tbl')) out.push(tableBlock(c));
+      else if (c.name === W('sdt') || c.name === W('customXml')) { const inner = c.name === W('sdt') ? child(c, 'sdtContent') : c; if (inner) blocks(inner).forEach(function (b) { out.push(b); }); }
+      else if (c.name !== W('sectPr')) out.push({ type: 'OTHER' });
+    });
+    return out;
+  }
+  function unwrap(node, local) {
+    const out = [];
+    kids(node).forEach(function (c) {
+      if (c.name === W(local)) out.push(c);
+      else if (c.name === W('sdt')) { const inner = child(c, 'sdtContent'); if (inner) unwrap(inner, local).forEach(function (x) { out.push(x); }); }
+    });
+    return out;
+  }
+  function tableBlock(tbl) {
+    return { type: 'TABLE', rows: unwrap(tbl, 'tr').map(function (tr) { return unwrap(tr, 'tc').map(blocks); }) };
+  }
+  const body = child(root, 'body');
+  if (!body) throw new Error('word/document.xml has no body');
+  return blocks(body);
+}
+
+/** Pure: the paragraph styles of word/styles.xml -- { byId: { id: { name, basedOn, numId } }, defaultParagraph }. */
+function agendaWordStyles_(stylesXml) {
+  const result = { byId: {}, defaultParagraph: undefined };
+  if (!stylesXml) return result;
+  const doc = parseAgendaXml_(stylesXml);
+  const root = doc.children.filter(function (c) { return typeof c !== 'string'; })[0];
+  const prefix = root ? agendaXmlPrefixFor_(root, AGENDA_WORD_MAIN_NAMESPACES_) : null;
+  if (prefix === null) return result;
+  const W = function (local) { return prefix ? prefix + ':' + local : local; };
+  const kids = function (node) { return (node.children || []).filter(function (c) { return typeof c !== 'string'; }); };
+  const child = function (node, local) { return node ? kids(node).filter(function (c) { return c.name === W(local); })[0] || null : null; };
+  kids(root).filter(function (s) { return s.name === W('style') && s.attrs[W('type')] === 'paragraph'; }).forEach(function (s) {
+    const id = s.attrs[W('styleId')];
+    const pPr = child(s, 'pPr');
+    const numId = child(child(pPr, 'numPr'), 'numId');
+    result.byId[id] = {
+      name: child(s, 'name') ? child(s, 'name').attrs[W('val')] : '',
+      basedOn: child(s, 'basedOn') ? child(s, 'basedOn').attrs[W('val')] : undefined,
+      numId: numId ? numId.attrs[W('val')] : undefined
+    };
+    const isDefault = s.attrs[W('default')];
+    if ((isDefault === '1' || isDefault === 'true' || isDefault === 'on') && result.defaultParagraph === undefined) result.defaultParagraph = id;
+  });
+  return result;
+}
+
+/**
+ * Pure: a small XML reader for the well-formed XML that Word writes: a tree
+ * of { name, attrs, children } with text nodes as strings, entities decoded.
+ * Comments, processing instructions and the DOCTYPE are skipped.
+ */
+function parseAgendaXml_(xml) {
+  const root = { name: '#document', attrs: {}, children: [] };
+  const stack = [root];
+  const decode = function (s) {
+    return s.replace(/&(#x[0-9a-fA-F]+|#\d+|lt|gt|amp|quot|apos);/g, function (m, e) {
+      if (e[0] === '#') return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+      return { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" }[e];
+    });
+  };
+  const token = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!DOCTYPE[^>]*>|<!\[CDATA\[([\s\S]*?)\]\]>|<\/([^\s>]+)\s*>|<([^\s>\/!?]+)((?:\s+[^\s=>\/]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g;
+  let m;
+  while ((m = token.exec(String(xml || ''))) !== null) {
+    const top = stack[stack.length - 1];
+    if (m[1] !== undefined) top.children.push(m[1]);
+    else if (m[2] !== undefined) {
+      if (stack.length < 2 || top.name !== m[2]) throw new Error('malformed XML: unexpected </' + m[2] + '>');
+      stack.pop();
+    } else if (m[3] !== undefined) {
+      const attrs = {};
+      const attr = /([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+      let a;
+      while ((a = attr.exec(m[4] || '')) !== null) attrs[a[1]] = decode(a[2] !== undefined ? a[2] : a[3]);
+      const node = { name: m[3], attrs: attrs, children: [] };
+      top.children.push(node);
+      if (!m[5]) stack.push(node);
+    } else if (m[6] !== undefined) top.children.push(decode(m[6]));
+  }
+  if (stack.length !== 1) throw new Error('malformed XML: <' + stack[stack.length - 1].name + '> is not closed');
+  return root;
+}
+
+/** Pure: the prefix ('' for a default namespace) the element binds to one of these namespace URIs; null if none. */
+function agendaXmlPrefixFor_(element, uris) {
+  const keys = Object.keys(element.attrs);
+  for (let i = 0; i < keys.length; i++) {
+    if (uris.indexOf(element.attrs[keys[i]]) === -1) continue;
+    if (keys[i] === 'xmlns') return '';
+    if (keys[i].indexOf('xmlns:') === 0) return keys[i].slice(6);
+  }
+  return null;
+}
+
+/** Pure: the text content of an element (its text nodes, in order). */
+function agendaXmlText_(node) {
+  return (node.children || []).map(function (c) { return typeof c === 'string' ? c : agendaXmlText_(c); }).join('');
+}
+
+/**
+ * Pure: the part of DocumentApp's Body that parseAgendaStructureWithText_()
+ * reads, over agenda blocks: getNumChildren/getChild (getType, asParagraph,
+ * getText, getHeading) and getTables (getNumRows, getRow, getCell, getText),
+ * with the tables of the body in document order (a nested table after its
+ * table). A cell's text is its paragraphs joined by "\n".
+ */
+function agendaBodyView_(blocks) {
+  const types = DocumentApp.ElementType;
+  const headings = DocumentApp.ParagraphHeading;
+  const textOf = function (bs) {
+    return bs.filter(function (b) { return b.type !== 'OTHER'; }).map(function (b) {
+      return b.type === 'TABLE' ? b.rows.map(function (r) { return r.map(textOf).join('\n'); }).join('\n') : b.text;
+    }).join('\n');
+  };
+  const element = function (b) {
+    const self = {
+      getType: function () { return b.type === 'OTHER' ? null : types[b.type]; },
+      asParagraph: function () { return self; },
+      getText: function () { return b.type === 'TABLE' ? textOf([b]) : b.text || ''; },
+      getHeading: function () { return headings[b.heading] || headings.NORMAL; }
+    };
+    return self;
+  };
+  const cellView = function (cellBlocks) { return { getText: function () { return textOf(cellBlocks); } }; };
+  const tableView = function (b) {
+    return {
+      getNumRows: function () { return b.rows.length; },
+      getRow: function (r) { return { getNumCells: function () { return b.rows[r].length; }, getCell: function (c) { return cellView(b.rows[r][c]); } }; },
+      getCell: function (r, c) { return cellView(b.rows[r][c]); }
+    };
+  };
+  const tables = [];
+  (function collect(bs) {
+    bs.forEach(function (b) { if (b.type === 'TABLE') { tables.push(tableView(b)); b.rows.forEach(function (r) { r.forEach(collect); }); } });
+  })(blocks);
+  return {
+    getNumChildren: function () { return blocks.length; },
+    getChild: function (i) { return element(blocks[i]); },
+    getTables: function () { return tables.slice(); }
+  };
+}
+
+/**
+ * Run from the Apps Script editor: downloads the configured agenda TDoc,
+ * converts it once, and reads it with EACH reader (DocumentApp, Docs API,
+ * Word file) -- logging for each whether it read the agenda, how many items,
+ * and whether its items equal the others'. The temporary Google Doc is
+ * trashed. Writes nothing: no property, nothing in the report. Logs counts,
+ * never the agenda's text.
+ */
+function diagnoseAgendaReaders() {
+  const cfg = getReportConfig_();
+  if (!cfg.AGENDA_TDOC) {
+    Logger.log('[AGENDA] readers: this report has no agenda TDoc configured; nothing to read.');
+    return 'No agenda TDoc configured.';
+  }
+  let docId = null;
+  try {
+    const url = normalizeFtpBase_(cfg.FTP_BASE || DEFAULT_S4_FTP_BASE) + cfg.AGENDA_TDOC + '.zip';
+    const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    if (response.getResponseCode() >= 400) throw new Error('Could not download agenda ZIP (' + response.getResponseCode() + '): ' + url);
+    const wordBlob = extractWordFromZip_(response.getBlob().setName(cfg.AGENDA_TDOC + '.zip'));
+    const wordBytes = wordBlob.getBytes();
+    docId = convertWordBlobToGoogleDoc_(wordBlob);
+    const results = AGENDA_READERS_.map(function (reader) { return Object.assign({ reader: reader }, readAgendaWith_(reader, docId, wordBytes)); });
+    const reference = results.filter(function (r) { return r.ok; })[0];
+    const key = function (items) { return JSON.stringify(items.map(function (i) { return [i.number, i.title, i.level, i.text]; })); };
+    const lines = results.map(function (r) {
+      return r.reader + ': ' + (r.ok ? r.items.length + ' agenda item(s)' + (reference && r !== reference ? (key(r.items) === key(reference.items) ? ', same as ' + reference.reader : ', DIFFERENT from ' + reference.reader) : '')
+        : 'FAILED -- ' + (r.error && r.error.message ? r.error.message : r.error));
+    });
+    const text = 'Agenda ' + cfg.AGENDA_TDOC + ' (Google Doc ' + docId + '): ' + lines.join('; ') + '.';
+    Logger.log('[AGENDA] readers: ' + text);
+    return text;
+  } catch (e) {
+    Logger.log('[AGENDA] readers: FAILED for ' + cfg.AGENDA_TDOC + ': ' + agendaErrorForLog_(e));
+    return 'Agenda ' + cfg.AGENDA_TDOC + ': FAILED -- ' + (e && e.message ? e.message : e);
+  } finally {
+    if (docId) trashConvertedAgenda_(docId);
+  }
+}
+
+// =========================================================
+// END OF AGENDA READERS
 // =========================================================
 
 /**

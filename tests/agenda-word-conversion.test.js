@@ -32,7 +32,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
-const { codeWithoutAgendaWordConversion, AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutAgendaReaders, codeWithoutAgendaWordConversion, AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -154,6 +154,8 @@ console.log('B. successful conversion');
   check('the log: convert, Drive result with ID and type, open, trash', w.agendaLogs().slice(1), [
     '[AGENDA] Drive.Files.create returned ' + DOC_ID + ' (' + GDOC + ', "' + w.creates[0].resource.name + '")',
     '[AGENDA] DocumentApp.openById(' + DOC_ID + ') succeeded on attempt 1 of 4',
+    // After T-2026.10.20: the reader that read the agenda is named (tests/agenda-readers.test.js).
+    '[AGENDA] read by DocumentApp: 2 agenda item(s)',
     '[AGENDA] temporary agenda document ' + DOC_ID + ' moved to the trash'
   ]);
 }
@@ -176,8 +178,10 @@ console.log('D. permanent failure');
 {
   const w = world({ openFailures: Infinity });
   const out = w.run(wordBlob(NAME_138));
-  check('one error naming the document, the step, the attempts and the original message', out.error,
-    'The agenda converted from Word (Google Doc ' + DOC_ID + ') could not be opened after 4 attempts over 7 s (DocumentApp.openById): ' + UNEXPECTED);
+  // After T-2026.10.20 the Docs API and the Word file are tried next (here neither can be: tests/agenda-readers.test.js);
+  // the DocumentApp part of the error is as before.
+  check('one error naming the document, the step, the attempts and the original message', out.error.split('; Docs API:')[0],
+    'The agenda could not be read -- DocumentApp: The agenda converted from Word (Google Doc ' + DOC_ID + ') could not be opened after 4 attempts over 7 s (DocumentApp.openById): ' + UNEXPECTED);
   check('four opens, waits 1, 2, 4 s; nothing parsed', [w.opens.length, w.sleeps, w.parsedBodies], [4, [1000, 2000, 4000], []]);
   check('every attempt in the log, with its stack', w.agendaLogs().filter((l) => /failed on attempt \d of 4: Error: Unexpected error/.test(l) && /\n\s+at /.test(l)).length, 4);
   check('the temporary document is still trashed (finally)', w.trashed, [[DOC_ID, true]]);
@@ -235,12 +239,12 @@ console.log('H. the whole agenda path, and diagnoseAgendaConversion()');
 
   const before = JSON.stringify(w.docProps._store);
   const d = withNetwork(world({ props: PROPS }));
-  check('diagnoseAgendaConversion(): the same steps, a one-line answer', d.sandbox.diagnoseAgendaConversion(), 'Agenda S4-261857: converted, opened and parsed -- 2 agenda item(s).');
+  check('diagnoseAgendaConversion(): the same steps, a one-line answer (after T-2026.10.20: naming the reader)', d.sandbox.diagnoseAgendaConversion(), 'Agenda S4-261857: converted, opened and parsed -- 2 agenda item(s), read by DocumentApp.');
   check('...and it writes no property', JSON.stringify(d.docProps._store), before);
   const f = withNetwork(world({ props: PROPS, openFailures: Infinity }));
   const failed = f.sandbox.diagnoseAgendaConversion();
-  check('a failure is answered, not thrown, with the full error', failed,
-    'Agenda S4-261857: FAILED -- The agenda converted from Word (Google Doc ' + DOC_ID + ') could not be opened after 4 attempts over 7 s (DocumentApp.openById): ' + UNEXPECTED);
+  check('a failure is answered, not thrown, with the full error', failed.split('; Docs API:')[0],
+    'Agenda S4-261857: FAILED -- The agenda could not be read -- DocumentApp: The agenda converted from Word (Google Doc ' + DOC_ID + ') could not be opened after 4 attempts over 7 s (DocumentApp.openById): ' + UNEXPECTED);
   check('...logged with its stack; the temporary document trashed; no property written', [f.agendaLogs().some((l) => /^\[AGENDA\] diagnosis: FAILED for S4-261857: Error: /.test(l) && /\n\s+at /.test(l)), f.trashed.length, JSON.stringify(f.docProps._store)], [true, 1, before]);
   const n = withNetwork(world({ props: { MEETING_TYPE: 'main' } }));
   check('without an agenda TDoc: nothing fetched, nothing converted', [n.sandbox.diagnoseAgendaConversion(), n.fetched, n.creates], ['No agenda TDoc configured.', [], []]);
@@ -251,6 +255,9 @@ console.log('I. what changed in Code.js: against T-2026.10.19, one section and t
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const view = codeWithoutAgendaWordConversion(FULL);
+  // After T-2026.10.20: the agenda readers came later and have their own ledger (tests/agenda-readers.test.js);
+  // the comparisons below are made without them.
+  const CODE = codeWithoutAgendaReaders(FULL).code;
   check('every change is in Code.js exactly once', view.problems, []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
@@ -271,12 +278,12 @@ console.log('I. what changed in Code.js: against T-2026.10.19, one section and t
   } else {
     check('without it, Code.js is the Code.js of T-2026.10.19, byte for byte', view.code === released, true);
     check('the functions that changed: parseAgendaWordBlob_ and convertWordBlobToGoogleDoc_',
-      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL, n) !== functionSource(released, n)).sort(), AGENDA_CONVERSION_CHANGED_FUNCTIONS.slice().sort());
-    check('the new functions are those of the section; none removed', [functionNames(FULL).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(CODE, n) !== functionSource(released, n)).sort(), AGENDA_CONVERSION_CHANGED_FUNCTIONS.slice().sort());
+    check('the new functions are those of the section; none removed', [functionNames(CODE).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(CODE).indexOf(n) === -1)],
       [AGENDA_CONVERSION_SECTION_FUNCTIONS.slice().sort(), []]);
     check('untouched: the build, the agenda choice, the download, the unzip, the parser, the TDoc lists, the update, Close Report',
       ['buildSkeletonWithTdocTables', 'runFullReportBuildCore_', 'parseAgendaForReport_', 'downloadMeetingAgenda_', 'extractWordFromZip_', 'parseAgendaStructureWithText_', 'parseAgendaDocumentById',
-        'downloadAndGroupTdocs_', 'continuousUpdateCore_', 'closeReportCore_', 'getReportConfig_'].map((n) => functionSource(FULL, n) === functionSource(released, n)), Array(11).fill(true));
+        'downloadAndGroupTdocs_', 'continuousUpdateCore_', 'closeReportCore_', 'getReportConfig_'].map((n) => functionSource(CODE, n) === functionSource(released, n)), Array(11).fill(true));
   }
 }
 

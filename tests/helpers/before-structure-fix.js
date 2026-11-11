@@ -461,9 +461,44 @@ const AGENDA_CONVERSION_CHANGES = [
    "  const file = Drive.Files.create(resource, wordBlob);\n  if (!file || !file.id) throw new Error('Drive conversion did not return a file ID.');\n  return file.id;\n"]
 ];
 
+/**
+ * The agenda readers (after T-2026.10.20, MBS SA4#138): the converted agenda
+ * is read by DocumentApp, else the Docs API, else the Word file itself, each
+ * through the same Body view and the unchanged parser. One section after the
+ * AGENDA WORD CONVERSION section, and two functions changed
+ * (parseAgendaWordBlob_ reads through the chain; diagnoseAgendaConversion
+ * names the reader). It came after the agenda Word conversion, so
+ * codeWithoutAgendaWordConversion() takes it out first. [now, before] pairs;
+ * with the section they give the Code.js of T-2026.10.20 byte for byte.
+ * tests/agenda-readers.test.js pins the behaviour.
+ */
+const AGENDA_READERS_SECTION_START = BAR + '// AGENDA READERS (after T-2026.10.20)\n' + BAR;
+const AGENDA_READERS_SECTION_END = BAR + '// END OF AGENDA READERS\n' + BAR + '\n';
+const AGENDA_READERS_SECTION_FUNCTIONS = ['readAgendaWithFallbacks_', 'readAgendaWith_', 'readConvertedAgendaWithDocsApi_', 'docsApiAgendaBody_', 'docsApiAgendaBlocks_', 'wordFileAgendaBody_',
+  'wordFileAgendaBlocks_', 'agendaWordStyles_', 'parseAgendaXml_', 'agendaXmlPrefixFor_', 'agendaXmlText_', 'agendaBodyView_', 'diagnoseAgendaReaders'];
+const AGENDA_READERS_CHANGED_FUNCTIONS = ['parseAgendaWordBlob_', 'diagnoseAgendaConversion'];
+const AGENDA_READERS_CHANGES = [
+  ["  // After T-2026.10.19: opened with bounded retries, trashed in every case (AGENDA WORD CONVERSION section).\n" +
+   "  // After T-2026.10.20: read by DocumentApp, else the Docs API, else the Word file itself (AGENDA READERS section).\n" +
+   "  try {\n    return readAgendaWithFallbacks_(convertedDocId, wordBlob.getBytes());\n",
+   "  // After T-2026.10.19: opened with bounded retries, trashed in every case (AGENDA WORD CONVERSION section).\n" +
+   "  try {\n    return parseAgendaStructureWithText_(openConvertedAgendaBody_(convertedDocId), '');\n"],
+  ["    // After T-2026.10.20: the reader that read it is named (AGENDA READERS section).\n" +
+   "    const text = 'Agenda ' + cfg.AGENDA_TDOC + ': converted, opened and parsed -- ' + items.length + ' agenda item(s)' +\n" +
+   "      (AGENDA_LAST_READER_ ? ', read by ' + AGENDA_LAST_READER_ : '') + '.';\n",
+   "    const text = 'Agenda ' + cfg.AGENDA_TDOC + ': converted, opened and parsed -- ' + items.length + ' agenda item(s).';\n"]
+];
+
+/** Code.js without the agenda readers: the Code.js of T-2026.10.20. { code, problems }. */
+function codeWithoutAgendaReaders(code) {
+  return takeOut(code, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_CHANGES, 'AGENDA READERS');
+}
+
 /** Code.js without the agenda Word conversion: the Code.js of T-2026.10.19. { code, problems }. */
 function codeWithoutAgendaWordConversion(code) {
-  return takeOut(code, AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_CHANGES, 'AGENDA WORD CONVERSION');
+  const later = codeWithoutAgendaReaders(code);
+  const view = takeOut(later.code, AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_CHANGES, 'AGENDA WORD CONVERSION');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 /** Code.js without the Portal-page fallback: the Code.js of T-2026.10.18. { code, problems }. */
@@ -517,6 +552,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutAgendaWordConversion, AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };
