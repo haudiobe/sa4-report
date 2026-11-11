@@ -278,3 +278,32 @@ SA4#138 report.
   file reads the 100 items, the same as the Docs API where both read them.
 - **Then:** if so, one Full Report Build. Its log should say "read by Docs API" or "read by Word
   file".
+
+## Release and deployment of T-2026.10.21 (2026-11-11)
+
+| Step | Result |
+|---|---|
+| Review | The PR #2 diff was reviewed against five checks. DocumentApp stays the first reader. The Docs API and Word-file readers feed the unchanged parser, so hierarchy, order and TDoc association are unchanged. The temporary document is trashed in a `finally` on every path, including in `diagnoseAgendaReaders()`. The diagnostic writes no property and nothing in the report. **One gap was found:** a reader whose agenda came back empty counted as successful, which stopped the fallback. Fixed in `dc2da01` (`agendaItemsProblem_()`, tests section K, 7 checks). |
+| Merge | PR #2 merged as `aca8ea3` (candidates `9559d17` and `dc2da01`). |
+| Release commit | `692c07861aa76c7907cc181687acdd258863f135`. It adds the version line 2.26.5 (2026-11-11) and its changelog entry; the version-pinned tests say 2.26.5. Without the header, `Code.js` is the `Code.js` of `aca8ea3`; the ledger gives the `Code.js` of T-2026.10.20 byte for byte. |
+| Tests | 116 files, 7,869 checks, 0 failures, on both the merged PR and the release commit. |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.21` on the release commit. `origin/master` fast-forwarded `aca8ea3` → `692c078`, without force, and the tag was pushed. |
+| Release bundle | `--release T-2026.10.21`: dry run, then `--write`. The four source files equal the tag; `Release.js` reads T-2026.10.21 / 2.26.5 / `692c078`. The staged files matched the hashes in `RELEASE-MANIFEST.json`. |
+| clasp identity | `clasp --user haudiobe.ts@gmail.com show-authorized-user`: the template owner's account. |
+| **Master template: before** | Container proven (`projects.get`): its parent is the "SA4 Report Template" document; last update 2026-11-11 12:46:37 UTC (the T-2026.10.20 push). A read-only pull: five files byte-identical to the T-2026.10.20 read-back. No unexpected difference. |
+| **Master template: push** | 2026-11-11 19:13:57 UTC, from its own scratch folder, without `--force`. |
+| **Master template: read-back** | A fresh pull: exactly five files, all byte-identical to the release bundle. `Release.js` reads T-2026.10.21 / 2.26.5 / `692c078`, and `Code.js` 2.26.5. |
+| **SA4#138 MBS report: before** | Container proven: its parent is "MBS SWG Minutes SA4#138"; last update 12:54:24 UTC (the T-2026.10.20 push), with nothing changed since. A read-only pull: five files byte-identical to the T-2026.10.20 read-back, including the manifest (the release's key order). No unexpected difference. |
+| **SA4#138 MBS report: adoption** | `--adopt T-2026.10.21 --label mbs-138`: dry run, then `--write`. The guardrails passed. The five files are byte-identical to the release bundle. The live manifest was already byte-identical to the bundle's, so clasp asked no overwrite question. |
+| **SA4#138 MBS report: push** | 2026-11-11 19:14:53 UTC, from its own scratch folder, without `--force`. |
+| **SA4#138 MBS report: read-back** | A fresh pull: exactly five files, all byte-identical to the adoption bundle and to the master template's read-back. `Release.js` reads T-2026.10.21 / 2.26.5 / `692c078`, and `Code.js` 2.26.5. |
+| **SA4#138 MBS report: configuration and triggers** | A push replaces script files only: it writes no Document Property and creates no trigger. The document's last modification is the push instant, 19:14:53 UTC, by the owner. The Document Properties and triggers cannot be listed without running code, so they were not read. No report function was run. |
+
+**Deployed:** the master template and the SA4#138 MBS report both run T-2026.10.21 / 2.26.5.
+`diagnoseAgendaReaders()` is to be run next, by hand, from the SA4#138 Apps Script editor. Full
+Report Build was not run.
+
+**Not touched:** MBS 86172, 6G (its automatic update stays off), every trigger, every report
+configuration, every draft revision, and the repository-root `.clasp.json`. Every clasp command
+used `--user haudiobe.ts@gmail.com` and ran from its own scratch folder. The TDoc revision
+feature is not part of this release.
