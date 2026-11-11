@@ -26,3 +26,16 @@ Audio SWG is a subgroup report of SA4#138 Calgary. Agenda S4-261857 and the shar
 No Full Build on the original Audio document, no merge or deployment until review and approval. Keep separate from issue #4 (time zones) and TDoc revision enhancements.
 
 References: issue #6; Audio document `1zawfIcbkzCJG-h2HYtnbQSEsm6MCd9OGhYzMgAFYENs`; Audio Apps Script `1TJAxpoSF2t6RS4FdO9TuCkHeM4eyaI7bDxcZk8v8GkaexZJLiOvKtTN1`.
+
+## Status (2026-11-11, branch `fix/audio-large-build-checkpoint`)
+Implementation and tests: `docs/LARGE_BUILD_CHECKPOINTS.md`. Candidate after T-2026.10.22, not released; nothing merged or deployed; the Audio document and its script were not read, built or repaired.
+
+| Checklist item | State |
+|---|---|
+| 1. Back up / inspect Audio | Not done (no live access in this work). Runbook: `LARGE_BUILD_CHECKPOINTS.md` §6. |
+| 2. Trace the throwing operation | Done. The one `saveAndClose()` of the build, in `finalizeStatusDropdowns_()`, carried every change of all phases and was refused; the step caught it and was reported "skipped"; Apps Script's own end-of-execution save failed again. No catch/finally path saves a second time. |
+| 3. Reproduce >100 TDocs with a DocumentApp save limit | Done in the tests, against the released `Code.js` of T-2026.10.22. |
+| 4. Checkpoints after verifying fresh references | Done. Every document access goes through `currentReportDocument_()`; loops that checkpoint take their body/tables again; the test closes every element of a saved document, so a stale reference fails the build. Small builds make no checkpoint. |
+| 5. Idempotent repair-only status finalization | Done: `previewStatusDropdownRepair()` / `repairStatusDropdownsAfterBuild()`. No DocumentApp change, no clear, no table added; minutes and dropdown values kept; refuses doubled TDoc tables. |
+| 6. Validate on a disposable copy of Audio | Open — pre-release gate (`LARGE_BUILD_CHECKPOINTS.md` §5 step 2). |
+| 7. PR, release, deploy to Master Template and Audio | PR opened; release and deployment wait for review and approval. |

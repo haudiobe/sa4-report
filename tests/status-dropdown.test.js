@@ -94,7 +94,8 @@ function report(options) {
   const doc = { getId: () => REPORT_ID, getBody: () => body,
     saveAndClose: () => { if (r.saveFails) throw new Error('synthetic save failure'); r.events.push('save'); body._state.dirty = false; body._state.closed = true; } };
   s.DocumentApp.getActiveDocument = () => doc;
-  s.DocumentApp.openById = () => ({ getBody: () => makeFakeDocumentBody(s) });
+  // After T-2026.10.22: the report itself is opened again after a checkpoint of a large build (LARGE BUILD CHECKPOINTS).
+  s.DocumentApp.openById = (id) => (id === REPORT_ID ? (r.events.push('reopen'), body._state.closed = false, doc) : { getBody: () => makeFakeDocumentBody(s) });
   s.DocumentApp.getUi = () => ui;
   s.DocumentApp.GlyphType = { BULLET: 'BULLET' };
   s.Session = { getScriptTimeZone: () => 'Europe/Berlin' };
@@ -292,7 +293,8 @@ console.log('\n5. the order of the work: everything DocumentApp does, one save, 
   check('every request names the tab', r.api.calls.filter((c) => c.call === 'batchUpdate')[1].requests.map((x) => (x.deleteContentRange ? x.deleteContentRange.range.tabId : x.insertDropdown.location.tabId)).filter((t) => t !== REPORT_TAB_ID), []);
   check('after the save nothing changes the document through DocumentApp: it is closed, and the build did not fail', [r.body._state.closed, r.body._state.dirty], [true, false]);
   check('the step is the last thing a build and an update do (source)', [
-    /phase\('status dropdowns', function \(\) \{[\s\S]*?\n    \}\);\n  \}\n\n  const totalMs = Date.now\(\) - totalStart;/.test(CODE),
+    // After T-2026.10.22: only the checkpoints are switched off after it; that touches no document.
+    /phase\('status dropdowns', function \(\) \{[\s\S]*?\n    \}\);\n  \}\n\n  const checkpoints = endLargeBuildCheckpoints_\(\);\n  const totalMs = Date.now\(\) - totalStart;/.test(CODE),
     /finalizeStatusDropdowns_\('update'\);\n      if \(unmapped\.length\) result\.statusNotes = unmapped;\n    \}\n\n    Logger\.log\('=== COMPLETE ==='\);/.test(CODE),
     (CODE.match(/finalizeStatusDropdowns_\('(build|update)'\)/g) || []).length], [true, true, 3]);
   check('it never runs in a background run, which has no active document to save (source)', /if \(!context\) \{\n      const unmapped = statusDropdownRun_\(\)\.unmapped\.slice\(\);\n      finalizeStatusDropdowns_\('update'\);/.test(CODE), true);
@@ -480,7 +482,9 @@ console.log('\n9. many TDocs: positions and batches; tables that were moved');
   check('130 TDocs: every one has exactly the status of its own row', [built.ok, r.all().filter((x, i) => x !== expected[i])], [true, []]);
   const batches = r.api.calls.filter((c) => c.call === 'batchUpdate' && c.requests[0].deleteContentRange);
   check('the 112 dropdowns are sent in three batches of at most fifty', batches.map((b) => b.requests.length / 2), [50, 50, 12]);
-  check('one save and one read of the report for all of them', [r.last.filter((e) => e === 'save').length, r.last.filter((e) => e === 'get report').length], [1, 1]);
+  // After T-2026.10.22: a build this large saves at checkpoints before (LARGE BUILD CHECKPOINTS); the step itself saves once.
+  check('one save and one read of the report for all of them, after the checkpoints of a large build',
+    [r.last.filter((e) => e === 'get report').length, r.last[r.last.indexOf('get report') - 1], r.last.filter((e) => e === 'save').length - r.last.filter((e) => e === 'reopen').length], [1, 'save', 1]);
   check('across the batches the positions only go down: a batch never moves what a later one writes', (() => { const starts = []; batches.forEach((b) => b.requests.forEach((q) => { if (q.deleteContentRange) starts.push(q.deleteContentRange.range.startIndex); })); return starts.every((x, i) => i === 0 || x < starts[i - 1]); })(), true);
   check('no title, number or other cell of any table was changed by it', many.map((t) => rowsOf(r.table(t[0])).slice(0, 5).map((row) => row[1]).join('|')).filter((x, i) => x !== [many[i][0], 'Synthetic title of ' + many[i][0], 'ExampleCorp', 'Sam Rivera', many[i][1]].join('|')), []);
 
@@ -575,7 +579,11 @@ console.log('\n10. when something is missing or fails: text statuses, as before'
 
   const saveFails = report();
   saveFails.saveFails = true;
-  check('the document cannot be saved: text statuses, no API call', [outcome(saveFails), saveFails.api.calls.length], [[true, SIX, TEXT, null], 0]);
+  // After T-2026.10.22 (GitHub issue #6): what could not be saved is not in the report, so the build FAILS, in the
+  // step that saves, naming the save -- it used to be reported as a completed build with a skipped step.
+  check('the document cannot be saved: the build fails in the status-dropdown step, which says so; text statuses, no API call',
+    [outcome(saveFails), saveFails.api.calls.length, (() => { saveFails.body._state.closed = false; const b = saveFails.build(); return [b.failedPhase, b.error]; })()],
+    [[false, SIX, TEXT, null], 0, ['status dropdowns', 'the document could not be saved (synthetic save failure)']]);
 
   // An update of a report with dropdowns, when the API fails.
   const r = report();
@@ -615,8 +623,9 @@ console.log('\n11. reports with text statuses: unchanged, and no API call');
   old.exec(() => old.s.analyzeReportStatus());
   old.exec(() => old.s.detectTdocTablesInDocument_(old.body));
   check('its status summary and its e-mail list make no API call either', old.events, []);
-  check('the mark is set by a build, and by a complete conversion of an existing report (tests/status-dropdown-migration.test.js) -- nowhere else (source)',
-    [(CODE.match(/setProperty\(STATUS_DROPDOWN_ENABLED_KEY_/g) || []).length, /if \(definition && mode === 'build'\) props\.setProperty\(STATUS_DROPDOWN_ENABLED_KEY_, '1'\);/.test(CODE), /if \(result\.ok\) \{ props\.setProperty\(STATUS_DROPDOWN_ENABLED_KEY_, '1'\); result\.marked = true; \}/.test(CODE)], [2, true, true]);
+  // After T-2026.10.22: and by a complete repair after a build (tests/large-build-checkpoints.test.js), with the same line.
+  check('the mark is set by a build, by a complete conversion of an existing report (tests/status-dropdown-migration.test.js) and by a complete repair -- nowhere else (source)',
+    [(CODE.match(/setProperty\(STATUS_DROPDOWN_ENABLED_KEY_/g) || []).length, /if \(definition && mode === 'build'\) props\.setProperty\(STATUS_DROPDOWN_ENABLED_KEY_, '1'\);/.test(CODE), (CODE.match(/if \(result\.ok\) \{ props\.setProperty\(STATUS_DROPDOWN_ENABLED_KEY_, '1'\); result\.marked = true; \}/g) || []).length], [3, true, 2]);
 
   // What a text report produces is what the previous release produced.
   const withService = report();
@@ -814,7 +823,8 @@ console.log('\n13. Build Report from Scratch keeps what was selected in a dropdo
   central.build(); central.build();
   check('CENTRAL and Legacy: nothing is read, nothing is kept, nothing changes', [central.events, central.all()[0]], [[], 'S4aA269001 text:agreed']);
   check('the values are read in one place: before the build clears the document (source)', [(CODE.match(/captureStatusDropdownValuesForRebuild_\(\)/g) || []).length,
-    /  captureStatusDropdownValuesForRebuild_\(\);\n\n  \/\/ Step 2: Clear document, set title\n  const body = DocumentApp\.getActiveDocument\(\)\.getBody\(\)\.clear\(\);/.test(CODE)], [2, true]);
+    // After T-2026.10.22: the body is a `let`, and the document is the one currentReportDocument_() gives (LARGE BUILD CHECKPOINTS).
+    /  captureStatusDropdownValuesForRebuild_\(\);\n\n  \/\/ Step 2: Clear document, set title\n  \/\/ After T-2026\.10\.22: .*\n  let body = currentReportDocument_\(\)\.getBody\(\)\.clear\(\);/.test(CODE)], [2, true]);
   check('nothing of it is stored: the feature writes its one property only, in its two places (source)', (CODE.slice(CODE.indexOf('// TDOC STATUS DROPDOWNS (T-2026.10.7)'), CODE.indexOf('// TDOC UPLOAD COMPLETION')).match(/\.setProperty\(([A-Z_a-z]*)/g) || []), ['.setProperty(STATUS_DROPDOWN_ENABLED_KEY_', '.setProperty(STATUS_DROPDOWN_ENABLED_KEY_']);
 }
 

@@ -147,9 +147,11 @@ console.log('1. the live failure (T-2026.10.2): a UI that fails once the documen
   // T-2026.10.7: one save, in the step that ends a build or an update of a report with status dropdowns -- after the last
   // change of the document, and never before a UI call. A runtime without the Google Docs API service has the five phases above.
   const finalize = CODE_ONLY.slice(CODE_ONLY.indexOf('function finalizeStatusDropdowns_('), CODE_ONLY.indexOf('\n}\n', CODE_ONLY.indexOf('function finalizeStatusDropdowns_(')));
-  check('the build still never flushes, and saves in one place only: the status-dropdown step at its very end; it still runs in one execution',
-    [/\.flush\s*\(/.test(CODE_ONLY), (CODE_ONLY.match(/saveAndClose\s*\(/g) || []).length, (finalize.match(/saveAndClose\s*\(/g) || []).length, (CODE.match(/phase\('/g) || []).length,
-      /if \(statusDropdownsAvailable_\(\)\) \{\n    phase\('status dropdowns'/.test(CODE)], [false, 1, 1, 6, true]);
+  // After T-2026.10.22: and in the checkpoint of a large build (LARGE BUILD CHECKPOINTS), which a small build never makes.
+  const checkpoint = CODE_ONLY.slice(CODE_ONLY.indexOf('function largeBuildCheckpoint_('), CODE_ONLY.indexOf('\n}\n', CODE_ONLY.indexOf('function largeBuildCheckpoint_(')));
+  check('the build still never flushes, and saves in two places only: the checkpoint of a large build, and the status-dropdown step at its very end; it still runs in one execution',
+    [/\.flush\s*\(/.test(CODE_ONLY), (CODE_ONLY.match(/saveAndClose\s*\(/g) || []).length, (finalize.match(/saveAndClose\s*\(/g) || []).length, (checkpoint.match(/saveAndClose\s*\(/g) || []).length, (CODE.match(/phase\('/g) || []).length,
+      /if \(statusDropdownsAvailable_\(\)\) \{\n    phase\('status dropdowns'/.test(CODE)], [false, 2, 1, 1, 6, true]);
 }
 
 console.log('1. declining the confirmation runs nothing');
@@ -166,7 +168,8 @@ console.log('1. formatting: once, after the enrichment phases');
   check('exactly one full formatting pass', r.events.filter((e) => e === 'WORK formatting').length, 1);
   check('it is the last piece of work, after e-mail and revisions', r.events.filter((e) => /^WORK/.test(e)), ['WORK e-mail', 'WORK revisions', 'WORK formatting']);
   check('the formatter treats the whole document from scratch, so an earlier pass adds nothing a later one does not redo (source)',
-    [/function removeRowHeightAndSpacing\(context\) \{\n  const body = getReportBody_\(context\);\n  const tables = getTablesCounted_\(body, 'removeRowHeightAndSpacing'\);/.test(CODE),
+    // After T-2026.10.22: `let`, so that a large build can take the same tables again after a checkpoint.
+    [/function removeRowHeightAndSpacing\(context\) \{\n  const body = getReportBody_\(context\);\n  \/\/ After T-2026\.10\.22: .*\n  let tables = getTablesCounted_\(body, 'removeRowHeightAndSpacing'\);/.test(CODE),
       /for \(let i = 0; i < tables\.length; i\+\+\)/.test(CODE.slice(CODE.indexOf('function removeRowHeightAndSpacing(context)'), CODE.indexOf('function removeRowHeightAndSpacing(context)') + 1500))],
     [true, true]);
 }

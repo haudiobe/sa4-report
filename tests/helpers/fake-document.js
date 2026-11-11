@@ -68,7 +68,8 @@ function makeFakeDocumentBody(sandbox, options) {
   // Unsaved changes, and the state after saveAndClose(): see the header.
   const state = { dirty: false, closed: false, nextDropdown: 0 };
   // onFirstTouch: called before the first unsaved change, so that the fake Docs API can keep what the saved document says.
-  const touch = () => { if (state.closed) throw new Error('The document is closed: it was saved and closed earlier in this execution.'); if (!state.dirty && state.onFirstTouch) state.onFirstTouch(); state.dirty = true; };
+  // Large-build checkpoints (after T-2026.10.22), addition only: `changes` counts the changes not saved yet (a test resets it when it saves).
+  const touch = () => { if (state.closed) throw new Error('The document is closed: it was saved and closed earlier in this execution.'); if (!state.dirty && state.onFirstTouch) state.onFirstTouch(); state.dirty = true; state.changes = (state.changes || 0) + 1; };
 
   function makeParagraph(text, heading) {
     const p = {

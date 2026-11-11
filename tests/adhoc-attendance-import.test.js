@@ -1157,7 +1157,7 @@ console.log('11. Build from Scratch');
   check('the build calls each hook once: one before the document is cleared, one after the reallocations are restored (source)', (() => {
     const src = CODE.slice(CODE.indexOf('\nfunction buildSkeletonWithTdocTables('), CODE.indexOf('\nfunction downloadAndGroupTdocs_('));
     return [(src.match(/beginAdhocAttendanceRebuild_\(\)/g) || []).length, (src.match(/finishAdhocAttendanceRebuild_\(/g) || []).length,
-      src.indexOf('beginAdhocAttendanceRebuild_()') < src.indexOf('getActiveDocument().getBody().clear()'), src.indexOf('finishAdhocAttendanceRebuild_(') > src.indexOf('saveReallocation(tdoc, r.original, r.new, r.reason)')];
+      src.indexOf('beginAdhocAttendanceRebuild_()') < src.indexOf('getBody().clear()'), src.indexOf('finishAdhocAttendanceRebuild_(') > src.indexOf('saveReallocation(tdoc, r.original, r.new, r.reason)')];
   })(), [1, 1, true, true]);
 
   // The question before the build.
