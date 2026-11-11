@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.5 (2026-11-11)
+ * Version: 2.26.6 (2026-11-11)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,18 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.6 (2026-11-11)
+ *   - Fixed: the TDoc list is downloaded when its configured address on
+ *     ftp.3gpp.org is refused. The configured address is asked first;
+ *     only if it fails, and only for ftp.3gpp.org, the same path under
+ *     https://www.3gpp.org/ftp/. An answer counts only with HTTP 2xx, a
+ *     non-empty body and the XLSX signature, so an HTML page sent with
+ *     HTTP 200 is refused. The configured address is unchanged and stays
+ *     the list's identity; how the list is read is unchanged.
+ *     diagnoseTdocListDownload(), run from the editor, asks every address
+ *     with the same check and writes nothing. (MBS SA4#138, 2026-11-11:
+ *     Full Report Build stopped at "Could not download TDOC list: HTTP
+ *     403".) (TDOC LIST DOWNLOAD section; docs/TDOC_LIST_DOWNLOAD.md.)
  * 2.26.5 (2026-11-11)
  *   - Fixed: the agenda is read even when DocumentApp cannot open the
  *     Google Doc converted from it. It is read by DocumentApp, else by the

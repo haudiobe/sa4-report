@@ -499,6 +499,11 @@ const TDOC_LIST_DOWNLOAD_SECTION_END = BAR + '// END OF TDOC LIST DOWNLOAD\n' + 
 const TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS = ['tdocListDownloadCandidates_', 'tdocListDownloadAttempt_', 'downloadTdocListXlsx_', 'diagnoseTdocListDownload'];
 const TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS = ['downloadAndGroupTdocs_'];
 const TDOC_LIST_DOWNLOAD_CHANGES = [
+  // The release of it (T-2026.10.22): the version line and the changelog entry of 2.26.6.
+  [" * Version: 2.26.6 (2026-11-11)\n",
+   " * Version: 2.26.5 (2026-11-11)\n"],
+  [" * CHANGELOG\n * 2.26.6 (2026-11-11)\n *   - Fixed: the TDoc list is downloaded when its configured address on\n *     ftp.3gpp.org is refused. The configured address is asked first;\n *     only if it fails, and only for ftp.3gpp.org, the same path under\n *     https://www.3gpp.org/ftp/. An answer counts only with HTTP 2xx, a\n *     non-empty body and the XLSX signature, so an HTML page sent with\n *     HTTP 200 is refused. The configured address is unchanged and stays\n *     the list's identity; how the list is read is unchanged.\n *     diagnoseTdocListDownload(), run from the editor, asks every address\n *     with the same check and writes nothing. (MBS SA4#138, 2026-11-11:\n *     Full Report Build stopped at \"Could not download TDOC list: HTTP\n *     403\".) (TDOC LIST DOWNLOAD section; docs/TDOC_LIST_DOWNLOAD.md.)\n",
+   " * CHANGELOG\n"],
   ["  // After T-2026.10.21: checked as an XLSX, the www.3gpp.org/ftp twin of an ftp.3gpp.org address as fallback (TDOC LIST DOWNLOAD section).\n" +
    "  const blob = perfTimed_('  TDoc-list: UrlFetchApp.fetch (download xlsx)', () => downloadTdocListXlsx_(meetingUrl)).blob;\n",
    "  const response = perfTimed_('  TDoc-list: UrlFetchApp.fetch (download xlsx)', () => UrlFetchApp.fetch(meetingUrl, { muteHttpExceptions: true }));\n" +

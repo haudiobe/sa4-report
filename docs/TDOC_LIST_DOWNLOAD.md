@@ -1,7 +1,7 @@
-# TDoc-list download (candidate after T-2026.10.21)
+# TDoc-list download (T-2026.10.22, Code.js 2.26.6)
 
-Status: **candidate, not released, not deployed.** `Code.js` stays 2.26.5 until the release. The proposed
-release is T-2026.10.22 (`Code.js` 2.26.6).
+Status: **released as T-2026.10.22 (Code.js 2.26.6).** Candidate commit `e9a9ac8`, merged by PR #3
+(`8497d01`). The deployment record is at the end of this document.
 
 ## Incident: MBS SA4#138, 2026-11-11
 

@@ -266,7 +266,7 @@ console.log('I. what changed in Code.js: against T-2026.10.19, one section and t
   check('it stands directly after convertWordBlobToGoogleDoc_()', FULL.indexOf('  return convertAgendaWordBlob_(wordBlob);\n}\n\n' + AGENDA_CONVERSION_SECTION_START) !== -1, true);
   check('it declares its constants and nothing else at top level', section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm) || [],
     ['var AGENDA_GOOGLE_DOC_MIME_', 'var AGENDA_WORD_CONTENT_TYPES_', 'var AGENDA_CONVERSION_OPEN_DELAYS_MS_']);
-  check('Code.js is version 2.26.5 (2.26.4 released it as T-2026.10.20, 2.26.5 the agenda readers; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.5');
+  check('Code.js is version 2.26.6 (2.26.4 released it as T-2026.10.20, 2.26.5 the agenda readers; 2.26.6 the TDoc-list download fallback; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.6');
   let released = null;
   try {
     released = execFileSync('git', ['show', 'template-release/T-2026.10.19:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
