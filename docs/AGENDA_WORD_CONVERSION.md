@@ -164,3 +164,116 @@ Build was not run.
 **Not touched:** MBS 86172, 6G (its automatic update stays off), every trigger, every report
 configuration, and the repository-root `.clasp.json`. Every clasp command used
 `--user haudiobe.ts@gmail.com` and ran from its own scratch folder.
+
+## Second failure, with T-2026.10.20: DocumentApp cannot open the converted agenda (candidate after T-2026.10.20)
+
+Status: **candidate, not released, not deployed.** `Code.js` stays 2.26.4 until the release.
+
+### Evidence
+
+The live run of `diagnoseAgendaConversion()` in the SA4#138 MBS report on T-2026.10.20 showed:
+
+- S4-261857 downloads.
+- `Drive.Files.create` returns `application/vnd.google-apps.document`.
+- `DocumentApp.openById(...).getBody()` fails on all four attempts, the last one 7 s after the
+  first, with "Unexpected error while getting the method or property openById on object
+  DocumentApp."
+- The temporary document is trashed.
+
+The same Word file was converted again outside Apps Script, by the template owner's account
+through the Drive API, and the result read back. The temporary files were deleted afterwards.
+
+| Check | SA4#138 (S4-261857) | SA4#136 (S4-260868) |
+|---|---|---|
+| Converted type | native Google Doc, owned, editable | native Google Doc, owned, editable |
+| Drive HTML export (rendered by the Docs backend) | 1 table, 101 rows, header `A.I.#`; 228 paragraphs; 7 list items | 1 table, 103 rows, header `A.I.#` |
+| Drive plain-text export | 8,204 characters | 7,574 characters |
+| Docs API `documents.get` | not testable this way: the API is disabled in clasp's OAuth client project (HTTP 403 `SERVICE_DISABLED`). This is a property of that client, not of the document. | — |
+
+The Word files are structurally alike: the same parts, the same elements and characters, and
+valid UTF-8.
+
+### Root cause, as far as the evidence goes
+
+- **The conversion is sound.** The Google Doc that Drive makes from S4-261857 is complete and
+  readable by the Docs backend.
+- **The failure is DocumentApp's own loading of that document.** It is deterministic: four
+  attempts over 7 s, and two builds before. Longer waits will not help.
+- **Why DocumentApp refuses this document is not visible from outside Google.** The error is
+  Apps Script's generic wrapper for an internal error.
+- **Neither the content nor the permissions explain it.** The account owns the document, and the
+  manifest has the `documents` and `drive` scopes. There is no evidence that this conversion path
+  has ever worked live through DocumentApp in a template report.
+
+### The fix: three readers, one parser
+
+The conversion, the retries and the cleanup are unchanged. The agenda is then read by the first
+of three readers that succeeds:
+
+1. **DocumentApp**, as before.
+2. **The Docs API** (`Docs.Documents.get`) on the same converted document, before it is trashed.
+   The Docs advanced service is already in the manifest and in live use by the status dropdowns.
+3. **The Word file itself**: `word/document.xml` and `word/styles.xml`, with no Google Doc.
+
+Each reader gives `parseAgendaStructureWithText_()` the same small Body view. That view holds
+only what the parser reads:
+
+- the top-level paragraphs (a numbered paragraph is a LIST_ITEM, as in DocumentApp);
+- each paragraph's text and heading;
+- the tables, where a cell's text is its paragraphs joined by "\n".
+
+The parser is unchanged. So the agenda items, their order, and the TDocs grouped under them by
+agenda-item number are the same whichever reader read them.
+
+**An empty or malformed agenda is not a read.** A reader counts as successful only if
+`agendaItemsProblem_()` accepts its items: at least one item, every item with a number, a title
+and a level, and at least one number like an agenda item's ("8", "8.1"). Otherwise the reader
+has failed and the next one is asked. If none succeeds, the build fails with an error that names
+each reader; it never continues with an empty agenda.
+
+**Logging.** Each reader's failure is logged with its original error and stack, and the log names
+the reader that read the agenda. The log holds counts only, never agenda text. If all three
+readers fail, the error names each one and its reason.
+
+**`diagnoseAgendaReaders()`.** Run it from the editor. It converts the configured agenda once,
+runs all three readers, logs for each whether it read the agenda, how many items, and whether
+they equal the others', then trashes the temporary document. It writes nothing.
+
+### Equivalence with Google's conversion
+
+The Word-file reader is checked against Google's own conversion of the same file: the Drive
+export of the converted Google Doc, read with the parser's rules (fixtures
+`tests/fixtures/agenda-S4-261857*` and `agenda-S4-260868*`).
+
+| Agenda | Items from Google's conversion | Items from the Word file | Result |
+|---|---|---|---|
+| S4-261857 (SA4#138) | 100 | 100 | identical in number, title, level and order |
+| S4-260868 (SA4#136) | 102 | 102 | identical in number, title, level and order |
+
+- **TDoc association.** All 388 TDocs of the SA4#138 TDoc list fall under an agenda item read
+  from the Word file. The MBS projection, 8.1–8.10, holds 46 of them, exactly as with Google's
+  items.
+- **One export detail.** The HTML export writes some spaces as `&nbsp;`, while the plain-text
+  export of the same document has none. The reference therefore normalises them to spaces. The
+  Word file's agenda cells hold no no-break space.
+
+### Not changed
+
+- the parser;
+- the Drive conversion and its checks;
+- the DocumentApp open and its retries;
+- the cleanup;
+- the build, the agenda choice and the download;
+- the TDoc lists, the update and Close Report.
+
+Nothing else in the report changes: no trigger, no configuration and no draft revision.
+
+### Another diagnostic run
+
+This is recommended after deployment and before any build: run `diagnoseAgendaReaders()` in the
+SA4#138 report.
+
+- **Expected:** DocumentApp FAILED; the Docs API either reads the 100 items or fails; the Word
+  file reads the 100 items, the same as the Docs API where both read them.
+- **Then:** if so, one Full Report Build. Its log should say "read by Docs API" or "read by Word
+  file".
