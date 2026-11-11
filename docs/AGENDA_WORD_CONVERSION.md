@@ -135,3 +135,30 @@ byte.
 5. **Other reports.** The other reports (the 6G report and the 86172 MBS report) get the
    release only by a separate, explicit decision. Their builds use this path only when they
    have an agenda TDoc. No trigger is touched.
+
+## Release and deployment of T-2026.10.20 (2026-11-11)
+
+| Step | Result |
+|---|---|
+| Review and merge | PR #1 reviewed: the change, temporary-file cleanup, security (no new scope, manifest unchanged, no new URL) and release compatibility (the five-file set). Merged as `3b62504` (candidate `0b7fd91`). |
+| Release commit | `fc3ef7d9401c43c3b7ec6c14fe5eae569bfb1672`. It adds the version line 2.26.4 (2026-11-11) and its changelog entry; the version-pinned tests say 2.26.4. Without the header, `Code.js` is the `Code.js` of `3b62504`; the ledger gives the `Code.js` of T-2026.10.19 byte for byte. |
+| Tests | 115 files, 7,812 checks, 0 failures, on both the PR head and the release commit. |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.20` on the release commit. `origin/master` fast-forwarded `3b62504` → `fc3ef7d`, without force, and the tag was pushed. |
+| Release bundle | `--release T-2026.10.20 --write`: the five production files. The four source files equal the tag; `Release.js` reads T-2026.10.20 / 2.26.4 / `fc3ef7d`. |
+| Adoption bundle | `--adopt T-2026.10.20 --label mbs-138`: dry run, then `--write`. The guardrails passed (not the template, not Legacy, not CENTRAL). The five files are byte-identical to the release bundle. |
+| clasp identity | `clasp --user haudiobe.ts@gmail.com show-authorized-user`: the template owner's account. |
+| **Master template: before** | Container proven with the Apps Script API (`projects.get`): its parent is the "SA4 Report Template" document; last update 2026-11-01 17:40:07 UTC (the T-2026.10.19 push). A read-only pull gave five files equal to T-2026.10.19 (line ends aside), with `Release.js` reading T-2026.10.19 / 2.26.3 / `277e5a5`. |
+| **Master template: push** | 2026-11-11 12:46:39 UTC (13:46:39 CET), from its own scratch folder, without `--force`. The staged files matched the hashes in `RELEASE-MANIFEST.json`. |
+| **Master template: read-back** | A fresh pull: exactly five files, all byte-identical to the bundle. `Release.js` reads T-2026.10.20 / 2.26.4 / `fc3ef7d`, and `Code.js` 2.26.4. The project's update time is 2026-11-11 12:46:37 UTC. |
+| **SA4#138 MBS report: before** | Container proven: its parent is "MBS SWG Minutes SA4#138"; the project was created 2026-11-11 11:28 UTC by the template copy and not updated since. A read-only pull: `Code.js`, `HyperLink.js`, `ReportCreator.js` and `Release.js` are T-2026.10.19. **Unexpected difference:** `appsscript.json` has the same content as T-2026.10.19 and T-2026.10.20, but with the key `runtimeVersion` moved to the end, probably re-serialized by the copy. |
+| **SA4#138 MBS report: push** | Approved by Thomas despite the key order. `clasp push` (without `--force`) detected the manifest difference, asked to overwrite it, and skipped the push ("Skipping push."). As the release tool requires, nothing was forced. |
+| **SA4#138 MBS report: state** | Unchanged: update time still 11:28:18 UTC, and all five files byte-identical to the pull taken before. It runs **T-2026.10.19 / 2.26.3**. |
+
+**Not deployed:** the SA4#138 MBS report, pending a decision on overwriting the manifest. The
+same five files would go up; the only change to the manifest is that `runtimeVersion` moves
+back to the release's key order. `diagnoseAgendaConversion` was not run, and Full Report Build
+was not run.
+
+**Not touched:** MBS 86172, 6G (its automatic update stays off), every trigger, every report
+configuration, and the repository-root `.clasp.json`. Every clasp command used
+`--user haudiobe.ts@gmail.com` and ran from its own scratch folder.
