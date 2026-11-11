@@ -42,7 +42,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { makeBlob, unzip } = require('./helpers/fake-zip.js');
-const { codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutTdocListDownload, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -341,6 +341,8 @@ console.log('J. what changed in Code.js: against T-2026.10.20, one section and t
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const view = codeWithoutAgendaReaders(FULL);
+  // Later changes (the TDoc-list download, after T-2026.10.21) taken out, as for every earlier layer.
+  const CODE = codeWithoutTdocListDownload(FULL).code;
   check('every change is in Code.js exactly once', view.problems, []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
@@ -361,13 +363,13 @@ console.log('J. what changed in Code.js: against T-2026.10.20, one section and t
   } else {
     check('without it, Code.js is the Code.js of T-2026.10.20, byte for byte', view.code === released, true);
     check('the functions that changed: parseAgendaWordBlob_ (the chain) and diagnoseAgendaConversion (names the reader)',
-      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL, n) !== functionSource(released, n)).sort(), AGENDA_READERS_CHANGED_FUNCTIONS.slice().sort());
-    check('the new functions are those of the section; none removed', [functionNames(FULL).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(CODE, n) !== functionSource(released, n)).sort(), AGENDA_READERS_CHANGED_FUNCTIONS.slice().sort());
+    check('the new functions are those of the section; none removed', [functionNames(CODE).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(CODE).indexOf(n) === -1)],
       [AGENDA_READERS_SECTION_FUNCTIONS.slice().sort(), []]);
     check('untouched: the parser, the conversion, the open with its retries, the cleanup, the build, the agenda choice, the download, the TDoc lists, the update, Close Report',
       ['parseAgendaStructureWithText_', 'parseAgendaFromTables_', 'parseAgendaFromHeadings_', 'convertWordBlobToGoogleDoc_', 'convertAgendaWordBlob_', 'openConvertedAgendaBody_', 'trashConvertedAgenda_',
         'buildSkeletonWithTdocTables', 'parseAgendaForReport_', 'downloadMeetingAgenda_', 'extractWordFromZip_', 'downloadAndGroupTdocs_', 'continuousUpdateCore_', 'closeReportCore_', 'getReportConfig_']
-        .map((n) => functionSource(FULL, n) === functionSource(released, n)), Array(15).fill(true));
+        .map((n) => functionSource(CODE, n) === functionSource(released, n)), Array(15).fill(true));
   }
 }
 

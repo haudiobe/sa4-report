@@ -203,7 +203,7 @@ function makeSandbox(props, sheet) {
   sandbox.DocumentApp.openById = () => ({ getBody: () => makeFakeDocumentBody(sandbox) });
   sandbox.DocumentApp.getUi = () => ({ alert: (t, m) => { alerts.push([t, m]); return 'YES'; }, Button: { YES: 'YES' }, ButtonSet: { OK: 'OK', YES_NO: 'YES_NO' } });
   sandbox.DocumentApp.GlyphType = { BULLET: 'BULLET' };
-  sandbox.UrlFetchApp.fetch = () => ({ getResponseCode: () => 200, getBlob: () => ({ setName() { return this; } }) });
+  sandbox.UrlFetchApp.fetch = () => ({ getResponseCode: () => 200, getBlob: () => ({ setName() { return this; }, getBytes: () => [0x50, 0x4B, 0x03, 0x04], getContentType: () => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) });
   sandbox.DriveApp.createFile = () => ({ setTrashed() {} });
   sandbox.SpreadsheetApp.open = () => ({ getSheets: () => [{ getDataRange: () => ({
     getValues: () => sheet.map((r) => r.slice()),

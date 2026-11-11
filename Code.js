@@ -10894,6 +10894,126 @@ function diagnoseAgendaReaders() {
 // END OF AGENDA READERS
 // =========================================================
 
+// =========================================================
+// TDOC LIST DOWNLOAD (after T-2026.10.21)
+// =========================================================
+//
+// MBS SA4#138, 2026-11-11, with T-2026.10.21: Full Report Build read the
+// agenda (by the Docs API), then stopped at "Could not download TDOC list:
+// HTTP 403". The configured TDoc list is on the host ftp.3gpp.org, which
+// answers Apps Script with 403; the same path under
+// https://www.3gpp.org/ftp/ answers HTTP 200 with the workbook (110,999
+// bytes starting 504b0304), as a diagnostic run in the report's editor
+// showed. downloadAndGroupTdocs_() fetched only the configured address, and
+// took any answer below HTTP 400 as the workbook without looking at it.
+//
+// Now the build's download goes through downloadTdocListXlsx_():
+//   - the configured address first, unchanged;
+//   - only if that fails, and only for an address on ftp.3gpp.org, the
+//     same path under https://www.3gpp.org/ftp/ (tdocListDownloadCandidates_);
+//   - an answer counts only with HTTP 2xx, a non-empty body and the XLSX
+//     (ZIP) signature, so an HTML page sent with HTTP 200 is refused.
+// The configured address is not changed, and it stays the list's identity.
+// The log names each failed address and its reason, never the content.
+// diagnoseTdocListDownload() asks every address with the same check and
+// writes nothing.
+
+var TDOC_LIST_FTP_HOST_RE_ = /^https?:\/\/ftp\.3gpp\.org\/+/i;
+var TDOC_LIST_WWW_FTP_BASE_ = 'https://www.3gpp.org/ftp/';
+
+/** Pure: the addresses to try for a TDoc list -- the configured one, then (ftp.3gpp.org only) its www.3gpp.org/ftp twin. */
+function tdocListDownloadCandidates_(url) {
+  const configured = String(url || '').trim();
+  if (!configured) return [];
+  const candidates = [configured];
+  if (TDOC_LIST_FTP_HOST_RE_.test(configured)) candidates.push(configured.replace(TDOC_LIST_FTP_HOST_RE_, TDOC_LIST_WWW_FTP_BASE_));
+  return candidates;
+}
+
+/** One download: { url, ok, status, bytes, signature, contentType, problem, blob }. Never throws; reads no content beyond the first four bytes. */
+function tdocListDownloadAttempt_(url) {
+  const attempt = { url: url, ok: false, status: null, bytes: 0, signature: '', contentType: '', problem: '', blob: null };
+  let response;
+  try {
+    response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  } catch (e) {
+    attempt.error = e;
+    attempt.problem = 'fetch failed (' + (e && e.message ? e.message : e) + ')';
+    return attempt;
+  }
+  attempt.status = response.getResponseCode();
+  if (!(attempt.status >= 200 && attempt.status < 300)) {
+    attempt.problem = 'HTTP ' + attempt.status;
+    return attempt;
+  }
+  const blob = response.getBlob();
+  const bytes = (blob && blob.getBytes()) || [];
+  attempt.bytes = bytes.length;
+  attempt.signature = Array.prototype.slice.call(bytes, 0, 4).map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
+  attempt.contentType = blob && typeof blob.getContentType === 'function' ? String(blob.getContentType() || '') : '';
+  if (!bytes.length) {
+    attempt.problem = 'HTTP ' + attempt.status + ' with an empty body';
+  } else if (!isXlsxSignature_(bytes)) {
+    attempt.problem = 'HTTP ' + attempt.status + ' but not an Excel workbook (' + bytes.length + ' bytes starting ' + attempt.signature + (attempt.contentType ? ', ' + attempt.contentType : '') + ')';
+  } else {
+    attempt.ok = true;
+    attempt.blob = blob;
+  }
+  return attempt;
+}
+
+/**
+ * The TDoc list as an XLSX blob: { blob, url }. The configured address
+ * first, else its www.3gpp.org/ftp twin. Throws "Could not download TDOC
+ * list: ..." naming each failure; with a single address, its reason alone
+ * ("HTTP 500"), or the fetch's own error if the fetch threw -- as before.
+ */
+function downloadTdocListXlsx_(url) {
+  const candidates = tdocListDownloadCandidates_(url);
+  if (!candidates.length) throw new Error('Could not download TDOC list: no address configured');
+  const failures = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const attempt = tdocListDownloadAttempt_(candidates[i]);
+    if (attempt.ok) {
+      if (i > 0) Logger.log('[TDOC LIST] downloaded from ' + attempt.url + ' (' + attempt.bytes + ' bytes) after the configured address failed');
+      return { blob: attempt.blob, url: attempt.url };
+    }
+    Logger.log('[TDOC LIST] ' + attempt.url + ': ' + attempt.problem);
+    failures.push(attempt);
+  }
+  // A single address whose fetch threw: its own error, as before.
+  if (failures.length === 1 && failures[0].error) throw failures[0].error;
+  throw new Error('Could not download TDOC list: ' + (failures.length === 1 ? failures[0].problem
+    : failures.map(function (f) { return f.problem + ' (' + f.url + ')'; }).join('; ')));
+}
+
+/**
+ * Run from the Apps Script editor: downloads the configured TDoc list from
+ * EVERY address the build may use, with the build's own check, and logs for
+ * each its status, size, first bytes and whether it is accepted. Writes
+ * nothing: no property, nothing in the report, no file.
+ */
+function diagnoseTdocListDownload() {
+  const cfg = getReportConfig_();
+  const candidates = tdocListDownloadCandidates_(cfg.TDOC_LIST_URL);
+  if (!candidates.length) {
+    Logger.log('[TDOC LIST] diagnosis: this report has no TDoc list configured.');
+    return 'No TDoc list configured.';
+  }
+  const lines = candidates.map(function (url, i) {
+    const a = tdocListDownloadAttempt_(url);
+    return (i === 0 ? 'configured ' : 'alternative ') + url + ': ' +
+      (a.ok ? 'accepted -- HTTP ' + a.status + ', ' + a.bytes + ' bytes starting ' + a.signature : 'refused -- ' + a.problem);
+  });
+  const text = 'TDoc list download: ' + lines.join('; ') + '.';
+  Logger.log('[TDOC LIST] diagnosis: ' + text);
+  return text;
+}
+
+// =========================================================
+// END OF TDOC LIST DOWNLOAD
+// =========================================================
+
 /**
  * SA4-IMPL-001: delegates to the central parseSA4DocumentId_() model instead
  * of a hardcoded /S4-\d{6}/. Preserves its exact external contract (valid ->
@@ -11808,12 +11928,8 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot, use) {
   Logger.log('Downloading TDOC list: ' + meetingUrl);
   perfCount_('UrlFetchApp.fetch() calls (total)');
   perfCount_('fetch() call site: downloadAndGroupTdocs_:TDocListXlsx');
-  const response = perfTimed_('  TDoc-list: UrlFetchApp.fetch (download xlsx)', () => UrlFetchApp.fetch(meetingUrl, { muteHttpExceptions: true }));
-  if (response.getResponseCode() >= 400) {
-    throw new Error('Could not download TDOC list: HTTP ' + response.getResponseCode());
-  }
-
-  const blob = response.getBlob();
+  // After T-2026.10.21: checked as an XLSX, the www.3gpp.org/ftp twin of an ftp.3gpp.org address as fallback (TDOC LIST DOWNLOAD section).
+  const blob = perfTimed_('  TDoc-list: UrlFetchApp.fetch (download xlsx)', () => downloadTdocListXlsx_(meetingUrl)).blob;
   blob.setName('TDoc_List_Temp.xlsx');
   const tempFile = perfTimed_('  TDoc-list: DriveApp.createFile (upload temp xlsx)', () => DriveApp.createFile(blob));
 

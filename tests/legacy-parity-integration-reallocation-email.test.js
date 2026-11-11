@@ -223,7 +223,7 @@ function setupReport(messages) {
   s.UrlFetchApp = {
     fetch: (url) => {
       fetched.push(url);
-      if (url.indexOf('list.etsi.org') === -1) return { getResponseCode: () => 200, getBlob: () => ({ setName() { return this; } }) };
+      if (url.indexOf('list.etsi.org') === -1) return { getResponseCode: () => 200, getBlob: () => ({ setName() { return this; }, getBytes: () => [0x50, 0x4B, 0x03, 0x04], getContentType: () => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) };
       const hit = new RegExp('[?&]L=' + LIST_6G + '(&|$)').test(url);
       const text = url.indexOf('?RSS&') !== -1 ? rssXml(hit ? messages : []) : '<html></html>';
       return { getResponseCode: () => 200, getContentText: () => text };

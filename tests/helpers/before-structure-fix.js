@@ -494,9 +494,28 @@ const AGENDA_READERS_CHANGES = [
    "    const text = 'Agenda ' + cfg.AGENDA_TDOC + ': converted, opened and parsed -- ' + items.length + ' agenda item(s).';\n"]
 ];
 
+const TDOC_LIST_DOWNLOAD_SECTION_START = BAR + '// TDOC LIST DOWNLOAD (after T-2026.10.21)\n' + BAR;
+const TDOC_LIST_DOWNLOAD_SECTION_END = BAR + '// END OF TDOC LIST DOWNLOAD\n' + BAR + '\n';
+const TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS = ['tdocListDownloadCandidates_', 'tdocListDownloadAttempt_', 'downloadTdocListXlsx_', 'diagnoseTdocListDownload'];
+const TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS = ['downloadAndGroupTdocs_'];
+const TDOC_LIST_DOWNLOAD_CHANGES = [
+  ["  // After T-2026.10.21: checked as an XLSX, the www.3gpp.org/ftp twin of an ftp.3gpp.org address as fallback (TDOC LIST DOWNLOAD section).\n" +
+   "  const blob = perfTimed_('  TDoc-list: UrlFetchApp.fetch (download xlsx)', () => downloadTdocListXlsx_(meetingUrl)).blob;\n",
+   "  const response = perfTimed_('  TDoc-list: UrlFetchApp.fetch (download xlsx)', () => UrlFetchApp.fetch(meetingUrl, { muteHttpExceptions: true }));\n" +
+   "  if (response.getResponseCode() >= 400) {\n    throw new Error('Could not download TDOC list: HTTP ' + response.getResponseCode());\n  }\n\n" +
+   "  const blob = response.getBlob();\n"]
+];
+
+/** Code.js without the TDoc-list download fallback: the Code.js of T-2026.10.21. { code, problems }. */
+function codeWithoutTdocListDownload(code) {
+  return takeOut(code, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_CHANGES, 'TDOC LIST DOWNLOAD');
+}
+
 /** Code.js without the agenda readers: the Code.js of T-2026.10.20. { code, problems }. */
 function codeWithoutAgendaReaders(code) {
-  return takeOut(code, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_CHANGES, 'AGENDA READERS');
+  const later = codeWithoutTdocListDownload(code);
+  const view = takeOut(later.code, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_CHANGES, 'AGENDA READERS');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 /** Code.js without the agenda Word conversion: the Code.js of T-2026.10.19. { code, problems }. */
@@ -557,6 +576,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };
