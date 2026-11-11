@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.3 (2026-11-01)
+ * Version: 2.26.4 (2026-11-11)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,18 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.4 (2026-11-11)
+ *   - Fixed: the agenda TDoc's Word file is converted reliably. It goes to
+ *     Drive with the content type of a Word file (by its extension), the
+ *     result must be a native Google Doc (otherwise refused, naming its
+ *     type), and it is opened with bounded retries (0/1/2/4 s). Every step
+ *     is logged as [AGENDA] with the document ID, every failure with its
+ *     original error and stack; the temporary document is always trashed.
+ *     diagnoseAgendaConversion(), run from the editor, does the same steps
+ *     for the configured agenda TDoc and writes nothing. How the agenda is
+ *     parsed is unchanged. (MBS SA4#138, 2026-11-11: two Full Builds failed
+ *     at DocumentApp.openById on the converted agenda S4-261857.) (AGENDA
+ *     WORD CONVERSION section; docs/AGENDA_WORD_CONVERSION.md.)
  * 2.26.3 (2026-11-01)
  *   - Added (template reports): Close Report's external check has a second
  *     source of evidence. When the configured TDoc list (the Portal's Excel

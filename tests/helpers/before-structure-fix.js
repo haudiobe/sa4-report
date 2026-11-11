@@ -445,6 +445,11 @@ const AGENDA_CONVERSION_SECTION_END = BAR + '// END OF AGENDA WORD CONVERSION\n'
 const AGENDA_CONVERSION_SECTION_FUNCTIONS = ['agendaWordContentType_', 'agendaErrorForLog_', 'convertAgendaWordBlob_', 'openConvertedAgendaBody_', 'trashConvertedAgenda_', 'diagnoseAgendaConversion'];
 const AGENDA_CONVERSION_CHANGED_FUNCTIONS = ['parseAgendaWordBlob_', 'convertWordBlobToGoogleDoc_'];
 const AGENDA_CONVERSION_CHANGES = [
+  // The release of it (T-2026.10.20): the version line and the changelog entry of 2.26.4.
+  [" * Version: 2.26.4 (2026-11-11)\n",
+   " * Version: 2.26.3 (2026-11-01)\n"],
+  [" * CHANGELOG\n * 2.26.4 (2026-11-11)\n *   - Fixed: the agenda TDoc's Word file is converted reliably. It goes to\n *     Drive with the content type of a Word file (by its extension), the\n *     result must be a native Google Doc (otherwise refused, naming its\n *     type), and it is opened with bounded retries (0/1/2/4 s). Every step\n *     is logged as [AGENDA] with the document ID, every failure with its\n *     original error and stack; the temporary document is always trashed.\n *     diagnoseAgendaConversion(), run from the editor, does the same steps\n *     for the configured agenda TDoc and writes nothing. How the agenda is\n *     parsed is unchanged. (MBS SA4#138, 2026-11-11: two Full Builds failed\n *     at DocumentApp.openById on the converted agenda S4-261857.) (AGENDA\n *     WORD CONVERSION section; docs/AGENDA_WORD_CONVERSION.md.)\n",
+   " * CHANGELOG\n"],
   ["  // After T-2026.10.19: opened with bounded retries, trashed in every case (AGENDA WORD CONVERSION section).\n" +
    "  try {\n    return parseAgendaStructureWithText_(openConvertedAgendaBody_(convertedDocId), '');\n  } finally {\n    trashConvertedAgenda_(convertedDocId);\n  }\n",
    "  try {\n    const doc = DocumentApp.openById(convertedDocId);\n    return parseAgendaStructureWithText_(doc.getBody(), '');\n  } finally {\n" +

@@ -1,6 +1,7 @@
-# Agenda Word conversion (candidate after T-2026.10.19)
+# Agenda Word conversion (T-2026.10.20, Code.js 2.26.4)
 
-Status: **candidate, not released, not deployed.** `Code.js` stays 2.26.3 until the release.
+Status: **released as T-2026.10.20 (Code.js 2.26.4).** Candidate commit `0b7fd91`, merged by
+PR #1 (`3b62504`). The deployment record is at the end of this document.
 
 ## Incident: MBS SA4#138, 2026-11-11
 
