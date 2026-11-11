@@ -152,12 +152,14 @@ byte.
 | **Master template: read-back** | A fresh pull: exactly five files, all byte-identical to the bundle. `Release.js` reads T-2026.10.20 / 2.26.4 / `fc3ef7d`, and `Code.js` 2.26.4. The project's update time is 2026-11-11 12:46:37 UTC. |
 | **SA4#138 MBS report: before** | Container proven: its parent is "MBS SWG Minutes SA4#138"; the project was created 2026-11-11 11:28 UTC by the template copy and not updated since. A read-only pull: `Code.js`, `HyperLink.js`, `ReportCreator.js` and `Release.js` are T-2026.10.19. **Unexpected difference:** `appsscript.json` has the same content as T-2026.10.19 and T-2026.10.20, but with the key `runtimeVersion` moved to the end, probably re-serialized by the copy. |
 | **SA4#138 MBS report: push** | Approved by Thomas despite the key order. `clasp push` (without `--force`) detected the manifest difference, asked to overwrite it, and skipped the push ("Skipping push."). As the release tool requires, nothing was forced. |
-| **SA4#138 MBS report: state** | Unchanged: update time still 11:28:18 UTC, and all five files byte-identical to the pull taken before. It runs **T-2026.10.19 / 2.26.3**. |
+| **SA4#138 MBS report: state after the skipped push** | Unchanged: update time still 11:28:18 UTC, and all five files byte-identical to the pull taken before. It still ran **T-2026.10.19 / 2.26.3**. |
+| **SA4#138 MBS report: manifest overwrite** | Approved by Thomas. Thomas ran the push and confirmed the manifest overwrite; the project's update time is 2026-11-11 12:54:24.783 UTC. |
+| **SA4#138 MBS report: read-back** | A fresh pull into a new scratch folder: exactly five files, all byte-identical to the adoption bundle and to the master template's read-back. The four source files equal the tag; `appsscript.json` now has the release's key order. `Release.js` reads T-2026.10.20 / 2.26.4 / `fc3ef7d`, and `Code.js` 2.26.4. |
+| **SA4#138 MBS report: configuration and triggers** | A push replaces script files only: it writes no Document Property and creates no trigger. The report document's last modification is 12:54:24.783 UTC, the same instant as the push, by the owner; nothing changed the document after it. Neither the Document Properties nor the triggers can be listed without running code (and the clasp credential has no `script.processes` scope), so they were not read. No report function was run. |
 
-**Not deployed:** the SA4#138 MBS report, pending a decision on overwriting the manifest. The
-same five files would go up; the only change to the manifest is that `runtimeVersion` moves
-back to the release's key order. `diagnoseAgendaConversion` was not run, and Full Report Build
-was not run.
+**Deployed:** the master template and the SA4#138 MBS report both run T-2026.10.20 / 2.26.4.
+`diagnoseAgendaConversion` is to be run next, from the SA4#138 Apps Script editor. Full Report
+Build was not run.
 
 **Not touched:** MBS 86172, 6G (its automatic update stays off), every trigger, every report
 configuration, and the repository-root `.clasp.json`. Every clasp command used
