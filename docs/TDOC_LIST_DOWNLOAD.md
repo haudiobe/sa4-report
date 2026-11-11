@@ -110,3 +110,32 @@ earlier layer.
    Report Build. Its log should show `[TDOC LIST] downloaded from https://www.3gpp.org/ftp/…`.
 
 MBS 86172 and 6G receive the release only by a separate decision.
+
+## Release and deployment of T-2026.10.22 (2026-11-11)
+
+| Step | Result |
+|---|---|
+| Re-check | PR #3 at head `e9a9ac8`, based on the then-current master: 8 files, as reviewed. Tests: 117 files, 7,912 checks, 0 failures. |
+| Merge | PR #3 merged as `8497d01`. |
+| Release commit | `ae1d1ca985111e702347ae17617687ef0a79d7c7`. It adds the version line 2.26.6 (2026-11-11) and its changelog entry; the version-pinned tests say 2.26.6. Without the header, `Code.js` is the `Code.js` of `8497d01`; the ledger gives the `Code.js` of T-2026.10.21 byte for byte. Tests: 117 files, 7,912 checks, 0 failures. |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.22` on the release commit. `origin/master` fast-forwarded `8497d01` → `ae1d1ca`, without force, and the tag was pushed. |
+| Release bundle | `--release T-2026.10.22`: dry run, then `--write`. The four source files equal the tag; `Release.js` reads T-2026.10.22 / 2.26.6 / `ae1d1ca`. Only `Code.js` and `Release.js` differ from T-2026.10.21; the manifest, `HyperLink.js` and `ReportCreator.js` are unchanged. |
+| clasp identity | `clasp --user haudiobe.ts@gmail.com show-authorized-user`: the template owner's account. |
+| **Master template: before** | Container proven: its parent is the "SA4 Report Template" document; last update 19:13:57 UTC (the T-2026.10.21 push). A read-only pull: five files byte-identical to the T-2026.10.21 read-back. |
+| **Master template: push** | 2026-11-11 20:25:31 UTC, from its own scratch folder, without `--force`. The staged files matched the SHA-256 hashes in `RELEASE-MANIFEST.json`. |
+| **Master template: read-back** | A fresh pull: exactly five files, each matching its SHA-256 in `RELEASE-MANIFEST.json` and byte-identical to the bundle. `Release.js` reads T-2026.10.22 / 2.26.6 / `ae1d1ca` / `template-release/T-2026.10.22`, and `Code.js` 2.26.6. |
+| **SA4#138 MBS report: before** | Container proven: its parent is "MBS SWG Minutes SA4#138"; last update 19:54:18 UTC. A read-only pull: `appsscript.json`, `HyperLink.js`, `ReportCreator.js` and `Release.js` are byte-identical to T-2026.10.21. `Code.js` is the `Code.js` of T-2026.10.21 byte for byte, followed by 47 appended lines with one function, `diagnoseTdocListDownload` (added by hand in the editor). That is the only deviation. |
+| **SA4#138 MBS report: backup** | The five pulled files, with their SHA-256 sums and the hand-written function on its own, are kept locally (outside the repository; `dist/` is not committed). The live `Code.js` had SHA-256 `b6ec4ad0…`. |
+| **SA4#138 MBS report: adoption** | `--adopt T-2026.10.22 --label mbs-138`: dry run, then `--write`. The guardrails passed. The five files are byte-identical to the release bundle; the live manifest was already byte-identical, so there was no overwrite question. |
+| **SA4#138 MBS report: push** | 2026-11-11 20:26:52 UTC, from its own scratch folder, without `--force`. The hand-written function is replaced by the released `diagnoseTdocListDownload()`, under the same name. |
+| **SA4#138 MBS report: read-back** | A fresh pull: exactly five files, each matching its SHA-256 in `RELEASE-MANIFEST.json`, byte-identical to the adoption bundle and to the master template's read-back. `Release.js` reads T-2026.10.22 / 2.26.6 / `ae1d1ca`, and `Code.js` 2.26.6. |
+| **SA4#138 MBS report: configuration and triggers** | A push replaces script files only: it writes no Document Property and creates no trigger. The document's last modification is the push instant, by the owner. Properties and triggers cannot be listed without running code, so they were not read. No report function was run. |
+
+**Deployed:** the master template and the SA4#138 MBS report both run T-2026.10.22 / 2.26.6.
+`diagnoseTdocListDownload()` is to be run next, by hand, from the SA4#138 Apps Script editor. Full Report
+Build was not run.
+
+**Not touched:** MBS 86172, 6G (its automatic update stays off), every trigger, every report configuration,
+every draft revision, and the repository-root `.clasp.json`. Every clasp command used
+`--user haudiobe.ts@gmail.com` and ran from its own scratch folder. The TDoc revision feature is not part of
+this release.
