@@ -127,10 +127,11 @@ console.log('4. the creator: from the Portal into the setup information');
   const mbs = createReport(GM.getMeetings86172, ROWS_MBS, '86172', {});
   check('86172 is created', [mbs.preview.ok, mbs.created.ok], [true, true]);
   const config = payloadOf(mbs.s, mbs.description).config;
-  check('the setup information has the start time and the time zone of the Portal, next to the date', [config.meetingDate, config.meetingStartTime, config.meetingTimeZone], ['October 1, 2026', '15:30', 'UTC+2']);
+  // After T-2026.10.22 (docs/MEETING_TIME_ZONES.md): a new report stores the meeting-local zone the Portal's record gives, verified against its offset.
+  check('the setup information has the start time and the time zone of the Portal, next to the date', [config.meetingDate, config.meetingStartTime, config.meetingTimeZone], ['October 1, 2026', '15:30', 'Europe/Brussels']);
   const audio = createReport(GM.getMeetings85916, ROWS_AUDIO, '85916', {});
   const audioConfig = payloadOf(audio.s, audio.description).config;
-  check('85916 (Shanghai): its own time and zone -- nothing Central European is assumed', [audioConfig.meetingDate, audioConfig.meetingStartTime, audioConfig.meetingTimeZone], ['September 28, 2026', '09:00', 'UTC+8']);
+  check('85916 (Shanghai): its own time and zone -- nothing Central European is assumed', [audioConfig.meetingDate, audioConfig.meetingStartTime, audioConfig.meetingTimeZone], ['September 28, 2026', '09:00', 'Asia/Shanghai']);
 
   const noTime = createReport(meeting(GM.getMeetings86172, { StartDate: '2026-10-01 00:00:00' }), ROWS_MBS, '86172', {});
   const noZone = createReport(meeting(GM.getMeetings86172, { StartTimeZone: '' }), ROWS_MBS, '86172', {});
@@ -139,11 +140,11 @@ console.log('4. the creator: from the Portal into the setup information');
   const missingZone = createReport(withoutZone, ROWS_MBS, '86172', {});
   check('a meeting at 00:00:00, without a time zone, or with one that has no offset: the report is created, with the value left empty',
     [noTime, noZone, oddZone, missingZone].map((c) => { const cfg = payloadOf(c.s, c.description).config; return [c.created.ok, cfg.meetingDate, cfg.meetingStartTime, cfg.meetingTimeZone]; }),
-    [[true, 'October 1, 2026', '', 'UTC+2'], [true, 'October 1, 2026', '15:30', ''], [true, 'October 1, 2026', '15:30', ''], [true, 'October 1, 2026', '15:30', '']]);
+    [[true, 'October 1, 2026', '', 'Europe/Brussels'], [true, 'October 1, 2026', '15:30', ''], [true, 'October 1, 2026', '15:30', ''], [true, 'October 1, 2026', '15:30', '']]);
 
   const main = createReport(meeting(GM.getMeetings86172, { Id: 60778, Type: 'OR', Title: '3GPPSA4#137', MtgDocURL: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_137_Synthetic/Docs/' }), [], '60778', { reportFamily: 'Video' });
   const mainConfig = payloadOf(main.s, main.description).config;
-  check('a main-meeting report (its opening is copied from the report template) carries neither', [main.created.ok, mainConfig.meetingType, mainConfig.meetingStartTime, mainConfig.meetingTimeZone], [true, 'main', '', '']);
+  check('a main-meeting report (its opening is copied from the report template) carries no start time, and its meeting-local zone', [main.created.ok, mainConfig.meetingType, mainConfig.meetingStartTime, mainConfig.meetingTimeZone], [true, 'main', '', 'Europe/Brussels']);
 
   check('the preview keeps the Portal time zone as it is given, beside the raw start date',
     [mbs.s.computeResolvedMeetingPreview_({}, mbs.preview.resolved).startTimeZoneRaw, mbs.s.computeResolvedMeetingPreview_({}, mbs.preview.resolved).startDateRaw, mbs.s.computeResolvedMeetingPreview_({}, null).startTimeZoneRaw],
@@ -157,13 +158,13 @@ console.log('5. the first run: stored with the meeting they belong to');
   const run = firstRunFor(mbs.description);
   const setup = run.run();
   check('the first run stores the three values', [setup.status, startOf(run.docProps), run.docProps.getProperty('MEETING_DATE'), run.docProps.getProperty('MEETING_ID')],
-    ['configured', ['15:30', 'UTC+2', '86172|October 1, 2026'], 'October 1, 2026', '86172']);
-  check('and they are what the build reads', plain(run.s.getMeetingStartForOpening_()), { time: '15:30', zone: 'UTC+2' });
+    ['configured', ['15:30', 'Europe/Brussels', '86172|October 1, 2026'], 'October 1, 2026', '86172']);
+  check('and they are what the build reads', plain(run.s.getMeetingStartForOpening_()), { time: '15:30', zone: 'Europe/Brussels' });
 
   const noTime = createReport(meeting(GM.getMeetings86172, { StartDate: '2026-10-01 00:00:00' }), ROWS_MBS, '86172', {});
   const runNoTime = firstRunFor(noTime.description);
   runNoTime.run();
-  check('a meeting without a start time: the zone is stored, no time is', [startOf(runNoTime.docProps), plain(runNoTime.s.getMeetingStartForOpening_())], [[null, 'UTC+2', '86172|October 1, 2026'], { time: '', zone: 'UTC+2' }]);
+  check('a meeting without a start time: the zone is stored, no time is', [startOf(runNoTime.docProps), plain(runNoTime.s.getMeetingStartForOpening_())], [[null, 'Europe/Brussels', '86172|October 1, 2026'], { time: '', zone: 'Europe/Brussels' }]);
 
   const neither = createReport(meeting(GM.getMeetings86172, { StartDate: '2026-10-01 00:00:00', StartTimeZone: '' }), ROWS_MBS, '86172', {});
   const runNeither = firstRunFor(neither.description);
@@ -175,7 +176,7 @@ console.log('5. the first run: stored with the meeting they belong to');
   check('a start time or a time zone that is not in its form is refused, and nothing is stored',
     [tampered({ meetingStartTime: '15:30 CEST' }), tampered({ meetingStartTime: '00:00' }), tampered({ meetingTimeZone: 'CEST' }), tampered({ meetingTimeZone: '<script>' }), tampered({ meetingStartTime: 1530 })],
     [['refused', ['The meeting start time is not a time.'], [null, null, null]], ['refused', ['The meeting start time is not a time.'], [null, null, null]],
-      ['refused', ['The meeting time zone is not a UTC offset.'], [null, null, null]], ['refused', ['The meeting time zone is not a UTC offset.'], [null, null, null]],
+      ['refused', ['The meeting time zone is neither a UTC offset nor a supported time zone.'], [null, null, null]], ['refused', ['The meeting time zone is neither a UTC offset nor a supported time zone.'], [null, null, null]],
       ['refused', ['Setup field "meetingStartTime" is not text.', 'The meeting start time is not a time.'], [null, null, null]]]);
   check('a setup field for the chair does not exist: it is refused like any unknown field', tampered({ chair: 'Somebody' }).slice(0, 2), ['refused', ['Unexpected setup field "chair".']]);
 }
@@ -224,11 +225,11 @@ console.log('7. the start of one meeting is never written for another');
   const dialogSave = (changes) => run.s.persistConfigurationSettings_(Object.assign({ meetingId: '86172', meetingType: 'adhoc', meetingName: 'SA4-e (AH) MBS SWG post 137-e', meetingDate: 'October 1, 2026', reportType: 'MBS',
     ftpBase: 'https://ftp.3gpp.org/TSG_SA/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_MBS/Docs/', tdocUrl: 'https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId=86172', mailingListMode: 'derived', apiTokenAction: 'keep', showPreview: true }, changes || {}));
   dialogSave();
-  check('saving Configure Meeting for the same meeting keeps the stored start', [startOf(run.docProps), plain(run.s.getMeetingStartForOpening_())], [['15:30', 'UTC+2', '86172|October 1, 2026'], { time: '15:30', zone: 'UTC+2' }]);
+  check('saving Configure Meeting for the same meeting keeps the stored start', [startOf(run.docProps), plain(run.s.getMeetingStartForOpening_())], [['15:30', 'Europe/Brussels', '86172|October 1, 2026'], { time: '15:30', zone: 'Europe/Brussels' }]);
   dialogSave({ meetingDate: 'October 8, 2026' });
   check('saving it with another meeting date: the stored start no longer applies', [run.docProps.getProperty('MEETING_DATE'), plain(run.s.getMeetingStartForOpening_())], ['October 8, 2026', { time: '', zone: '' }]);
   dialogSave({ meetingDate: 'October 1, 2026' });
-  check('and applies again when the date is the one it was stored with', plain(run.s.getMeetingStartForOpening_()), { time: '15:30', zone: 'UTC+2' });
+  check('and applies again when the date is the one it was stored with', plain(run.s.getMeetingStartForOpening_()), { time: '15:30', zone: 'Europe/Brussels' });
 }
 
 // ====================================================================

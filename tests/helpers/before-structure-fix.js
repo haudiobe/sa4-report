@@ -537,11 +537,94 @@ const LARGE_BUILD_CHANGES = [
 
 /** Code.js without the large-build checkpoints: the Code.js of T-2026.10.22. { code, problems }. */
 function codeWithoutLargeBuildCheckpoints(code) {
-  const view = takeOut(code, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_CHANGES, 'LARGE BUILD CHECKPOINTS');
+  // The meeting time zones (after T-2026.10.23) came later: taken out first.
+  const later = codeWithoutMeetingTimeZones(code);
+  const view = takeOut(later.code, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_CHANGES, 'LARGE BUILD CHECKPOINTS');
   // The document access: every currentReportDocument_() left is one that was DocumentApp.getActiveDocument().
   const uses = (view.code.match(/currentReportDocument_\(\)/g) || []).length;
   if (uses !== LARGE_BUILD_DOCUMENT_ACCESS_COUNT) view.problems.push('LARGE BUILD CHECKPOINTS: ' + uses + ' uses of currentReportDocument_() outside the section, not ' + LARGE_BUILD_DOCUMENT_ACCESS_COUNT);
-  return { code: view.code.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()'), problems: view.problems };
+  return { code: view.code.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()'), problems: later.problems.concat(view.problems) };
+}
+
+const MEETING_TIME_ZONES_SECTION_START = BAR + '// MEETING TIME ZONES (after T-2026.10.22)\n' + BAR;
+const MEETING_TIME_ZONES_SECTION_END = BAR + '// END OF MEETING TIME ZONES\n' + BAR + '\n';
+const MEETING_TIME_ZONES_SECTION_FUNCTIONS = ['isAllowedMeetingTimeZoneId_', 'isValidMeetingTimeZoneSetting_', 'utcOffsetLabelMinutes_', 'formatUtcOffsetLabel_', 'meetingTimeZoneOffsetMinutes_',
+  'meetingWallClockToInstant_', 'meetingTimeZoneDisplay_', 'meetingTimeZoneOptionLabel_', 'meetingLocalTimeZoneFromPortal_', 'meetingTimeZoneFromPortal_', 'meetingLocalTimeZonePreview_',
+  'meetingSessionTimeZone_', 'storeMeetingTimeZone_', 'keptMeetingTimeZoneBeforeSave_', 'meetingLocalTimeZoneOfSave_', 'meetingTimeZoneChoiceProblem_', 'applyMeetingTimeZoneChoice_', 'meetingTimeZoneDialogState_'];
+// After T-2026.10.22 (GitHub issue #4): the changes outside the section, [now, before], in the order they were made.
+const MEETING_TIME_ZONES_CHANGES = [
+  ["    return { time: isValidMeetingStartTime_(time) ? time : '', zone: isValidMeetingTimeZoneSetting_(zone) ? zone : '' };\n",
+   "    return { time: isValidMeetingStartTime_(time) ? time : '', zone: isValidMeetingTimeZoneLabel_(zone) ? zone : '' };\n"],
+  ["  // After T-2026.10.22: an IANA zone is written as its abbreviation on the meeting date (MEETING TIME ZONES section).\n  const zone = meetingTimeZoneDisplay_(timeZoneLabel, meetingStartDateIso_(meetingDateText), isValidMeetingStartTime_(startTime) ? startTime : '') || '<time zone>';\n",
+   "  const zone = isValidMeetingTimeZoneLabel_(timeZoneLabel) ? timeZoneLabel : '<time zone>';\n"],
+  ["  const hasZone = isValidMeetingTimeZoneSetting_(zone);\n",
+   "  const hasZone = isValidMeetingTimeZoneLabel_(zone);\n"],
+  ["  else docProps.deleteProperty(MEETING_START_BASIS_KEY_);\n  // After T-2026.10.22: an IANA zone from the Portal is the meeting-local zone; an offset has no mode (MEETING TIME ZONES section).\n  if (hasZone && isAllowedMeetingTimeZoneId_(zone) && !isValidMeetingTimeZoneLabel_(zone)) docProps.setProperty(MEETING_TIME_ZONE_MODE_KEY_, 'local');\n  else docProps.deleteProperty(MEETING_TIME_ZONE_MODE_KEY_);\n}\n",
+   "  else docProps.deleteProperty(MEETING_START_BASIS_KEY_);\n}\n"],
+  ["  // After T-2026.10.22: the verified meeting-local zone, else the offset as before (MEETING TIME ZONES section).\n  return { time: computeMeetingStartTimeFromStartDate_(resolved.startDate), zone: meetingTimeZoneFromPortal_(resolved.startDate, resolved.timeZone, resolved.country) };\n",
+   "  return { time: computeMeetingStartTimeFromStartDate_(resolved.startDate), zone: computeMeetingTimeZoneLabel_(resolved.timeZone) };\n"],
+  ["function persistConfigurationSettings_(config) {\n  const docProps = PropertiesService.getDocumentProperties();\n  const scriptProps = PropertiesService.getScriptProperties();\n  // After T-2026.10.22: the time zone a save asks for is checked before anything is written; a zone selected\n  // for the meeting, or an offset stored before, is kept by a Resolve (MEETING TIME ZONES section).\n  const meetingTimeZoneProblem = meetingTimeZoneChoiceProblem_(config, docProps);\n  if (meetingTimeZoneProblem) throw new Error(meetingTimeZoneProblem);\n  const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);\n",
+   "function persistConfigurationSettings_(config) {\n  const docProps = PropertiesService.getDocumentProperties();\n  const scriptProps = PropertiesService.getScriptProperties();\n"],
+  ["    if (resolvedStart) storeMeetingStart_(docProps, resolvedStart.time, resolvedStart.zone);\n  }\n  applyMeetingTimeZoneChoice_(docProps, config, keptMeetingTimeZone);\n",
+   "    if (resolvedStart) storeMeetingStart_(docProps, resolvedStart.time, resolvedStart.zone);\n  }\n"],
+  ["      location: m.Location !== undefined ? m.Location : (ical ? ical.location : null),\n      // After T-2026.10.22: the meeting's country, which names its local time zone (MEETING TIME ZONES section).\n      country: m.Country !== undefined ? m.Country : null\n",
+   "      location: m.Location !== undefined ? m.Location : (ical ? ical.location : null)\n"],
+  ["    location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null,\n    // After T-2026.10.22 (MEETING TIME ZONES section): the country, and the meeting-local zone the Portal's record gives.\n    country: resolvedMeeting && resolvedMeeting.country ? resolvedMeeting.country : null,\n    meetingLocalTimeZone: resolvedMeeting ? meetingLocalTimeZonePreview_(resolvedMeeting.startDate, resolvedMeeting.timeZone, resolvedMeeting.country) : null\n  };\n",
+   "    location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null\n  };\n"],
+  ["  const initialPreview = computeResolvedMeetingPreview_(existingForPreview, null);\n  // After T-2026.10.22: the meeting time zone -- Meeting local, or a zone selected (MEETING TIME ZONES section).\n  const meetingTimeZoneState = meetingTimeZoneDialogState_(props);\n  const meetingTimeZoneOptions = ['<option value=\"unset\"' + (meetingTimeZoneState.choice === '' ? ' selected=\"selected\"' : '') + '>Not set</option>',\n    '<option value=\"local\"' + (meetingTimeZoneState.choice === 'local' ? ' selected=\"selected\"' : '') + '>Meeting local</option>']\n    .concat(Object.keys(MEETING_TIME_ZONES_).map(function (zone) {\n      return '<option value=\"' + zone + '\"' + (meetingTimeZoneState.choice === zone ? ' selected=\"selected\"' : '') + '>' + meetingTimeZoneOptionLabel_(zone) + '</option>';\n    })).join('');\n",
+   "  const initialPreview = computeResolvedMeetingPreview_(existingForPreview, null);\n"],
+  ["      <div id=\"meetingSummary\">${esc(initialPreview.summary)}</div>\n      <label>Meeting Time Zone:</label>\n      <select id=\"meetingTimeZoneChoice\" onchange=\"updateMeetingTimeZoneHint()\">${meetingTimeZoneOptions}</select>\n      <input type=\"hidden\" id=\"meetingTimeZoneStored\" value=\"${esc(meetingTimeZoneState.stored)}\">\n      <input type=\"hidden\" id=\"meetingTimeZoneText\" value=\"${esc(meetingTimeZoneState.text)}\">\n      <div class=\"hint\" id=\"meetingTimeZoneHint\">${esc(meetingTimeZoneState.text)}</div>\n",
+   "      <div id=\"meetingSummary\">${esc(initialPreview.summary)}</div>\n"],
+  ["            resolvedMeetingStart = { meetingId: String(result.resolved.id), startDate: result.preview.startDateRaw || '', timeZone: result.preview.startTimeZoneRaw || '', country: result.preview.country || '' };\n            applyPreview(result.preview);\n            onMeetingLocalTimeZone(result.preview.meetingLocalTimeZone);\n",
+   "            resolvedMeetingStart = { meetingId: String(result.resolved.id), startDate: result.preview.startDateRaw || '', timeZone: result.preview.startTimeZoneRaw || '' };\n            applyPreview(result.preview);\n"],
+  ["      // After T-2026.10.22: Meeting local, as Resolve found it; selected by itself only when no zone is stored.\n      let resolvedLocalTimeZone = null;\n      function onMeetingLocalTimeZone(local) {\n        resolvedLocalTimeZone = local || null;\n        const select = document.getElementById('meetingTimeZoneChoice');\n        if (!select) return;\n        if (local && local.zone && select.value === 'unset' && fieldValue('meetingTimeZoneStored') === 'none') select.value = 'local';\n        updateMeetingTimeZoneHint();\n      }\n      function fieldValue(id) { const el = document.getElementById(id); return el ? String(el.value || '') : ''; }\n      function updateMeetingTimeZoneHint() {\n        const select = document.getElementById('meetingTimeZoneChoice');\n        const hint = document.getElementById('meetingTimeZoneHint');\n        if (!select || !hint) return;\n        if (select.value !== 'unset' && select.value !== 'local') hint.textContent = 'Selected: ' + select.value + '. The meeting\\\\u2019s times are written in this zone.';\n        else hint.textContent = resolvedLocalTimeZone ? resolvedLocalTimeZone.text : fieldValue('meetingTimeZoneText');\n      }\n\n      function resolveMeeting() {\n",
+   "      function resolveMeeting() {\n"],
+  ["        // After T-2026.10.22: the meeting time zone; Meeting local only when it is known (MEETING TIME ZONES section).\n        const timeZoneSelect = document.getElementById('meetingTimeZoneChoice');\n        if (timeZoneSelect && timeZoneSelect.value && timeZoneSelect.value !== 'unset') {\n          if (timeZoneSelect.value === 'local' && !(resolvedLocalTimeZone && resolvedLocalTimeZone.zone) && fieldValue('meetingTimeZoneStored') !== 'local') {\n            alert(resolvedLocalTimeZone ? resolvedLocalTimeZone.text : 'Meeting local is not known yet: Resolve the meeting, or select a time zone.');\n            return;\n          }\n          config.meetingTimeZoneChoice = timeZoneSelect.value;\n        }\n        // The start Resolve found goes with the save of the meeting it was found for (see persistConfigurationSettings_()).\n",
+   "        // The start Resolve found goes with the save of the meeting it was found for (see persistConfigurationSettings_()).\n"],
+  ["function adhocSessionWhenText_(session, zone) {\n  // After T-2026.10.22: with a meeting zone, each time names its zone on its own day (MEETING TIME ZONES section).\n  const at = function (time, day) { const shown = zone && time ? meetingTimeZoneDisplay_(zone, day, time) : ''; return shown ? time + ' ' + shown : time; };\n  const prefix = session.label ? session.label + ', ' : '';\n  if (isAdhocMultiDaySession_(session)) {\n    const parts = [];\n    if (session.start) parts.push('from ' + at(session.start, session.date) + ' on the first day');\n    if (session.end) parts.push('until ' + at(session.end, adhocSessionLastDay_(session)) + ' on the last day');\n    return prefix + adhocSessionDatesText_(session) + (parts.length ? ' (' + parts.join(', ') + ')' : '');\n  }\n  const date = adhocLongDate_(session.date);\n  const startZone = zone && session.start ? meetingTimeZoneDisplay_(zone, session.date, session.start) : '';\n  const endZone = zone && session.end ? meetingTimeZoneDisplay_(zone, session.date, session.end) : '';\n  const time = session.start && session.end\n    ? ', ' + (startZone === endZone ? session.start + '–' + session.end + (endZone ? ' ' + endZone : '') : at(session.start, session.date) + '–' + at(session.end, session.date))\n    : (session.start ? ', ' + at(session.start, session.date) : (session.end ? ', until ' + at(session.end, session.date) : ''));\n  return prefix + date + time;\n}\n",
+   "function adhocSessionWhenText_(session) {\n  const prefix = session.label ? session.label + ', ' : '';\n  if (isAdhocMultiDaySession_(session)) {\n    const parts = [];\n    if (session.start) parts.push('from ' + session.start + ' on the first day');\n    if (session.end) parts.push('until ' + session.end + ' on the last day');\n    return prefix + adhocSessionDatesText_(session) + (parts.length ? ' (' + parts.join(', ') + ')' : '');\n  }\n  const date = adhocLongDate_(session.date);\n  const time = session.start && session.end ? ', ' + session.start + '–' + session.end\n    : (session.start ? ', ' + session.start : (session.end ? ', until ' + session.end : ''));\n  return prefix + date + time;\n}\n"],
+  ["function buildAdhocOpeningLines_(sessions, details, zone) {\n",
+   "function buildAdhocOpeningLines_(sessions, details) {\n"],
+  ["    lines.push({ text: codes[session.id] + ': ' + adhocSessionWhenText_(session, zone), bold: true });\n",
+   "    lines.push({ text: codes[session.id] + ': ' + adhocSessionWhenText_(session), bold: true });\n"],
+  ["  return renderAdhocOpeningSection_(body, buildAdhocOpeningLines_(sessions, stored.sessions, meetingSessionTimeZone_()));\n",
+   "  return renderAdhocOpeningSection_(body, buildAdhocOpeningLines_(sessions, stored.sessions));\n"],
+  ["      return { id: s.id, when: adhocSessionWhenText_(s, meetingSessionTimeZone_()), chair: entry.chair || ''",
+   "      return { id: s.id, when: adhocSessionWhenText_(s), chair: entry.chair || ''"],
+  ["      return { id: s.id, when: adhocSessionWhenText_(s, meetingSessionTimeZone_()), groups: groups };\n",
+   "      return { id: s.id, when: adhocSessionWhenText_(s), groups: groups };\n"],
+  ["function convertUtcWallClockToReportZone_(at, zone) {\n",
+   "function convertUtcWallClockToReportZone_(at) {\n"],
+  ["isAllowedMeetingTimeZoneId_(zone) ? zone : Session.getScriptTimeZone(), \"yyyy-MM-dd'T'HH:mm:ss\");\n  return /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/",
+   "Session.getScriptTimeZone(), \"yyyy-MM-dd'T'HH:mm:ss\");\n  return /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/"],
+  ["  const model = stored.model;\n  // After T-2026.10.22: the sessions' zone -- the meeting's IANA zone, else the script's as before (MEETING TIME ZONES section).\n  const sessionZone = meetingSessionTimeZone_(context);\n  const onSessionClock = function (upload) {\n",
+   "  const model = stored.model;\n  const onSessionClock = function (upload) {\n"],
+  ["    const at = convertUtcWallClockToReportZone_(upload.at, sessionZone);\n",
+   "    const at = convertUtcWallClockToReportZone_(upload.at);\n"],
+  ["    sessions: sessions, zone: sessionZone, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,\n",
+   "    sessions: sessions, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,\n"],
+  ["    uploadedZone: resolver.clock === 'utc' ? String(resolver.zone || Session.getScriptTimeZone() || '') : '',\n",
+   "    uploadedZone: resolver.clock === 'utc' ? String(Session.getScriptTimeZone() || '') : '',\n"],
+  ["  const model = buildAdhocSessionsDialogModel_(props.getProperty(ADHOC_SESSIONS_KEY_), props.getProperty('MEETING_DATE'));\n  // After T-2026.10.22: the zone the times are meant in (MEETING TIME ZONES section).\n  const sessionsZone = meetingSessionTimeZone_();\n  const sessionsZoneText = sessionsZone ? 'the meeting time zone, ' + meetingTimeZoneOptionLabel_(sessionsZone) : 'the report\\'s time zone';\n",
+   "  const model = buildAdhocSessionsDialogModel_(props.getProperty(ADHOC_SESSIONS_KEY_), props.getProperty('MEETING_DATE'));\n"],
+  ["Times are optional and are meant in ${sessionsZoneText}:",
+   "Times are optional and are meant in the report's time zone:"]
+];
+const MEETING_TIME_ZONES_CREATOR_CHANGES = [
+  ["    // After T-2026.10.22 (MEETING TIME ZONES section of Code.js): the verified meeting-local zone, for any\n    // meeting; else, for an ad-hoc meeting, the offset as before.\n    meetingTimeZone: meetingType === 'adhoc' ? meetingTimeZoneFromPortal_(p.startDateRaw, p.startTimeZoneRaw, p.country)\n      : meetingLocalTimeZoneFromPortal_(p.startDateRaw, p.startTimeZoneRaw, p.country).zone\n",
+   "    meetingTimeZone: meetingType === 'adhoc' ? computeMeetingTimeZoneLabel_(p.startTimeZoneRaw) : ''\n"],
+  ["  if (cfg.meetingTimeZone && !isValidMeetingTimeZoneSetting_(cfg.meetingTimeZone)) errors.push('The meeting time zone is neither a UTC offset nor a supported time zone.');\n",
+   "  if (cfg.meetingTimeZone && !isValidMeetingTimeZoneLabel_(cfg.meetingTimeZone)) errors.push('The meeting time zone is not a UTC offset.');\n"]
+];
+
+/** Code.js without the meeting time zones: the Code.js of T-2026.10.22. { code, problems }. */
+function codeWithoutMeetingTimeZones(code) {
+  return takeOut(code, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_CHANGES, 'MEETING TIME ZONES');
+}
+
+/** template/ReportCreator.js without the meeting time zones: { code, problems }. */
+function creatorWithoutMeetingTimeZones(code) {
+  return takeOut(code, null, null, MEETING_TIME_ZONES_CREATOR_CHANGES, 'MEETING TIME ZONES (ReportCreator.js)');
 }
 
 const TDOC_LIST_DOWNLOAD_SECTION_START = BAR + '// TDOC LIST DOWNLOAD (after T-2026.10.21)\n' + BAR;
@@ -618,10 +701,12 @@ const DISPOSITION_CREATOR_CHANGE = "    // After T-2026.10.15: the Disposition S
 
 /** template/ReportCreator.js without the two menu items of the Disposition Summary: { code, problems }. */
 function creatorWithoutDispositionSummary(code) {
-  const text = String(code).replace(/\r/g, '');
+  // The meeting time zones (after T-2026.10.22) came later: taken out first.
+  const later = creatorWithoutMeetingTimeZones(code);
+  const text = later.code;
   const at = text.indexOf(DISPOSITION_CREATOR_CHANGE);
-  if (at === -1 || text.indexOf(DISPOSITION_CREATOR_CHANGE, at + 1) !== -1) return { code: text, problems: ['the DISPOSITION SUMMARY change of ReportCreator.js is not in it exactly once'] };
-  return { code: text.slice(0, at) + text.slice(at + DISPOSITION_CREATOR_CHANGE.length), problems: [] };
+  if (at === -1 || text.indexOf(DISPOSITION_CREATOR_CHANGE, at + 1) !== -1) return { code: text, problems: later.problems.concat(['the DISPOSITION SUMMARY change of ReportCreator.js is not in it exactly once']) };
+  return { code: text.slice(0, at) + text.slice(at + DISPOSITION_CREATOR_CHANGE.length), problems: later.problems };
 }
 
 function codeBeforeStructureFix(code) {
@@ -634,6 +719,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

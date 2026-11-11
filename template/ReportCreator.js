@@ -253,7 +253,10 @@ function buildReportBootstrapPayload_(preview, choices, release, nowIso) {
     // zone of the Portal's StartDate, '' where the Portal has none. A main
     // report copies its opening from the report template and has no use for them.
     meetingStartTime: meetingType === 'adhoc' ? computeMeetingStartTimeFromStartDate_(p.startDateRaw) : '',
-    meetingTimeZone: meetingType === 'adhoc' ? computeMeetingTimeZoneLabel_(p.startTimeZoneRaw) : ''
+    // After T-2026.10.22 (MEETING TIME ZONES section of Code.js): the verified meeting-local zone, for any
+    // meeting; else, for an ad-hoc meeting, the offset as before.
+    meetingTimeZone: meetingType === 'adhoc' ? meetingTimeZoneFromPortal_(p.startDateRaw, p.startTimeZoneRaw, p.country)
+      : meetingLocalTimeZoneFromPortal_(p.startDateRaw, p.startTimeZoneRaw, p.country).zone
   };
 
   if (meetingType === 'main') {
@@ -386,7 +389,7 @@ function validateBootstrapPayload_(payload, documentId) {
   if ((cfg.mailingListMode === 'override') !== !!cfg.mailingList) errors.push('The mailing-list override is inconsistent.');
   if (cfg.emailStartDate && !isValidCollectorStartDate_(cfg.emailStartDate)) errors.push('The e-mail collection start date is not a date.');
   if (cfg.meetingStartTime && !isValidMeetingStartTime_(cfg.meetingStartTime)) errors.push('The meeting start time is not a time.');
-  if (cfg.meetingTimeZone && !isValidMeetingTimeZoneLabel_(cfg.meetingTimeZone)) errors.push('The meeting time zone is not a UTC offset.');
+  if (cfg.meetingTimeZone && !isValidMeetingTimeZoneSetting_(cfg.meetingTimeZone)) errors.push('The meeting time zone is neither a UTC offset nor a supported time zone.');
   return errors.concat(validateBootstrapUrls_(cfg));
 }
 

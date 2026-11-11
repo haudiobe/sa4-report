@@ -8401,6 +8401,13 @@ function configureMeetingSettings() {
     REVISIONS_URL: props.getProperty('REVISIONS_URL')
   };
   const initialPreview = computeResolvedMeetingPreview_(existingForPreview, null);
+  // After T-2026.10.22: the meeting time zone -- Meeting local, or a zone selected (MEETING TIME ZONES section).
+  const meetingTimeZoneState = meetingTimeZoneDialogState_(props);
+  const meetingTimeZoneOptions = ['<option value="unset"' + (meetingTimeZoneState.choice === '' ? ' selected="selected"' : '') + '>Not set</option>',
+    '<option value="local"' + (meetingTimeZoneState.choice === 'local' ? ' selected="selected"' : '') + '>Meeting local</option>']
+    .concat(Object.keys(MEETING_TIME_ZONES_).map(function (zone) {
+      return '<option value="' + zone + '"' + (meetingTimeZoneState.choice === zone ? ' selected="selected"' : '') + '>' + meetingTimeZoneOptionLabel_(zone) + '</option>';
+    })).join('');
   const initiallyAdhoc = String(initialPreview.meetingType.value || '').trim().toLowerCase() === 'adhoc';
   const familyInfo = buildReportFamilyInfo_();
   // ADDON-007B3: the canonical rules and the evaluator's own source are
@@ -8470,6 +8477,11 @@ function configureMeetingSettings() {
       <div class="hint">Find the ID in the meeting's 3GPP portal address (...MtgId=NNNNN). Resolving reads public meeting details and does not save anything.</div>
       <div id="resolveStatus"></div>
       <div id="meetingSummary">${esc(initialPreview.summary)}</div>
+      <label>Meeting Time Zone:</label>
+      <select id="meetingTimeZoneChoice" onchange="updateMeetingTimeZoneHint()">${meetingTimeZoneOptions}</select>
+      <input type="hidden" id="meetingTimeZoneStored" value="${esc(meetingTimeZoneState.stored)}">
+      <input type="hidden" id="meetingTimeZoneText" value="${esc(meetingTimeZoneState.text)}">
+      <div class="hint" id="meetingTimeZoneHint">${esc(meetingTimeZoneState.text)}</div>
     </div>
 
     <div class="section">
@@ -8849,6 +8861,24 @@ function configureMeetingSettings() {
       // the meeting it is of. Sent with Save only for that same meeting id.
       let resolvedMeetingStart = null;
 
+      // After T-2026.10.22: Meeting local, as Resolve found it; selected by itself only when no zone is stored.
+      let resolvedLocalTimeZone = null;
+      function onMeetingLocalTimeZone(local) {
+        resolvedLocalTimeZone = local || null;
+        const select = document.getElementById('meetingTimeZoneChoice');
+        if (!select) return;
+        if (local && local.zone && select.value === 'unset' && fieldValue('meetingTimeZoneStored') === 'none') select.value = 'local';
+        updateMeetingTimeZoneHint();
+      }
+      function fieldValue(id) { const el = document.getElementById(id); return el ? String(el.value || '') : ''; }
+      function updateMeetingTimeZoneHint() {
+        const select = document.getElementById('meetingTimeZoneChoice');
+        const hint = document.getElementById('meetingTimeZoneHint');
+        if (!select || !hint) return;
+        if (select.value !== 'unset' && select.value !== 'local') hint.textContent = 'Selected: ' + select.value + '. The meeting\\u2019s times are written in this zone.';
+        else hint.textContent = resolvedLocalTimeZone ? resolvedLocalTimeZone.text : fieldValue('meetingTimeZoneText');
+      }
+
       function resolveMeeting() {
         const meetingId = document.getElementById('meetingId').value;
         lastResolvedCore = null;
@@ -8879,8 +8909,9 @@ function configureMeetingSettings() {
               return;
             }
             lastResolvedCore = result.resolved;
-            resolvedMeetingStart = { meetingId: String(result.resolved.id), startDate: result.preview.startDateRaw || '', timeZone: result.preview.startTimeZoneRaw || '' };
+            resolvedMeetingStart = { meetingId: String(result.resolved.id), startDate: result.preview.startDateRaw || '', timeZone: result.preview.startTimeZoneRaw || '', country: result.preview.country || '' };
             applyPreview(result.preview);
+            onMeetingLocalTimeZone(result.preview.meetingLocalTimeZone);
             console.log('resolveMeeting(): client preview render completed (ok:true path)');
             if (result.resolved.warnings && result.resolved.warnings.length > 0) {
               statusEl.className = 'error';
@@ -8992,6 +9023,15 @@ function configureMeetingSettings() {
           config.personalTokenAction = personalTokenWishes[0];
           if (personalTokenWishes[0] === 'replace') config.personalToken = newToken;
         }
+        // After T-2026.10.22: the meeting time zone; Meeting local only when it is known (MEETING TIME ZONES section).
+        const timeZoneSelect = document.getElementById('meetingTimeZoneChoice');
+        if (timeZoneSelect && timeZoneSelect.value && timeZoneSelect.value !== 'unset') {
+          if (timeZoneSelect.value === 'local' && !(resolvedLocalTimeZone && resolvedLocalTimeZone.zone) && fieldValue('meetingTimeZoneStored') !== 'local') {
+            alert(resolvedLocalTimeZone ? resolvedLocalTimeZone.text : 'Meeting local is not known yet: Resolve the meeting, or select a time zone.');
+            return;
+          }
+          config.meetingTimeZoneChoice = timeZoneSelect.value;
+        }
         // The start Resolve found goes with the save of the meeting it was found for (see persistConfigurationSettings_()).
         if (resolvedMeetingStart && resolvedMeetingStart.meetingId === String(config.meetingId || '').trim()) {
           config.resolvedMeetingStart = resolvedMeetingStart;
@@ -9091,6 +9131,11 @@ function redactConfigForLog_(config) {
 function persistConfigurationSettings_(config) {
   const docProps = PropertiesService.getDocumentProperties();
   const scriptProps = PropertiesService.getScriptProperties();
+  // After T-2026.10.22: the time zone a save asks for is checked before anything is written; a zone selected
+  // for the meeting, or an offset stored before, is kept by a Resolve (MEETING TIME ZONES section).
+  const meetingTimeZoneProblem = meetingTimeZoneChoiceProblem_(config, docProps);
+  if (meetingTimeZoneProblem) throw new Error(meetingTimeZoneProblem);
+  const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);
 
   // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date is a
   // normal Configure Meeting field in the template runtime. Checked with the
@@ -9225,6 +9270,7 @@ function persistConfigurationSettings_(config) {
     const resolvedStart = meetingStartFromResolved_(config.resolvedMeetingStart, docProps.getProperty('MEETING_ID'), docProps.getProperty('MEETING_TYPE'), docProps.getProperty('MEETING_DATE'));
     if (resolvedStart) storeMeetingStart_(docProps, resolvedStart.time, resolvedStart.zone);
   }
+  applyMeetingTimeZoneChoice_(docProps, config, keptMeetingTimeZone);
 
   Logger.log('Configuration saved: ' + JSON.stringify(redactConfigForLog_(config)));
 }
@@ -13858,7 +13904,8 @@ function isValidMeetingTimeZoneLabel_(value) {
 function buildMeetingOpeningSentence_(meetingDateText, startTime, timeZoneLabel) {
   const date = String(meetingDateText === null || meetingDateText === undefined ? '' : meetingDateText).trim() || '<meeting date>';
   const time = isValidMeetingStartTime_(startTime) ? startTime : '<start>';
-  const zone = isValidMeetingTimeZoneLabel_(timeZoneLabel) ? timeZoneLabel : '<time zone>';
+  // After T-2026.10.22: an IANA zone is written as its abbreviation on the meeting date (MEETING TIME ZONES section).
+  const zone = meetingTimeZoneDisplay_(timeZoneLabel, meetingStartDateIso_(meetingDateText), isValidMeetingStartTime_(startTime) ? startTime : '') || '<time zone>';
   return '<Chair> opens the session on ' + date + ' at ' + time + ' ' + zone + '.';
 }
 
@@ -13881,13 +13928,16 @@ function meetingStartBasis_(meetingId, meetingDate) {
  */
 function storeMeetingStart_(docProps, time, zone) {
   const hasTime = isValidMeetingStartTime_(time);
-  const hasZone = isValidMeetingTimeZoneLabel_(zone);
+  const hasZone = isValidMeetingTimeZoneSetting_(zone);
   if (hasTime) docProps.setProperty(MEETING_START_TIME_KEY_, time);
   else docProps.deleteProperty(MEETING_START_TIME_KEY_);
   if (hasZone) docProps.setProperty(MEETING_TIME_ZONE_KEY_, zone);
   else docProps.deleteProperty(MEETING_TIME_ZONE_KEY_);
   if (hasTime || hasZone) docProps.setProperty(MEETING_START_BASIS_KEY_, meetingStartBasis_(docProps.getProperty('MEETING_ID'), docProps.getProperty('MEETING_DATE')));
   else docProps.deleteProperty(MEETING_START_BASIS_KEY_);
+  // After T-2026.10.22: an IANA zone from the Portal is the meeting-local zone; an offset has no mode (MEETING TIME ZONES section).
+  if (hasZone && isAllowedMeetingTimeZoneId_(zone) && !isValidMeetingTimeZoneLabel_(zone)) docProps.setProperty(MEETING_TIME_ZONE_MODE_KEY_, 'local');
+  else docProps.deleteProperty(MEETING_TIME_ZONE_MODE_KEY_);
 }
 
 /**
@@ -13912,7 +13962,8 @@ function meetingStartFromResolved_(resolved, savedMeetingId, savedMeetingType, s
   if (String(savedMeetingType || '').trim().toLowerCase() !== 'adhoc') return null;
   const savedDate = String(savedMeetingDate === null || savedMeetingDate === undefined ? '' : savedMeetingDate).trim();
   if (!savedDate || computeMeetingDateFromStartDate_(resolved.startDate) !== savedDate) return { time: '', zone: '' };
-  return { time: computeMeetingStartTimeFromStartDate_(resolved.startDate), zone: computeMeetingTimeZoneLabel_(resolved.timeZone) };
+  // After T-2026.10.22: the verified meeting-local zone, else the offset as before (MEETING TIME ZONES section).
+  return { time: computeMeetingStartTimeFromStartDate_(resolved.startDate), zone: meetingTimeZoneFromPortal_(resolved.startDate, resolved.timeZone, resolved.country) };
 }
 
 /**
@@ -13929,11 +13980,388 @@ function getMeetingStartForOpening_() {
     if (!basis || basis !== meetingStartBasis_(props.getProperty('MEETING_ID'), props.getProperty('MEETING_DATE'))) return none;
     const time = String(props.getProperty(MEETING_START_TIME_KEY_) || '');
     const zone = String(props.getProperty(MEETING_TIME_ZONE_KEY_) || '');
-    return { time: isValidMeetingStartTime_(time) ? time : '', zone: isValidMeetingTimeZoneLabel_(zone) ? zone : '' };
+    return { time: isValidMeetingStartTime_(time) ? time : '', zone: isValidMeetingTimeZoneSetting_(zone) ? zone : '' };
   } catch (e) {
     return none;
   }
 }
+
+// =========================================================
+// MEETING TIME ZONES (after T-2026.10.22)
+// =========================================================
+//
+// docs/MEETING_TIME_ZONES.md (GitHub issue #4). MEETING_TIME_ZONE -- the
+// zone of the meeting's start, stored with MEETING_START_TIME and
+// MEETING_START_BASIS -- holds one of:
+//   - an offset from UTC, as every report stored it before ("UTC+2",
+//     "UTC-3:30", "UTC"): kept and written exactly as it is stored;
+//   - an IANA zone of MEETING_TIME_ZONES_ ("America/Edmonton"): written,
+//     for a given date, as its abbreviation on that date ("MST" in
+//     November, "MDT" in summer) or, for a zone without one, as its offset
+//     on that date ("UTC+8").
+// MEETING_TIME_ZONE_MODE says where an IANA zone came from:
+//   'local'    Meeting local -- resolved from the Portal's own record of the
+//              meeting (meetingLocalTimeZoneFromPortal_()) and verified
+//              against the UTC offset the Portal gives for the start;
+//   'explicit' selected in Configure Meeting; a later Resolve or Save
+//              keeps it.
+// Without a mode the zone is an offset, as before. A zone is never taken
+// from the editor, the account, the browser or the script's own zone: when
+// the meeting-local zone cannot be verified, nothing is stored and
+// Configure Meeting asks for a zone.
+//
+// Times are wall-clock times of the meeting: a session's start and end,
+// and the Portal's StartDate, are local times of the meeting zone and are
+// never converted. Only a time that is an instant -- the UTC "Uploaded"
+// time of the TDoc list -- is converted, once, into the sessions' zone
+// (meetingSessionTimeZone_(), else the script's zone as before).
+// Deadlines quoted from e-mails and the e-mail collection zone are not
+// meeting times and do not use this.
+
+var MEETING_TIME_ZONE_MODE_KEY_ = 'MEETING_TIME_ZONE_MODE';
+
+// The zones a meeting can be given: id -> the abbreviation of each UTC offset (minutes) the zone has. An
+// offset without one is written as the offset ("UTC+8"). The offset comes from the rules of the zone on that
+// date, so a zone whose rules change (Alberta and British Columbia keep UTC-6 / UTC-7 all year from 2026,
+// tzdata 2026c) is written by what its clocks show, never by "winter" or "summer".
+var MEETING_TIME_ZONES_ = {
+  'UTC': { '0': 'UTC' },
+  'Europe/London': { '0': 'GMT', '60': 'BST' },
+  'Europe/Dublin': { '0': 'GMT', '60': 'IST' },
+  'Europe/Lisbon': { '0': 'WET', '60': 'WEST' },
+  'Europe/Amsterdam': { '60': 'CET', '120': 'CEST' },
+  'Europe/Belgrade': { '60': 'CET', '120': 'CEST' },
+  'Europe/Berlin': { '60': 'CET', '120': 'CEST' },
+  'Europe/Bratislava': { '60': 'CET', '120': 'CEST' },
+  'Europe/Brussels': { '60': 'CET', '120': 'CEST' },
+  'Europe/Budapest': { '60': 'CET', '120': 'CEST' },
+  'Europe/Copenhagen': { '60': 'CET', '120': 'CEST' },
+  'Europe/Ljubljana': { '60': 'CET', '120': 'CEST' },
+  'Europe/Madrid': { '60': 'CET', '120': 'CEST' },
+  'Europe/Malta': { '60': 'CET', '120': 'CEST' },
+  'Europe/Oslo': { '60': 'CET', '120': 'CEST' },
+  'Europe/Paris': { '60': 'CET', '120': 'CEST' },
+  'Europe/Prague': { '60': 'CET', '120': 'CEST' },
+  'Europe/Rome': { '60': 'CET', '120': 'CEST' },
+  'Europe/Stockholm': { '60': 'CET', '120': 'CEST' },
+  'Europe/Vienna': { '60': 'CET', '120': 'CEST' },
+  'Europe/Warsaw': { '60': 'CET', '120': 'CEST' },
+  'Europe/Zurich': { '60': 'CET', '120': 'CEST' },
+  'Europe/Athens': { '120': 'EET', '180': 'EEST' },
+  'Europe/Bucharest': { '120': 'EET', '180': 'EEST' },
+  'Europe/Helsinki': { '120': 'EET', '180': 'EEST' },
+  'Europe/Sofia': { '120': 'EET', '180': 'EEST' },
+  'Europe/Istanbul': {},
+  'Asia/Dubai': {},
+  'Asia/Kolkata': { '330': 'IST' },
+  'Asia/Bangkok': {},
+  'Asia/Singapore': {},
+  'Asia/Shanghai': {},
+  'Asia/Hong_Kong': { '480': 'HKT' },
+  'Asia/Taipei': {},
+  'Asia/Seoul': { '540': 'KST' },
+  'Asia/Tokyo': { '540': 'JST' },
+  'Australia/Sydney': { '600': 'AEST', '660': 'AEDT' },
+  'America/Vancouver': { '-480': 'PST', '-420': 'PDT' },
+  'America/Los_Angeles': { '-480': 'PST', '-420': 'PDT' },
+  'America/Phoenix': { '-420': 'MST' },
+  'America/Edmonton': { '-420': 'MST', '-360': 'MDT' },
+  'America/Denver': { '-420': 'MST', '-360': 'MDT' },
+  'America/Chicago': { '-360': 'CST', '-300': 'CDT' },
+  'America/Toronto': { '-300': 'EST', '-240': 'EDT' },
+  'America/New_York': { '-300': 'EST', '-240': 'EDT' },
+  'America/Sao_Paulo': {}
+};
+
+// The Portal's StartTimeZone names (after its "(GMT...)" offset) and the
+// zone each means; `byCountry` names the zone of the meeting's country
+// where the name covers several. A name not listed is not guessed at.
+var PORTAL_TIME_ZONE_NAMES_ = [
+  { names: 'Dublin, Edinburgh, Lisbon, London', zone: 'Europe/London', byCountry: { IE: 'Europe/Dublin', PT: 'Europe/Lisbon' } },
+  { names: 'Brussels, Copenhagen, Madrid, Paris', zone: 'Europe/Brussels', byCountry: { DK: 'Europe/Copenhagen', ES: 'Europe/Madrid', FR: 'Europe/Paris' } },
+  { names: 'Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna', zone: 'Europe/Berlin', byCountry: { NL: 'Europe/Amsterdam', CH: 'Europe/Zurich', IT: 'Europe/Rome', SE: 'Europe/Stockholm', AT: 'Europe/Vienna', MT: 'Europe/Malta', NO: 'Europe/Oslo' } },
+  { names: 'Belgrade, Bratislava, Budapest, Ljubljana, Prague', zone: 'Europe/Budapest', byCountry: { RS: 'Europe/Belgrade', SK: 'Europe/Bratislava', SI: 'Europe/Ljubljana', CZ: 'Europe/Prague' } },
+  { names: 'Sarajevo, Skopje, Warsaw, Zagreb', zone: 'Europe/Warsaw' },
+  { names: 'Athens, Bucharest', zone: 'Europe/Athens', byCountry: { RO: 'Europe/Bucharest' } },
+  { names: 'Helsinki, Kyiv, Riga, Sofia, Tallinn, Vilnius', zone: 'Europe/Helsinki', byCountry: { BG: 'Europe/Sofia' } },
+  { names: 'Istanbul', zone: 'Europe/Istanbul' },
+  { names: 'Abu Dhabi, Muscat', zone: 'Asia/Dubai' },
+  { names: 'Chennai, Kolkata, Mumbai, New Delhi', zone: 'Asia/Kolkata' },
+  { names: 'Bangkok, Hanoi, Jakarta', zone: 'Asia/Bangkok' },
+  { names: 'Kuala Lumpur, Singapore', zone: 'Asia/Singapore' },
+  { names: 'Beijing, Chongqing, Hong Kong, Urumqi', zone: 'Asia/Shanghai', byCountry: { HK: 'Asia/Hong_Kong' } },
+  { names: 'Taipei', zone: 'Asia/Taipei' },
+  { names: 'Seoul', zone: 'Asia/Seoul' },
+  { names: 'Osaka, Sapporo, Tokyo', zone: 'Asia/Tokyo' },
+  { names: 'Canberra, Melbourne, Sydney', zone: 'Australia/Sydney' },
+  { names: 'Pacific Time (US & Canada)', zone: 'America/Los_Angeles', byCountry: { CA: 'America/Vancouver' } },
+  { names: 'Arizona', zone: 'America/Phoenix' },
+  { names: 'Mountain Time (US & Canada)', zone: 'America/Denver', byCountry: { CA: 'America/Edmonton' } },
+  { names: 'Mountain Time (Alberta)', zone: 'America/Edmonton' },
+  { names: 'Central Time (US & Canada)', zone: 'America/Chicago' },
+  { names: 'Eastern Time (US & Canada)', zone: 'America/New_York', byCountry: { CA: 'America/Toronto' } },
+  { names: 'Brasilia', zone: 'America/Sao_Paulo' }
+];
+
+/** Pure: an IANA zone a meeting can be given. */
+function isAllowedMeetingTimeZoneId_(value) {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(MEETING_TIME_ZONES_, value);
+}
+
+/** Pure: a MEETING_TIME_ZONE value -- an offset as stored before ("UTC+2"), or an allowed IANA zone. */
+function isValidMeetingTimeZoneSetting_(value) {
+  return isValidMeetingTimeZoneLabel_(value) || isAllowedMeetingTimeZoneId_(String(value === null || value === undefined ? '' : value));
+}
+
+/** Pure: the minutes of an offset label ("UTC+2" -> 120, "UTC-3:30" -> -210, "UTC" -> 0); null for anything else. */
+function utcOffsetLabelMinutes_(label) {
+  const m = String(label || '').match(/^UTC(?:([+-])(\d{1,2})(?::(\d{2}))?)?$/);
+  if (!m) return null;
+  if (!m[1]) return 0;
+  return (m[1] === '-' ? -1 : 1) * (parseInt(m[2], 10) * 60 + parseInt(m[3] || '0', 10));
+}
+
+/** Pure: minutes as an offset label, in the form the reports store (120 -> "UTC+2", -210 -> "UTC-3:30", 0 -> "UTC"). */
+function formatUtcOffsetLabel_(minutes) {
+  if (!minutes) return 'UTC';
+  const abs = Math.abs(minutes);
+  return 'UTC' + (minutes < 0 ? '-' : '+') + Math.floor(abs / 60) + (abs % 60 ? ':' + String(abs % 60).padStart(2, '0') : '');
+}
+
+/**
+ * The offset from UTC, in minutes, of an IANA zone at an instant (ms) --
+ * by Apps Script's own zone rules (Utilities.formatDate, pattern "Z"),
+ * else by the JavaScript runtime's (Intl). null when neither knows it.
+ */
+function meetingTimeZoneOffsetMinutes_(zone, instant) {
+  if (zone === 'UTC') return 0;
+  const date = new Date(instant);
+  if (isNaN(date.getTime())) return null;
+  try {
+    const z = String(Utilities.formatDate(date, zone, 'Z'));
+    const m = z.match(/^([+-])(\d{2})(\d{2})$/);
+    if (m) return (m[1] === '-' ? -1 : 1) * (parseInt(m[2], 10) * 60 + parseInt(m[3], 10));
+  } catch (e) { /* the runtime's rules below */ }
+  try {
+    const parts = {};
+    new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(date).forEach(function (p) { parts[p.type] = p.value; });
+    const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute, +parts.second);
+    const offset = Math.round((asUtc - Math.floor(date.getTime() / 1000) * 1000) / 60000);
+    return isNaN(offset) ? null : offset;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** The instant (ms) of a wall-clock time of the zone: `isoDate` YYYY-MM-DD, `time` HH:MM (noon when ''). null when unknown. */
+function meetingWallClockToInstant_(zone, isoDate, time) {
+  const d = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!d) return null;
+  const t = String(time || '').match(/^(\d{2}):(\d{2})$/);
+  const local = Date.UTC(+d[1], +d[2] - 1, +d[3], t ? +t[1] : 12, t ? +t[2] : 0);
+  const first = meetingTimeZoneOffsetMinutes_(zone, local);
+  if (first === null) return null;
+  const guess = local - first * 60000;
+  const second = meetingTimeZoneOffsetMinutes_(zone, guess);
+  if (second === null) return null;
+  return second === first ? guess : local - second * 60000;
+}
+
+/**
+ * How the zone is written beside a wall-clock time of that date: an offset
+ * label as stored ("UTC+2"); an IANA zone as the abbreviation of its offset on
+ * that date ("MST", "MDT", "CET", "CEST") or, without one, the offset ("UTC+8");
+ * the zone's id when the date is not known; '' for no usable zone.
+ */
+function meetingTimeZoneDisplay_(zone, isoDate, time) {
+  const z = String(zone === null || zone === undefined ? '' : zone).trim();
+  if (z === 'UTC' || (isValidMeetingTimeZoneLabel_(z) && !isAllowedMeetingTimeZoneId_(z))) return z;
+  if (!isAllowedMeetingTimeZoneId_(z)) return '';
+  const instant = meetingWallClockToInstant_(z, isoDate, time);
+  if (instant === null) return z;
+  const offset = meetingTimeZoneOffsetMinutes_(z, instant);
+  if (offset === null) return z;
+  return MEETING_TIME_ZONES_[z][String(offset)] || formatUtcOffsetLabel_(offset);
+}
+
+/** The name of a zone in a list: "America/Edmonton (MST/MDT)", "Asia/Shanghai (UTC+8)", "UTC". */
+function meetingTimeZoneOptionLabel_(zone) {
+  if (zone === 'UTC') return 'UTC';
+  const year = new Date().getUTCFullYear();
+  const winter = meetingTimeZoneDisplay_(zone, year + '-01-15', '12:00');
+  const summer = meetingTimeZoneDisplay_(zone, year + '-07-15', '12:00');
+  return zone + ' (' + (winter === summer ? winter : (meetingTimeZoneOffsetMinutes_(zone, Date.UTC(year, 0, 15, 12)) < meetingTimeZoneOffsetMinutes_(zone, Date.UTC(year, 6, 15, 12)) ? winter + '/' + summer : summer + '/' + winter)) + ')';
+}
+
+/**
+ * The meeting-local zone from the Portal's own record: its StartDate,
+ * StartTimeZone ("(GMT-07:00) Mountain Time (US & Canada)") and Country.
+ * The name must be one of PORTAL_TIME_ZONE_NAMES_, and the zone's offset at
+ * the start must be the offset the Portal gives -- otherwise nothing is
+ * resolved. Returns { zone, reason, source }: zone '' with the reason when
+ * it is not known.
+ */
+function meetingLocalTimeZoneFromPortal_(startDate, portalTimeZone, country) {
+  const raw = String(portalTimeZone === null || portalTimeZone === undefined ? '' : portalTimeZone);
+  const named = raw.match(/^\s*\(\s*(?:GMT|UTC)[^)]*\)\s*(.*)$/i);
+  const names = named ? named[1].replace(/\s+/g, ' ').trim() : '';
+  if (!names) return { zone: '', reason: 'the Portal gives no time zone for this meeting', source: '' };
+  const entry = PORTAL_TIME_ZONE_NAMES_.filter(function (e) { return e.names.toLowerCase() === names.toLowerCase(); })[0];
+  if (!entry) return { zone: '', reason: 'the Portal\'s time zone "' + names + '" is not one this report knows', source: '' };
+  const cc = String(country === null || country === undefined ? '' : country).trim().toUpperCase();
+  const zone = (entry.byCountry && entry.byCountry[cc]) || entry.zone;
+  const portalOffset = utcOffsetLabelMinutes_(computeMeetingTimeZoneLabel_(raw));
+  const day = String(startDate === null || startDate === undefined ? '' : startDate).trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  if (portalOffset === null || !day) return { zone: '', reason: 'the Portal gives no start date or UTC offset for this meeting', source: '' };
+  const instant = meetingWallClockToInstant_(zone, day[1], computeMeetingStartTimeFromStartDate_(startDate));
+  const offset = instant === null ? null : meetingTimeZoneOffsetMinutes_(zone, instant);
+  if (offset === null) return { zone: '', reason: 'the rules of ' + zone + ' are not available', source: '' };
+  if (offset !== portalOffset) {
+    return { zone: '', reason: 'the Portal gives ' + formatUtcOffsetLabel_(portalOffset) + ' for the start, but ' + zone + ' is ' + formatUtcOffsetLabel_(offset) + ' then', source: '' };
+  }
+  return { zone: zone, reason: '', source: names + (cc ? ', ' + cc : '') };
+}
+
+/** What the Portal's start gives MEETING_TIME_ZONE: the verified meeting-local zone, else the offset label as before ('' for none). */
+function meetingTimeZoneFromPortal_(startDate, portalTimeZone, country) {
+  return meetingLocalTimeZoneFromPortal_(startDate, portalTimeZone, country).zone || computeMeetingTimeZoneLabel_(portalTimeZone);
+}
+
+/** For Configure Meeting: the meeting-local zone the Portal gives, and the line that explains it. */
+function meetingLocalTimeZonePreview_(startDate, portalTimeZone, country) {
+  const local = meetingLocalTimeZoneFromPortal_(startDate, portalTimeZone, country);
+  if (!local.zone) return { zone: '', text: 'Meeting local is not available: ' + local.reason + '. Select a time zone.' };
+  const day = String(startDate || '').slice(0, 10);
+  const shown = meetingTimeZoneDisplay_(local.zone, day, computeMeetingStartTimeFromStartDate_(startDate));
+  return { zone: local.zone, text: 'Meeting local: ' + local.zone + ' (from the Portal: ' + local.source + '), ' + shown + ' on ' + computeMeetingDateFromStartDate_(day) + '.' };
+}
+
+/**
+ * The zone the sessions' wall-clock times are in: the meeting's IANA zone,
+ * when one is stored for the meeting the report is configured for; '' (the
+ * script's zone, as before) otherwise. Never throws.
+ */
+function meetingSessionTimeZone_(context) {
+  try {
+    const store = getReportStateStore_(context);
+    const zone = String(store.getProperty(MEETING_TIME_ZONE_KEY_) || '');
+    if (!isAllowedMeetingTimeZoneId_(zone)) return '';
+    const basis = store.getProperty(MEETING_START_BASIS_KEY_);
+    return basis && basis === meetingStartBasis_(store.getProperty('MEETING_ID'), store.getProperty('MEETING_DATE')) ? zone : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/** Stores a zone for the meeting the document is configured for; a start time stored for another meeting is removed, not revived. */
+function storeMeetingTimeZone_(docProps, zone, mode) {
+  const basis = meetingStartBasis_(docProps.getProperty('MEETING_ID'), docProps.getProperty('MEETING_DATE'));
+  if (docProps.getProperty(MEETING_START_BASIS_KEY_) !== basis) docProps.deleteProperty(MEETING_START_TIME_KEY_);
+  docProps.setProperty(MEETING_TIME_ZONE_KEY_, zone);
+  docProps.setProperty(MEETING_TIME_ZONE_MODE_KEY_, mode);
+  docProps.setProperty(MEETING_START_BASIS_KEY_, basis);
+}
+
+/**
+ * Before a save: the zone that a save without a choice keeps for the stored
+ * meeting -- one selected explicitly, or an offset stored by an earlier
+ * release ("UTC+2", kept until Meeting local or a zone is selected) --
+ * { zone, basis, kind: 'explicit' | 'offset' }, or null.
+ */
+function keptMeetingTimeZoneBeforeSave_(docProps) {
+  const zone = String(docProps.getProperty(MEETING_TIME_ZONE_KEY_) || '');
+  const basis = docProps.getProperty(MEETING_START_BASIS_KEY_);
+  const mode = docProps.getProperty(MEETING_TIME_ZONE_MODE_KEY_);
+  if (mode === 'explicit' && isAllowedMeetingTimeZoneId_(zone)) return { zone: zone, basis: basis, kind: 'explicit' };
+  if (!mode && isValidMeetingTimeZoneLabel_(zone)) return { zone: zone, basis: basis, kind: 'offset' };
+  return null;
+}
+
+/** The meeting-local zone a save can use: from the Portal record Resolve found for the saved meeting, or null. */
+function meetingLocalTimeZoneOfSave_(config) {
+  const resolved = config && config.resolvedMeetingStart;
+  if (!resolved || String(resolved.meetingId || '').trim() !== String(config.meetingId || '').trim()) return null;
+  return meetingLocalTimeZoneFromPortal_(resolved.startDate, resolved.timeZone, resolved.country);
+}
+
+/**
+ * Before anything is written: why the zone a save asks for cannot be used,
+ * or ''. `meetingTimeZoneChoice` is 'local', an allowed IANA zone, or
+ * absent (no change). Meeting local needs a verified zone: from this save's
+ * Resolve, or the one already stored as meeting-local for this meeting.
+ */
+function meetingTimeZoneChoiceProblem_(config, docProps) {
+  const choice = String((config && config.meetingTimeZoneChoice) || '').trim();
+  if (!choice) return '';
+  if (choice !== 'local') return isAllowedMeetingTimeZoneId_(choice) ? '' : '"' + choice + '" is not a time zone a meeting can be given.';
+  const local = meetingLocalTimeZoneOfSave_(config);
+  if (local && local.zone) return '';
+  const storedLocal = docProps.getProperty(MEETING_TIME_ZONE_MODE_KEY_) === 'local' && isAllowedMeetingTimeZoneId_(String(docProps.getProperty(MEETING_TIME_ZONE_KEY_) || '')) &&
+    String(docProps.getProperty('MEETING_ID') || '').trim() === String(config.meetingId || '').trim();
+  if (storedLocal) return '';
+  return 'The meeting-local time zone is not known' + (local ? ': ' + local.reason : ' (Resolve the meeting first)') + '. Select a time zone instead.';
+}
+
+/**
+ * After a save has stored the meeting and its start: the zone.
+ *   - 'local' -> the verified meeting-local zone (a stored one stays);
+ *   - an IANA zone -> that zone, explicitly;
+ *   - no choice -> a zone selected explicitly for this meeting, and an
+ *     offset an earlier release stored for it, stay (a Resolve does not
+ *     replace them); a main meeting takes its verified meeting-local zone
+ *     (an ad-hoc meeting has it from its start already).
+ */
+function applyMeetingTimeZoneChoice_(docProps, config, kept) {
+  const choice = String((config && config.meetingTimeZoneChoice) || '').trim();
+  const local = meetingLocalTimeZoneOfSave_(config);
+  if (choice === 'local') {
+    if (local && local.zone) storeMeetingTimeZone_(docProps, local.zone, 'local');
+    return;
+  }
+  if (choice) {
+    if (isAllowedMeetingTimeZoneId_(choice)) storeMeetingTimeZone_(docProps, choice, 'explicit');
+    return;
+  }
+  const basis = meetingStartBasis_(docProps.getProperty('MEETING_ID'), docProps.getProperty('MEETING_DATE'));
+  if (kept && kept.basis === basis && kept.kind === 'explicit') {
+    storeMeetingTimeZone_(docProps, kept.zone, 'explicit');
+    return;
+  }
+  if (kept && kept.basis === basis && kept.kind === 'offset') {
+    // The offset an earlier release stored stays as it was stored when this save's Resolve only says the same as
+    // an IANA zone (the same offset at the start). A Portal that now gives another offset is taken, as before.
+    const now = String(docProps.getProperty(MEETING_TIME_ZONE_KEY_) || '');
+    if (docProps.getProperty(MEETING_START_BASIS_KEY_) === basis && docProps.getProperty(MEETING_TIME_ZONE_MODE_KEY_) === 'local' && isAllowedMeetingTimeZoneId_(now)) {
+      const instant = meetingWallClockToInstant_(now, meetingStartDateIso_(docProps.getProperty('MEETING_DATE')), String(docProps.getProperty(MEETING_START_TIME_KEY_) || ''));
+      if (instant !== null && meetingTimeZoneOffsetMinutes_(now, instant) === utcOffsetLabelMinutes_(kept.zone)) {
+        docProps.setProperty(MEETING_TIME_ZONE_KEY_, kept.zone);
+        docProps.deleteProperty(MEETING_TIME_ZONE_MODE_KEY_);
+      }
+    }
+    return;
+  }
+  if (local && local.zone && normalizeMeetingType_(docProps.getProperty('MEETING_TYPE')) !== 'adhoc' && docProps.getProperty(MEETING_TIME_ZONE_MODE_KEY_) !== 'explicit') {
+    storeMeetingTimeZone_(docProps, local.zone, 'local');
+  }
+}
+
+/** For Configure Meeting: what is stored now -- { choice: '' | 'local' | <zone>, stored: 'none' | 'offset' | 'local' | 'explicit', text }. */
+function meetingTimeZoneDialogState_(props) {
+  const zone = String(props.getProperty(MEETING_TIME_ZONE_KEY_) || '');
+  const mode = props.getProperty(MEETING_TIME_ZONE_MODE_KEY_);
+  const current = props.getProperty(MEETING_START_BASIS_KEY_) === meetingStartBasis_(props.getProperty('MEETING_ID'), props.getProperty('MEETING_DATE'));
+  if (current && isAllowedMeetingTimeZoneId_(zone) && mode === 'local') return { choice: 'local', stored: 'local', text: 'Meeting local: ' + meetingTimeZoneOptionLabel_(zone) + '.' };
+  if (current && isAllowedMeetingTimeZoneId_(zone) && mode === 'explicit') return { choice: zone, stored: 'explicit', text: 'Selected: ' + meetingTimeZoneOptionLabel_(zone) + '.' };
+  if (current && isValidMeetingTimeZoneLabel_(zone)) {
+    return { choice: '', stored: 'offset', text: 'Stored as the fixed offset ' + zone + ' the Portal gave; it is kept. Select Meeting local or a time zone to write date-specific abbreviations.' };
+  }
+  return { choice: '', stored: 'none', text: 'No time zone is set. Resolve the meeting for Meeting local, or select a time zone.' };
+}
+
+// =========================================================
+// END OF MEETING TIME ZONES
+// =========================================================
 
 // =========================================================
 // TDOC STATUS DROPDOWNS (T-2026.10.7)
@@ -15647,6 +16075,9 @@ function configureAdhocSessions() {
   }
   const props = getReportStateStore_();
   const model = buildAdhocSessionsDialogModel_(props.getProperty(ADHOC_SESSIONS_KEY_), props.getProperty('MEETING_DATE'));
+  // After T-2026.10.22: the zone the times are meant in (MEETING TIME ZONES section).
+  const sessionsZone = meetingSessionTimeZone_();
+  const sessionsZoneText = sessionsZone ? 'the meeting time zone, ' + meetingTimeZoneOptionLabel_(sessionsZone) : 'the report\'s time zone';
   // "<" is written as an escape so that no stored text can end the script element.
   const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');
 
@@ -15667,7 +16098,7 @@ function configureAdhocSessions() {
     </style>
 
     <h2>Sessions</h2>
-    <div class="hint">The meetings of this ad-hoc series. A session can span several days: enter its last day as End date, or leave End date empty for a session of one day. Times are optional and are meant in the report's time zone: the start time is on the first day, the end time is the final cut-off on the last day. An empty label is shown as the day and month of the dates.</div>
+    <div class="hint">The meetings of this ad-hoc series. A session can span several days: enter its last day as End date, or leave End date empty for a session of one day. Times are optional and are meant in ${sessionsZoneText}: the start time is on the first day, the end time is the final cut-off on the last day. An empty label is shown as the day and month of the dates.</div>
     <div id="notice"></div>
 
     <table>
@@ -17704,10 +18135,10 @@ function readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, cont
 }
 
 /** A wall-clock time meant as UTC, as the wall-clock time of the report's time zone; '' when that cannot be done. */
-function convertUtcWallClockToReportZone_(at) {
+function convertUtcWallClockToReportZone_(at, zone) {
   const m = String(at || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
   if (!m) return '';
-  const text = Utilities.formatDate(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  const text = Utilities.formatDate(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])), isAllowedMeetingTimeZoneId_(zone) ? zone : Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(String(text)) ? String(text) : '';
 }
 
@@ -17902,9 +18333,11 @@ function makeAdhocTdocSessionResolver_(context) {
   if (sessions.length === 0) return null;
   const stored = parseAdhocTdocSessionsProperty_(getReportStateStore_(context).getProperty(ADHOC_TDOC_SESSIONS_KEY_));
   const model = stored.model;
+  // After T-2026.10.22: the sessions' zone -- the meeting's IANA zone, else the script's as before (MEETING TIME ZONES section).
+  const sessionZone = meetingSessionTimeZone_(context);
   const onSessionClock = function (upload) {
     if (!upload || model.clock !== 'utc' || upload.unreadable || !upload.at) return upload;
-    const at = convertUtcWallClockToReportZone_(upload.at);
+    const at = convertUtcWallClockToReportZone_(upload.at, sessionZone);
     return at ? { at: at, dateOnly: null, unreadable: false } : { at: null, dateOnly: null, unreadable: true };
   };
   // The upload time of a TDoc on the clock of the sessions: THE value the automatic session is decided from.
@@ -17912,7 +18345,7 @@ function makeAdhocTdocSessionResolver_(context) {
   const automatic = function (td) { return assignAdhocSession_(uploaded(td), sessions); };
   const effective = function (td) { return effectiveAdhocTdocSessions_(automatic(td).sessionId, model.tdocs[tdocNumberOf_(td)], sessions); };
   return {
-    sessions: sessions, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,
+    sessions: sessions, zone: sessionZone, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,
     uploaded: uploaded, automatic: automatic, effective: effective,
     cell: function (td) { return adhocTdocSessionCellText_(effective(td), sessions); }
   };
@@ -18110,7 +18543,7 @@ function buildAdhocTdocSessionsDialogModel_(resolver, tdocGroups, registrationCo
     sessions: resolver.sessions.map(function (s) { return { id: s.id, label: s.displayLabel }; }),
     clock: resolver.clock,
     // What the Uploaded column shows: the time zone the upload times are converted to, or '' when they are shown as the list has them.
-    uploadedZone: resolver.clock === 'utc' ? String(Session.getScriptTimeZone() || '') : '',
+    uploadedZone: resolver.clock === 'utc' ? String(resolver.zone || Session.getScriptTimeZone() || '') : '',
     notice: resolver.error ? resolver.error + ' They are not used; saving replaces them.' : '',
     readOnly: resolver.status === 'unsupported',
     column: registrationColumns,
@@ -18625,17 +19058,22 @@ function saveAdhocOpeningWith_(store, sessions, input) {
  * 2026 (from 09:00 on the first day, until 17:00 on the last day)": its
  * times are never written as if they were on one day.
  */
-function adhocSessionWhenText_(session) {
+function adhocSessionWhenText_(session, zone) {
+  // After T-2026.10.22: with a meeting zone, each time names its zone on its own day (MEETING TIME ZONES section).
+  const at = function (time, day) { const shown = zone && time ? meetingTimeZoneDisplay_(zone, day, time) : ''; return shown ? time + ' ' + shown : time; };
   const prefix = session.label ? session.label + ', ' : '';
   if (isAdhocMultiDaySession_(session)) {
     const parts = [];
-    if (session.start) parts.push('from ' + session.start + ' on the first day');
-    if (session.end) parts.push('until ' + session.end + ' on the last day');
+    if (session.start) parts.push('from ' + at(session.start, session.date) + ' on the first day');
+    if (session.end) parts.push('until ' + at(session.end, adhocSessionLastDay_(session)) + ' on the last day');
     return prefix + adhocSessionDatesText_(session) + (parts.length ? ' (' + parts.join(', ') + ')' : '');
   }
   const date = adhocLongDate_(session.date);
-  const time = session.start && session.end ? ', ' + session.start + '–' + session.end
-    : (session.start ? ', ' + session.start : (session.end ? ', until ' + session.end : ''));
+  const startZone = zone && session.start ? meetingTimeZoneDisplay_(zone, session.date, session.start) : '';
+  const endZone = zone && session.end ? meetingTimeZoneDisplay_(zone, session.date, session.end) : '';
+  const time = session.start && session.end
+    ? ', ' + (startZone === endZone ? session.start + '–' + session.end + (endZone ? ' ' + endZone : '') : at(session.start, session.date) + '–' + at(session.end, session.date))
+    : (session.start ? ', ' + at(session.start, session.date) : (session.end ? ', until ' + at(session.end, session.date) : ''));
   return prefix + date + time;
 }
 
@@ -18646,12 +19084,12 @@ function adhocSessionWhenText_(session) {
  * Session column of the registration table shows); then Chair, Minute
  * taker(s) and the lines of the note, each only when it has a value.
  */
-function buildAdhocOpeningLines_(sessions, details) {
+function buildAdhocOpeningLines_(sessions, details, zone) {
   const lines = [];
   const codes = adhocSessionCodes_(sessions);
   sessions.forEach(function (session) {
     const entry = details[session.id] || {};
-    lines.push({ text: codes[session.id] + ': ' + adhocSessionWhenText_(session), bold: true });
+    lines.push({ text: codes[session.id] + ': ' + adhocSessionWhenText_(session, zone), bold: true });
     if (entry.chair) lines.push({ text: 'Chair: ' + entry.chair, bold: false });
     if (entry.minuteTakers) lines.push({ text: 'Minute taker(s): ' + entry.minuteTakers, bold: false });
     String(entry.note || '').split('\n').forEach(function (line) {
@@ -18912,7 +19350,7 @@ function refreshAdhocOpeningSection_(body, options) {
   refreshAdhocMeetingInformationSafely_(body, sessions, !!(options && options.afterRebuild));
   const stored = parseAdhocOpeningProperty_(adhocOpeningStore_().getProperty(ADHOC_OPENING_KEY_));
   if ((stored.status === 'unsupported' || stored.status === 'invalid') && !(options && options.afterRebuild)) return { container: 'skipped', error: stored.error };
-  return renderAdhocOpeningSection_(body, buildAdhocOpeningLines_(sessions, stored.sessions));
+  return renderAdhocOpeningSection_(body, buildAdhocOpeningLines_(sessions, stored.sessions, meetingSessionTimeZone_()));
 }
 
 /** Build from Scratch, at the end: writes the container again. Returns a note for the build result, '' when all is well. */
@@ -18978,7 +19416,7 @@ function buildAdhocOpeningDialogModel_() {
     fields: ADHOC_OPENING_FIELDS_.map(function (f) { return { key: f.key, label: f.label, max: f.max, multiline: f.multiline }; }),
     sessions: getAdhocSessions_().map(function (s) {
       const entry = stored.sessions[s.id] || {};
-      return { id: s.id, when: adhocSessionWhenText_(s), chair: entry.chair || '', minuteTakers: entry.minuteTakers || '', note: entry.note || '' };
+      return { id: s.id, when: adhocSessionWhenText_(s, meetingSessionTimeZone_()), chair: entry.chair || '', minuteTakers: entry.minuteTakers || '', note: entry.note || '' };
     })
   };
 }
@@ -19334,7 +19772,7 @@ function buildAdhocSessionStatusModel_(sessions, opening, attendance, tdocs) {
       groups.push({ title: 'TDocs', rows: t
         ? [['In this session', String(t.perSession[s.id].assigned)], ['– by upload time', String(t.perSession[s.id].automatic)], ['– by manual assignment', String(t.perSession[s.id].manual)]]
         : [['TDoc sessions', 'not available']] });
-      return { id: s.id, when: adhocSessionWhenText_(s), groups: groups };
+      return { id: s.id, when: adhocSessionWhenText_(s, meetingSessionTimeZone_()), groups: groups };
     }),
     opening: openingFacts,
     attendance: attendanceFacts,
@@ -20170,7 +20608,9 @@ function resolveMeetingCoreById_(meetingId) {
       startDate: m.StartDate !== undefined ? m.StartDate : (ical ? ical.dtstart : null),
       endDate: m.EndDate !== undefined ? m.EndDate : (ical ? ical.dtend : null),
       timeZone: m.StartTimeZone !== undefined ? m.StartTimeZone : null,
-      location: m.Location !== undefined ? m.Location : (ical ? ical.location : null)
+      location: m.Location !== undefined ? m.Location : (ical ? ical.location : null),
+      // After T-2026.10.22: the meeting's country, which names its local time zone (MEETING TIME ZONES section).
+      country: m.Country !== undefined ? m.Country : null
     },
 
     sources: {
@@ -20995,7 +21435,10 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     startTimeZoneRaw: resolvedMeeting && resolvedMeeting.timeZone ? resolvedMeeting.timeZone : null,
     warnings: resolved ? resolved.warnings : [],
     unresolved: resolved ? resolved.unresolved : [],
-    location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null
+    location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null,
+    // After T-2026.10.22 (MEETING TIME ZONES section): the country, and the meeting-local zone the Portal's record gives.
+    country: resolvedMeeting && resolvedMeeting.country ? resolvedMeeting.country : null,
+    meetingLocalTimeZone: resolvedMeeting ? meetingLocalTimeZonePreview_(resolvedMeeting.startDate, resolvedMeeting.timeZone, resolvedMeeting.country) : null
   };
   // ADDON-008A: ad-hoc TDoc list and agenda-structure provenance. A saved
   // TDoc list URL always wins over the discovered one.
