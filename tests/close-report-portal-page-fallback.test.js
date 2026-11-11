@@ -414,7 +414,7 @@ console.log('L. what changed in Code.js: against T-2026.10.18, one section and t
     const identity = (src) => src.slice(src.indexOf('// TDOC LIST IDENTITY (after T-2026.10.16)'), src.indexOf('// END OF TDOC LIST IDENTITY'));
     check('untouched: the identity section; the update, the build, the legacy import; the summary and its scope; the revision check; the agenda-discovery parser',
       [identity(FULL) === identity(released)].concat(['continuousUpdateCore_', 'downloadAndGroupTdocs_', 'downloadAndProcessFromWeb', 'buildSkeletonWithTdocTables', 'updateDispositionSummary', 'writeDispositionSummary_', 'syncDispositionSummaryOnUpdate_',
-        'reportTdocScope_', 'meetingTdocScope_', 'checkRevisionsIn3gu_', 'parseMeetingTdocListHtml_', 'extractTdocListRowCells_', 'assertTdocListIdentity_', 'evaluateTdocListIdentity_'].map((n) => functionSource(FULL, n) === functionSource(released, n))), Array(15).fill(true));
+        'reportTdocScope_', 'meetingTdocScope_', 'checkRevisionsIn3gu_', 'parseMeetingTdocListHtml_', 'extractTdocListRowCells_', 'assertTdocListIdentity_', 'evaluateTdocListIdentity_'].map((n) => functionSource(CODE, n) === functionSource(released, n))), Array(15).fill(true));
   }
 }
 
