@@ -187,3 +187,25 @@ Before the release:
    step 2), and only with approval on the original.
 
 Other reports (MBS, 6G, …) are not touched by any of this.
+
+## 7. Release and deployment of T-2026.10.23 (2026-11-12, issue #8)
+
+| Step | Result |
+|---|---|
+| Live state before | **Master template** (`17xPMiY9…`, parent "SA4 Report Template"): last update 2026-11-11 20:25:31 UTC; a read-only pull gave five files byte-identical to the T-2026.10.22 bundle. **Audio** (`1TJAxpo…`, parent "Audio SWG Minutes SA4#138"): last update 2026-11-12 09:20:44 UTC (the guarded push of candidate `6267011`); six files byte-identical to that push's read-back. Neither had changed in between. Issue #4 (time zones, PR #5) is not merged and not deployed. |
+| Code | PR #7 squash-merged as `cbf12a3`; its tree is identical to the candidate `6267011` tested live in Audio. |
+| Release commit | `edbbdd213f8dfffea7d6a1d455d33abdedda273c`: version line 2.26.7 (2026-11-12) and its changelog entry, the ledger pair in `LARGE_BUILD_CHANGES`, version-pinned tests. Without the header, `Code.js` is the `Code.js` of `cbf12a3`. Tests: 119 files, 8,032 checks, 0 failures. |
+| Tag and publication | Lightweight tag `template-release/T-2026.10.23`; `origin/master` fast-forwarded `cbf12a3` → `edbbdd2`, without force. |
+| Release bundle | `--release T-2026.10.23`: dry run, then `--write`. Only `Code.js` and `Release.js` differ from T-2026.10.22. SHA-256: `appsscript.json` `c5ac395c…`, `Code.js` `3f9e719e…`, `HyperLink.js` `aeb79994…`, `ReportCreator.js` `c74d3ff0…`, `Release.js` `43faa6f4…`. Compared with the `Code.js` tested live in Audio, only the version line and the changelog entry differ. |
+| **Master template: backup** | The five pulled files with `SHA256SUMS`, kept locally in `dist/backups/backup-template-before-T-2026.10.23/` (gitignored). Re-pulled immediately before the push: unchanged. |
+| **Master template: push** | 2026-11-12 10:47:32 UTC, from its own staging folder, without `--force`; the staged files matched `RELEASE-MANIFEST.json`. |
+| **Master template: read-back** | A fresh pull: exactly five files, each matching its SHA-256 in `RELEASE-MANIFEST.json` and byte-identical to the bundle. `Release.js`: T-2026.10.23 / 2.26.7 / `edbbdd2` / `template-release/T-2026.10.23`. |
+| **Audio: backup** | Six pulled files (with the test-only `IntegrationCheck.js`) and `SHA256SUMS` in `dist/backups/backup-audio-138-before-T-2026.10.23/`; re-pulled immediately before the push: unchanged since 09:20:44 UTC. The content backup "BACKUP before issue #6 test - Audio SWG Minutes SA4#138 - do not edit" (`1Ik9pp…`) stays. |
+| **Audio: adoption** | `--adopt T-2026.10.23 --label audio-138`: dry run, then `--write`. `Code.js`, `HyperLink.js`, `ReportCreator.js` and `Release.js` were staged byte for byte from the adoption bundle. `appsscript.json` stayed Audio's own (`4c2cc5ea…`): the same content as the release's (same keys and values, scopes in the same order), in Google's formatting. Its bytes differ from the release's, so pushing the release's would have been a manifest overwrite that needs `--force`; that was not needed and not done. |
+| **Audio: push** | 2026-11-12 10:50:17 UTC, without `--force`. The test-only `IntegrationCheck.js` was removed (it is in the backup). |
+| **Audio: read-back** | A fresh pull: exactly five files. Four match `RELEASE-MANIFEST.json` and the adoption bundle byte for byte; `appsscript.json` is byte-identical to Audio's own from before the push. `Release.js`: T-2026.10.23 / 2.26.7 / `edbbdd2`. |
+| Not done | No Full Build, no report function, no trigger, no Document Property. The Audio document's content was not changed by this release. MBS SA4#138, MBS 86172, 6G and every other report untouched; the repository-root `.clasp.json` unused. |
+
+**Rollback.** Master template: push `dist/backups/backup-template-before-T-2026.10.23/script` (or the
+T-2026.10.22 bundle) from its own staging folder with the template's `.clasp.json`, without `--force`, then pull and
+compare. Audio: the same with `dist/backups/backup-audio-138-before-T-2026.10.23/script` and the Audio Script ID.
