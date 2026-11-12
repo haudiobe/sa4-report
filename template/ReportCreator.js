@@ -253,7 +253,7 @@ function buildReportBootstrapPayload_(preview, choices, release, nowIso) {
     // zone of the Portal's StartDate, '' where the Portal has none. A main
     // report copies its opening from the report template and has no use for them.
     meetingStartTime: meetingType === 'adhoc' ? computeMeetingStartTimeFromStartDate_(p.startDateRaw) : '',
-    // After T-2026.10.22 (MEETING TIME ZONES section of Code.js): the verified meeting-local zone, for any
+    // After T-2026.10.23 (MEETING TIME ZONES section of Code.js): the verified meeting-local zone, for any
     // meeting; else, for an ad-hoc meeting, the offset as before.
     meetingTimeZone: meetingType === 'adhoc' ? meetingTimeZoneFromPortal_(p.startDateRaw, p.startTimeZoneRaw, p.country)
       : meetingLocalTimeZoneFromPortal_(p.startDateRaw, p.startTimeZoneRaw, p.country).zone

@@ -1,5 +1,5 @@
 /**
- * Meeting-local and selected IANA time zones (after T-2026.10.22; GitHub issue #4; docs/MEETING_TIME_ZONES.md).
+ * Meeting-local and selected IANA time zones (after T-2026.10.23; GitHub issue #4; docs/MEETING_TIME_ZONES.md).
  *
  *   A. how a zone is written for a date: SA4#138 Calgary (America/Edmonton) MST in November, MDT in summer;
  *      Berlin CET/CEST; the DST changes of both; zones without an abbreviation; both rule paths
@@ -14,7 +14,7 @@
  *   G. the dialog: the field, its state, Resolve selects Meeting local only when nothing is stored;
  *   H. manual edits of the opening survive an update; the update writes no opening;
  *   I. what is left of "CEST" in the code is the quoting of external deadlines, not a meeting time;
- *   J. what changed in Code.js and ReportCreator.js, against T-2026.10.22.
+ *   J. what changed in Code.js and ReportCreator.js, against T-2026.10.23.
  *
  * Fakes only: no network, no Google account. The SA4#138 and SA4#137 records are the Portal's public meeting
  * records (GetMeetings, meetings 60780 and 60779) as fetched on 2026-11-11.
@@ -388,7 +388,7 @@ console.log('I. "CEST" in the code');
 }
 
 // ====================================================================== J
-console.log('J. what changed, against T-2026.10.22');
+console.log('J. what changed, against T-2026.10.23');
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
@@ -400,19 +400,19 @@ console.log('J. what changed, against T-2026.10.22');
   const section = FULL.slice(FULL.indexOf(MEETING_TIME_ZONES_SECTION_START), FULL.indexOf(MEETING_TIME_ZONES_SECTION_END) + MEETING_TIME_ZONES_SECTION_END.length);
   check('the section: these functions, in this order', functionNames(section), MEETING_TIME_ZONES_SECTION_FUNCTIONS);
   check('it stands directly after getMeetingStartForOpening_()', FULL.indexOf('    return none;\n  }\n}\n\n' + MEETING_TIME_ZONES_SECTION_START) !== -1, true);
-  check('the version is unchanged (a candidate)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.6');
+  check('the version is unchanged: 2.26.7 of T-2026.10.23 (a candidate)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.7');
   let released = null;
   let releasedCreator = null;
   try {
-    released = execFileSync('git', ['show', 'template-release/T-2026.10.22:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
-    releasedCreator = execFileSync('git', ['show', 'template-release/T-2026.10.22:template/ReportCreator.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
+    released = execFileSync('git', ['show', 'template-release/T-2026.10.23:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
+    releasedCreator = execFileSync('git', ['show', 'template-release/T-2026.10.23:template/ReportCreator.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
   } catch (e) {
     released = null;
   }
   if (released === null) {
-    console.log('  note: template-release/T-2026.10.22 is not available in this checkout; the comparison with it is skipped.');
+    console.log('  note: template-release/T-2026.10.23 is not available in this checkout; the comparison with it is skipped.');
   } else {
-    check('without it, Code.js and ReportCreator.js are those of T-2026.10.22, byte for byte', [view.code === released, creatorView.code === releasedCreator], [true, true]);
+    check('without it, Code.js and ReportCreator.js are those of T-2026.10.23, byte for byte', [view.code === released, creatorView.code === releasedCreator], [true, true]);
     check('the functions of Code.js that changed', functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL, n) !== functionSource(released, n)).sort(),
       ['adhocSessionWhenText_', 'buildAdhocOpeningDialogModel_', 'buildAdhocOpeningLines_', 'buildAdhocSessionStatusModel_', 'buildAdhocTdocSessionsDialogModel_', 'buildMeetingOpeningSentence_', 'computeResolvedMeetingPreview_',
         'configureAdhocSessions', 'configureMeetingSettings', 'convertUtcWallClockToReportZone_', 'getMeetingStartForOpening_', 'makeAdhocTdocSessionResolver_', 'meetingStartFromResolved_', 'persistConfigurationSettings_',

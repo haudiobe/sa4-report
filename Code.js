@@ -8401,7 +8401,7 @@ function configureMeetingSettings() {
     REVISIONS_URL: props.getProperty('REVISIONS_URL')
   };
   const initialPreview = computeResolvedMeetingPreview_(existingForPreview, null);
-  // After T-2026.10.22: the meeting time zone -- Meeting local, or a zone selected (MEETING TIME ZONES section).
+  // After T-2026.10.23: the meeting time zone -- Meeting local, or a zone selected (MEETING TIME ZONES section).
   const meetingTimeZoneState = meetingTimeZoneDialogState_(props);
   const meetingTimeZoneOptions = ['<option value="unset"' + (meetingTimeZoneState.choice === '' ? ' selected="selected"' : '') + '>Not set</option>',
     '<option value="local"' + (meetingTimeZoneState.choice === 'local' ? ' selected="selected"' : '') + '>Meeting local</option>']
@@ -8861,7 +8861,7 @@ function configureMeetingSettings() {
       // the meeting it is of. Sent with Save only for that same meeting id.
       let resolvedMeetingStart = null;
 
-      // After T-2026.10.22: Meeting local, as Resolve found it; selected by itself only when no zone is stored.
+      // After T-2026.10.23: Meeting local, as Resolve found it; selected by itself only when no zone is stored.
       let resolvedLocalTimeZone = null;
       function onMeetingLocalTimeZone(local) {
         resolvedLocalTimeZone = local || null;
@@ -9023,7 +9023,7 @@ function configureMeetingSettings() {
           config.personalTokenAction = personalTokenWishes[0];
           if (personalTokenWishes[0] === 'replace') config.personalToken = newToken;
         }
-        // After T-2026.10.22: the meeting time zone; Meeting local only when it is known (MEETING TIME ZONES section).
+        // After T-2026.10.23: the meeting time zone; Meeting local only when it is known (MEETING TIME ZONES section).
         const timeZoneSelect = document.getElementById('meetingTimeZoneChoice');
         if (timeZoneSelect && timeZoneSelect.value && timeZoneSelect.value !== 'unset') {
           if (timeZoneSelect.value === 'local' && !(resolvedLocalTimeZone && resolvedLocalTimeZone.zone) && fieldValue('meetingTimeZoneStored') !== 'local') {
@@ -9131,7 +9131,7 @@ function redactConfigForLog_(config) {
 function persistConfigurationSettings_(config) {
   const docProps = PropertiesService.getDocumentProperties();
   const scriptProps = PropertiesService.getScriptProperties();
-  // After T-2026.10.22: the time zone a save asks for is checked before anything is written; a zone selected
+  // After T-2026.10.23: the time zone a save asks for is checked before anything is written; a zone selected
   // for the meeting, or an offset stored before, is kept by a Resolve (MEETING TIME ZONES section).
   const meetingTimeZoneProblem = meetingTimeZoneChoiceProblem_(config, docProps);
   if (meetingTimeZoneProblem) throw new Error(meetingTimeZoneProblem);
@@ -13904,7 +13904,7 @@ function isValidMeetingTimeZoneLabel_(value) {
 function buildMeetingOpeningSentence_(meetingDateText, startTime, timeZoneLabel) {
   const date = String(meetingDateText === null || meetingDateText === undefined ? '' : meetingDateText).trim() || '<meeting date>';
   const time = isValidMeetingStartTime_(startTime) ? startTime : '<start>';
-  // After T-2026.10.22: an IANA zone is written as its abbreviation on the meeting date (MEETING TIME ZONES section).
+  // After T-2026.10.23: an IANA zone is written as its abbreviation on the meeting date (MEETING TIME ZONES section).
   const zone = meetingTimeZoneDisplay_(timeZoneLabel, meetingStartDateIso_(meetingDateText), isValidMeetingStartTime_(startTime) ? startTime : '') || '<time zone>';
   return '<Chair> opens the session on ' + date + ' at ' + time + ' ' + zone + '.';
 }
@@ -13935,7 +13935,7 @@ function storeMeetingStart_(docProps, time, zone) {
   else docProps.deleteProperty(MEETING_TIME_ZONE_KEY_);
   if (hasTime || hasZone) docProps.setProperty(MEETING_START_BASIS_KEY_, meetingStartBasis_(docProps.getProperty('MEETING_ID'), docProps.getProperty('MEETING_DATE')));
   else docProps.deleteProperty(MEETING_START_BASIS_KEY_);
-  // After T-2026.10.22: an IANA zone from the Portal is the meeting-local zone; an offset has no mode (MEETING TIME ZONES section).
+  // After T-2026.10.23: an IANA zone from the Portal is the meeting-local zone; an offset has no mode (MEETING TIME ZONES section).
   if (hasZone && isAllowedMeetingTimeZoneId_(zone) && !isValidMeetingTimeZoneLabel_(zone)) docProps.setProperty(MEETING_TIME_ZONE_MODE_KEY_, 'local');
   else docProps.deleteProperty(MEETING_TIME_ZONE_MODE_KEY_);
 }
@@ -13962,7 +13962,7 @@ function meetingStartFromResolved_(resolved, savedMeetingId, savedMeetingType, s
   if (String(savedMeetingType || '').trim().toLowerCase() !== 'adhoc') return null;
   const savedDate = String(savedMeetingDate === null || savedMeetingDate === undefined ? '' : savedMeetingDate).trim();
   if (!savedDate || computeMeetingDateFromStartDate_(resolved.startDate) !== savedDate) return { time: '', zone: '' };
-  // After T-2026.10.22: the verified meeting-local zone, else the offset as before (MEETING TIME ZONES section).
+  // After T-2026.10.23: the verified meeting-local zone, else the offset as before (MEETING TIME ZONES section).
   return { time: computeMeetingStartTimeFromStartDate_(resolved.startDate), zone: meetingTimeZoneFromPortal_(resolved.startDate, resolved.timeZone, resolved.country) };
 }
 
@@ -13987,7 +13987,7 @@ function getMeetingStartForOpening_() {
 }
 
 // =========================================================
-// MEETING TIME ZONES (after T-2026.10.22)
+// MEETING TIME ZONES (after T-2026.10.23)
 // =========================================================
 //
 // docs/MEETING_TIME_ZONES.md (GitHub issue #4). MEETING_TIME_ZONE -- the
@@ -16075,7 +16075,7 @@ function configureAdhocSessions() {
   }
   const props = getReportStateStore_();
   const model = buildAdhocSessionsDialogModel_(props.getProperty(ADHOC_SESSIONS_KEY_), props.getProperty('MEETING_DATE'));
-  // After T-2026.10.22: the zone the times are meant in (MEETING TIME ZONES section).
+  // After T-2026.10.23: the zone the times are meant in (MEETING TIME ZONES section).
   const sessionsZone = meetingSessionTimeZone_();
   const sessionsZoneText = sessionsZone ? 'the meeting time zone, ' + meetingTimeZoneOptionLabel_(sessionsZone) : 'the report\'s time zone';
   // "<" is written as an escape so that no stored text can end the script element.
@@ -18333,7 +18333,7 @@ function makeAdhocTdocSessionResolver_(context) {
   if (sessions.length === 0) return null;
   const stored = parseAdhocTdocSessionsProperty_(getReportStateStore_(context).getProperty(ADHOC_TDOC_SESSIONS_KEY_));
   const model = stored.model;
-  // After T-2026.10.22: the sessions' zone -- the meeting's IANA zone, else the script's as before (MEETING TIME ZONES section).
+  // After T-2026.10.23: the sessions' zone -- the meeting's IANA zone, else the script's as before (MEETING TIME ZONES section).
   const sessionZone = meetingSessionTimeZone_(context);
   const onSessionClock = function (upload) {
     if (!upload || model.clock !== 'utc' || upload.unreadable || !upload.at) return upload;
@@ -19059,7 +19059,7 @@ function saveAdhocOpeningWith_(store, sessions, input) {
  * times are never written as if they were on one day.
  */
 function adhocSessionWhenText_(session, zone) {
-  // After T-2026.10.22: with a meeting zone, each time names its zone on its own day (MEETING TIME ZONES section).
+  // After T-2026.10.23: with a meeting zone, each time names its zone on its own day (MEETING TIME ZONES section).
   const at = function (time, day) { const shown = zone && time ? meetingTimeZoneDisplay_(zone, day, time) : ''; return shown ? time + ' ' + shown : time; };
   const prefix = session.label ? session.label + ', ' : '';
   if (isAdhocMultiDaySession_(session)) {
@@ -20609,7 +20609,7 @@ function resolveMeetingCoreById_(meetingId) {
       endDate: m.EndDate !== undefined ? m.EndDate : (ical ? ical.dtend : null),
       timeZone: m.StartTimeZone !== undefined ? m.StartTimeZone : null,
       location: m.Location !== undefined ? m.Location : (ical ? ical.location : null),
-      // After T-2026.10.22: the meeting's country, which names its local time zone (MEETING TIME ZONES section).
+      // After T-2026.10.23: the meeting's country, which names its local time zone (MEETING TIME ZONES section).
       country: m.Country !== undefined ? m.Country : null
     },
 
@@ -21436,7 +21436,7 @@ function computeResolvedMeetingPreview_(existingProps, resolverResult) {
     warnings: resolved ? resolved.warnings : [],
     unresolved: resolved ? resolved.unresolved : [],
     location: resolvedMeeting && resolvedMeeting.location ? resolvedMeeting.location : null,
-    // After T-2026.10.22 (MEETING TIME ZONES section): the country, and the meeting-local zone the Portal's record gives.
+    // After T-2026.10.23 (MEETING TIME ZONES section): the country, and the meeting-local zone the Portal's record gives.
     country: resolvedMeeting && resolvedMeeting.country ? resolvedMeeting.country : null,
     meetingLocalTimeZone: resolvedMeeting ? meetingLocalTimeZonePreview_(resolvedMeeting.startDate, resolvedMeeting.timeZone, resolvedMeeting.country) : null
   };

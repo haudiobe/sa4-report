@@ -1,6 +1,6 @@
-# Meeting time zones (candidate after T-2026.10.22)
+# Meeting time zones (candidate after T-2026.10.23)
 
-Status: **candidate, not released, not deployed.** `Code.js` stays 2.26.6 until the release. GitHub issue #4.
+Status: **candidate, not released, not deployed.** `Code.js` stays 2.26.7 (T-2026.10.23) until the release. GitHub issue #4.
 
 A meeting can have its local time zone, resolved from the Portal's record, or a time zone selected
 explicitly. Generated meeting times then name the zone that is in force on their own date: CET or
