@@ -41,7 +41,7 @@ const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { makeFakeDocumentBody } = require('./helpers/fake-document.js');
 const { templateReport, zip } = require('./helpers/template-report.js');
-const { codeWithoutListIdentity, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS,
+const { codeWithoutListIdentity, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, creatorWithoutMeetingTimeZones, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS,
   DISPOSITION_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
@@ -1131,6 +1131,8 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
   const view = codeWithoutDispositionSummary(FULL);
   const creatorView = creatorWithoutDispositionSummary(CREATOR);
+  // Later changes (the meeting time zones, after T-2026.10.22) taken out, as for every earlier layer.
+  const CREATOR_THEN = creatorWithoutMeetingTimeZones(CREATOR).code;
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const section = CODE.slice(CODE.indexOf(DISPOSITION_SECTION_START), CODE.indexOf(DISPOSITION_SECTION_END) + DISPOSITION_SECTION_END.length);
   check('the new functions are one section, in this order', functionNames(section), DISPOSITION_SECTION_FUNCTIONS);
@@ -1158,7 +1160,7 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
       DISPOSITION_CHANGED_FUNCTIONS.slice().sort((a, b) => CODE.indexOf('\nfunction ' + a + '(') - CODE.indexOf('\nfunction ' + b + '(')));
     check('the new functions are those of the section; none was removed', [functionNames(CODE).filter((name) => functionNames(released).indexOf(name) === -1).sort(), functionNames(released).filter((name) => functionNames(CODE).indexOf(name) === -1)],
       [DISPOSITION_SECTION_FUNCTIONS.slice().sort(), []]);
-    check('the one function of ReportCreator.js that changed is the report menu', functionNames(releasedCreator).filter((name) => functionSource(CREATOR, name) !== functionSource(releasedCreator, name)), DISPOSITION_CREATOR_CHANGED_FUNCTIONS);
+    check('the one function of ReportCreator.js that changed is the report menu', functionNames(releasedCreator).filter((name) => functionSource(CREATOR_THEN, name) !== functionSource(releasedCreator, name)), DISPOSITION_CREATOR_CHANGED_FUNCTIONS);
     check('HyperLink.js and the manifest are the released files', ['HyperLink.js', 'appsscript.json'].filter((file) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r/g, '') !==
       execFileSync('git', ['show', 'template-release/T-2026.10.15:' + file], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '')), []);
   }

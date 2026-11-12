@@ -36,7 +36,7 @@ const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { makeFakeDocumentBody } = require('./helpers/fake-document.js');
 const { makeFakeDocsApi } = require('./helpers/fake-docs-api.js');
-const { codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT } =
+const { codeWithoutMeetingTimeZones, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT } =
   require('./helpers/before-structure-fix.js');
 
 let failures = 0;
@@ -480,10 +480,12 @@ console.log('\nG. what changed in Code.js: against T-2026.10.22, one section, si
     const RELEASED_CODE_ONLY = RELEASED.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     check('the document access: every code use of DocumentApp.getActiveDocument() the release had, and no other', (RELEASED_CODE_ONLY.match(/DocumentApp\.getActiveDocument\(\)(?!\.getBody\(\) calls \(total\)')/g) || []).length, LARGE_BUILD_DOCUMENT_ACCESS_COUNT);
     // With the document access read back, only these functions differ from the release.
-    const accessOnly = FULL.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()');
+    // Later layers (the meeting time zones, after T-2026.10.23) taken out, as for every earlier layer.
+    const LAYER = codeWithoutMeetingTimeZones(FULL).code;
+    const accessOnly = LAYER.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()');
     check('beyond the document access, the functions that changed: ' + LARGE_BUILD_CHANGED_FUNCTIONS.join(', '),
       functionNames(RELEASED).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(accessOnly, n) !== functionSource(RELEASED, n)).sort(), LARGE_BUILD_CHANGED_FUNCTIONS.slice().sort());
-    check('the new functions are those of the section; none removed', [functionNames(FULL).filter((n) => functionNames(RELEASED).indexOf(n) === -1).sort(), functionNames(RELEASED).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+    check('the new functions are those of the section; none removed', [functionNames(LAYER).filter((n) => functionNames(RELEASED).indexOf(n) === -1).sort(), functionNames(RELEASED).filter((n) => functionNames(LAYER).indexOf(n) === -1)],
       [LARGE_BUILD_SECTION_FUNCTIONS.slice().sort(), []]);
     check('untouched: the update, the conversion of an existing report, the planning and sending of the dropdowns, the agenda and the TDoc list',
       ['continuousUpdateCore_', 'migrateStatusFieldsToDropdowns_', 'planStatusDropdownRequests_', 'sendStatusDropdownInsertPairs_', 'statusDropdownHealCandidates_', 'buildStatusDocsIndex_', 'downloadAndGroupTdocs_', 'readAgendaWithFallbacks_', 'fetchAndAddAbstract_', 'collectRevisionsOnly']

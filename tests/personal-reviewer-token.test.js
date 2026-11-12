@@ -44,6 +44,7 @@ const { loadTemplateRuntime, REPORT_CREATOR_PATH } = require('./helpers/load-tem
 const { makeFakeDrive, EXPECTED_QUERY, NAME } = require('./helpers/fake-drive-files.js');
 const { configurableReport, RELEASE } = require('./helpers/config-dialog.js');
 const { templateReport } = require('./helpers/template-report.js');
+const { codeWithoutMeetingTimeZones } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -661,7 +662,8 @@ console.log('13. CENTRAL / Legacy (no template release): nothing changed');
       sandbox.configureMeetingSettings();
       return html;
     };
-    const now = htmlOf(fs.readFileSync(CODE_JS_PATH, 'utf8'));
+    // Later changes (the meeting time zones, after T-2026.10.22) taken out, as for every earlier layer.
+    const now = htmlOf(codeWithoutMeetingTimeZones(fs.readFileSync(CODE_JS_PATH, 'utf8')).code);
     const then = htmlOf(before);
     // The one difference of the page since T-2026.10.8 that is not about the token: the start Resolve found goes with Save (Batch 1).
     const withoutStart = (html) => html.replace(/\r/g, '')

@@ -236,7 +236,7 @@ console.log('source-structure: buildSkeletonWithTdocTables() SA4-PROD-001 fixes'
     check('the ad-hoc opening text retains the literal "<start>" placeholder (never invented in code)',
       /: '<start>';/.test(openingSentence), true);
     check('and has a "<time zone>" placeholder: no time zone ("CEST") is written into the build or the sentence',
-      [/: '<time zone>';/.test(openingSentence), /CEST|CET\b/.test(stripComments(body)), /CEST|CET\b/.test(openingSentence)], [true, false, false]);
+      [/(?::|\|\|) '<time zone>';/.test(openingSentence), /CEST|CET\b/.test(stripComments(body)), /CEST|CET\b/.test(openingSentence)], [true, false, false]);
     check('the ad-hoc opening text does not hardcode "September 22" or any specific date in generic production logic',
       /September 22/.test(stripComments(body)), false);
     check('the main-meeting else branch still copies the template (findHeading_ + copySectionContentWithReplacement_), unchanged',

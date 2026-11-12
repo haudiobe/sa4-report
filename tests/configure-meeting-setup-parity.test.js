@@ -92,12 +92,12 @@ function byConfigureMeeting(getMeetings, rows, id) {
 console.log('PART 1 -- the start of the meeting');
 console.log('1. the same meeting, at creation or in Configure Meeting');
 [
-  ['86172 (online, 15:30, UTC+2)', GM.getMeetings86172, ROWS_MBS, '86172', ['86172', 'October 1, 2026', '15:30', 'UTC+2', '86172|October 1, 2026'], '<Chair> opens the session on October 1, 2026 at 15:30 UTC+2.'],
-  ['85916 (Shanghai, 09:00, UTC+8)', GM.getMeetings85916, ROWS_AUDIO, '85916', ['85916', 'September 28, 2026', '09:00', 'UTC+8', '85916|September 28, 2026'], '<Chair> opens the session on September 28, 2026 at 09:00 UTC+8.'],
+  ['86172 (online, 15:30, UTC+2)', GM.getMeetings86172, ROWS_MBS, '86172', ['86172', 'October 1, 2026', '15:30', 'Europe/Brussels', '86172|October 1, 2026'], '<Chair> opens the session on October 1, 2026 at 15:30 CEST.'],
+  ['85916 (Shanghai, 09:00, UTC+8)', GM.getMeetings85916, ROWS_AUDIO, '85916', ['85916', 'September 28, 2026', '09:00', 'Asia/Shanghai', '85916|September 28, 2026'], '<Chair> opens the session on September 28, 2026 at 09:00 UTC+8.'],
   ['a meeting after the change to winter time (UTC+1)', meeting(GM.getMeetings86172, { StartDate: '2026-11-05 15:30:00', StartTimeZone: '(GMT+01:00) Brussels, Copenhagen, Madrid, Paris' }), ROWS_MBS, '86172',
-    ['86172', 'November 5, 2026', '15:30', 'UTC+1', '86172|November 5, 2026'], '<Chair> opens the session on November 5, 2026 at 15:30 UTC+1.'],
+    ['86172', 'November 5, 2026', '15:30', 'Europe/Brussels', '86172|November 5, 2026'], '<Chair> opens the session on November 5, 2026 at 15:30 CET.'],
   ['a meeting whose time the Portal does not have (00:00:00)', meeting(GM.getMeetings86172, { StartDate: '2026-10-01 00:00:00' }), ROWS_MBS, '86172',
-    ['86172', 'October 1, 2026', null, 'UTC+2', '86172|October 1, 2026'], '<Chair> opens the session on October 1, 2026 at <start> UTC+2.'],
+    ['86172', 'October 1, 2026', null, 'Europe/Brussels', '86172|October 1, 2026'], '<Chair> opens the session on October 1, 2026 at <start> CEST.'],
   ['a meeting without a time zone', meeting(GM.getMeetings86172, { StartTimeZone: '' }), ROWS_MBS, '86172',
     ['86172', 'October 1, 2026', '15:30', null, '86172|October 1, 2026'], '<Chair> opens the session on October 1, 2026 at 15:30 <time zone>.'],
   ['a meeting with neither', meeting(GM.getMeetings86172, { StartDate: '2026-10-01 00:00:00', StartTimeZone: 'Brussels, Copenhagen, Madrid, Paris' }), ROWS_MBS, '86172',
@@ -129,13 +129,13 @@ console.log('2. no further Portal request; Resolve alone stores nothing');
   check('Resolve asks the Portal once, and stores nothing', [r.portalRequests, r.requests, r.props(START)], [['86172'], [], [null, null, null, null, null]]);
   page.save();
   check('Save asks the Portal nothing more: it sends what Resolve got', [r.portalRequests, page.sent[0].resolvedMeetingStart],
-    [['86172'], { meetingId: '86172', startDate: '2026-10-01 15:30:00', timeZone: '(GMT+02.00)  Brussels, Copenhagen, Madrid, Paris' }]);
+    [['86172'], { meetingId: '86172', startDate: '2026-10-01 15:30:00', timeZone: '(GMT+02.00)  Brussels, Copenhagen, Madrid, Paris', country: '' }]);
   check('what it sends is the Portal\'s own StartDate and StartTimeZone, not a value worked out in the page', [page.sent[0].meetingStartTime, page.sent[0].meetingTimeZone], [undefined, undefined]);
   const persist = functionSource(CODE, 'persistConfigurationSettings_');
   const fromResolved = functionSource(CODE, 'meetingStartFromResolved_');
   check('the server works them out with the creator\'s two functions, and both ways store through one function (source)',
-    [/computeMeetingStartTimeFromStartDate_\(resolved\.startDate\)/.test(fromResolved), /computeMeetingTimeZoneLabel_\(resolved\.timeZone\)/.test(fromResolved), (withoutComments(persist).match(/storeMeetingStart_\(/g) || []).length,
-      /computeMeetingStartTimeFromStartDate_\(p\.startDateRaw\)/.test(CREATOR), /computeMeetingTimeZoneLabel_\(p\.startTimeZoneRaw\)/.test(CREATOR)], [true, true, 2, true, true]);
+    [/computeMeetingStartTimeFromStartDate_\(resolved\.startDate\)/.test(fromResolved), /meetingTimeZoneFromPortal_\(resolved\.startDate, resolved\.timeZone, resolved\.country\)/.test(fromResolved), (withoutComments(persist).match(/storeMeetingStart_\(/g) || []).length,
+      /computeMeetingStartTimeFromStartDate_\(p\.startDateRaw\)/.test(CREATOR), /meetingTimeZoneFromPortal_\(p\.startDateRaw, p\.startTimeZoneRaw, p\.country\)/.test(CREATOR)], [true, true, 2, true, true]);
   check('there is one reader of each Portal value in the code: no second parser (source)',
     [(withoutComments(CODE).match(/\nfunction computeMeetingStartTimeFromStartDate_\(/g) || []).length, (withoutComments(CODE).match(/\nfunction computeMeetingTimeZoneLabel_\(/g) || []).length,
       /UrlFetchApp|fetchMeetingMetadataById_|resolveMeeting/.test(withoutComments(fromResolved + functionSource(CODE, 'storeMeetingStart_')))], [1, 1, false]);
@@ -153,8 +153,8 @@ console.log('3. a report changed from meeting A to meeting B');
     return { before: before, stored: r.props(START), sentence: sentenceOf(r.s, r.docProps), page: page, r: r };
   };
   const toB = repoint(GM.getMeetings85916, ROWS_AUDIO, '85916');
-  check('the report has the start of A', toB.before, ['86172', 'October 1, 2026', '15:30', 'UTC+2', '86172|October 1, 2026']);
-  check('Resolve B and Save: the start of B, nothing of A', [toB.stored, toB.sentence], [['85916', 'September 28, 2026', '09:00', 'UTC+8', '85916|September 28, 2026'], '<Chair> opens the session on September 28, 2026 at 09:00 UTC+8.']);
+  check('the report has the start of A', toB.before, ['86172', 'October 1, 2026', '15:30', 'Europe/Brussels', '86172|October 1, 2026']);
+  check('Resolve B and Save: the start of B, nothing of A', [toB.stored, toB.sentence], [['85916', 'September 28, 2026', '09:00', 'Asia/Shanghai', '85916|September 28, 2026'], '<Chair> opens the session on September 28, 2026 at 09:00 UTC+8.']);
 
   const toBare = repoint(meeting(GM.getMeetings85916, { StartDate: '2026-09-28 00:00:00', StartTimeZone: '' }), ROWS_AUDIO, '85916');
   check('B has no start time and no time zone: A\'s are removed, and the sentence has the placeholders',
@@ -175,7 +175,7 @@ console.log('3. a report changed from meeting A to meeting B');
     [stale.page.sent[0].resolvedMeetingStart, stale.page.sent[0].meetingId], [undefined, '86172']);
 
   const backToA = repoint(GM.getMeetings85916, ROWS_AUDIO, '85916', (page) => { page.resolve('85916').save(); page.resolve('86172').save(); });
-  check('A -> B -> A: the start of A again, from the Portal', [backToA.stored, backToA.r.portalRequests], [['86172', 'October 1, 2026', '15:30', 'UTC+2', '86172|October 1, 2026'], ['85916', '86172']]);
+  check('A -> B -> A: the start of A again, from the Portal', [backToA.stored, backToA.r.portalRequests], [['86172', 'October 1, 2026', '15:30', 'Europe/Brussels', '86172|October 1, 2026'], ['85916', '86172']]);
 }
 
 console.log('4. what a Save does not carry, and what is never guessed');
@@ -183,7 +183,7 @@ console.log('4. what a Save does not carry, and what is never guessed');
   const A = () => { const created = createReport(GM.getMeetings86172, ROWS_MBS, '86172', {}); const run = firstRunFor(created.description); run.run(); return plain(run.docProps._store); };
   const kept = configurableReport({ props: A(), meetings: { 86172: GM.getMeetings86172 }, rows: ROWS_MBS });
   kept.open().save();
-  check('a Save without Resolve, for the same meeting, keeps the stored start', kept.props(START), ['86172', 'October 1, 2026', '15:30', 'UTC+2', '86172|October 1, 2026']);
+  check('a Save without Resolve, for the same meeting, keeps the stored start', kept.props(START), ['86172', 'October 1, 2026', '15:30', 'Europe/Brussels', '86172|October 1, 2026']);
 
   const dateTyped = configurableReport({ meetings: { 86172: GM.getMeetings86172 }, rows: ROWS_MBS });
   const page = dateTyped.open().resolve('86172');
@@ -197,7 +197,7 @@ console.log('4. what a Save does not carry, and what is never guessed');
   const mainPage = main.open().resolve('60778');
   mainPage.fields.reportType.value = 'Video';
   mainPage.save();
-  check('a main meeting: no start is stored, as at creation', [main.docProps.getProperty('MEETING_TYPE'), main.props(START).slice(2)], ['main', [null, null, null]]);
+  check('a main meeting: no start time is stored, as at creation; its verified meeting-local zone is', [main.docProps.getProperty('MEETING_TYPE'), main.props(START).slice(2)], ['main', [null, 'Europe/Brussels', '60778|October 1, 2026']]);
 
   const from = kept.s.meetingStartFromResolved_;
   const RESOLVED = { meetingId: '86172', startDate: '2026-10-01 15:30:00', timeZone: '(GMT+02.00)  Brussels, Copenhagen, Madrid, Paris' };
@@ -205,7 +205,7 @@ console.log('4. what a Save does not carry, and what is never guessed');
     [from(RESOLVED, '86172', 'adhoc', 'October 1, 2026'), from(RESOLVED, '85916', 'adhoc', 'October 1, 2026'), from(RESOLVED, '86172', 'main', 'October 1, 2026'), from(RESOLVED, '86172', 'adhoc', 'October 2, 2026'),
       from(RESOLVED, '86172', 'adhoc', ''), from(null, '86172', 'adhoc', 'October 1, 2026'), from('86172', '86172', 'adhoc', 'October 1, 2026'), from({ meetingId: '', startDate: RESOLVED.startDate }, '', 'adhoc', 'October 1, 2026'),
       from({ meetingId: '86172', startDate: '15:30', timeZone: 'CEST' }, '86172', 'adhoc', 'October 1, 2026'), from({ meetingId: 86172, startDate: RESOLVED.startDate, timeZone: 'CEST' }, '86172', 'ADHOC', 'October 1, 2026')],
-    [{ time: '15:30', zone: 'UTC+2' }, null, null, { time: '', zone: '' }, { time: '', zone: '' }, null, null, null, { time: '', zone: '' }, { time: '15:30', zone: '' }]);
+    [{ time: '15:30', zone: 'Europe/Brussels' }, null, null, { time: '', zone: '' }, { time: '', zone: '' }, null, null, null, { time: '', zone: '' }, { time: '15:30', zone: '' }]);
   // What the page sends is data from a browser: only a time and an offset in their forms can come of it.
   const hostile = configurableReport({ props: { MEETING_ID: '86172', MEETING_TYPE: 'adhoc', MEETING_DATE: 'October 1, 2026' } });
   hostile.s.persistConfigurationSettings_({ meetingId: '86172', meetingType: 'adhoc', meetingDate: 'October 1, 2026', reportType: 'MBS', mailingListMode: 'derived', apiTokenAction: 'keep',

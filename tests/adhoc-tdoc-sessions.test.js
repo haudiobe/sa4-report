@@ -407,7 +407,7 @@ console.log('5. the clock of the upload times');
   check('nothing to convert', [r.s.convertUtcWallClockToReportZone_(''), r.s.convertUtcWallClockToReportZone_('2026-09-22'), r.s.convertUtcWallClockToReportZone_(null)], ['', '', '']);
   check('no offset and no zone name is written in the code: the zone comes from the script, the rules from Apps Script (source)', (() => {
     const section = CODE.slice(CODE.indexOf('// AD-HOC TDOC SESSIONS (stage B)'), CODE.indexOf('// AD-HOC OPENING (stage E)')).replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, '');
-    return [/CEST|CET\b|Europe\/|\+0[12]:?00|7200|3600/.test(section), /Utilities\.formatDate\(new Date\(Date\.UTC\([^;]*Session\.getScriptTimeZone\(\)/.test(section)];
+    return [/CEST|CET\b|Europe\/|\+0[12]:?00|7200|3600/.test(section), /Utilities\.formatDate\(new Date\([^;]*Session\.getScriptTimeZone\(\)/.test(section)];
   })(), [false, true]);
 
   check('a report can say that its list is already on the sessions\' clock; that is stored', [r.s.saveAdhocTdocSessions({ clock: 'session', tdocs: {} }).ok, resolver().clock, JSON.parse(r.docProps.getProperty(KEY)).clock], [true, 'session', 'session']);
