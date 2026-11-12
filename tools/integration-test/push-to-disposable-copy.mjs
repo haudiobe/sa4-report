@@ -34,7 +34,9 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const { pushRefusals, audioOriginalRefusals, candidateReleaseJs, sha256 } = require('./guard.js');
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO = path.resolve(HERE, '..', '..');
+// The canonical path (drive letter as the file system spells it): clasp refuses a content directory whose
+// realpath differs from its resolved path ("Content directory is a symlink"), which a lowercase c: triggers.
+const REPO = fs.realpathSync.native(path.resolve(HERE, "..", ".."));
 
 const argv = process.argv.slice(2);
 const value = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
