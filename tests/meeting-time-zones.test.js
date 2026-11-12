@@ -16,6 +16,7 @@
  *   I. what is left of "CEST" in the code is the quoting of external deadlines, not a meeting time;
  *   J. what changed in Code.js and ReportCreator.js, against T-2026.10.23.
  *   K. regressions: Alberta (ABT) with old and new tz data, Calgary on 16 November 2026, Berlin, DST changes, CENTRAL.
+ *   L. the save path after review: unchanged choices, "Not set", another meeting, another clock, CENTRAL sync.
  *
  * Fakes only: no network, no Google account. The SA4#138 and SA4#137 records are the Portal's public meeting
  * records (GetMeetings, meetings 60780 and 60779) as fetched on 2026-11-11.
@@ -287,6 +288,7 @@ console.log('G. the dialog');
     page.fields.meetingTimeZoneChoice = { id: 'meetingTimeZoneChoice', value: (page.html.match(/<option value="([^"]+)" selected="selected">/) || [])[1] || '' };
     page.fields.meetingTimeZoneStored = { value: value('meetingTimeZoneStored') };
     page.fields.meetingTimeZoneText = { value: value('meetingTimeZoneText').replace(/&quot;/g, '"').replace(/&amp;/g, '&') };
+    page.fields.meetingTimeZoneInitial = { value: value('meetingTimeZoneInitial') };
     page.fields.meetingTimeZoneHint = { textContent: '' };
     return { r: r, page: page };
   };
@@ -532,6 +534,97 @@ console.log('\nK. regressions: Alberta (ABT) with every tz database, Calgary on 
   const notAdopted = withRules('old', CALGARY_PROPS);
   check('CENTRAL background run of a document adopted before this change (no zone in the central state): the add-on\'s zone, as before',
     notAdopted.sandbox.meetingSessionTimeZone_({ documentId: 'OTHER', mode: 'addon-background' }), '');
+}
+
+// ====================================================================== L
+console.log('\nL. the review of the save path: unchanged choices, "Not set", another meeting, another clock, CENTRAL sync');
+{
+  const SAVE = { meetingId: '60780', meetingType: 'main', meetingName: '3GPPSA4#138', meetingDate: 'November 16, 2026', reportType: 'MBS', meetingFolder: 'TSGS4_138_Calgary', meetingNumber: '138',
+    ftpBase: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/', mailingListMode: 'derived', apiTokenAction: 'keep', showPreview: true };
+  const persist = (props, changes) => {
+    const l = sandbox(props, 'intl');
+    l.sandbox.Session.getScriptTimeZone = () => 'Asia/Tokyo';
+    const error = thrown(() => l.sandbox.persistConfigurationSettings_(Object.assign({}, SAVE, changes || {})));
+    return { error: error, zone: ZONE_KEYS.map((k) => l.docProps.getProperty(k)), l: l };
+  };
+  const B138 = '60780|November 16, 2026';
+  const RESOLVED_138 = { meetingId: '60780', startDate: SA4_138.StartDate, timeZone: SA4_138.StartTimeZone, country: 'CA' };
+  const RESOLVED_ALBERTA = { meetingId: '60780', startDate: SA4_138.StartDate, timeZone: '(GMT-06:00) Mountain Time (Alberta)', country: 'CA' };
+  const EXPLICIT = { MEETING_ID: '60780', MEETING_DATE: 'November 16, 2026', MEETING_TIME_ZONE: 'Europe/Paris', MEETING_TIME_ZONE_MODE: 'explicit', MEETING_START_BASIS: B138 };
+  const LOCAL = { MEETING_ID: '60780', MEETING_DATE: 'November 16, 2026', MEETING_TIME_ZONE: 'America/Edmonton', MEETING_TIME_ZONE_MODE: 'local', MEETING_START_BASIS: B138 };
+
+  // "Not set" removes a selected or meeting-local zone; a start time stays with its meeting.
+  check('"Not set" removes an explicit zone', persist(EXPLICIT, { meetingTimeZoneChoice: 'unset' }).zone, [null, null, null, null]);
+  check('"Not set" removes a meeting-local zone, keeps the start time and its meeting', persist(Object.assign({ MEETING_START_TIME: '09:00' }, LOCAL), { meetingTimeZoneChoice: 'unset' }).zone, ['09:00', null, null, B138]);
+  check('no choice sent (the select left as it opened): the explicit zone of this meeting stays', persist(EXPLICIT, {}).zone, [null, 'Europe/Paris', 'explicit', B138]);
+
+  // Another meeting: an explicit zone does not follow the report.
+  const moved = persist(EXPLICIT, { meetingId: '60779', meetingDate: 'November 9, 2026' });
+  check('another meeting saved without a choice: the explicit zone of the old meeting is not the new meeting\'s (its zone is not read)',
+    [moved.error, moved.l.sandbox.meetingSessionTimeZone_(), moved.l.sandbox.meetingTimeZoneDialogState_(moved.l.docProps).stored], [null, '', 'none']);
+  const mainStale = persist({ MEETING_ID: '60779', MEETING_DATE: 'November 9, 2026', MEETING_TIME_ZONE: 'Europe/Paris', MEETING_TIME_ZONE_MODE: 'explicit', MEETING_START_BASIS: '60779|November 9, 2026' },
+    { resolvedMeetingStart: RESOLVED_ALBERTA });
+  check('a main report moved to a meeting whose zone verifies: Meeting local is stored, a stale explicit mode of the old meeting does not block it', mainStale.zone, [null, 'America/Edmonton', 'local', B138]);
+  check('...an explicit zone for this same meeting still wins over Meeting local', persist({ MEETING_ID: '60780', MEETING_DATE: 'November 16, 2026', MEETING_TIME_ZONE: 'America/Denver', MEETING_TIME_ZONE_MODE: 'explicit', MEETING_START_BASIS: B138 },
+    { resolvedMeetingStart: RESOLVED_ALBERTA }).zone, [null, 'America/Denver', 'explicit', B138]);
+
+  // Meeting local asked for: a Resolve of this save that does not verify is not overruled by a stored zone.
+  check('Meeting local with a Resolve that does not verify: refused, although a meeting-local zone is stored', persist(LOCAL, { meetingTimeZoneChoice: 'local', resolvedMeetingStart: RESOLVED_138 }).error,
+    'The meeting-local time zone is not known: the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 (ABT) then. Select a time zone instead.');
+  check('Meeting local without a Resolve: the stored zone of this meeting and date counts; of another date it does not', [
+    persist(LOCAL, { meetingTimeZoneChoice: 'local' }).error, persist(LOCAL, { meetingTimeZoneChoice: 'local', meetingDate: 'November 17, 2026' }).error],
+  [null, 'The meeting-local time zone is not known (Resolve the meeting first). Select a time zone instead.']);
+
+  // An explicit zone and the start time of an ad-hoc meeting: the time stays only on its own clock.
+  const ADHOC = { meetingType: 'adhoc', meetingId: '60780', meetingDate: 'November 16, 2026' };
+  const RESOLVED_DENVER = { meetingId: '60780', startDate: '2026-11-16 09:00:00', timeZone: '(GMT-07:00) Mountain Time (US & Canada)', country: 'US' };
+  check('ad-hoc, Portal 09:00 Mountain Time (US), Europe/Berlin selected: the start time is removed (09:00 CET would be 8 hours off)',
+    persist({}, Object.assign({}, ADHOC, { resolvedMeetingStart: RESOLVED_DENVER, meetingTimeZoneChoice: 'Europe/Berlin' })).zone, [null, 'Europe/Berlin', 'explicit', B138]);
+  check('ad-hoc, the same, America/Denver selected: the start time stays (the same clock)',
+    persist({}, Object.assign({}, ADHOC, { resolvedMeetingStart: RESOLVED_DENVER, meetingTimeZoneChoice: 'America/Denver' })).zone, ['09:00', 'America/Denver', 'explicit', B138]);
+  check('ad-hoc SA4#138 as the Portal has it (GMT-07:00, CA), America/Edmonton selected: the start time stays -- the Portal\'s name is Edmonton\'s, its offset is out of date',
+    persist({}, Object.assign({}, ADHOC, { resolvedMeetingStart: RESOLVED_138, meetingTimeZoneChoice: 'America/Edmonton' })).zone, ['09:00', 'America/Edmonton', 'explicit', B138]);
+  check('a start time stored without a zone stays when a zone is selected', persist({ MEETING_ID: '60780', MEETING_DATE: 'November 16, 2026', MEETING_START_TIME: '09:00', MEETING_START_BASIS: B138 },
+    { meetingTimeZoneChoice: 'Europe/Berlin' }).zone, ['09:00', 'Europe/Berlin', 'explicit', B138]);
+
+  // CENTRAL: a save of an adopted document syncs the zone into its central state.
+  const central = persist({}, { resolvedMeetingStart: RESOLVED_138, meetingTimeZoneChoice: 'America/Edmonton' }).l;
+  check('CENTRAL: the zone keys are Configure Meeting keys too (synced on every save of an adopted document)',
+    ['MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'].map((k) => central.sandbox.CONFIG_DIALOG_MANAGED_KEYS_.indexOf(k) !== -1), [true, true, true]);
+  check('CENTRAL: every Configure Meeting key is an adoption key', central.sandbox.CONFIG_DIALOG_MANAGED_KEYS_.filter((k) => central.sandbox.ADDON003_ADOPTION_FIXED_KEYS_.indexOf(k) === -1), []);
+  central.sandbox.DocumentApp.getActiveDocument = () => ({ getId: () => 'DOC138', getName: () => 'Audio SWG Minutes SA4#138' });
+  const synced = thrown(() => central.sandbox.syncConfigurationDialogStateToCentral_('DOC138'));
+  check('CENTRAL: the save is synced into the central state, and the background update reads the zone from there',
+    [synced, ['MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'].map((k) => central.scriptProps.getProperty('SA4_STATE|DOC138|' + k)),
+      central.sandbox.meetingSessionTimeZone_({ documentId: 'DOC138', mode: 'addon-background' })],
+    [null, ['America/Edmonton', 'explicit', B138], 'America/Edmonton']);
+
+  // The dialog: a choice is sent only when it was changed there.
+  const SA4_138_MEETING = [Object.assign({}, GM.getMeetings86172[0], SA4_138, { Id: 60780, Type: 'OR', MtgDocURL: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/' })];
+  const open = (props) => {
+    const r = configurableReport({ props: props || {}, meetings: { 60780: SA4_138_MEETING } });
+    r.s.Utilities.formatDate = appsScriptFormatDate;
+    const page = r.open();
+    const value = (id) => ((page.html.match(new RegExp('id="' + id + '" value="([^"]*)"')) || [])[1] || '');
+    page.fields.meetingTimeZoneChoice = { id: 'meetingTimeZoneChoice', value: (page.html.match(/<option value="([^"]+)" selected="selected">/) || [])[1] || '' };
+    page.fields.meetingTimeZoneStored = { value: value('meetingTimeZoneStored') };
+    page.fields.meetingTimeZoneText = { value: value('meetingTimeZoneText') };
+    page.fields.meetingTimeZoneInitial = { value: value('meetingTimeZoneInitial') };
+    page.fields.meetingTimeZoneHint = { textContent: '' };
+    page.fields.reportType.value = 'MBS';
+    return { r: r, page: page };
+  };
+  const untouched = open(EXPLICIT);
+  check('the dialog opens with what is selected: Europe/Paris, remembered as the initial choice', [untouched.page.fields.meetingTimeZoneChoice.value, untouched.page.fields.meetingTimeZoneInitial.value], ['Europe/Paris', 'Europe/Paris']);
+  untouched.page.save();
+  check('Save with the select untouched sends no choice; the zone stays', [untouched.page.sent.length, 'meetingTimeZoneChoice' in untouched.page.sent[0], untouched.r.props(ZONE_KEYS)], [1, false, [null, 'Europe/Paris', 'explicit', B138]]);
+  const cleared = open(EXPLICIT);
+  cleared.page.fields.meetingTimeZoneChoice.value = 'unset';
+  cleared.page.save();
+  check('"Not set" chosen in the dialog: sent as unset, the zone is removed', [cleared.page.sent[0].meetingTimeZoneChoice, cleared.r.props(ZONE_KEYS)], ['unset', [null, null, null, null]]);
+  const nothing = open();
+  nothing.page.save();
+  check('nothing stored, "Not set" left as it is: no choice sent', [nothing.page.fields.meetingTimeZoneInitial.value, 'meetingTimeZoneChoice' in nothing.page.sent[0]], ['unset', false]);
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll meeting time zone checks passed.');

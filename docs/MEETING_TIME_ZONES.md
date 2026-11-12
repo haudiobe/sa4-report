@@ -116,6 +116,32 @@ section is written by a Build, or by saving Configure Sessions or Edit Opening D
 writes either**, and this work adds no such call: an edited opening survives every update (see
 `tests/meeting-time-zones.test.js`, H).
 
+## What a save of Configure Meeting does with the zone
+
+The dialog sends a zone only when the field was **changed** there. A field left as the dialog opened sends nothing,
+and the server decides for the meeting being saved:
+
+| Field on Save | Result |
+|---|---|
+| left as it opened | A zone selected explicitly for **this** meeting stays, and so does a legacy offset. A zone selected for another meeting is not carried over: a main meeting takes its verified meeting-local zone, if Resolve found one. |
+| changed to *Meeting local* | The zone verified by this save's Resolve. If this save's Resolve does not verify, the save is refused, even when a meeting-local zone is stored. Without a Resolve, the meeting-local zone stored for this meeting **and date** counts. |
+| changed to a zone | Stored as explicit. A start time read on another clock is removed: the opening then shows `<start>` rather than a time that is hours off. A start time stays when the zone has the same offset at that time, or when the zone is the one the Portal's own zone name means (SA4#138: `Mountain Time (US & Canada)` with `CA` is `America/Edmonton`, even though the Portal's offset is out of date). |
+| changed to *Not set* | The zone and its mode are removed. A start time stays with its meeting. |
+
+For an adopted document (CENTRAL add-on), every save syncs the zone, its mode and its meeting into the central state,
+together with the other Configure Meeting keys.
+
+## Known behaviour (intended)
+
+- **A zone saved later does not rewrite text already in the report.** The opening and the Session administration
+  section keep their text until the next Build, or until Configure Sessions or Edit Opening Details is saved. This is
+  what keeps manual edits (see above). The Session column follows at the next update.
+- **The Session column's clock can move once.** An ad-hoc report that had no IANA zone converts the TDoc list's UTC
+  upload times into the script's zone (Europe/Berlin). Once a meeting zone is saved, it converts them into that zone.
+  Session times entered under the old hint ("the report's time zone") were meant in the script's zone. For a meeting
+  outside it, check the sessions after saving the zone. A TDoc near a session boundary may move at the next update.
+  A legacy offset (`UTC+2`) is not an IANA zone and changes nothing here.
+
 ## New reports and existing reports (migration)
 
 - **New report (creator):** stores the verified meeting-local zone, for any meeting type. If it
