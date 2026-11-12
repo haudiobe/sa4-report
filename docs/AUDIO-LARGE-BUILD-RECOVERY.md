@@ -32,10 +32,10 @@ Implementation and tests: `docs/LARGE_BUILD_CHECKPOINTS.md`. Candidate after T-2
 
 | Checklist item | State |
 |---|---|
-| 1. Back up / inspect Audio | Not done (no live access in this work). Runbook: `LARGE_BUILD_CHECKPOINTS.md` §6. |
+| 1. Back up / inspect Audio | Script part done 2026-11-12, read-only: bound script = T-2026.10.22 byte for byte, Drive version 41, modified 2026-11-11 22:29:47Z (`INTEGRATION-TEST-ISSUE6.md`). A Drive copy of the document and the content inspection are still open (no document access from the tooling). Runbook: `LARGE_BUILD_CHECKPOINTS.md` §6. |
 | 2. Trace the throwing operation | Done. The one `saveAndClose()` of the build, in `finalizeStatusDropdowns_()`, carried every change of all phases and was refused; the step caught it and was reported "skipped"; Apps Script's own end-of-execution save failed again. No catch/finally path saves a second time. |
 | 3. Reproduce >100 TDocs with a DocumentApp save limit | Done in the tests, against the released `Code.js` of T-2026.10.22. |
 | 4. Checkpoints after verifying fresh references | Done. Every document access goes through `currentReportDocument_()`; loops that checkpoint take their body/tables again; the test closes every element of a saved document, so a stale reference fails the build. Small builds make no checkpoint. |
 | 5. Idempotent repair-only status finalization | Done: `previewStatusDropdownRepair()` / `repairStatusDropdownsAfterBuild()`. No DocumentApp change, no clear, no table added; minutes and dropdown values kept; refuses doubled TDoc tables. |
-| 6. Validate on a disposable copy of Audio | Open — pre-release gate (`LARGE_BUILD_CHECKPOINTS.md` §5 step 2). |
+| 6. Validate on a disposable copy of Audio | Open — pre-release gate. Kit and runbook ready; blocked on making the copy by hand (`INTEGRATION-TEST-ISSUE6.md`). |
 | 7. PR, release, deploy to Master Template and Audio | PR opened; release and deployment wait for review and approval. |

@@ -135,7 +135,12 @@ the report; the fake document counts its unsaved changes (addition only); source
 text moved (`let`, two places that save, a third place that marks, a fourth user of the batch sender); the
 status-dropdown test now expects a failed save to fail the build.
 
-**118 test files, 7,980 checks, 0 failures.**
+**At `e014f5d`: 118 test files, 7,982 checks, 0 failures.** A check is an output line starting with `ok` or
+`PASS`; failures are lines starting with `FAIL` or `not ok`, and every file must exit 0. An earlier draft of this
+line said 7,980: it was counted before the column-widths checkpoint added two checks to
+`tests/large-build-checkpoints.test.js` (the checkpoint-list check became two, and "the widths every row of every TDoc
+table" is new); the PR said 7,982. Two runs of the committed tree give identical per-file counts.
+With the integration-test kit (`tests/integration-test-kit.test.js`, 33 checks): see `docs/INTEGRATION-TEST-ISSUE6.md`.
 
 ## 5. Release preparation (Master Template)
 
@@ -146,7 +151,8 @@ released second is rebased onto the first and its ledger layer chained after it.
 Before the release:
 
 1. Review and approve the PR. Do not merge before.
-2. **Validate on a disposable copy of the Audio report** (never the original):
+2. **Validate on a disposable copy of the Audio report** (never the original). Kit, runbook, pass criteria and
+   current state: `docs/INTEGRATION-TEST-ISSUE6.md` (status 2026-11-12: blocked on making the copy by hand).
    - a Drive copy of Audio, bound script set to this candidate (adoption to the copy only);
    - one Full Report Build on the copy: the log shows `[CHECKPOINT]` lines and every phase done; no
      `Too many changes`; the execution "Completed";
