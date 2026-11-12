@@ -532,7 +532,7 @@ console.log('9. adoption (copy into the central state)');
   check('it is copied when the document has it', keys({ MEETING_ID: '86178', [KEY]: VALID }), ['MEETING_ID', KEY]);
   check('it is not invented when the document has none', keys({ MEETING_ID: '86178' }), ['MEETING_ID']);
   check('it is not a Configure Meeting key', S.CONFIG_DIALOG_MANAGED_KEYS_.indexOf(KEY), -1);
-  check('the other adoption keys are the ones of the release before', S.ADDON003_ADOPTION_FIXED_KEYS_.filter((k) => k !== KEY && k !== 'ADHOC_TDOC_SESSIONS'), [
+  check('the other adoption keys are the ones of the release before', S.ADDON003_ADOPTION_FIXED_KEYS_.filter((k) => k !== KEY && k !== 'ADHOC_TDOC_SESSIONS' && ['MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'].indexOf(k) === -1), [
     'MEETING_FOLDER', 'MEETING_NUMBER', 'MEETING_ID', 'FTP_BASE', 'TDOC_LIST_URL', 'REPORT_SUFFIX', 'AGENDA_ITEM_PREFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC',
     'AGENDA_CSV_URL', 'MEETING_DATE', 'SHOW_PREVIEW_SNIPPET', 'MEETING_TYPE', 'MEETING_NAME', 'REVISIONS_URL', 'MAILING_LIST', 'FETCH_ABSTRACTS_ON_UPDATE',
     'REVISION_MAP', 'DEADLINE_EXTENSIONS']);

@@ -548,11 +548,14 @@ function codeWithoutLargeBuildCheckpoints(code) {
 
 const MEETING_TIME_ZONES_SECTION_START = BAR + '// MEETING TIME ZONES (after T-2026.10.23)\n' + BAR;
 const MEETING_TIME_ZONES_SECTION_END = BAR + '// END OF MEETING TIME ZONES\n' + BAR + '\n';
-const MEETING_TIME_ZONES_SECTION_FUNCTIONS = ['isAllowedMeetingTimeZoneId_', 'isValidMeetingTimeZoneSetting_', 'utcOffsetLabelMinutes_', 'formatUtcOffsetLabel_', 'meetingTimeZoneOffsetMinutes_',
-  'meetingWallClockToInstant_', 'meetingTimeZoneDisplay_', 'meetingTimeZoneOptionLabel_', 'meetingLocalTimeZoneFromPortal_', 'meetingTimeZoneFromPortal_', 'meetingLocalTimeZonePreview_',
+const MEETING_TIME_ZONES_SECTION_FUNCTIONS = ['isAllowedMeetingTimeZoneId_', 'isValidMeetingTimeZoneSetting_', 'utcOffsetLabelMinutes_', 'formatUtcOffsetLabel_', 'meetingTimeZoneRuleChange_', 'meetingTimeZoneOffsetMinutes_',
+  'meetingWallClockToInstant_', 'meetingZoneWallClockOfInstant_', 'meetingTimeZoneAbbreviationAt_', 'meetingTimeZoneDisplay_', 'meetingTimeZoneOptionLabel_', 'meetingTimeZoneOptionLabelAt_', 'meetingLocalTimeZoneFromPortal_', 'meetingTimeZoneFromPortal_', 'meetingLocalTimeZonePreview_',
   'meetingSessionTimeZone_', 'storeMeetingTimeZone_', 'keptMeetingTimeZoneBeforeSave_', 'meetingLocalTimeZoneOfSave_', 'meetingTimeZoneChoiceProblem_', 'applyMeetingTimeZoneChoice_', 'meetingTimeZoneDialogState_'];
 // After T-2026.10.23 (GitHub issue #4): the changes outside the section, [now, before], in the order they were made.
 const MEETING_TIME_ZONES_CHANGES = [
+  // The adoption into the CENTRAL add-on's state copies the sessions' zone (read by every update).
+  ["  'ADHOC_TDOC_SESSIONS',\n  // After T-2026.10.23: the meeting's IANA zone, its mode and the meeting it was stored for -- the zone into which\n  // every update converts the TDoc list's UTC upload times for the Session column (MEETING TIME ZONES section).\n  'MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'\n",
+   "  'ADHOC_TDOC_SESSIONS'\n"],
   ["    return { time: isValidMeetingStartTime_(time) ? time : '', zone: isValidMeetingTimeZoneSetting_(zone) ? zone : '' };\n",
    "    return { time: isValidMeetingStartTime_(time) ? time : '', zone: isValidMeetingTimeZoneLabel_(zone) ? zone : '' };\n"],
   ["  // After T-2026.10.23: an IANA zone is written as its abbreviation on the meeting date (MEETING TIME ZONES section).\n  const zone = meetingTimeZoneDisplay_(timeZoneLabel, meetingStartDateIso_(meetingDateText), isValidMeetingStartTime_(startTime) ? startTime : '') || '<time zone>';\n",
@@ -595,8 +598,8 @@ const MEETING_TIME_ZONES_CHANGES = [
    "      return { id: s.id, when: adhocSessionWhenText_(s), groups: groups };\n"],
   ["function convertUtcWallClockToReportZone_(at, zone) {\n",
    "function convertUtcWallClockToReportZone_(at) {\n"],
-  ["isAllowedMeetingTimeZoneId_(zone) ? zone : Session.getScriptTimeZone(), \"yyyy-MM-dd'T'HH:mm:ss\");\n  return /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/",
-   "Session.getScriptTimeZone(), \"yyyy-MM-dd'T'HH:mm:ss\");\n  return /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/"],
+  ["  // After T-2026.10.23: into the meeting's IANA zone by its rules -- rule changes newer than Apps Script's tz database included (MEETING TIME ZONES section).\n  const instant = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);\n  const text = isAllowedMeetingTimeZoneId_(zone) ? meetingZoneWallClockOfInstant_(zone, instant) : Utilities.formatDate(new Date(instant), Session.getScriptTimeZone(), \"yyyy-MM-dd'T'HH:mm:ss\");\n",
+   "  const text = Utilities.formatDate(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])), Session.getScriptTimeZone(), \"yyyy-MM-dd'T'HH:mm:ss\");\n"],
   ["  const model = stored.model;\n  // After T-2026.10.23: the sessions' zone -- the meeting's IANA zone, else the script's as before (MEETING TIME ZONES section).\n  const sessionZone = meetingSessionTimeZone_(context);\n  const onSessionClock = function (upload) {\n",
    "  const model = stored.model;\n  const onSessionClock = function (upload) {\n"],
   ["    const at = convertUtcWallClockToReportZone_(upload.at, sessionZone);\n",

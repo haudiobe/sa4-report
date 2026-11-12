@@ -4,7 +4,7 @@ Status: **candidate, not released, not deployed.** `Code.js` stays 2.26.7 (T-202
 
 A meeting can have its local time zone, resolved from the Portal's record, or a time zone selected
 explicitly. Generated meeting times then name the zone that is in force on their own date: CET or
-CEST, MST or MDT, and so on. No zone name is written into the code.
+CEST, MST or MDT, ABT in Alberta from 1 November 2026, and so on. No output hard-codes a zone name; abbreviations come from the offset in force.
 
 ## What is stored
 
@@ -13,7 +13,7 @@ The existing Document Properties are extended. No competing property is added.
 | Property | Values | Meaning |
 |---|---|---|
 | `MEETING_TIME_ZONE` | an offset: `UTC`, `UTC+2`, `UTC-3:30` | As every earlier release stored it, from the Portal. It is kept and written exactly as stored. |
-| | an IANA zone of the allowed list, e.g. `America/Edmonton`, `Europe/Berlin`, `Asia/Seoul`, `UTC` | Written as the abbreviation of the zone's offset on that date (`MST`, `MDT`, `CET`, `CEST`, `KST`), or as the offset where there is no abbreviation (`UTC+8`). |
+| | an IANA zone of the allowed list, e.g. `America/Edmonton`, `Europe/Berlin`, `Asia/Seoul`, `UTC` | Written as the abbreviation of the zone's offset on that date (`MST`, `MDT`, `ABT`, `CET`, `CEST`, `KST`), or as the offset where there is no abbreviation (`UTC+8`). |
 | `MEETING_TIME_ZONE_MODE` | `local` | **Meeting local**: resolved from the Portal's record and verified (see below). |
 | | `explicit` | Selected in Configure Meeting. A later Resolve or Save keeps it. |
 | | (absent) | An offset, as before. |
@@ -39,7 +39,7 @@ Meeting local is resolved from the Portal's record of the meeting:
 
 A location alone ("Calgary") is not used: it is free text, and "Online" for e-meetings.
 
-### SA4#138 Calgary, and Alberta's 2026 change
+### SA4#138 Calgary, and Alberta's change on 1 November 2026
 
 The Portal's record for SA4#138 (meeting 60780) is:
 
@@ -47,28 +47,39 @@ The Portal's record for SA4#138 (meeting 60780) is:
 StartDate 2026-11-16 09:00, StartTimeZone "(GMT-07:00) Mountain Time (US & Canada)", Location Calgary, Country CA
 ```
 
-Alberta has kept UTC−6 all year since the spring of 2026. The tz database has it from release 2026c
-(July 2026), and Windows has a new zone, "(UTC-06:00) Mountain Time (Alberta)", for it. So Calgary
-did **not** return to MST (UTC−7) on 1 November 2026. On 16 November its clocks are at UTC−6, which
-the tz database names MDT. The Portal's `-07:00` is the old Windows zone and no longer right for
-Calgary.
+From 1 November 2026, Alberta stays at **UTC−6 all year**, and the official name of that time is **ABT**. Its
+clocks did not go back to MST (UTC−7) at 02:00 MDT on 1 November 2026 (08:00 UTC). On 16 November 2026, 09:00 in
+Calgary is 15:00 UTC. The Portal's `-07:00` is the old Windows zone and no longer right for Calgary.
+
+**Copies of the tz database differ, and Apps Script's copy is not under our control:**
+
+| tz database | Calgary from 1 November 2026 |
+|---|---|
+| before Alberta's change | UTC−7, `MST` (wrong) |
+| 2026c and later | UTC−6, `MDT` (right offset, not the official name) |
+
+So the rule is in the code, not taken from the tz database: `MEETING_TIME_ZONE_RULE_CHANGES_` says that
+`America/Edmonton` is at UTC−6 and written `ABT` from 2026-11-01 08:00 UTC on. It is applied before Apps Script's
+rules (`Utilities.formatDate`, pattern `Z`) and before the JavaScript runtime's (`Intl`), in every place that needs an
+offset: the abbreviation, a wall-clock time to an instant, and the conversion of the TDoc list's UTC upload times.
+Before that instant the tz database's rules apply unchanged (MST in winter 2025/26, MDT from 8 March 2026).
 
 What the code does:
 
-- **Meeting local for SA4#138 is refused.** The reason given is: the Portal gives UTC−7 for the
-  start, but America/Edmonton is UTC−6 then.
-- **The report selects `America/Edmonton` explicitly.** Its times are then written as the clocks
-  in Calgary show them. With the rules of tzdata 2026c or later, that is `MDT` on 16 November
-  2026.
-- **The new Windows zone is recognised.** If the Portal changes to "(GMT-06:00) Mountain Time
-  (Alberta)", Meeting local resolves and verifies by itself.
-- **No abbreviation follows from the season.** Abbreviations come from the offset in force
-  (`MEETING_TIME_ZONES_` maps offset to abbreviation). A zone whose rules change is written by what
-  its clocks show: Calgary's UTC−6 is never called "MST".
+- **Times in Calgary from 1 November 2026 are written `ABT`**: `09:00 ABT` on 16 November 2026, with any tz database.
+  A session over the night of the change reads `from 09:00 MDT on the first day, until 17:00 ABT on the last day`.
+  There is no repeated hour: 01:30 is MDT, 02:30 is ABT, both UTC−6.
+- **Meeting local for SA4#138 is refused.** The reason given is: the Portal gives UTC−7 for the start, but
+  America/Edmonton is UTC−6 (ABT) then. The report selects `America/Edmonton` explicitly. Nothing is guessed from the
+  Portal's out-of-date offset.
+- **Windows' new zone is recognised.** If the Portal changes to "(GMT-06:00) Mountain Time (Alberta)" (or `UTC-06:00`),
+  Meeting local resolves and verifies by itself.
+- **Configure Meeting names a zone by its next twelve months**: `America/Edmonton (ABT)` from November 2026,
+  `America/Denver (MST/MDT)`, `Europe/Berlin (CET/CEST)`.
+- **Denver is unchanged**: MST from 1 November 2026, MDT in summer. The DST behaviour of Mountain Time is tested with
+  it.
 
-Apps Script uses Google's own copy of the tz database (through `Utilities.formatDate`, pattern `Z`).
-The JavaScript runtime's rules (`Intl`) are used only if that is not available. After deployment, a
-check in the SA4#138 editor will show which rules Apps Script has.
+The rule table is the only place to change if another zone's rules change before Apps Script's tz database has them.
 
 ## Wall-clock times and instants
 
@@ -86,8 +97,8 @@ check in the SA4#138 editor will show which rules Apps Script has.
 
 | Place | What changes |
 |---|---|
-| Ad-hoc opening sentence, no sessions (Build only) | `at 09:00 MDT` for an IANA zone, by the meeting date. An offset is written as stored, and a missing zone is the placeholder, as before. |
-| Session administration lines (Build, Configure Sessions, Edit Opening Details) | Each time names the zone of its own day: `09:00–17:30 MDT`. A session over a DST change reads `from 09:00 CEST on the first day, until 17:00 CET on the last day`. A session through the night of a change reads `00:30 CEST–04:00 CET`. Without an IANA zone the lines are exactly as before. |
+| Ad-hoc opening sentence, no sessions (Build only) | `at 09:00 ABT` for an IANA zone, by the meeting date. An offset is written as stored, and a missing zone is the placeholder, as before. |
+| Session administration lines (Build, Configure Sessions, Edit Opening Details) | Each time names the zone of its own day: `09:00–17:30 ABT`. A session over a DST change reads `from 09:00 CEST on the first day, until 17:00 CET on the last day`. A session through the night of a change reads `00:30 CEST–04:00 CET`. Without an IANA zone the lines are exactly as before. |
 | Edit Opening Details, statistics dialog | The same text. |
 | Session column (update, Assign TDoc Sessions) | UTC uploads are converted into the meeting zone (see above). |
 | Configure Sessions | The hint says which zone the times are meant in. |
@@ -118,8 +129,12 @@ writes either**, and this work adds no such call: an edited opening survives eve
   always did.
 - **Existing report without a zone:** unchanged until a zone is saved. After Resolve, Meeting local
   is preselected when it can be verified.
-- **CENTRAL add-on backend:** the meeting zone is not a centrally adopted key. Its sessions keep the
-  script's zone for upload times, in interactive and background runs alike.
+- **CENTRAL add-on backend:** `MEETING_TIME_ZONE`, `MEETING_TIME_ZONE_MODE` and `MEETING_START_BASIS` are adoption
+  keys (`ADDON003_ADOPTION_FIXED_KEYS_`), because every update reads them: they give the zone into which the TDoc
+  list's UTC upload times are converted for the Session column. A document adopted after this change converts them in
+  the meeting zone, in background runs as in the bound script. A document adopted before it has no zone in the
+  central state and keeps the add-on's own zone (Europe/Berlin) until it is adopted again. `MEETING_START_TIME` is not
+  an adoption key: only a build reads it, and builds are interactive.
 
 ## Not changed
 

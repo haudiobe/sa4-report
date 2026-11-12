@@ -2955,7 +2955,10 @@ var ADDON003_ADOPTION_FIXED_KEYS_ = [
   'ADHOC_SESSIONS',
   // Manual TDoc session assignments and the upload clock (stage B): read by
   // every update of a report that has the Session column.
-  'ADHOC_TDOC_SESSIONS'
+  'ADHOC_TDOC_SESSIONS',
+  // After T-2026.10.23: the meeting's IANA zone, its mode and the meeting it was stored for -- the zone into which
+  // every update converts the TDoc list's UTC upload times for the Session column (MEETING TIME ZONES section).
+  'MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'
 ];
 
 var ADDON003_ADOPTION_PREFIX_FAMILIES_ = [
@@ -13995,10 +13998,11 @@ function getMeetingStartForOpening_() {
 // MEETING_START_BASIS -- holds one of:
 //   - an offset from UTC, as every report stored it before ("UTC+2",
 //     "UTC-3:30", "UTC"): kept and written exactly as it is stored;
-//   - an IANA zone of MEETING_TIME_ZONES_ ("America/Edmonton"): written,
+//   - an IANA zone of MEETING_TIME_ZONES_ ("America/Denver"): written,
 //     for a given date, as its abbreviation on that date ("MST" in
-//     November, "MDT" in summer) or, for a zone without one, as its offset
-//     on that date ("UTC+8").
+//     November, "MDT" in summer; "ABT" for America/Edmonton from
+//     1 November 2026, MEETING_TIME_ZONE_RULE_CHANGES_) or, for a zone
+//     without one, as its offset on that date ("UTC+8").
 // MEETING_TIME_ZONE_MODE says where an IANA zone came from:
 //   'local'    Meeting local -- resolved from the Portal's own record of the
 //              meeting (meetingLocalTimeZoneFromPortal_()) and verified
@@ -14022,8 +14026,7 @@ var MEETING_TIME_ZONE_MODE_KEY_ = 'MEETING_TIME_ZONE_MODE';
 
 // The zones a meeting can be given: id -> the abbreviation of each UTC offset (minutes) the zone has. An
 // offset without one is written as the offset ("UTC+8"). The offset comes from the rules of the zone on that
-// date, so a zone whose rules change (Alberta and British Columbia keep UTC-6 / UTC-7 all year from 2026,
-// tzdata 2026c) is written by what its clocks show, never by "winter" or "summer".
+// date, so a zone whose rules change is written by what its clocks show, never by "winter" or "summer".
 var MEETING_TIME_ZONES_ = {
   'UTC': { '0': 'UTC' },
   'Europe/London': { '0': 'GMT', '60': 'BST' },
@@ -14071,6 +14074,15 @@ var MEETING_TIME_ZONES_ = {
   'America/Toronto': { '-300': 'EST', '-240': 'EDT' },
   'America/New_York': { '-300': 'EST', '-240': 'EDT' },
   'America/Sao_Paulo': {}
+};
+
+// Rule changes that hold whatever copy of the tz database Apps Script has. From the instant `from` (ms UTC) on,
+// the zone is at `offset` minutes all year and is written `abbreviation`. Alberta: from 1 November 2026, when its
+// clocks would have gone back to MST at 02:00 MDT (08:00 UTC), America/Edmonton stays at UTC-6, officially ABT.
+// Copies of the tz database from before Alberta's change still go back to UTC-7 (MST); those from 2026c on keep
+// UTC-6 but call it MDT. Neither is used for an instant this table covers.
+var MEETING_TIME_ZONE_RULE_CHANGES_ = {
+  'America/Edmonton': [{ from: Date.UTC(2026, 10, 1, 8, 0, 0), offset: -360, abbreviation: 'ABT' }]
 };
 
 // The Portal's StartTimeZone names (after its "(GMT...)" offset) and the
@@ -14128,15 +14140,26 @@ function formatUtcOffsetLabel_(minutes) {
   return 'UTC' + (minutes < 0 ? '-' : '+') + Math.floor(abs / 60) + (abs % 60 ? ':' + String(abs % 60).padStart(2, '0') : '');
 }
 
+/** Pure: the rule change of MEETING_TIME_ZONE_RULE_CHANGES_ in force for the zone at an instant (ms), or null. */
+function meetingTimeZoneRuleChange_(zone, instant) {
+  const changes = Object.prototype.hasOwnProperty.call(MEETING_TIME_ZONE_RULE_CHANGES_, zone) ? MEETING_TIME_ZONE_RULE_CHANGES_[zone] : [];
+  let found = null;
+  changes.forEach(function (c) { if (instant >= c.from && (!found || c.from >= found.from)) found = c; });
+  return found;
+}
+
 /**
  * The offset from UTC, in minutes, of an IANA zone at an instant (ms) --
- * by Apps Script's own zone rules (Utilities.formatDate, pattern "Z"),
- * else by the JavaScript runtime's (Intl). null when neither knows it.
+ * by MEETING_TIME_ZONE_RULE_CHANGES_ where one is in force, else by Apps
+ * Script's own zone rules (Utilities.formatDate, pattern "Z"), else by the
+ * JavaScript runtime's (Intl). null when none knows it.
  */
 function meetingTimeZoneOffsetMinutes_(zone, instant) {
   if (zone === 'UTC') return 0;
   const date = new Date(instant);
   if (isNaN(date.getTime())) return null;
+  const change = meetingTimeZoneRuleChange_(zone, date.getTime());
+  if (change) return change.offset;
   try {
     const z = String(Utilities.formatDate(date, zone, 'Z'));
     const m = z.match(/^([+-])(\d{2})(\d{2})$/);
@@ -14168,11 +14191,27 @@ function meetingWallClockToInstant_(zone, isoDate, time) {
   return second === first ? guess : local - second * 60000;
 }
 
+/** The wall-clock time of the zone at an instant (ms), as "yyyy-MM-ddTHH:mm:ss"; '' when the zone's rules are not known. */
+function meetingZoneWallClockOfInstant_(zone, instant) {
+  const offset = meetingTimeZoneOffsetMinutes_(zone, instant);
+  if (offset === null) return '';
+  return new Date(Math.floor(instant / 1000) * 1000 + offset * 60000).toISOString().slice(0, 19);
+}
+
+/** How an allowed IANA zone is written at an instant (ms): the abbreviation of its offset then, else the offset; '' when unknown. */
+function meetingTimeZoneAbbreviationAt_(zone, instant) {
+  const offset = meetingTimeZoneOffsetMinutes_(zone, instant);
+  if (offset === null) return '';
+  const change = meetingTimeZoneRuleChange_(zone, instant);
+  if (change && change.offset === offset) return change.abbreviation;
+  return MEETING_TIME_ZONES_[zone][String(offset)] || formatUtcOffsetLabel_(offset);
+}
+
 /**
  * How the zone is written beside a wall-clock time of that date: an offset
  * label as stored ("UTC+2"); an IANA zone as the abbreviation of its offset on
- * that date ("MST", "MDT", "CET", "CEST") or, without one, the offset ("UTC+8");
- * the zone's id when the date is not known; '' for no usable zone.
+ * that date ("MST", "MDT", "CET", "CEST", "ABT") or, without one, the offset
+ * ("UTC+8"); the zone's id when the date is not known; '' for no usable zone.
  */
 function meetingTimeZoneDisplay_(zone, isoDate, time) {
   const z = String(zone === null || zone === undefined ? '' : zone).trim();
@@ -14180,18 +14219,31 @@ function meetingTimeZoneDisplay_(zone, isoDate, time) {
   if (!isAllowedMeetingTimeZoneId_(z)) return '';
   const instant = meetingWallClockToInstant_(z, isoDate, time);
   if (instant === null) return z;
-  const offset = meetingTimeZoneOffsetMinutes_(z, instant);
-  if (offset === null) return z;
-  return MEETING_TIME_ZONES_[z][String(offset)] || formatUtcOffsetLabel_(offset);
+  return meetingTimeZoneAbbreviationAt_(z, instant) || z;
 }
 
-/** The name of a zone in a list: "America/Edmonton (MST/MDT)", "Asia/Shanghai (UTC+8)", "UTC". */
+/**
+ * The name of a zone in a list, by what its clocks show in the coming twelve
+ * months (the lower offset first): "America/Denver (MST/MDT)",
+ * "America/Edmonton (ABT)", "Asia/Shanghai (UTC+8)", "UTC".
+ */
 function meetingTimeZoneOptionLabel_(zone) {
+  return meetingTimeZoneOptionLabelAt_(zone, Date.now());
+}
+
+/** meetingTimeZoneOptionLabel_() for the twelve months from `now` (ms). */
+function meetingTimeZoneOptionLabelAt_(zone, now) {
   if (zone === 'UTC') return 'UTC';
-  const year = new Date().getUTCFullYear();
-  const winter = meetingTimeZoneDisplay_(zone, year + '-01-15', '12:00');
-  const summer = meetingTimeZoneDisplay_(zone, year + '-07-15', '12:00');
-  return zone + ' (' + (winter === summer ? winter : (meetingTimeZoneOffsetMinutes_(zone, Date.UTC(year, 0, 15, 12)) < meetingTimeZoneOffsetMinutes_(zone, Date.UTC(year, 6, 15, 12)) ? winter + '/' + summer : summer + '/' + winter)) + ')';
+  const seen = [];
+  for (let month = 0; month < 12; month++) {
+    const at = now + month * 30.5 * 86400000;
+    const shown = meetingTimeZoneAbbreviationAt_(zone, at);
+    const offset = meetingTimeZoneOffsetMinutes_(zone, at);
+    if (shown && !seen.some(function (s) { return s.shown === shown; })) seen.push({ shown: shown, offset: offset });
+  }
+  if (!seen.length) return zone;
+  seen.sort(function (a, b) { return a.offset - b.offset; });
+  return zone + ' (' + seen.map(function (s) { return s.shown; }).join('/') + ')';
 }
 
 /**
@@ -14218,7 +14270,9 @@ function meetingLocalTimeZoneFromPortal_(startDate, portalTimeZone, country) {
   const offset = instant === null ? null : meetingTimeZoneOffsetMinutes_(zone, instant);
   if (offset === null) return { zone: '', reason: 'the rules of ' + zone + ' are not available', source: '' };
   if (offset !== portalOffset) {
-    return { zone: '', reason: 'the Portal gives ' + formatUtcOffsetLabel_(portalOffset) + ' for the start, but ' + zone + ' is ' + formatUtcOffsetLabel_(offset) + ' then', source: '' };
+    const shown = meetingTimeZoneAbbreviationAt_(zone, instant);
+    return { zone: '', reason: 'the Portal gives ' + formatUtcOffsetLabel_(portalOffset) + ' for the start, but ' + zone + ' is ' + formatUtcOffsetLabel_(offset) +
+      (shown && shown !== formatUtcOffsetLabel_(offset) ? ' (' + shown + ')' : '') + ' then', source: '' };
   }
   return { zone: zone, reason: '', source: names + (cc ? ', ' + cc : '') };
 }
@@ -18138,7 +18192,9 @@ function readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, cont
 function convertUtcWallClockToReportZone_(at, zone) {
   const m = String(at || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
   if (!m) return '';
-  const text = Utilities.formatDate(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])), isAllowedMeetingTimeZoneId_(zone) ? zone : Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  // After T-2026.10.23: into the meeting's IANA zone by its rules -- rule changes newer than Apps Script's tz database included (MEETING TIME ZONES section).
+  const instant = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  const text = isAllowedMeetingTimeZoneId_(zone) ? meetingZoneWallClockOfInstant_(zone, instant) : Utilities.formatDate(new Date(instant), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(String(text)) ? String(text) : '';
 }
 

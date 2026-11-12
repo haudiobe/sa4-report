@@ -15,6 +15,7 @@
  *   H. manual edits of the opening survive an update; the update writes no opening;
  *   I. what is left of "CEST" in the code is the quoting of external deadlines, not a meeting time;
  *   J. what changed in Code.js and ReportCreator.js, against T-2026.10.23.
+ *   K. regressions: Alberta (ABT) with old and new tz data, Calgary on 16 November 2026, Berlin, DST changes, CENTRAL.
  *
  * Fakes only: no network, no Google account. The SA4#138 and SA4#137 records are the Portal's public meeting
  * records (GetMeetings, meetings 60780 and 60779) as fetched on 2026-11-11.
@@ -51,15 +52,15 @@ const SA4_138 = { Title: '3GPPSA4#138', StartDate: '2026-11-16 09:00:00', EndDat
 const SA4_137 = { Title: '3GPPSA4#137', StartDate: '2026-10-12 09:00:00', StartTimeZone: '(GMT+02.00)  Belgrade, Bratislava, Budapest, Ljubljana, Prague', Location: 'Prague', Country: 'CZ' };
 const ZONE_KEYS = ['MEETING_START_TIME', 'MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'];
 
-// Alberta keeps UTC-6 all year from 2026 (tzdata 2026c, July 2026): Calgary does not go back to MST on 1 November
-// 2026, and the Portal's "(GMT-07:00) Mountain Time (US & Canada)" for SA4#138 is out of date. What Calgary's
-// clocks show on 16 November is taken from the rules this runtime has; the DST changes themselves are checked
-// with America/Denver, which keeps them.
+// Alberta keeps UTC-6 all year from 1 November 2026, officially ABT (MEETING_TIME_ZONE_RULE_CHANGES_): Calgary does
+// not go back to MST, whatever copy of the tz database the runtime has (section K has both kinds). The Portal's
+// "(GMT-07:00) Mountain Time (US & Canada)" for SA4#138 is out of date. The DST changes themselves are checked with
+// America/Denver, which keeps them.
 const intlOffset = (zone, iso) => { const d = new Date(iso); const p = {}; new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(d).forEach((x) => { p[x.type] = x.value; }); return Math.round((Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - d.getTime()) / 60000); };
-const ALBERTA_YEAR_ROUND = intlOffset('America/Edmonton', '2026-11-16T16:00:00Z') === -360;
-const CALGARY_NOV = ALBERTA_YEAR_ROUND ? 'MDT' : 'MST';
-console.log('note: this runtime\'s rules (tzdata ' + (process.versions.tz || '?') + ') have Calgary on ' + (ALBERTA_YEAR_ROUND ? 'UTC-6 (Alberta\'s year-round time)' : 'UTC-7 (MST)') + ' on 16 November 2026.');
-const SA4_138_ALBERTA = Object.assign({}, SA4_138, ALBERTA_YEAR_ROUND ? { StartTimeZone: '(GMT-06:00) Mountain Time (Alberta)' } : {});
+const RUNTIME_ALBERTA = intlOffset('America/Edmonton', '2026-11-16T16:00:00Z');
+const CALGARY_NOV = 'ABT';
+console.log('note: this runtime\'s own rules (tzdata ' + (process.versions.tz || '?') + ') have Calgary on ' + (RUNTIME_ALBERTA === -360 ? 'UTC-6' : 'UTC-7') + ' on 16 November 2026; the report uses UTC-6 (ABT) either way.');
+const SA4_138_ALBERTA = Object.assign({}, SA4_138, { StartTimeZone: '(GMT-06:00) Mountain Time (Alberta)' });
 const DENVER = Object.assign({}, SA4_138, { Location: 'Denver', Country: 'US' });
 
 /** Utilities.formatDate as Apps Script does it, for the two patterns used here; by the runtime's Intl. */
@@ -97,7 +98,7 @@ console.log('A. how a zone is written for a date');
       ['CET', 'CET', 'CEST', 'CEST', 'CEST', 'CET', 'CET']);
     check(rules + ': the DST changes of Mountain Time (8 March, 1 November 2026)', [show('America/Denver', '2026-03-07', '12:00'), show('America/Denver', '2026-03-08', '12:00'), show('America/Denver', '2026-10-31', '12:00'), show('America/Denver', '2026-11-01', '12:00')],
       ['MST', 'MDT', 'MDT', 'MST']);
-    check(rules + ': a zone is written by the offset its clocks show, never by "winter" -- Calgary in January 2027', show('America/Edmonton', '2027-01-15', '09:00'), ALBERTA_YEAR_ROUND ? 'MDT' : 'MST');
+    check(rules + ': a zone is written by the offset its clocks show, never by "winter" -- Calgary in January 2027', show('America/Edmonton', '2027-01-15', '09:00'), 'ABT');
     check(rules + ': zones without an abbreviation are written as their offset on that date; Sydney in its summer', [show('Asia/Shanghai', '2026-09-28', '09:00'), show('Asia/Kolkata', '2026-02-09', '09:00'), show('Asia/Seoul', '2026-05-01', '09:00'), show('Europe/Istanbul', '2026-05-01', '09:00'), show('Australia/Sydney', '2026-01-10', '09:00'), show('Australia/Sydney', '2026-07-10', '09:00'), show('UTC', '2026-07-10', '09:00')],
       ['UTC+8', 'IST', 'KST', 'UTC+3', 'AEDT', 'AEST', 'UTC']);
   });
@@ -107,13 +108,13 @@ console.log('A. how a zone is written for a date');
   check('not a zone of the list, or not a zone: nothing', ['Mars/Olympus', 'CEST', 'GMT+2', '', null, 'america/edmonton'].map((z) => s.meetingTimeZoneDisplay_(z, '2026-11-16', '09:00')), ['', '', '', '', '', '']);
   check('the stored forms: an offset, or a zone of the list', [['UTC+2', 'UTC', 'America/Edmonton', 'Europe/Berlin', 'Asia/Seoul'].map(s.isValidMeetingTimeZoneSetting_), ['CEST', 'MST', 'Mars/Olympus', 'Europe/berlin', '', null].map(s.isValidMeetingTimeZoneSetting_)],
     [[true, true, true, true, true], [false, false, false, false, false, false]]);
-  check('the names in the list of Configure Meeting', ['America/Denver', 'Europe/Berlin', 'Asia/Shanghai', 'Australia/Sydney', 'UTC'].map(s.meetingTimeZoneOptionLabel_),
+  check('the names in the list of Configure Meeting', ['America/Denver', 'Europe/Berlin', 'Asia/Shanghai', 'Australia/Sydney', 'UTC'].map((z) => s.meetingTimeZoneOptionLabel_(z)),
     ['America/Denver (MST/MDT)', 'Europe/Berlin (CET/CEST)', 'Asia/Shanghai (UTC+8)', 'Australia/Sydney (AEST/AEDT)', 'UTC']);
   check('an offset the table has no abbreviation for is written as the offset', s.meetingTimeZoneDisplay_('America/Sao_Paulo', '2026-11-16', '09:00'), 'UTC-3');
   check('every zone of the list is known to the runtime\'s rules', Object.keys(s.MEETING_TIME_ZONES_).filter((z) => s.meetingTimeZoneOffsetMinutes_(z, Date.UTC(2026, 0, 15)) === null), []);
   check('wall-clock time to instant: 09:00 in Denver on 16 November is 16:00 UTC; in Calgary as its clocks are; 09:00 in Berlin on 24 August is 07:00 UTC',
     [new Date(s.meetingWallClockToInstant_('America/Denver', '2026-11-16', '09:00')).toISOString(), new Date(s.meetingWallClockToInstant_('America/Edmonton', '2026-11-16', '09:00')).toISOString(), new Date(s.meetingWallClockToInstant_('Europe/Berlin', '2026-08-24', '09:00')).toISOString()],
-    ['2026-11-16T16:00:00.000Z', ALBERTA_YEAR_ROUND ? '2026-11-16T15:00:00.000Z' : '2026-11-16T16:00:00.000Z', '2026-08-24T07:00:00.000Z']);
+    ['2026-11-16T16:00:00.000Z', '2026-11-16T15:00:00.000Z', '2026-08-24T07:00:00.000Z']);
 }
 
 // ====================================================================== B
@@ -123,8 +124,8 @@ console.log('B. Meeting local, from the Portal\'s own record');
     const s = sandbox({}, rules).sandbox;
     s.Session.getScriptTimeZone = () => 'Asia/Tokyo';
     const local = (m) => plain(s.meetingLocalTimeZoneFromPortal_(m.StartDate, m.StartTimeZone, m.Country));
-    check(rules + ': SA4#138 Calgary as the Portal has it ("(GMT-07:00) Mountain Time (US & Canada)", CA): ' + (ALBERTA_YEAR_ROUND ? 'refused -- Calgary is UTC-6 then; the user selects the zone' : 'America/Edmonton'), local(SA4_138),
-      ALBERTA_YEAR_ROUND ? { zone: '', reason: 'the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 then', source: '' } : { zone: 'America/Edmonton', reason: '', source: 'Mountain Time (US & Canada), CA' });
+    check(rules + ': SA4#138 Calgary as the Portal has it ("(GMT-07:00) Mountain Time (US & Canada)", CA): refused -- Calgary is UTC-6 (ABT) then; the user selects the zone', local(SA4_138),
+      { zone: '', reason: 'the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 (ABT) then', source: '' });
     check(rules + ': Calgary with a zone that fits (Windows\' "Mountain Time (Alberta)" where Alberta keeps UTC-6): America/Edmonton -- never the script\'s zone (Asia/Tokyo here)', local(SA4_138_ALBERTA).zone, 'America/Edmonton');
     check(rules + ': the same name in the US: America/Denver', local(DENVER).zone, 'America/Denver');
     check(rules + ': SA4#137 Prague (CZ, +02:00 on 12 October): Europe/Prague', local(SA4_137).zone, 'Europe/Prague');
@@ -134,7 +135,7 @@ console.log('B. Meeting local, from the Portal\'s own record');
   const s = sandbox({}, 'intl').sandbox;
   const local = (m) => plain(s.meetingLocalTimeZoneFromPortal_(m.StartDate, m.StartTimeZone, m.Country));
   check('an offset that does not fit the zone on that date is not taken: -06:00 for Denver in November', local(Object.assign({}, DENVER, { StartTimeZone: '(GMT-06:00) Mountain Time (US & Canada)' })),
-    { zone: '', reason: 'the Portal gives UTC-6 for the start, but America/Denver is UTC-7 then', source: '' });
+    { zone: '', reason: 'the Portal gives UTC-6 for the start, but America/Denver is UTC-7 (MST) then', source: '' });
   check('a name the report does not know, a partial name, no name, no offset: not resolved, with the reason', [
     local(Object.assign({}, SA4_138, { StartTimeZone: '(GMT-07:00) Mountain Time' })).reason,
     local(Object.assign({}, SA4_138, { StartTimeZone: '(GMT-07:00) Chihuahua, La Paz, Mazatlan' })).zone,
@@ -150,9 +151,8 @@ console.log('B. Meeting local, from the Portal\'s own record');
   check('every zone the Portal names map to is a zone of the list', s.PORTAL_TIME_ZONE_NAMES_.reduce((all, e) => all.concat([e.zone], Object.values(e.byCountry || {})), []).filter((z) => !s.isAllowedMeetingTimeZoneId_(z)), []);
   check('the preview line of Configure Meeting', [s.meetingLocalTimeZonePreview_(DENVER.StartDate, DENVER.StartTimeZone, 'US').text, s.meetingLocalTimeZonePreview_(SA4_138.StartDate, '', 'CA').text],
     ['Meeting local: America/Denver (from the Portal: Mountain Time (US & Canada), US), MST on November 16, 2026.', 'Meeting local is not available: the Portal gives no time zone for this meeting. Select a time zone.']);
-  check('...for SA4#138 as the Portal has it', s.meetingLocalTimeZonePreview_(SA4_138.StartDate, SA4_138.StartTimeZone, 'CA').text, ALBERTA_YEAR_ROUND
-    ? 'Meeting local is not available: the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 then. Select a time zone.'
-    : 'Meeting local: America/Edmonton (from the Portal: Mountain Time (US & Canada), CA), MST on November 16, 2026.');
+  check('...for SA4#138 as the Portal has it', s.meetingLocalTimeZonePreview_(SA4_138.StartDate, SA4_138.StartTimeZone, 'CA').text,
+    'Meeting local is not available: the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 (ABT) then. Select a time zone.');
 }
 
 // ====================================================================== C
@@ -206,7 +206,7 @@ console.log('E. the upload clock');
   s.Session.getScriptTimeZone = () => 'Europe/Berlin';
   check('UTC upload times into the meeting zone: Mountain Time in November (UTC-7), and over its DST change', [s.convertUtcWallClockToReportZone_('2026-11-16T16:30:00', 'America/Denver'), s.convertUtcWallClockToReportZone_('2026-11-01T07:30:00', 'America/Denver'), s.convertUtcWallClockToReportZone_('2026-11-01T08:30:00', 'America/Denver')],
     ['2026-11-16T09:30:00', '2026-11-01T01:30:00', '2026-11-01T01:30:00']);
-  check('...and Calgary as its clocks are', s.convertUtcWallClockToReportZone_('2026-11-16T16:30:00', 'America/Edmonton'), ALBERTA_YEAR_ROUND ? '2026-11-16T10:30:00' : '2026-11-16T09:30:00');
+  check('...and Calgary as its clocks are', s.convertUtcWallClockToReportZone_('2026-11-16T16:30:00', 'America/Edmonton'), '2026-11-16T10:30:00');
   check('without a meeting zone, or with anything that is not one: the script\'s zone, as before', [s.convertUtcWallClockToReportZone_('2026-09-22T13:00:00'), s.convertUtcWallClockToReportZone_('2026-09-22T13:00:00', ''), s.convertUtcWallClockToReportZone_('2026-09-22T13:00:00', 1), s.convertUtcWallClockToReportZone_('2026-09-22T13:00:00', 'UTC+2')],
     ['2026-09-22T15:00:00', '2026-09-22T15:00:00', '2026-09-22T15:00:00', '2026-09-22T15:00:00']);
   // The resolver of the Session column uses the meeting zone; a wall-clock "session" clock is never converted.
@@ -236,8 +236,8 @@ console.log('F. Configure Meeting');
   // A record whose zone fits the rules of this runtime (see the note at the top); and SA4#138 as the Portal has it.
   const RESOLVED_OK = { meetingId: '60780', startDate: SA4_138_ALBERTA.StartDate, timeZone: SA4_138_ALBERTA.StartTimeZone, country: 'CA' };
   const asPortal = persist({}, { resolvedMeetingStart: RESOLVED_138 });
-  check('SA4#138 (main) as the Portal has it: Resolve and Save ' + (ALBERTA_YEAR_ROUND ? 'store no zone -- its offset is out of date; nothing is guessed' : 'store the meeting-local zone and no start time'),
-    [asPortal.error, asPortal.zone], [null, ALBERTA_YEAR_ROUND ? [null, null, null, null] : [null, 'America/Edmonton', 'local', '60780|November 16, 2026']]);
+  check('SA4#138 (main) as the Portal has it: Resolve and Save store no zone -- its offset is out of date; nothing is guessed',
+    [asPortal.error, asPortal.zone], [null, [null, null, null, null]]);
   check('...so SA4#138 selects its zone explicitly: America/Edmonton, no start time', persist({}, { resolvedMeetingStart: RESOLVED_138, meetingTimeZoneChoice: 'America/Edmonton' }).zone, [null, 'America/Edmonton', 'explicit', '60780|November 16, 2026']);
   check('a main meeting whose Portal zone fits: Resolve and Save store the meeting-local zone and no start time', persist({}, { resolvedMeetingStart: RESOLVED_OK }).zone, [null, 'America/Edmonton', 'local', '60780|November 16, 2026']);
   check('Meeting local chosen in the dialog with that Resolve: the same', persist({}, { resolvedMeetingStart: RESOLVED_OK, meetingTimeZoneChoice: 'local' }).zone, [null, 'America/Edmonton', 'local', '60780|November 16, 2026']);
@@ -246,7 +246,7 @@ console.log('F. Configure Meeting');
   check('Meeting local without a known meeting-local zone: refused, and nothing at all written', [refused.error, plain(refused.all)],
     ['The meeting-local time zone is not known (Resolve the meeting first). Select a time zone instead.', before]);
   check('Meeting local when the Portal\'s zone does not fit: refused with the reason', persist(before, { meetingTimeZoneChoice: 'local', resolvedMeetingStart: Object.assign({}, RESOLVED_138, { timeZone: '(GMT-06:00) Mountain Time (US & Canada)', country: 'US' }) }).error,
-    'The meeting-local time zone is not known: the Portal gives UTC-6 for the start, but America/Denver is UTC-7 then. Select a time zone instead.');
+    'The meeting-local time zone is not known: the Portal gives UTC-6 for the start, but America/Denver is UTC-7 (MST) then. Select a time zone instead.');
   check('a zone that is not in the list: refused, nothing written', [persist(before, { meetingTimeZoneChoice: 'Mars/Olympus' }).error, plain(persist(before, { meetingTimeZoneChoice: 'Mars/Olympus' }).all)], ['"Mars/Olympus" is not a time zone a meeting can be given.', before]);
   check('an explicit zone: stored as explicit', persist({}, { meetingTimeZoneChoice: 'America/Edmonton' }).zone, [null, 'America/Edmonton', 'explicit', '60780|November 16, 2026']);
   const explicit = { MEETING_ID: '60780', MEETING_DATE: 'November 16, 2026', MEETING_TIME_ZONE: 'America/Denver', MEETING_TIME_ZONE_MODE: 'explicit', MEETING_START_BASIS: '60780|November 16, 2026' };
@@ -294,18 +294,13 @@ console.log('G. the dialog');
   check('the field: Not set, Meeting local, then the zones with their abbreviations; nothing stored is "Not set"', [/<select id="meetingTimeZoneChoice"/.test(fresh.page.html), /<option value="unset" selected="selected">Not set<\/option><option value="local">Meeting local<\/option>/.test(fresh.page.html),
     /<option value="America\/Denver">America\/Denver \(MST\/MDT\)<\/option>/.test(fresh.page.html), /<option value="America\/Edmonton">America\/Edmonton \(/.test(fresh.page.html), fresh.page.fields.meetingTimeZoneStored.value], [true, true, true, true, 'none']);
   fresh.page.resolve('60780');
-  if (ALBERTA_YEAR_ROUND) {
-    check('Resolve of SA4#138 as the Portal has it: Meeting local is not selected, the hint says why and asks for a zone', [fresh.page.fields.meetingTimeZoneChoice.value, fresh.page.fields.meetingTimeZoneHint.textContent],
-      ['unset', 'Meeting local is not available: the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 then. Select a time zone.']);
-    fresh.page.fields.meetingTimeZoneChoice.value = 'America/Edmonton';
-  } else {
-    check('Resolve of SA4#138 with nothing stored: Meeting local is selected, the hint says what it is', [fresh.page.fields.meetingTimeZoneChoice.value, fresh.page.fields.meetingTimeZoneHint.textContent],
-      ['local', 'Meeting local: America/Edmonton (from the Portal: Mountain Time (US & Canada), CA), MST on November 16, 2026.']);
-  }
+  check('Resolve of SA4#138 as the Portal has it: Meeting local is not selected, the hint says why and asks for a zone', [fresh.page.fields.meetingTimeZoneChoice.value, fresh.page.fields.meetingTimeZoneHint.textContent],
+    ['unset', 'Meeting local is not available: the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 (ABT) then. Select a time zone.']);
+  fresh.page.fields.meetingTimeZoneChoice.value = 'America/Edmonton';
   fresh.page.fields.reportType.value = 'MBS';
   fresh.page.save();
   check('Save sends the choice and the country; the report has the zone', [fresh.page.sent[0].meetingTimeZoneChoice, fresh.page.sent[0].resolvedMeetingStart.country, fresh.r.props(ZONE_KEYS)],
-    ALBERTA_YEAR_ROUND ? ['America/Edmonton', 'CA', [null, 'America/Edmonton', 'explicit', '60780|November 16, 2026']] : ['local', 'CA', [null, 'America/Edmonton', 'local', '60780|November 16, 2026']]);
+    ['America/Edmonton', 'CA', [null, 'America/Edmonton', 'explicit', '60780|November 16, 2026']]);
   const verified = open();
   verified.r.s.fetchMeetingMetadataById_ = () => ({ statusCode: 200, text: JSON.stringify([Object.assign({}, SA4_138_MEETING[0], { StartTimeZone: SA4_138_ALBERTA.StartTimeZone })]) });
   verified.page.resolve('60780');
@@ -425,6 +420,118 @@ console.log('J. what changed, against T-2026.10.23');
       ['continuousUpdateCore_', 'closeReportCore_', 'getCollectorConfig_', 'checkRSSFeed_', 'extractDeadlineFromSubject_', 'parseDeadlineCellText_', 'readAgendaWithFallbacks_', 'downloadAndGroupTdocs_', 'computeMeetingTimeZoneLabel_', 'isValidMeetingTimeZoneLabel_']
         .map((n) => functionSource(FULL, n) === functionSource(released, n)), Array(10).fill(true));
   }
+}
+
+// ====================================================================== K
+console.log('\nK. regressions: Alberta (ABT) with every tz database, Calgary on 16 November 2026, Berlin, DST changes, CENTRAL');
+{
+  // Utilities.formatDate as Apps Script answers it with two generations of the tz database. "old": from before
+  // Alberta's change -- Calgary goes back to UTC-7 (MST) on 1 November 2026, as Denver does. "new": tzdata 2026c
+  // and later -- Calgary keeps UTC-6 and calls it MDT. Every other zone by the runtime's own rules.
+  const ALBERTA_CHANGE = Date.UTC(2026, 10, 1, 8, 0, 0);
+  const tzdata = (generation) => (date, zone, pattern) => {
+    if (zone === 'America/Edmonton' && pattern === 'Z') {
+      if (generation === 'new' && date.getTime() >= ALBERTA_CHANGE) return '-0600';
+      return appsScriptFormatDate(date, 'America/Denver', 'Z');
+    }
+    return appsScriptFormatDate(date, zone, pattern);
+  };
+  const withRules = (generation, props) => {
+    const loaded = loadCode({ documentProperties: props || {} });
+    if (generation !== 'intl') loaded.sandbox.Utilities.formatDate = tzdata(generation);
+    loaded.sandbox.Session.getScriptTimeZone = () => 'Europe/Berlin';
+    return loaded;
+  };
+  const S = (date, endDate, start, end, label) => Object.assign({ id: 's1', label: label || '', date: date, start: start || '', end: end || '' }, endDate ? { endDate: endDate } : {});
+
+  ['old', 'new', 'intl'].forEach((generation) => {
+    const s = withRules(generation).sandbox;
+    const tag = 'tzdata ' + generation + ': ';
+    // Calgary, 16 November 2026 (SA4#138).
+    check(tag + 'Calgary on 16 November 2026 is UTC-6 and written ABT: offset, abbreviation, 09:00 local = 15:00 UTC',
+      [s.meetingTimeZoneOffsetMinutes_('America/Edmonton', Date.UTC(2026, 10, 16, 15)), s.meetingTimeZoneDisplay_('America/Edmonton', '2026-11-16', '09:00'),
+        new Date(s.meetingWallClockToInstant_('America/Edmonton', '2026-11-16', '09:00')).toISOString()],
+      [-360, 'ABT', '2026-11-16T15:00:00.000Z']);
+    check(tag + 'SA4#138: the opening sentence, the plenary of 16-20 November, one day', [
+      s.buildMeetingOpeningSentence_('November 16, 2026', '09:00', 'America/Edmonton'),
+      s.adhocSessionWhenText_(S('2026-11-16', '2026-11-20', '09:00', '17:30', 'Plenary'), 'America/Edmonton'),
+      s.adhocSessionWhenText_(S('2026-11-16', '', '09:00', '17:30'), 'America/Edmonton')],
+    ['<Chair> opens the session on November 16, 2026 at 09:00 ABT.',
+      'Plenary, November 16–20, 2026 (from 09:00 ABT on the first day, until 17:30 ABT on the last day)',
+      'November 16, 2026, 09:00–17:30 ABT']);
+    check(tag + 'SA4#138: UTC upload times converted once into Calgary time (UTC-6)', [
+      s.convertUtcWallClockToReportZone_('2026-11-16T14:59:00', 'America/Edmonton'), s.convertUtcWallClockToReportZone_('2026-11-16T15:00:00', 'America/Edmonton'),
+      s.convertUtcWallClockToReportZone_('2026-11-20T23:30:00', 'America/Edmonton')],
+    ['2026-11-16T08:59:00', '2026-11-16T09:00:00', '2026-11-20T17:30:00']);
+    // The night of 1 November 2026: MDT until 08:00 UTC, ABT from then on, the same UTC-6 throughout -- no hour twice.
+    check(tag + '1 November 2026: 07:59 UTC is MDT, 08:00 UTC is ABT, both UTC-6', [
+      s.meetingTimeZoneAbbreviationAt_('America/Edmonton', ALBERTA_CHANGE - 60000), s.meetingTimeZoneAbbreviationAt_('America/Edmonton', ALBERTA_CHANGE),
+      s.meetingTimeZoneOffsetMinutes_('America/Edmonton', ALBERTA_CHANGE - 60000), s.meetingTimeZoneOffsetMinutes_('America/Edmonton', ALBERTA_CHANGE)],
+    ['MDT', 'ABT', -360, -360]);
+    check(tag + '1 November 2026, local times: 01:30 MDT, 02:30 ABT (no repeated hour), each at UTC-6', [
+      new Date(s.meetingWallClockToInstant_('America/Edmonton', '2026-11-01', '01:30')).toISOString(), new Date(s.meetingWallClockToInstant_('America/Edmonton', '2026-11-01', '02:30')).toISOString(),
+      s.meetingTimeZoneDisplay_('America/Edmonton', '2026-11-01', '01:30'), s.meetingTimeZoneDisplay_('America/Edmonton', '2026-11-01', '02:30'),
+      s.convertUtcWallClockToReportZone_('2026-11-01T07:30:00', 'America/Edmonton'), s.convertUtcWallClockToReportZone_('2026-11-01T08:30:00', 'America/Edmonton')],
+    ['2026-11-01T07:30:00.000Z', '2026-11-01T08:30:00.000Z', 'MDT', 'ABT', '2026-11-01T01:30:00', '2026-11-01T02:30:00']);
+    check(tag + 'a session over the change: from MDT on the first day, until ABT on the last day', s.adhocSessionWhenText_(S('2026-10-30', '2026-11-02', '09:00', '17:00'), 'America/Edmonton'),
+      'October 30 – November 2, 2026 (from 09:00 MDT on the first day, until 17:00 ABT on the last day)');
+    check(tag + 'Calgary before the change keeps its old rules: MST in January 2026, MDT from 8 March 2026; ABT in summer 2027 (no DST any more)', [
+      s.meetingTimeZoneDisplay_('America/Edmonton', '2026-01-15', '09:00'), s.meetingTimeZoneDisplay_('America/Edmonton', '2026-03-07', '12:00'),
+      s.meetingTimeZoneDisplay_('America/Edmonton', '2026-03-08', '12:00'), s.meetingTimeZoneDisplay_('America/Edmonton', '2027-07-15', '09:00'),
+      s.meetingTimeZoneOffsetMinutes_('America/Edmonton', Date.UTC(2027, 6, 15, 15))],
+    ['MST', 'MST', 'MDT', 'ABT', -360]);
+    check(tag + 'Denver is not Alberta: MST from 1 November 2026, MDT in summer 2027', [s.meetingTimeZoneDisplay_('America/Denver', '2026-11-16', '09:00'), s.meetingTimeZoneDisplay_('America/Denver', '2027-07-15', '09:00')], ['MST', 'MDT']);
+    // Berlin, summer and winter, and both DST changes of 2026.
+    check(tag + 'Berlin in summer (CEST, UTC+2) and in winter (CET, UTC+1): sentence and uploads', [
+      s.buildMeetingOpeningSentence_('August 24, 2026', '09:00', 'Europe/Berlin'), s.buildMeetingOpeningSentence_('January 20, 2026', '10:00', 'Europe/Berlin'),
+      s.convertUtcWallClockToReportZone_('2026-08-24T07:30:00', 'Europe/Berlin'), s.convertUtcWallClockToReportZone_('2026-01-20T07:30:00', 'Europe/Berlin')],
+    ['<Chair> opens the session on August 24, 2026 at 09:00 CEST.', '<Chair> opens the session on January 20, 2026 at 10:00 CET.', '2026-08-24T09:30:00', '2026-01-20T08:30:00']);
+    check(tag + 'Berlin, 29 March 2026: 00:59 UTC is 01:59 CET, 01:00 UTC is 03:00 CEST', [
+      s.convertUtcWallClockToReportZone_('2026-03-29T00:59:00', 'Europe/Berlin'), s.convertUtcWallClockToReportZone_('2026-03-29T01:00:00', 'Europe/Berlin'),
+      s.meetingTimeZoneDisplay_('Europe/Berlin', '2026-03-29', '01:59'), s.meetingTimeZoneDisplay_('Europe/Berlin', '2026-03-29', '03:00')],
+    ['2026-03-29T01:59:00', '2026-03-29T03:00:00', 'CET', 'CEST']);
+    check(tag + 'Berlin, 25 October 2026: 00:30 UTC is 02:30 CEST, 01:30 UTC is 02:30 CET -- each UTC time converted once', [
+      s.convertUtcWallClockToReportZone_('2026-10-25T00:30:00', 'Europe/Berlin'), s.convertUtcWallClockToReportZone_('2026-10-25T01:30:00', 'Europe/Berlin')],
+    ['2026-10-25T02:30:00', '2026-10-25T02:30:00']);
+    check(tag + 'legacy offsets are written as stored, also for Calgary dates', [s.buildMeetingOpeningSentence_('November 16, 2026', '09:00', 'UTC+2'), s.buildMeetingOpeningSentence_('November 16, 2026', '09:00', 'UTC-7'),
+      s.adhocSessionWhenText_(S('2026-11-16', '', '09:00', '17:30'), 'UTC+2')],
+    ['<Chair> opens the session on November 16, 2026 at 09:00 UTC+2.', '<Chair> opens the session on November 16, 2026 at 09:00 UTC-7.', 'November 16, 2026, 09:00–17:30 UTC+2']);
+  });
+
+  const s = withRules('old').sandbox;
+  check('Configure Meeting names: by the coming twelve months -- Calgary from November 2026 ABT; across the change all three; Denver MST/MDT', [
+    s.meetingTimeZoneOptionLabelAt_('America/Edmonton', Date.UTC(2026, 10, 12)), s.meetingTimeZoneOptionLabelAt_('America/Edmonton', Date.UTC(2026, 0, 15)),
+    s.meetingTimeZoneOptionLabelAt_('America/Denver', Date.UTC(2026, 10, 12)), s.meetingTimeZoneOptionLabelAt_('Europe/Berlin', Date.UTC(2026, 10, 12)), s.meetingTimeZoneOptionLabelAt_('UTC', Date.UTC(2026, 10, 12))],
+  ['America/Edmonton (ABT)', 'America/Edmonton (MST/MDT/ABT)', 'America/Denver (MST/MDT)', 'Europe/Berlin (CET/CEST)', 'UTC']);
+  check('Meeting local for SA4#138 as the Portal has it ("(GMT-07:00) Mountain Time (US & Canada)", CA): refused with old and new tz data alike',
+    ['old', 'new'].map((g) => withRules(g).sandbox.meetingLocalTimeZoneFromPortal_(SA4_138.StartDate, SA4_138.StartTimeZone, 'CA').reason),
+    ['the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 (ABT) then', 'the Portal gives UTC-7 for the start, but America/Edmonton is UTC-6 (ABT) then']);
+  check('Meeting local with Windows\' "(UTC-06:00) Mountain Time (Alberta)": America/Edmonton, verified, with old and new tz data alike',
+    ['old', 'new'].map((g) => withRules(g).sandbox.meetingLocalTimeZoneFromPortal_(SA4_138.StartDate, '(UTC-06:00) Mountain Time (Alberta)', 'CA').zone), ['America/Edmonton', 'America/Edmonton']);
+
+  // The Session column of SA4#138 with the old tz data: the end of a session (12:00) is the cut-off; UTC-7 would move it by an hour.
+  const session = { id: 's1', label: '', date: '2026-11-16', start: '09:00', end: '12:00' };
+  const CALGARY_PROPS = { MEETING_TYPE: 'adhoc', MEETING_ID: '60780', MEETING_DATE: 'November 16, 2026', MEETING_TIME_ZONE: 'America/Edmonton', MEETING_TIME_ZONE_MODE: 'explicit',
+    MEETING_START_BASIS: '60780|November 16, 2026', ADHOC_SESSIONS: JSON.stringify({ v: 1, nextId: 2, sessions: [session] }) };
+  const td = (at) => ({ tdoc: 'S4-261001', uploaded: { at: at, dateOnly: null, unreadable: false } });
+  const bound = withRules('old', CALGARY_PROPS).sandbox.makeAdhocTdocSessionResolver_();
+  check('Session column, bound script, old tz data: 17:59 UTC is 11:59 ABT, in the session (until 12:00); 18:01 UTC is 12:01 ABT, after it (at UTC-7 it would be 11:01, wrongly inside)', [bound.zone, bound.uploaded(td('2026-11-16T17:59:00')).at, bound.automatic(td('2026-11-16T17:59:00')).sessionId, bound.automatic(td('2026-11-16T18:01:00')).sessionId],
+    ['America/Edmonton', '2026-11-16T11:59:00', 's1', null]);
+
+  // CENTRAL add-on: adoption copies the sessions' zone, so a background update converts uploads as the bound script does.
+  const central = withRules('old', CALGARY_PROPS);
+  central.sandbox.DocumentApp.getActiveDocument = () => ({ getId: () => 'DOC138' });
+  check('CENTRAL: the zone, its mode and its meeting are adoption keys (MEETING_START_TIME, read only by a build, is not)', ['MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS', 'MEETING_START_TIME'].map((k) => central.sandbox.ADDON003_ADOPTION_FIXED_KEYS_.indexOf(k) !== -1), [true, true, true, false]);
+  const adopted = central.sandbox.adoptReportDocumentForAddon_();
+  check('CENTRAL: adoption copies them and verifies', [adopted.verified, ['MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'].map((k) => central.scriptProps.getProperty('SA4_STATE|DOC138|' + k))],
+    [true, ['America/Edmonton', 'explicit', '60780|November 16, 2026']]);
+  const background = central.sandbox.makeAdhocTdocSessionResolver_({ documentId: 'DOC138', mode: 'addon-background' });
+  check('CENTRAL background update: the sessions\' zone is the meeting\'s, the upload is in the session as in the bound script (not Berlin, the add-on\'s own zone)',
+    [central.sandbox.meetingSessionTimeZone_({ documentId: 'DOC138', mode: 'addon-background' }), background.uploaded(td('2026-11-16T15:01:00')).at, background.automatic(td('2026-11-16T15:01:00')).sessionId],
+    ['America/Edmonton', '2026-11-16T09:01:00', 's1']);
+  const notAdopted = withRules('old', CALGARY_PROPS);
+  check('CENTRAL background run of a document adopted before this change (no zone in the central state): the add-on\'s zone, as before',
+    notAdopted.sandbox.meetingSessionTimeZone_({ documentId: 'OTHER', mode: 'addon-background' }), '');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll meeting time zone checks passed.');
