@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.7 (2026-11-12)
+ * Version: 2.26.8 (2026-11-12)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,20 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.8 (2026-11-12)
+ *   - Added: meeting-local and selected IANA time zones. MEETING_TIME_ZONE
+ *     keeps the offsets earlier releases stored ("UTC+2", written as
+ *     stored) and accepts a zone of an allowed list; MEETING_TIME_ZONE_MODE
+ *     says whether it is Meeting local (from the Portal's own record,
+ *     verified against the offset the Portal gives) or selected in
+ *     Configure Meeting. Opening sentence and Session administration name
+ *     the zone in force on each date (CET/CEST, MST/MDT, ...); UTC upload
+ *     times of the TDoc list are converted once into the meeting zone.
+ *     Alberta: America/Edmonton is UTC-6 all year from 1 November 2026,
+ *     written ABT, whatever tz database Apps Script has. The CENTRAL
+ *     add-on adopts and syncs the zone. No update writes the opening, so
+ *     manual edits survive. (GitHub issue #4; MEETING TIME ZONES section;
+ *     docs/MEETING_TIME_ZONES.md.)
  * 2.26.7 (2026-11-12)
  *   - Fixed: a large Full Report Build is saved in parts. When about 2000
  *     DocumentApp changes are pending, the build saves the report and

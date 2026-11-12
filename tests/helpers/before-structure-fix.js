@@ -553,6 +553,11 @@ const MEETING_TIME_ZONES_SECTION_FUNCTIONS = ['isAllowedMeetingTimeZoneId_', 'is
   'meetingSessionTimeZone_', 'storeMeetingTimeZone_', 'keptMeetingTimeZoneBeforeSave_', 'meetingLocalTimeZoneOfSave_', 'meetingTimeZoneChoiceProblem_', 'dropMeetingStartOfAnotherClock_', 'applyMeetingTimeZoneChoice_', 'meetingTimeZoneDialogState_'];
 // After T-2026.10.23 (GitHub issue #4): the changes outside the section, [now, before], in the order they were made.
 const MEETING_TIME_ZONES_CHANGES = [
+  // The release of it (T-2026.10.24): the version line and the changelog entry of 2.26.8.
+  [" * Version: 2.26.8 (2026-11-12)\n",
+   " * Version: 2.26.7 (2026-11-12)\n"],
+  [" * CHANGELOG\n * 2.26.8 (2026-11-12)\n *   - Added: meeting-local and selected IANA time zones. MEETING_TIME_ZONE\n *     keeps the offsets earlier releases stored (\"UTC+2\", written as\n *     stored) and accepts a zone of an allowed list; MEETING_TIME_ZONE_MODE\n *     says whether it is Meeting local (from the Portal's own record,\n *     verified against the offset the Portal gives) or selected in\n *     Configure Meeting. Opening sentence and Session administration name\n *     the zone in force on each date (CET/CEST, MST/MDT, ...); UTC upload\n *     times of the TDoc list are converted once into the meeting zone.\n *     Alberta: America/Edmonton is UTC-6 all year from 1 November 2026,\n *     written ABT, whatever tz database Apps Script has. The CENTRAL\n *     add-on adopts and syncs the zone. No update writes the opening, so\n *     manual edits survive. (GitHub issue #4; MEETING TIME ZONES section;\n *     docs/MEETING_TIME_ZONES.md.)\n",
+   " * CHANGELOG\n"],
   ["function buildAdhocSessionStatusModel_(sessions, opening, attendance, tdocs) {\n  const total = sessions.length;\n  // After T-2026.10.23: the sessions' zone, read once (MEETING TIME ZONES section).\n  const sessionZone = meetingSessionTimeZone_();\n",
    "function buildAdhocSessionStatusModel_(sessions, opening, attendance, tdocs) {\n  const total = sessions.length;\n"],
   ["function buildAdhocOpeningDialogModel_() {\n  const stored = parseAdhocOpeningProperty_(adhocOpeningStore_().getProperty(ADHOC_OPENING_KEY_));\n  // After T-2026.10.23: the sessions' zone, read once (MEETING TIME ZONES section).\n  const sessionZone = meetingSessionTimeZone_();\n",

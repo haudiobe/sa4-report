@@ -351,7 +351,7 @@ console.log('J. what changed in Code.js: against T-2026.10.20, one section and t
   check('it stands directly after the AGENDA WORD CONVERSION section', FULL.indexOf('// END OF AGENDA WORD CONVERSION\n// =========================================================\n\n' + AGENDA_READERS_SECTION_START) !== -1, true);
   check('it declares its constants and nothing else at top level', section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm) || [],
     ['var AGENDA_READERS_', 'var AGENDA_LAST_READER_', 'var AGENDA_DOCS_API_HEADINGS_', 'var AGENDA_WORD_MAIN_NAMESPACES_']);
-  check('Code.js is version 2.26.7 (2.26.5 released it as T-2026.10.21, 2.26.6 the TDoc-list download fallback, 2.26.7 the large-build checkpoints; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.7');
+  check('Code.js is version 2.26.8 (2.26.5 released it as T-2026.10.21, 2.26.6 the TDoc-list download fallback, 2.26.7 the large-build checkpoints, 2.26.8 the meeting time zones; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
   let released = null;
   try {
     released = execFileSync('git', ['show', 'template-release/T-2026.10.20:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');

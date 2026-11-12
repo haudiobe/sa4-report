@@ -260,7 +260,7 @@ console.log('J. what changed in Code.js: against T-2026.10.21, one section and o
   check('the section: these functions, in this order', functionNames(section), TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS);
   check('it stands directly after the AGENDA READERS section', FULL.indexOf('// END OF AGENDA READERS\n// =========================================================\n\n' + TDOC_LIST_DOWNLOAD_SECTION_START) !== -1, true);
   check('it declares its constants and nothing else at top level', section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm) || [], ['var TDOC_LIST_FTP_HOST_RE_', 'var TDOC_LIST_WWW_FTP_BASE_']);
-  check('Code.js is version 2.26.7 (2.26.6 released it as T-2026.10.22, 2.26.7 the large-build checkpoints; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.7');
+  check('Code.js is version 2.26.8 (2.26.6 released it as T-2026.10.22, 2.26.7 the large-build checkpoints, 2.26.8 the meeting time zones; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
   if (RELEASED === null) {
     console.log('  note: template-release/T-2026.10.21 is not available in this checkout; the comparison with it is skipped.');
   } else {

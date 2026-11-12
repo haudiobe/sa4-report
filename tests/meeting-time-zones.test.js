@@ -397,7 +397,7 @@ console.log('J. what changed, against T-2026.10.23');
   const section = FULL.slice(FULL.indexOf(MEETING_TIME_ZONES_SECTION_START), FULL.indexOf(MEETING_TIME_ZONES_SECTION_END) + MEETING_TIME_ZONES_SECTION_END.length);
   check('the section: these functions, in this order', functionNames(section), MEETING_TIME_ZONES_SECTION_FUNCTIONS);
   check('it stands directly after getMeetingStartForOpening_()', FULL.indexOf('    return none;\n  }\n}\n\n' + MEETING_TIME_ZONES_SECTION_START) !== -1, true);
-  check('the version is unchanged: 2.26.7 of T-2026.10.23 (a candidate)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.7');
+  check('Code.js is version 2.26.8 (released as T-2026.10.24; the ledger takes the header out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
   let released = null;
   let releasedCreator = null;
   try {
