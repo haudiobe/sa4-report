@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { loadCode } = require('./helpers/load-code');
-const { pushRefusals, audioOriginalRefusals, candidateReleaseJs, AUDIO_BASE_CODE_SHA256, DISPOSABLE_NAME_PREFIX } = require('../tools/integration-test/guard.js');
+const { pushRefusals, audioOriginalRefusals, candidateReleaseJs, AUDIO_BASE_CODE_SHA256, COPY_BASE_CODE_SHA256S, DISPOSABLE_NAME_PREFIX } = require('../tools/integration-test/guard.js');
 const { RELEASE_FILES } = require('../tools/template-release.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -42,7 +42,7 @@ truthy('a script bound to the original, named as the copy, is refused', pushRefu
 truthy('a standalone script is refused', pushRefusals(Object.assign({}, GOOD, { parentId: null })).some((r) => /not bound/.test(r)));
 truthy('a document not named as a disposable copy is refused', pushRefusals(Object.assign({}, GOOD, { documentName: 'Copy of Audio SWG Minutes SA4#138' })).some((r) => /Rename the copy/.test(r)));
 truthy('a trashed document is refused', pushRefusals(Object.assign({}, GOOD, { documentTrashed: true })).some((r) => /trash/.test(r)));
-truthy('a script that does not run T-2026.10.22 is refused', pushRefusals(Object.assign({}, GOOD, { baseCodeSha256: 'ab'.repeat(32) })).some((r) => /not T-2026.10.22/.test(r)));
+truthy('a script that does not run a release Audio ran is refused', pushRefusals(Object.assign({}, GOOD, { baseCodeSha256: 'ab'.repeat(32) })).some((r) => /not a release the Audio report ran/.test(r)));
 check('... unless --allow-other-base', pushRefusals(Object.assign({}, GOOD, { baseCodeSha256: 'ab'.repeat(32), allowOtherBase: true })), []);
 truthy('missing IDs are refused', pushRefusals({}).length === 2);
 truthy('without --target audio-original the Audio report stays refused', pushRefusals(Object.assign({}, GOOD, { scriptId: AUDIO_SCRIPT, documentId: AUDIO_DOC, parentId: AUDIO_DOC, documentName: DISPOSABLE_NAME_PREFIX })).length > 0);
@@ -138,6 +138,32 @@ check('no runtime function or variable starts with it6/IT6 (no clash in the copy
 const kitSrc = fs.readFileSync(path.join(ROOT, 'tools', 'integration-test', 'IntegrationCheck.js'), 'utf8');
 check('IntegrationCheck.js makes no DocumentApp change and calls no Docs batchUpdate', /batchUpdate|saveAndClose|\.(setText|appendParagraph|insertTable|clear|removeChild|appendTable)\(/.test(kitSrc), false);
 truthy('IntegrationCheck.js refuses the master template', kitSrc.includes(TEMPLATE_DOC));
+
+// ====================================================================== E (issue #9)
+console.log('E. issue #9: a copy of Audio as it runs T-2026.10.23; the time-zone check');
+{
+  const T23 = '3f9e719eb43c3abb3fb0721b6b8fa6390abe8ee3ade0851fdd1575d3cbaf27a8';
+  check('a fresh copy may start from T-2026.10.22 or T-2026.10.23', [pushRefusals(Object.assign({}, GOOD, { baseCodeSha256: AUDIO_BASE_CODE_SHA256 })), pushRefusals(Object.assign({}, GOOD, { baseCodeSha256: T23 }))], [[], []]);
+  check('T-2026.10.23 is the Code.js of its release bundle', COPY_BASE_CODE_SHA256S[T23], 'T-2026.10.23');
+  truthy('any other base is refused unless --allow-other-base', pushRefusals(Object.assign({}, GOOD, { baseCodeSha256: 'ab'.repeat(32) })).some((r) => /not a fresh copy/.test(r)) &&
+    pushRefusals(Object.assign({}, GOOD, { baseCodeSha256: 'ab'.repeat(32), allowOtherBase: true })).length === 0);
+  truthy('the Audio original stays refused in the copy mode', pushRefusals(Object.assign({}, GOOD, { scriptId: AUDIO_SCRIPT, documentId: AUDIO_DOC, parentId: AUDIO_DOC, baseCodeSha256: T23 })).some((r) => /original Audio/.test(r)));
+  const check9 = fs.readFileSync(path.join(__dirname, '..', 'tools', 'integration-test', 'IntegrationCheck.js'), 'utf8');
+  truthy('the check file refuses the template and the Audio original', /11XNUHU3TpAr8BaS7gyFQlwiKEzQFvnvzvGu4ms8lo2s/.test(check9.slice(0, check9.indexOf('IT6_SNAPSHOT_PREFIX_'))) && /1zawfIcbkzCJG-h2HYtnbQSEsm6MCd9OGhYzMgAFYENs/.test(check9.slice(0, check9.indexOf('IT6_SNAPSHOT_PREFIX_'))));
+
+  const l = loadCode({});
+  const vm = require('vm');
+  vm.runInContext(check9, l.sandbox);
+  const lines = l.sandbox.it9TimeZoneLines_({ release: 'T', stored: {}, sessionsZone: '', scriptZone: 'Europe/Berlin', rawCalgary: '-0700 MST', rawChange: '-0700 MST', paragraphs: [] });
+  check('it9TimeZoneCheck: what it reports for Calgary (by the report rule, whatever the tz data says)', lines.filter((x) => /report rule|09:00 on|opening sentence|session, |uploads/.test(x)), [
+    '[IT9] report rule, 2026-11-16 15:00 UTC: offset -360 min, written ABT',
+    '[IT9] 09:00 on 2026-11-16 in Calgary is 2026-11-16T15:00:00.000Z',
+    '[IT9] opening sentence: <Chair> opens the session on November 16, 2026 at 09:00 ABT.',
+    '[IT9] session, one day: November 16, 2026, 09:00–17:30 ABT',
+    '[IT9] session, over 1 November: October 30 – November 2, 2026 (from 09:00 MDT on the first day, until 17:00 ABT on the last day)',
+    '[IT9] uploads (UTC -> Calgary): 2026-11-16T17:59:00 -> 2026-11-16T11:59:00, 2026-11-16T18:01:00 -> 2026-11-16T12:01:00, 2026-11-01T08:30:00 -> 2026-11-01T02:30:00 (ABT)']);
+  truthy('it9TimeZoneCheck writes nothing (source)', !/setProperty|deleteProperty|setText|appendParagraph|insert|clear\(|saveAndClose/.test(check9.slice(check9.indexOf('// Issue #9'))));
+}
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed) { console.log('SOME CHECKS FAILED'); process.exit(1); }
