@@ -70,7 +70,8 @@ function templateReport(options) {
   const ui = { alerts: [], ButtonSet: { OK: 'OK', YES_NO: 'YES_NO' }, Button: { YES: 'YES' }, alert: (...args) => { ui.alerts.push(args); return 'YES'; }, showModalDialog: () => {} };
   r.ui = ui;
   s.DocumentApp.getActiveDocument = () => doc;
-  s.DocumentApp.openById = () => ({ getBody: () => makeFakeDocumentBody(s) });
+  // After T-2026.10.22: the report itself is opened again after a checkpoint of a large build (LARGE BUILD CHECKPOINTS).
+  s.DocumentApp.openById = (id) => (id === REPORT_ID ? (body._state.closed = false, doc) : { getBody: () => makeFakeDocumentBody(s) });
   s.DocumentApp.getUi = () => ui;
   s.DocumentApp.GlyphType = { BULLET: 'BULLET' };
   if (o.release !== false) s.SA4_RELEASE_ = { releaseId: 'T-2026.10.8', flavor: 'template', codeVersion: '2.20.0', templateDocumentId: TEMPLATE_ID };

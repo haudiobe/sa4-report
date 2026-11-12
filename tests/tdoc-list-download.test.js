@@ -33,7 +33,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutLargeBuildCheckpoints, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -251,6 +251,8 @@ console.log('J. what changed in Code.js: against T-2026.10.21, one section and o
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const view = codeWithoutTdocListDownload(FULL);
+  // Later changes (the large-build checkpoints, after T-2026.10.22) taken out, as for every earlier layer.
+  const CODE = codeWithoutLargeBuildCheckpoints(FULL).code;
   check('every change is in Code.js exactly once', view.problems, []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((m) => m.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
@@ -265,13 +267,13 @@ console.log('J. what changed in Code.js: against T-2026.10.21, one section and o
     const released = RELEASED.replace(/\r/g, '');
     check('without it, Code.js is the Code.js of T-2026.10.21, byte for byte', view.code === released, true);
     check('the function that changed: downloadAndGroupTdocs_ (the download)',
-      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL, n) !== functionSource(released, n)).sort(), TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS.slice().sort());
-    check('the new functions are those of the section; none removed', [functionNames(FULL).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+      functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(CODE, n) !== functionSource(released, n)).sort(), TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS.slice().sort());
+    check('the new functions are those of the section; none removed', [functionNames(CODE).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(CODE).indexOf(n) === -1)],
       [TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS.slice().sort(), []]);
     check('untouched: the TDoc reading and grouping helpers, the identity, the agenda readers, the build, the update, Close Report, the other list readers',
       ['assertTdocListIdentity_', 'evaluateTdocListIdentity_', 'readTdocUploadTimesForSessions_', 'buildSkeletonWithTdocTables', 'continuousUpdateCore_', 'closeReportCore_', 'readAgendaWithFallbacks_', 'parseAgendaStructureWithText_',
         'readTdocListWorkbook_', 'isXlsxSignature_', 'downloadAndProcessFromWeb', 'testTdocListUrl', 'getReportConfig_', 'buildRevisionMapFromTdocList_', 'readPortalTdocListPageScope_']
-        .map((n) => functionSource(FULL, n) === functionSource(released, n)), Array(15).fill(true));
+        .map((n) => functionSource(CODE, n) === functionSource(released, n)), Array(15).fill(true));
     const body = (src) => { const f = functionSource(src, 'downloadAndGroupTdocs_'); return f.slice(f.indexOf("blob.setName('TDoc_List_Temp.xlsx');")); };
     check('downloadAndGroupTdocs_: from the blob on (conversion, columns, identity, grouping), unchanged', body(FULL) === body(released), true);
   }

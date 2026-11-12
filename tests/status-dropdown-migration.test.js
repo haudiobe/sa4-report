@@ -98,7 +98,8 @@ function existingReport(options) {
   s.DocumentApp.ElementType.UNSUPPORTED = 'UNSUPPORTED';
   const doc = { getId: () => REPORT_ID, getBody: () => body, saveAndClose: () => { r.events.push('save'); body._state.dirty = false; body._state.closed = true; } };
   s.DocumentApp.getActiveDocument = () => doc;
-  s.DocumentApp.openById = () => ({ getBody: () => makeFakeDocumentBody(s) });
+  // After T-2026.10.22: the report itself is opened again after a checkpoint of a large build (LARGE BUILD CHECKPOINTS).
+  s.DocumentApp.openById = (id) => (id === REPORT_ID ? (r.events.push('reopen'), body._state.closed = false, doc) : { getBody: () => makeFakeDocumentBody(s) });
   s.DocumentApp.getUi = () => ui;
   s.DocumentApp.GlyphType = { BULLET: 'BULLET' };
   s.Session = { getScriptTimeZone: () => 'Europe/Berlin' };
@@ -545,8 +546,9 @@ console.log('\n13. every write by position names its revision (updates and build
     [batches().filter((c) => c.requests[0].deleteContentRange).every((c) => /^rev\.\d+$/.test(c.requiredRevisionId)), batches().filter((c) => c.requests[0].updateDropdownProperties).map((c) => c.requiredRevisionId), r.api.shown('S4aA269003')], [true, [null], 'dropdown:available']);
   r.update();
   check('the next update gives the new TDoc its dropdown', r.api.shown('S4aA269012'), 'dropdown:agreed');
-  check('in the source, no insert pair is sent without a revision: one sender, used by the update and by the conversion, and it refuses to send blind',
-    [(CODE.match(/sendStatusDropdownInsertPairs_\(/g) || []).length, /if \(!revision\) throw new Error\('the revision of the document is not known/.test(CODE), /writeControl: \{ requiredRevisionId: revision \}/.test(CODE), (CODE.match(/Docs\.Documents\.batchUpdate\(/g) || []).length], [3, true, true, 3]);
+  // After T-2026.10.22: the repair after a build (LARGE BUILD CHECKPOINTS) is a third user of the same sender, and sends nothing else.
+  check('in the source, no insert pair is sent without a revision: one sender, used by the update, the conversion and the repair, and it refuses to send blind',
+    [(CODE.match(/sendStatusDropdownInsertPairs_\(/g) || []).length, /if \(!revision\) throw new Error\('the revision of the document is not known/.test(CODE), /writeControl: \{ requiredRevisionId: revision \}/.test(CODE), (CODE.match(/Docs\.Documents\.batchUpdate\(/g) || []).length], [4, true, true, 3]);
 }
 
 // ================================================================ 14. the read back decides, not the reply

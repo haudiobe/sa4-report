@@ -1918,7 +1918,7 @@ function withAddonScriptLock_(fn) {
 // before).
 function enableAutomaticUpdatesForAddon() {
   const ui = DocumentApp.getUi();
-  const documentId = DocumentApp.getActiveDocument().getId();
+  const documentId = currentReportDocument_().getId();
   const context = { documentId: documentId, mode: 'addon-interactive' };
 
   withAddonScriptLock_(function () {
@@ -1958,7 +1958,7 @@ function enableAutomaticUpdatesForAddon() {
 
 function disableAutomaticUpdatesForAddon() {
   const ui = DocumentApp.getUi();
-  const documentId = DocumentApp.getActiveDocument().getId();
+  const documentId = currentReportDocument_().getId();
 
   withAddonScriptLock_(function () {
     const registryEntry = getRegisteredReportDocument_(documentId);
@@ -1987,7 +1987,7 @@ function disableAutomaticUpdatesForAddon() {
  */
 function setAutomaticUpdateIntervalForAddon() {
   const ui = DocumentApp.getUi();
-  const documentId = DocumentApp.getActiveDocument().getId();
+  const documentId = currentReportDocument_().getId();
   const registryEntry = getRegisteredReportDocument_(documentId);
 
   if (!registryEntry) {
@@ -2032,7 +2032,7 @@ function setAutomaticUpdateIntervalForAddon() {
  * file: the dialog never calls an underscore-suffixed function directly.
  */
 function setAutomaticUpdateIntervalForAddonRpc(hours) {
-  const documentId = DocumentApp.getActiveDocument().getId();
+  const documentId = currentReportDocument_().getId();
   return withAddonScriptLock_(function () {
     return registerReportDocument_(documentId, { intervalHours: hours });
   });
@@ -2040,7 +2040,7 @@ function setAutomaticUpdateIntervalForAddonRpc(hours) {
 
 function showAddonSchedulerStatusForAddon() {
   const ui = DocumentApp.getUi();
-  const documentId = DocumentApp.getActiveDocument().getId();
+  const documentId = currentReportDocument_().getId();
   const registryEntry = getRegisteredReportDocument_(documentId);
   const triggerStatus = getAddonSchedulerTriggerStatus_();
 
@@ -2578,7 +2578,7 @@ function getReportDocument_(context) {
     }
     return context._resolvedDocument;
   }
-  return DocumentApp.getActiveDocument();
+  return currentReportDocument_();
 }
 
 function getReportBody_(context) {
@@ -3763,7 +3763,7 @@ function meetingStartDateIso_(meetingDateText) {
 }
 
 function ensureCollectorConfigTable_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   for (const t of body.getTables()) {
     if (isCollectorConfigTable_(t)) return;
   }
@@ -3822,7 +3822,7 @@ function deriveAdminAnchorsFromBuiltDocument_(body) {
  * Create or ensure reallocation table exists as subsection X.1.3
  */
 function ensureReallocationTable_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
 
   // Check if table already exists
   for (const t of body.getTables()) {
@@ -4168,7 +4168,7 @@ function copyTableToDoc2(spreadsheetName, sheetName) {
   }
 
   // Get the active document
-  var doc = DocumentApp.getActiveDocument();
+  var doc = currentReportDocument_();
   var body = doc.getBody();
 
   // Search for the table with matching headings
@@ -4357,7 +4357,7 @@ function processWebDownloadedSheet_(sheet) {
   const suffix = cfg.REPORT_SUFFIX || '6G';
   const agendaPrefix = getConfiguredAgendaPrefix_();
   
-  const doc = DocumentApp.getActiveDocument();
+  const doc = currentReportDocument_();
   const body = doc.getBody();
   
   const data = sheet.getDataRange().getValues();
@@ -5394,7 +5394,7 @@ function copyAllTablesToDoc_(spreadsheetName) {
     return;
   }
   var spreadsheet = SpreadsheetApp.open(files.next());
-  var doc = DocumentApp.getActiveDocument();
+  var doc = currentReportDocument_();
   var body = doc.getBody();
 
   spreadsheet.getSheets().forEach(function (sheet) {
@@ -7906,7 +7906,7 @@ function fixLinksAndReorder_() {
 // =========================================================
 
 function rewritePortalLinksInDoc_() {
-  const doc = DocumentApp.getActiveDocument();
+  const doc = currentReportDocument_();
   const body = doc.getBody();
   const tables = body.getTables();
   const ftpBase = DEFAULT_S4_FTP_BASE;
@@ -8016,17 +8016,22 @@ function shouldReformatAfterUpdate_(newTdocsAdded, revisionsMoved, revisionLinke
 
 function removeRowHeightAndSpacing(context) {
   const body = getReportBody_(context);
-  const tables = getTablesCounted_(body, 'removeRowHeightAndSpacing');
+  // After T-2026.10.22: `let` -- in a Full Build the tables are taken again after a checkpoint (LARGE BUILD CHECKPOINTS section).
+  let tables = getTablesCounted_(body, 'removeRowHeightAndSpacing');
 
   // Apply widths ONLY for 2-column TDOC tables (and leave other tables untouched)
   // PERF-001: this ALWAYS runs, unconditionally, on every continuousUpdate()
   // call, regardless of whether anything actually changed -- suspected
   // major cost driver (see this task's report). Timed as its own stage.
   perfTimed_('  formatting: setTwoColumnTDocTableWidths_', () => setTwoColumnTDocTableWidths_(context));
+  // After T-2026.10.22: the widths may have made a checkpoint; the tables of the document that is open now (LARGE BUILD CHECKPOINTS section).
+  tables = largeBuildTablesIfDue_(tables, 'formatting', true);
 
   const formattingWriteLoopStart = Date.now();
   for (let i = 0; i < tables.length; i++) {
+    tables = largeBuildTablesIfDue_(tables, 'formatting');
     const table = tables[i];
+    largeBuildCount_(table.getNumRows() * LARGE_BUILD_UNITS_.formattedRow);
 
     // Row formatting + paragraph spacing cleanup
     for (let j = 0; j < table.getNumRows(); j++) {
@@ -8103,9 +8108,12 @@ function setTwoColumnTDocTableWidths_(context) {
   const secondColWidth = pageWidth - firstColWidth;
 
   const body = getActiveDocumentBodyCounted_('setTwoColumnTDocTableWidths_', context);
-  const tables = getTablesCounted_(body, 'setTwoColumnTDocTableWidths_');
+  // After T-2026.10.22: in a Full Build the tables are taken again after a checkpoint (LARGE BUILD CHECKPOINTS section).
+  let tables = getTablesCounted_(body, 'setTwoColumnTDocTableWidths_');
 
-  tables.forEach(t => {
+  tables.slice().forEach((_, tableIndex) => {
+    tables = largeBuildTablesIfDue_(tables, 'formatting: widths');
+    const t = tables[tableIndex];
     if (!isTDocTable_(t)) return;
 
     // only apply to exactly 2 columns
@@ -8118,6 +8126,7 @@ function setTwoColumnTDocTableWidths_(context) {
       row.getCell(1).setWidth(secondColWidth);
       perfCount_('DocumentApp writes: cell.setWidth()', 2);
     }
+    largeBuildCount_(t.getNumRows() * LARGE_BUILD_UNITS_.widthRow);
   });
 }
 
@@ -8152,7 +8161,7 @@ function removeEmptyParagraphs_(context) {
  * CONFIG TABLE
  ********************************************************/
 function ensureConfigTable_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   
   // Find existing table
   for (const t of body.getTables()) {
@@ -9038,7 +9047,7 @@ var CONFIG_DIALOG_MANAGED_KEYS_ = [
 
 function getActiveDocumentIdSafely_() {
   try {
-    return DocumentApp.getActiveDocument().getId() || null;
+    return currentReportDocument_().getId() || null;
   } catch (e) {
     return null;
   }
@@ -9575,7 +9584,7 @@ function updateReportIncremental() {
  * PHASE 4: Analyze Report Status
  */
 function analyzeReportStatus() {
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   const tables = body.getTables();
   
   const stats = {
@@ -9987,7 +9996,7 @@ function addDocumentReallocation() {
 function saveReallocation(tdoc, original, newAgenda, reason) {
   ensureReallocationTable_();
   
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   
   // Find the reallocation table
   for (const table of body.getTables()) {
@@ -10108,7 +10117,7 @@ function clearAllReallocations() {
   
   if (response !== ui.Button.YES) return;
   
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   
   // Find and clear the reallocation table
   for (const table of body.getTables()) {
@@ -11026,6 +11035,331 @@ function diagnoseTdocListDownload() {
 // END OF TDOC LIST DOWNLOAD
 // =========================================================
 
+// =========================================================
+// LARGE BUILD CHECKPOINTS (after T-2026.10.22)
+// =========================================================
+//
+// GitHub issue #6. The Full Build of Audio SWG SA4#138 (10 agenda items,
+// 111 TDocs, 100 abstracts) made every DocumentApp change of all its phases
+// in one unsaved batch. The first save -- the one the status-dropdown step
+// makes -- was refused by Google Docs: "Too many changes applied before
+// saving document. Please save changes in smaller batches using
+// Document.saveAndClose(), then reopen the document with
+// Document.openById()." The step caught it and was reported as skipped;
+// the execution then failed when Apps Script tried the same save at its end.
+//
+// What a Full Build does now:
+//   - CHECKPOINTS. Whenever about LARGE_BUILD_CHECKPOINT_BUDGET_ changes
+//     are pending (an estimate, by LARGE_BUILD_UNITS_), the build saves
+//     them: inside the loops that make most changes -- the TDoc tables of
+//     the skeleton, the abstracts, the column widths, the formatting -- and
+//     at the end of a phase. Once a build has made one checkpoint it is a large
+//     build, and from then on it saves at the end of every phase as well.
+//     A small build makes none and saves as every release before did.
+//     A checkpoint is saveAndClose() and DocumentApp.openById() of the
+//     same document, as Google asks.
+//   - FRESH REFERENCES. A closed document cannot be changed, nor can any
+//     element read from it. Every document access of Code.js goes through
+//     currentReportDocument_(): the document a checkpoint reopened, else
+//     the active one. Each loop that checkpoints takes its body or its
+//     tables again from the reopened document; the number of tables must
+//     be the same, or the build stops.
+//   - A SAVE THAT FAILS FAILS THE BUILD, naming the checkpoint, and what
+//     was saved before it. The status-dropdown step no longer reports a
+//     failed save as "skipped".
+// Outside a Full Build nothing of this runs: currentReportDocument_() is
+// DocumentApp.getActiveDocument(), and the loops make no checkpoint.
+//
+// REPAIR (an existing report, no rebuild). repairStatusDropdownsAfterBuild()
+// and its dry run previewStatusDropdownRepair(), run from the Apps Script
+// editor, finish what the status-dropdown step of a build would have done,
+// on the document as it is: they read it once through the Docs API, refuse
+// a report whose TDoc numbers have more than one table, create the "Document
+// Status" definition from the template if the report has none, turn every
+// text Status that is a Portal status with an option into its dropdown, read
+// the document again and mark the report only when every such cell is a
+// dropdown and nothing else in the document differs. DocumentApp changes
+// nothing; no table, minute, abstract or dropdown that exists is touched.
+// Run again, it finds nothing to do. Nothing is downloaded, nothing cleared.
+
+/** About how many changes may be pending before a checkpoint saves them (an estimate; see LARGE_BUILD_UNITS_). */
+var LARGE_BUILD_CHECKPOINT_BUDGET_ = 2000;
+/** Estimated DocumentApp changes: a TDoc table of the skeleton, a row of the registration table, a formatted table row, an abstract row, the two widths of a row. */
+var LARGE_BUILD_UNITS_ = { tdocTable: 40, registrationRow: 6, formattedRow: 8, abstractRow: 6, widthRow: 2 };
+/** Pauses before each attempt to open the document again after a checkpoint. */
+var LARGE_BUILD_REOPEN_DELAYS_MS_ = [0, 1000, 2000];
+// One execution's checkpoints: on only inside runFullReportBuildCore_().
+var LARGE_BUILD_CHECKPOINTS_ = { enabled: false, reopened: null, pending: 0, saves: 0, last: '' };
+
+/** The report document: the one a checkpoint of this execution reopened, else the active document. */
+function currentReportDocument_() {
+  return LARGE_BUILD_CHECKPOINTS_.reopened || DocumentApp.getActiveDocument();
+}
+
+/** The start of a Full Build: checkpoints on, nothing pending. */
+function beginLargeBuildCheckpoints_() {
+  LARGE_BUILD_CHECKPOINTS_ = { enabled: true, reopened: null, pending: 0, saves: 0, last: '' };
+}
+
+/** The end of a Full Build: checkpoints off. Returns how many were made. */
+function endLargeBuildCheckpoints_() {
+  const saves = LARGE_BUILD_CHECKPOINTS_.saves;
+  LARGE_BUILD_CHECKPOINTS_ = { enabled: false, reopened: null, pending: 0, saves: 0, last: '' };
+  return saves;
+}
+
+/** Counts estimated changes made since the last checkpoint (nothing outside a Full Build). */
+function largeBuildCount_(units) {
+  if (LARGE_BUILD_CHECKPOINTS_.enabled) LARGE_BUILD_CHECKPOINTS_.pending += units || 0;
+}
+
+/** Opens the document again after it was saved and closed, with short pauses between attempts. Throws the last error. */
+function reopenReportDocument_(documentId) {
+  let lastError = null;
+  for (let attempt = 0; attempt < LARGE_BUILD_REOPEN_DELAYS_MS_.length; attempt++) {
+    if (LARGE_BUILD_REOPEN_DELAYS_MS_[attempt] && typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(LARGE_BUILD_REOPEN_DELAYS_MS_[attempt]);
+    try {
+      return DocumentApp.openById(documentId);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('the document could not be opened');
+}
+
+/**
+ * A checkpoint: saves and closes the report, opens it again and makes that
+ * the document of the rest of the build. Returns the reopened Document, or
+ * null when checkpoints are off. Throws -- and the build stops -- when the
+ * save or the reopening fails, naming this checkpoint and the last one saved.
+ */
+function largeBuildCheckpoint_(label) {
+  const state = LARGE_BUILD_CHECKPOINTS_;
+  if (!state.enabled) return null;
+  const doc = currentReportDocument_();
+  const documentId = doc.getId();
+  const pending = state.pending;
+  const savedBefore = state.saves ? 'What the build made up to the checkpoint "' + state.last + '" is saved; what it made after that is not.' : 'Nothing this build made has been saved.';
+  try {
+    doc.saveAndClose();
+  } catch (e) {
+    throw new Error('The report could not be saved at the checkpoint "' + label + '" (' + e.message + '). ' + savedBefore +
+      ' The report is incomplete: do not use it as it is; run the build again on a copy, or restore the backup.');
+  }
+  state.reopened = null;
+  state.saves++;
+  state.last = label;
+  state.pending = 0;
+  try {
+    state.reopened = reopenReportDocument_(documentId);
+  } catch (e) {
+    throw new Error('The report was saved at the checkpoint "' + label + '" but could not be opened again (' + e.message + '). The build stops there.');
+  }
+  Logger.log('[CHECKPOINT] ' + label + ': saved (about ' + pending + ' change(s)) and opened again; checkpoint ' + state.saves + '.');
+  return state.reopened;
+}
+
+/**
+ * The end of a phase of a Full Build: a checkpoint when enough changes are
+ * pending, or when the build has made one already (a large build saves after
+ * every phase). Returns the reopened Document, or null when none was made.
+ */
+function largeBuildPhaseCheckpoint_(label) {
+  const state = LARGE_BUILD_CHECKPOINTS_;
+  if (!state.enabled || (state.pending < LARGE_BUILD_CHECKPOINT_BUDGET_ && state.saves === 0)) return null;
+  return largeBuildCheckpoint_(label);
+}
+
+/**
+ * In a loop that writes into `body`: a checkpoint first when enough changes
+ * are pending, then `units` more are counted. Returns the body to go on with
+ * -- the reopened document's after a checkpoint, else `body` itself.
+ */
+function largeBuildStep_(body, label, units) {
+  const state = LARGE_BUILD_CHECKPOINTS_;
+  if (!state.enabled) return body;
+  const out = state.pending >= LARGE_BUILD_CHECKPOINT_BUDGET_ ? largeBuildCheckpoint_(label).getBody() : body;
+  state.pending += units || 0;
+  return out;
+}
+
+/**
+ * In a loop over the tables of the report that changes them but adds or
+ * removes none: a checkpoint when enough changes are pending, and then the
+ * tables of the reopened document. Returns `tables` itself when there was no
+ * checkpoint -- unless `current`: then, in a build that has made a checkpoint,
+ * the tables of the document that is open now (a callee may have made one).
+ * Throws when the document has another number of tables.
+ */
+function largeBuildTablesIfDue_(tables, label, current) {
+  const state = LARGE_BUILD_CHECKPOINTS_;
+  if (!state.enabled) return tables;
+  let fresh;
+  if (state.pending >= LARGE_BUILD_CHECKPOINT_BUDGET_) fresh = largeBuildCheckpoint_(label).getBody().getTables();
+  else if (current && state.saves > 0) fresh = currentReportDocument_().getBody().getTables();
+  else return tables;
+  if (fresh.length !== tables.length) throw new Error('After the checkpoint "' + label + '" the report has ' + fresh.length + ' tables instead of ' + tables.length + '. The build stops there.');
+  return fresh;
+}
+
+/**
+ * Pure: what the repair does with a report read through the API.
+ * `index`: buildStatusDocsIndex_(); `options`: the options of the report's definition, or of the template's when the
+ * report has none. { tdocTables, duplicates: [number], dropdowns, convert: { number: text }, unmapped: [{ number, text }], empty, other: [{ number, why }] }
+ */
+function planStatusDropdownRepair_(index, options) {
+  const plan = { tdocTables: 0, duplicates: Object.keys(index.duplicates || {}).sort(), dropdowns: 0, convert: {}, unmapped: [], empty: 0, other: [] };
+  const convert = statusDropdownHealCandidates_(index, { options: options || [] });
+  Object.keys(index.tables).sort().forEach(function (number) {
+    const entry = index.tables[number];
+    plan.tdocTables++;
+    if (index.duplicates[number]) return;
+    if (entry.kind === 'dropdown') { plan.dropdowns++; return; }
+    if (Object.prototype.hasOwnProperty.call(convert, number)) { plan.convert[number] = convert[number]; return; }
+    if (String(entry.text || '').trim() === '') { plan.empty++; return; }
+    if (!mapPortalStatusToDropdownOption_(entry.text, options || [])) { plan.unmapped.push({ number: number, text: String(entry.text).trim() }); return; }
+    plan.other.push({ number: number, why: 'its Status cell is not one line of plain text' });
+  });
+  return plan;
+}
+
+/**
+ * The repair itself. `options.dryRun`: only read and say what would be done. Never throws.
+ * { ok, dryRun, error, tdocTables, duplicates: [number], dropdownsBefore, toConvert, converted, unmapped: [{ number, text }], empty,
+ *   other: [{ number, why }], notConverted: [number], unexpected: [number], contentUnchanged, definition: 'in the report' | 'created' | 'to be created',
+ *   markedBefore, marked }
+ */
+function repairStatusDropdowns_(options) {
+  const dryRun = !!(options && options.dryRun);
+  const result = { ok: false, dryRun: dryRun, error: '', tdocTables: 0, duplicates: [], dropdownsBefore: 0, toConvert: 0, converted: 0, unmapped: [], empty: 0, other: [], notConverted: [], unexpected: [],
+    contentUnchanged: null, definition: '', markedBefore: false, marked: false };
+  try {
+    if (!statusDropdownsAvailable_()) { result.error = 'Status dropdowns are not available in this report: it needs the template runtime with the Google Docs API service. Nothing was changed.'; return result; }
+    const props = PropertiesService.getDocumentProperties();
+    result.markedBefore = props.getProperty(STATUS_DROPDOWN_ENABLED_KEY_) === '1';
+    const documentId = currentReportDocument_().getId();
+    let beforeDocument = statusDocsGet_(documentId, STATUS_DOCS_MIGRATION_FIELDS_);
+    let index = buildStatusDocsIndex_(beforeDocument);
+    if (!index) { result.error = 'The document could not be read. Nothing was changed.'; return result; }
+
+    let definition = index.definition;
+    let optionList = definition ? definition.options : null;
+    result.definition = definition ? 'in the report' : 'to be created';
+    if (!definition) {
+      const source = readStatusDropdownSourceDefinition_();
+      if (!source) { result.error = 'The template has no "' + STATUS_DROPDOWN_TITLE_ + '" dropdown. Nothing was changed.'; return result; }
+      optionList = source.options;
+    }
+    let plan = planStatusDropdownRepair_(index, optionList);
+    Object.assign(result, { tdocTables: plan.tdocTables, duplicates: plan.duplicates, dropdownsBefore: plan.dropdowns, toConvert: Object.keys(plan.convert).length, unmapped: plan.unmapped, empty: plan.empty, other: plan.other });
+    if (plan.tdocTables === 0) { result.error = 'The report has no TDoc table: it is not a built report. Nothing was changed.'; return result; }
+    if (plan.duplicates.length) {
+      result.error = plan.duplicates.length + ' TDoc number(s) have more than one table (' + statusDropdownNumberList_(plan.duplicates) + '). That is not what a build leaves; the report must be looked at before it is repaired. Nothing was changed.';
+      return result;
+    }
+    if (dryRun) { result.ok = true; return result; }
+
+    if (!definition) {
+      createStatusDropdownDefinition_(documentId, index.tabId);
+      result.definition = 'created';
+      // Read again: the positions are the same, but they are used with the revision this read names.
+      beforeDocument = statusDocsGet_(documentId, STATUS_DOCS_MIGRATION_FIELDS_);
+      index = buildStatusDocsIndex_(beforeDocument);
+      definition = index && index.definition;
+      if (!definition) { result.error = 'The "' + STATUS_DROPDOWN_TITLE_ + '" dropdown could not be created in this report. No Status was changed.'; return result; }
+      plan = planStatusDropdownRepair_(index, definition.options);
+      result.toConvert = Object.keys(plan.convert).length;
+    }
+
+    const requests = planStatusDropdownRequests_(index, definition, plan.convert, {}, {});
+    const progress = { sent: 0 };
+    try {
+      sendStatusDropdownInsertPairs_(documentId, requests.insertPairs, index.revisionId, progress);
+    } catch (e) {
+      result.error = 'Not every Status could be repaired (' + e.message + '). What was repaired is complete; the rest is unchanged. Run the repair again.';
+    }
+
+    // Read back: every Status cell, and everything that is not a Status value.
+    const afterDocument = statusDocsGet_(documentId, STATUS_DOCS_MIGRATION_FIELDS_);
+    const after = buildStatusDocsIndex_(afterDocument);
+    Object.keys(index.tables).forEach(function (number) {
+      const was = index.tables[number];
+      const now = after && after.tables[number];
+      if (Object.prototype.hasOwnProperty.call(plan.convert, number)) {
+        const want = mapPortalStatusToDropdownOption_(plan.convert[number], definition.options);
+        if (now && now.kind === 'dropdown' && now.selectedOptionId === want.optionId && now.definitionId === definition.id) result.converted++;
+        else if (now && now.kind === 'text' && now.text === was.text) result.notConverted.push(number);
+        else result.unexpected.push(number);
+      } else if (!now || now.kind !== was.kind || now.text !== was.text || (was.kind === 'dropdown' && now.selectedOptionId !== was.selectedOptionId)) {
+        result.unexpected.push(number);
+      }
+    });
+    if (after && Object.keys(after.tables).length !== Object.keys(index.tables).length) result.unexpected.push('(the number of TDoc tables changed)');
+    const a = statusDocsOtherContent_(beforeDocument);
+    const b = statusDocsOtherContent_(afterDocument);
+    result.contentUnchanged = a.length === b.length && a.every(function (line, i) { return line === b[i]; });
+
+    result.ok = !result.error && result.notConverted.length === 0 && result.unexpected.length === 0 && result.contentUnchanged === true;
+    if (result.ok) { props.setProperty(STATUS_DROPDOWN_ENABLED_KEY_, '1'); result.marked = true; }
+    if (!result.ok && !result.error) {
+      result.error = result.unexpected.length ? 'After the repair ' + result.unexpected.length + ' Status cell(s) are not what was expected: ' + statusDropdownNumberList_(result.unexpected) + '.'
+        : (result.contentUnchanged === false ? 'The document differs outside its Status cells from what it was before the repair. It may have been edited meanwhile; run the repair again to check.'
+          : 'Not every Status was repaired. Run the repair again.');
+    }
+  } catch (e) {
+    result.error = 'The repair stopped: ' + e.message;
+  }
+  Logger.log('[REPAIR] ' + formatStatusDropdownRepair_(result).replace(/\n/g, ' | '));
+  return result;
+}
+
+/** Pure: what the repair says, for the log. */
+function formatStatusDropdownRepair_(result) {
+  const lines = [];
+  lines.push(result.dryRun ? (result.ok ? 'Status dropdown repair -- dry run, nothing was changed.' : 'Status dropdown repair -- dry run: the repair would be refused.')
+    : (result.ok ? 'Status dropdown repair -- done.' : 'Status dropdown repair -- NOT complete.'));
+  if (result.error) lines.push(result.error);
+  lines.push('TDoc tables: ' + result.tdocTables + (result.duplicates.length ? ' (' + result.duplicates.length + ' number(s) with more than one table)' : ''));
+  lines.push('already a dropdown: ' + result.dropdownsBefore);
+  lines.push((result.dryRun ? 'to be made a dropdown: ' : 'made a dropdown: ') + (result.dryRun ? result.toConvert : result.converted + (result.converted !== result.toConvert ? ' of ' + result.toConvert : '')));
+  lines.push('left as text: ' + (result.unmapped.length + result.empty) + (result.unmapped.length ? ' (no option for: ' + result.unmapped.slice(0, 5).map(function (u) { return u.number + ' "' + u.text.slice(0, 30) + '"'; }).join(', ') + (result.unmapped.length > 5 ? ', …' : '') + ')' : ''));
+  if (result.other.length) lines.push('not a plain-text Status, left alone: ' + statusDropdownNumberList_(result.other.map(function (o) { return o.number; })));
+  if (result.notConverted.length) lines.push('still text: ' + statusDropdownNumberList_(result.notConverted));
+  if (result.unexpected.length) lines.push('to be looked at: ' + statusDropdownNumberList_(result.unexpected));
+  lines.push('definition: ' + result.definition + '; report marked before: ' + result.markedBefore + (result.dryRun ? '' : ', after: ' + result.marked) +
+    (result.contentUnchanged === null ? '' : '; everything else unchanged: ' + result.contentUnchanged));
+  return lines.join('\n');
+}
+
+/** Run from the Apps Script editor: what the repair would do. Reads only. */
+function previewStatusDropdownRepair() {
+  resetStatusDropdownRun_();
+  return formatStatusDropdownRepair_(repairStatusDropdowns_({ dryRun: true }));
+}
+
+/**
+ * Run from the Apps Script editor: the repair of an existing report after a build whose status-dropdown step did
+ * not run. Holds the lock an update holds, so that the two never run at the same time. Safe to run again.
+ */
+function repairStatusDropdownsAfterBuild() {
+  assertNotTemplateMaster_();
+  resetStatusDropdownRun_();
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    Logger.log('[REPAIR] Nothing was changed: an update of this report is running right now. Try again in a minute.');
+    return 'Nothing was changed: an update of this report is running right now.';
+  }
+  try {
+    return formatStatusDropdownRepair_(repairStatusDropdowns_({ dryRun: false }));
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// =========================================================
+// END OF LARGE BUILD CHECKPOINTS
+// =========================================================
+
 /**
  * SA4-IMPL-001: delegates to the central parseSA4DocumentId_() model instead
  * of a hardcoded /S4-\d{6}/. Preserves its exact external contract (valid ->
@@ -11293,6 +11627,8 @@ function runFullReportBuildCore_() {
       const outcome = fn() || {};
       if (outcome.skipped) entry.status = 'skipped';
       entry.detail = outcome.detail || '';
+      // After T-2026.10.22: in a large build, what the phase changed is saved before the next one starts (LARGE BUILD CHECKPOINTS section).
+      if (name !== 'status dropdowns') largeBuildPhaseCheckpoint_('after ' + name);
     } catch (e) {
       entry.status = 'failed';
       entry.detail = e.message;
@@ -11305,6 +11641,8 @@ function runFullReportBuildCore_() {
 
   resetReviewerTokenRunState_();
   resetStatusDropdownRun_();
+  // After T-2026.10.22: a large build is saved in parts (LARGE BUILD CHECKPOINTS section).
+  beginLargeBuildCheckpoints_();
 
   phase('skeleton', function () {
     SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = true;
@@ -11331,12 +11669,15 @@ function runFullReportBuildCore_() {
   if (statusDropdownsAvailable_()) {
     phase('status dropdowns', function () {
       const done = finalizeStatusDropdowns_('build');
+      // After T-2026.10.22: a save that failed is a failure of the build, not a skipped step (LARGE BUILD CHECKPOINTS section).
+      if (done.saveFailed) throw new Error(done.reason);
       return done.ran ? { detail: done.inserted + ' dropdown(s) inserted' + (done.reason ? ' -- ' + done.reason : '') } : { skipped: true, detail: done.reason };
     });
   }
 
+  const checkpoints = endLargeBuildCheckpoints_();
   const totalMs = Date.now() - totalStart;
-  Logger.log('[FULLBUILD] total: ' + totalMs + ' ms -- ' + phases.map(function (p) { return p.name + ' ' + p.status + ' ' + p.ms + ' ms'; }).join(', '));
+  Logger.log('[FULLBUILD] total: ' + totalMs + ' ms -- ' + phases.map(function (p) { return p.name + ' ' + p.status + ' ' + p.ms + ' ms'; }).join(', ') + (checkpoints ? ' -- ' + checkpoints + ' checkpoint(s)' : ''));
   return {
     ok: !failed,
     failedPhase: failed ? failed.name : null,
@@ -11486,14 +11827,15 @@ function buildSkeletonWithTdocTables(options) {
   // unless this ad-hoc report has sessions.
   const tdocSessions = makeAdhocTdocSessionResolverSafely_();
   // After T-2026.10.15: the Disposition Summary is not rebuilt; the result says how to write it again.
-  const dispositionSummaryNote = dispositionSummaryRebuildNote_(DocumentApp.getActiveDocument().getBody());
+  const dispositionSummaryNote = dispositionSummaryRebuildNote_(currentReportDocument_().getBody());
 
   // T-2026.10.7: what the status dropdowns say now is kept for the end of this build (nothing is read unless the
   // report has status dropdowns).
   captureStatusDropdownValuesForRebuild_();
 
   // Step 2: Clear document, set title
-  const body = DocumentApp.getActiveDocument().getBody().clear();
+  // After T-2026.10.22: `let` -- after a checkpoint the body is the reopened document's (LARGE BUILD CHECKPOINTS section).
+  let body = currentReportDocument_().getBody().clear();
   setDocumentTitleFromTemplate_(templateDocId);
 
   const allTdocs = [];
@@ -11656,6 +11998,7 @@ function buildSkeletonWithTdocTables(options) {
     // the Session column (tdocSessions is null for every other report).
     if (allTdocs.length > 0) {
       createSummaryTable_(body, allTdocs, allTdocs[0].tdocCol, allTdocs[0].titleCol, allTdocs[0].sourceCol, -1, tdocSessions);
+      largeBuildCount_(allTdocs.length * LARGE_BUILD_UNITS_.registrationRow);
     }
 
     // SA4-PROD-003: {agendaPrefixNum}.1.4 "Documents" -- collects every
@@ -11801,6 +12144,7 @@ function buildSkeletonWithTdocTables(options) {
             ['Disposition', revisedTo ? 'Revised to ' + revisedTo : ''],
             ['Status', tdocData.statusCol >= 0 ? row[tdocData.statusCol] : '']
           ];
+          body = largeBuildStep_(body, 'skeleton: TDoc tables', LARGE_BUILD_UNITS_.tdocTable);
           const table = body.appendTable();
           removeInitialEmptyRow_(table);
           tempData.forEach(rowData => {
@@ -12080,7 +12424,7 @@ function addTdocTablesOnly() {
  */
 function setDocumentTitleFromTemplate_(sourceDocId) {
   try {
-    const targetDoc = DocumentApp.getActiveDocument();
+    const targetDoc = currentReportDocument_();
     const context = getMeetingContext_();
     const newTitle = generateReportTitle_({
       REPORT_SUFFIX: context.report.type,
@@ -12136,7 +12480,7 @@ function generateReportTitle_(cfg) {
 
 function buildReportPreamble_(sourceDocId, cfg) {
   const sourceBody = DocumentApp.openById(sourceDocId).getBody();
-  const targetBody = DocumentApp.getActiveDocument().getBody();
+  const targetBody = currentReportDocument_().getBody();
   const agendaPrefix = (cfg.AGENDA_ITEM_PREFIX || '0.').replace(/\.$/, '');
 
   // --- 1. Opening of the session ---
@@ -12650,7 +12994,11 @@ function addAbstractsForTables_(body, context, leaveOut, portalStatuses, options
   const cacheSkipsBefore = perfCounterValue_('Reviewer negative-cache hits');
   const rowsInsertedBefore = perfCounterValue_('structural: abstract row inserted (fetchAndAddAbstract_)');
 
-  getTablesCounted_(body, 'addAbstractsForTables_').forEach(table => {
+  // After T-2026.10.22: in a Full Build the tables are taken again after a checkpoint (LARGE BUILD CHECKPOINTS section).
+  let tables = getTablesCounted_(body, 'addAbstractsForTables_');
+  tables.slice().forEach((_, tableIndex) => {
+    tables = largeBuildTablesIfDue_(tables, 'abstracts');
+    const table = tables[tableIndex];
     if (!isTDocTable_(table)) return;
 
     const existingAbstract = findCellText_(table, 'Abstract');
@@ -12668,6 +13016,7 @@ function addAbstractsForTables_(body, context, leaveOut, portalStatuses, options
     // false: the TDoc is withdrawn and nothing was asked -- no candidate.
     const asked = perfTimedAccum_('Reviewer API abstract fetch (fetchAndAddAbstract_, accumulated)', () => fetchAndAddAbstract_(table, parsedTdoc.raw, context, portalStatus, options));
     if (asked !== false) candidatesProcessed++;
+    if (asked !== false) largeBuildCount_(LARGE_BUILD_UNITS_.abstractRow);
   });
 
   // Callers log their own message from this breakdown (see
@@ -12737,7 +13086,7 @@ function autoCreateReportStructure() {
  * Create report structure from agenda items
  */
 function createReportStructure_(agendaItems) {
-  const doc = DocumentApp.getActiveDocument();
+  const doc = currentReportDocument_();
   const body = doc.getBody();
   
   // Find where to insert (after config tables and "Registered Documents")
@@ -12858,7 +13207,7 @@ function removeDuplicateEmailEntries() {
   
   if (response !== ui.Button.YES) return;
   
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   const tables = body.getTables();
   
   let processedTables = 0;
@@ -12971,7 +13320,7 @@ function cleanUpWrongEmailDiscussions() {
   
   if (response !== ui.Button.YES) return;
   
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   const tables = body.getTables();
   const props = PropertiesService.getDocumentProperties();
   
@@ -13104,7 +13453,7 @@ function applyDocumentReallocations() {
   
   if (response !== ui.Button.YES) return;
 
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   const result = applyDocumentReallocationsToBody_(body, reallocations);
 
   Logger.log(`Applied reallocations: ${result.movedCount} moved, ${result.removedCount} removed, ${result.updatedCount} updated, ${result.notFound.length} not in report`);
@@ -13823,7 +14172,7 @@ function statusDropdownIndex_() {
   run.index = null;
   if (!statusDropdownsAvailable_()) return null;
   try {
-    run.index = buildStatusDocsIndex_(statusDocsGet_(DocumentApp.getActiveDocument().getId(), STATUS_DOCS_REPORT_FIELDS_));
+    run.index = buildStatusDocsIndex_(statusDocsGet_(currentReportDocument_().getId(), STATUS_DOCS_REPORT_FIELDS_));
   } catch (e) {
     Logger.log('Status dropdowns: the statuses could not be read (' + e.message + '). A status that is a dropdown counts as unknown in this run.');
   }
@@ -14153,9 +14502,15 @@ function finalizeStatusDropdowns_(mode) {
     const mayInsert = (wantInserts || heal) && (mode === 'build' || marked);
     if (!mayInsert && !wantUpdates) { result.reason = 'this report has text statuses'; return result; }
 
-    const doc = DocumentApp.getActiveDocument();
+    const doc = currentReportDocument_();
     const documentId = doc.getId();
-    doc.saveAndClose();
+    // After T-2026.10.22: the caller is told that the save failed (LARGE BUILD CHECKPOINTS section).
+    try {
+      doc.saveAndClose();
+    } catch (e) {
+      result.saveFailed = true;
+      throw new Error('the document could not be saved (' + e.message + ')');
+    }
     result.ran = true;
     const index = buildStatusDocsIndex_(statusDocsGet_(documentId, STATUS_DOCS_REPORT_FIELDS_));
     if (!index) throw new Error('the document has no readable tab');
@@ -14322,7 +14677,7 @@ function migrateStatusFieldsToDropdowns_(options) {
     if (!statusDropdownsAvailable_()) { result.error = 'Status dropdowns are not available in this report: it needs the template runtime with the Google Docs API service.'; return result; }
     const props = PropertiesService.getDocumentProperties();
     result.markedBefore = props.getProperty(STATUS_DROPDOWN_ENABLED_KEY_) === '1';
-    const documentId = DocumentApp.getActiveDocument().getId();
+    const documentId = currentReportDocument_().getId();
     let beforeDocument = statusDocsGet_(documentId, STATUS_DOCS_MIGRATION_FIELDS_);
     let index = buildStatusDocsIndex_(beforeDocument);
     if (!index) { result.error = 'The document could not be read.'; return result; }
@@ -15197,7 +15552,7 @@ function saveAdhocSessionsConfiguration(rows) {
   if (result.ok && result.changed) {
     let relevant = !!(openingSessionIds && openingSessionIds.length);
     try {
-      relevant = relevant || !!findAdhocOpeningContainer_(DocumentApp.getActiveDocument().getBody());
+      relevant = relevant || !!findAdhocOpeningContainer_(currentReportDocument_().getBody());
     } catch (e) {
       // Without a document to look at there is nothing to bring in line.
     }
@@ -15214,7 +15569,7 @@ function saveAdhocSessionsConfiguration(rows) {
   if (result.ok && result.changed && attendanceSessionIds && attendanceSessionIds.length && result.sessions.length) {
     const rendered = withAdhocAttendanceLock_(function () {
       try {
-        refreshAdhocAttendanceSection_(DocumentApp.getActiveDocument().getBody());
+        refreshAdhocAttendanceSection_(currentReportDocument_().getBody());
         return { ok: true };
       } catch (e) {
         return { ok: false, error: e.message };
@@ -15230,7 +15585,7 @@ function saveAdhocSessionsConfiguration(rows) {
   if (result.ok && result.changed) {
     let hasColumn = false;
     try {
-      const found = findRegistrationTable_(DocumentApp.getActiveDocument().getBody());
+      const found = findRegistrationTable_(currentReportDocument_().getBody());
       hasColumn = !!found && found.columns === 5;
     } catch (e) {
       hasColumn = false;
@@ -16710,7 +17065,7 @@ function beginAdhocAttendanceRebuild_() {
     const store = adhocAttendanceStore_();
     const state = readAdhocAttendance_(store);
     if (state.status !== 'ok' || (Object.keys(state.sessions).length === 0 && state.problems.length === 0)) return null;
-    const merged = mergeAdhocCompanyCorrections_(state.companies, state.sessions, harvestAdhocAttendeeCompanies_(DocumentApp.getActiveDocument().getBody()));
+    const merged = mergeAdhocCompanyCorrections_(state.companies, state.sessions, harvestAdhocAttendeeCompanies_(currentReportDocument_().getBody()));
     writeAdhocAttendanceValue_(store, ADHOC_ATTENDANCE_COMPANIES_ID_, Object.keys(merged).length ? JSON.stringify(merged) : null);
     return { active: true };
   } catch (e) {
@@ -16835,7 +17190,7 @@ function withAdhocAttendanceLock_(fn) {
 /** Renders after a change that is already stored; a failure is reported, the stored data stays. */
 function renderAfterAdhocAttendanceChange_(done) {
   try {
-    const body = DocumentApp.getActiveDocument().getBody();
+    const body = currentReportDocument_().getBody();
     const rendered = refreshAdhocAttendanceSection_(body);
     // An attendance list the report had before (made by hand, or by another tool) is never changed or removed here: it is only pointed out.
     const elsewhere = rendered.container === 'removed' || rendered.container === 'none' ? 0 : countAdhocAttendeeTablesElsewhere_(body);
@@ -16879,7 +17234,7 @@ function confirmTeamsAttendanceImport(sessionId, base64, token) {
     if (plan.token !== token) return { ok: false, error: 'Nothing was imported: the file or the session is not the one that was previewed. Preview again.' };
 
     if (plan.unchanged) {
-      if (findAdhocAttendanceContainer_(DocumentApp.getActiveDocument().getBody())) {
+      if (findAdhocAttendanceContainer_(currentReportDocument_().getBody())) {
         return { ok: true, error: null, changed: false, rendered: false, message: 'This attendance is already imported for ' + whose + '. Nothing was changed.' };
       }
       const restored = renderAfterAdhocAttendanceChange_('This attendance was already imported for ' + whose + '; the Attendance section was written again.');
@@ -16944,7 +17299,7 @@ function refreshAdhocAttendanceSection() {
   assertNotTemplateMaster_();
   if (!adhocSessionsEnabled_()) throw new Error('Attendance needs an ad-hoc report with configured sessions. Use Configure Sessions first.');
   const result = withAdhocAttendanceLock_(function () {
-    return { ok: true, rendered: refreshAdhocAttendanceSection_(DocumentApp.getActiveDocument().getBody()) };
+    return { ok: true, rendered: refreshAdhocAttendanceSection_(currentReportDocument_().getBody()) };
   });
   if (!result.ok) throw new Error(result.error);
   return result.rendered;
@@ -17779,7 +18134,7 @@ function saveAdhocTdocSessions(input) {
   if (!result.ok || !result.changed) return result;
 
   // The assignments are saved. A report that has the Session column shows them at once.
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   const found = findRegistrationTable_(body);
   if (found && found.columns === 5) {
     const refreshed = withAdhocAttendanceLock_(function () { return refreshSessionColumnFromList_(body); });
@@ -17798,7 +18153,7 @@ function enableAdhocSessionColumn() {
   const unavailable = adhocTdocSessionsUnavailable_();
   if (unavailable) return { ok: false, error: unavailable };
   return withAdhocAttendanceLock_(function () {
-    const body = DocumentApp.getActiveDocument().getBody();
+    const body = currentReportDocument_().getBody();
     const found = findRegistrationTable_(body);
     if (!found) return { ok: false, error: 'This report has no registration table yet. Build the report first; a report built with sessions gets the Session column.' };
     if (found.columns === 5) return { ok: true, error: null, changed: false, message: 'This report already has the Session column.' };
@@ -17838,7 +18193,7 @@ function assignAdhocTdocSessions() {
   let model;
   try {
     const resolver = makeAdhocTdocSessionResolver_();
-    const found = findRegistrationTable_(DocumentApp.getActiveDocument().getBody());
+    const found = findRegistrationTable_(currentReportDocument_().getBody());
     model = buildAdhocTdocSessionsDialogModel_(resolver, downloadAndGroupTdocs_(getReportConfig_()), found ? found.columns : 0);
   } catch (e) {
     ui.alert('Assign TDoc Sessions', 'The TDoc list could not be read:\n\n' + e.message, ui.ButtonSet.OK);
@@ -18569,7 +18924,7 @@ function adhocOpeningUnavailable_() {
 function renderAdhocOpeningAfterChange_(saved) {
   const outcome = withAdhocAttendanceLock_(function () {
     try {
-      return { ok: true, rendered: refreshAdhocOpeningSection_(DocumentApp.getActiveDocument().getBody()) };
+      return { ok: true, rendered: refreshAdhocOpeningSection_(currentReportDocument_().getBody()) };
     } catch (e) {
       Logger.log('Opening details: stored, but the section could not be written: ' + e.message);
       return { ok: false, error: e.message };
@@ -18998,7 +19353,7 @@ function collectAdhocSessionStatus_() {
 
   const tdocs = { available: false, reason: '', column: -1, clock: 'utc', storedStatus: 'absent', storedError: null, summary: null };
   try {
-    const found = findRegistrationTable_(DocumentApp.getActiveDocument().getBody());
+    const found = findRegistrationTable_(currentReportDocument_().getBody());
     tdocs.column = found ? found.columns : 0;
   } catch (e) {
     tdocs.column = -1;
@@ -21530,7 +21885,7 @@ function checkRevisionsIn3gu_(entries, allTdocs, listProblem) {
  * revision, 3GU or anything stored; the summary is the only thing written.
  */
 function closeReportCore_() {
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   const result = { ready: false, checked: 0, counts: {}, unresolved: [], revisions: [], problems: [], summaryState: '', otherMeetings: 0, externalVerified: false };
   // ONE report scope for the summary, the TDocs not yet disposed and the revision check.
   const summary = writeDispositionSummary_(body, { revisions: true, scope: reportTdocScope_(body) });
@@ -21660,7 +22015,7 @@ function updateDispositionSummary() {
   assertNotTemplateMaster_();
   const done = withDispositionLock_('Update Disposition Summary', function () {
     // The TDocs the report has registered: from the report alone, no TDoc list is read.
-    const body = DocumentApp.getActiveDocument().getBody();
+    const body = currentReportDocument_().getBody();
     return writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
   });
   const ui = DocumentApp.getUi();
@@ -23466,7 +23821,7 @@ function buildEmailExportZipFileName_(now, listTag) {
  */
 function prepareTdocDiscussionEmails() {
   const ui = DocumentApp.getUi();
-  const body = DocumentApp.getActiveDocument().getBody();
+  const body = currentReportDocument_().getBody();
   const allDetected = detectTdocTablesInDocument_(body);
   // ADDON-009: the dialog needs the list tag for its default introduction.
   // A configuration problem is shown up front; Generate re-checks it and
@@ -23933,7 +24288,7 @@ function generateTdocDiscussionEmails(selections, globalText) {
     if (!Array.isArray(selections) || selections.length === 0) {
       throw new Error('Select at least one TDoc.');
     }
-    const body = DocumentApp.getActiveDocument().getBody();
+    const body = currentReportDocument_().getBody();
     const tables = body.getTables();
     // 2.15.2: base for the report's own tab/heading links.
     const documentUrl = buildEmailExportDocumentUrl_(getActiveDocumentIdSafely_());

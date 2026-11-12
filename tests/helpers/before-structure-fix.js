@@ -494,6 +494,51 @@ const AGENDA_READERS_CHANGES = [
    "    const text = 'Agenda ' + cfg.AGENDA_TDOC + ': converted, opened and parsed -- ' + items.length + ' agenda item(s).';\n"]
 ];
 
+const LARGE_BUILD_SECTION_START = BAR + '// LARGE BUILD CHECKPOINTS (after T-2026.10.22)\n' + BAR;
+const LARGE_BUILD_SECTION_END = BAR + '// END OF LARGE BUILD CHECKPOINTS\n' + BAR + '\n';
+const LARGE_BUILD_SECTION_FUNCTIONS = ['currentReportDocument_', 'beginLargeBuildCheckpoints_', 'endLargeBuildCheckpoints_', 'largeBuildCount_', 'reopenReportDocument_', 'largeBuildCheckpoint_',
+  'largeBuildPhaseCheckpoint_', 'largeBuildStep_', 'largeBuildTablesIfDue_', 'planStatusDropdownRepair_', 'repairStatusDropdowns_', 'formatStatusDropdownRepair_', 'previewStatusDropdownRepair', 'repairStatusDropdownsAfterBuild'];
+// The released functions it changed beyond the document access below.
+const LARGE_BUILD_CHANGED_FUNCTIONS = ['runFullReportBuildCore_', 'buildSkeletonWithTdocTables', 'addAbstractsForTables_', 'removeRowHeightAndSpacing', 'setTwoColumnTDocTableWidths_', 'finalizeStatusDropdowns_'];
+// Every code use of DocumentApp.getActiveDocument() outside the section became currentReportDocument_(): this many.
+const LARGE_BUILD_DOCUMENT_ACCESS_COUNT = 44;
+// After T-2026.10.22 (GitHub issue #6): the changes outside the section, [now, before], in the order they were made.
+const LARGE_BUILD_CHANGES = [
+  ["      entry.detail = outcome.detail || '';\n      // After T-2026.10.22: in a large build, what the phase changed is saved before the next one starts (LARGE BUILD CHECKPOINTS section).\n      if (name !== 'status dropdowns') largeBuildPhaseCheckpoint_('after ' + name);\n",
+   "      entry.detail = outcome.detail || '';\n"],
+  ["  resetStatusDropdownRun_();\n  // After T-2026.10.22: a large build is saved in parts (LARGE BUILD CHECKPOINTS section).\n  beginLargeBuildCheckpoints_();\n\n  phase('skeleton', function () {\n",
+   "  resetStatusDropdownRun_();\n\n  phase('skeleton', function () {\n"],
+  ["      // After T-2026.10.22: a save that failed is a failure of the build, not a skipped step (LARGE BUILD CHECKPOINTS section).\n      if (done.saveFailed) throw new Error(done.reason);\n", ''],
+  ["  const checkpoints = endLargeBuildCheckpoints_();\n  const totalMs = Date.now() - totalStart;\n", "  const totalMs = Date.now() - totalStart;\n"],
+  [".join(', ') + (checkpoints ? ' -- ' + checkpoints + ' checkpoint(s)' : ''));\n", ".join(', '));\n"],
+  ["  // After T-2026.10.22: `let` -- after a checkpoint the body is the reopened document's (LARGE BUILD CHECKPOINTS section).\n  let body = currentReportDocument_().getBody().clear();\n",
+   "  const body = currentReportDocument_().getBody().clear();\n"],
+  ["          body = largeBuildStep_(body, 'skeleton: TDoc tables', LARGE_BUILD_UNITS_.tdocTable);\n", ''],
+  ["      largeBuildCount_(allTdocs.length * LARGE_BUILD_UNITS_.registrationRow);\n", ''],
+  ["  // After T-2026.10.22: in a Full Build the tables are taken again after a checkpoint (LARGE BUILD CHECKPOINTS section).\n  let tables = getTablesCounted_(body, 'addAbstractsForTables_');\n  tables.slice().forEach((_, tableIndex) => {\n    tables = largeBuildTablesIfDue_(tables, 'abstracts');\n    const table = tables[tableIndex];\n",
+   "  getTablesCounted_(body, 'addAbstractsForTables_').forEach(table => {\n"],
+  ["    if (asked !== false) largeBuildCount_(LARGE_BUILD_UNITS_.abstractRow);\n", ''],
+  ["  // After T-2026.10.22: `let` -- in a Full Build the tables are taken again after a checkpoint (LARGE BUILD CHECKPOINTS section).\n  let tables = getTablesCounted_(body, 'removeRowHeightAndSpacing');\n",
+   "  const tables = getTablesCounted_(body, 'removeRowHeightAndSpacing');\n"],
+  ["  // After T-2026.10.22: the widths may have made a checkpoint; the tables of the document that is open now (LARGE BUILD CHECKPOINTS section).\n  tables = largeBuildTablesIfDue_(tables, 'formatting', true);\n", ''],
+  ["    tables = largeBuildTablesIfDue_(tables, 'formatting');\n    const table = tables[i];\n    largeBuildCount_(table.getNumRows() * LARGE_BUILD_UNITS_.formattedRow);\n",
+   "    const table = tables[i];\n"],
+  ["  // After T-2026.10.22: in a Full Build the tables are taken again after a checkpoint (LARGE BUILD CHECKPOINTS section).\n  let tables = getTablesCounted_(body, 'setTwoColumnTDocTableWidths_');\n\n  tables.slice().forEach((_, tableIndex) => {\n    tables = largeBuildTablesIfDue_(tables, 'formatting: widths');\n    const t = tables[tableIndex];\n",
+   "  const tables = getTablesCounted_(body, 'setTwoColumnTDocTableWidths_');\n\n  tables.forEach(t => {\n"],
+  ["    largeBuildCount_(t.getNumRows() * LARGE_BUILD_UNITS_.widthRow);\n", ''],
+  ["    // After T-2026.10.22: the caller is told that the save failed (LARGE BUILD CHECKPOINTS section).\n    try {\n      doc.saveAndClose();\n    } catch (e) {\n      result.saveFailed = true;\n      throw new Error('the document could not be saved (' + e.message + ')');\n    }\n",
+   "    doc.saveAndClose();\n"]
+];
+
+/** Code.js without the large-build checkpoints: the Code.js of T-2026.10.22. { code, problems }. */
+function codeWithoutLargeBuildCheckpoints(code) {
+  const view = takeOut(code, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_CHANGES, 'LARGE BUILD CHECKPOINTS');
+  // The document access: every currentReportDocument_() left is one that was DocumentApp.getActiveDocument().
+  const uses = (view.code.match(/currentReportDocument_\(\)/g) || []).length;
+  if (uses !== LARGE_BUILD_DOCUMENT_ACCESS_COUNT) view.problems.push('LARGE BUILD CHECKPOINTS: ' + uses + ' uses of currentReportDocument_() outside the section, not ' + LARGE_BUILD_DOCUMENT_ACCESS_COUNT);
+  return { code: view.code.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()'), problems: view.problems };
+}
+
 const TDOC_LIST_DOWNLOAD_SECTION_START = BAR + '// TDOC LIST DOWNLOAD (after T-2026.10.21)\n' + BAR;
 const TDOC_LIST_DOWNLOAD_SECTION_END = BAR + '// END OF TDOC LIST DOWNLOAD\n' + BAR + '\n';
 const TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS = ['tdocListDownloadCandidates_', 'tdocListDownloadAttempt_', 'downloadTdocListXlsx_', 'diagnoseTdocListDownload'];
@@ -513,7 +558,10 @@ const TDOC_LIST_DOWNLOAD_CHANGES = [
 
 /** Code.js without the TDoc-list download fallback: the Code.js of T-2026.10.21. { code, problems }. */
 function codeWithoutTdocListDownload(code) {
-  return takeOut(code, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_CHANGES, 'TDOC LIST DOWNLOAD');
+  // The large-build checkpoints (after T-2026.10.22) came later: taken out first.
+  const later = codeWithoutLargeBuildCheckpoints(code);
+  const view = takeOut(later.code, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_CHANGES, 'TDOC LIST DOWNLOAD');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 /** Code.js without the agenda readers: the Code.js of T-2026.10.20. { code, problems }. */
@@ -581,6 +629,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };
