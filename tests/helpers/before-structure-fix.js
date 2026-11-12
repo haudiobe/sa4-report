@@ -504,6 +504,11 @@ const LARGE_BUILD_CHANGED_FUNCTIONS = ['runFullReportBuildCore_', 'buildSkeleton
 const LARGE_BUILD_DOCUMENT_ACCESS_COUNT = 44;
 // After T-2026.10.22 (GitHub issue #6): the changes outside the section, [now, before], in the order they were made.
 const LARGE_BUILD_CHANGES = [
+  // The release of it (T-2026.10.23): the version line and the changelog entry of 2.26.7.
+  [" * Version: 2.26.7 (2026-11-12)\n",
+   " * Version: 2.26.6 (2026-11-11)\n"],
+  [" * CHANGELOG\n * 2.26.7 (2026-11-12)\n *   - Fixed: a large Full Report Build is saved in parts. When about 2000\n *     DocumentApp changes are pending, the build saves the report and\n *     opens it again (saveAndClose + openById, as Google's message asks)\n *     and goes on with the reopened document; every later access takes\n *     the current document, never an element of the closed one. A small\n *     build saves once, as before. A save that fails fails the build.\n *     previewStatusDropdownRepair() and repairStatusDropdownsAfterBuild(),\n *     run from the editor, finish the Status dropdowns of a built report\n *     whose last phase did not complete: only the Status cells, never a\n *     table twice, a report with doubled TDoc tables refused. (Audio SWG\n *     SA4#138, 2026-11-11: Full Report Build of 111 TDocs ended in \"Too\n *     many changes applied before saving document\".) (LARGE BUILD\n *     CHECKPOINTS section; docs/LARGE_BUILD_CHECKPOINTS.md.)\n",
+   " * CHANGELOG\n"],
   ["      entry.detail = outcome.detail || '';\n      // After T-2026.10.22: in a large build, what the phase changed is saved before the next one starts (LARGE BUILD CHECKPOINTS section).\n      if (name !== 'status dropdowns') largeBuildPhaseCheckpoint_('after ' + name);\n",
    "      entry.detail = outcome.detail || '';\n"],
   ["  resetStatusDropdownRun_();\n  // After T-2026.10.22: a large build is saved in parts (LARGE BUILD CHECKPOINTS section).\n  beginLargeBuildCheckpoints_();\n\n  phase('skeleton', function () {\n",

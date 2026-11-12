@@ -3,8 +3,9 @@
 Branch `fix/audio-large-build-checkpoint`, on master `fd0621b` (T-2026.10.22, `Code.js` 2.26.6). GitHub issue #6;
 evidence and safety gates in `docs/AUDIO-LARGE-BUILD-RECOVERY.md`.
 
-**Status: CANDIDATE, NOT RELEASED. Nothing merged, deployed or run on a live document. The Audio report was not
-read, built or repaired.**
+**Status: released as T-2026.10.23 (`Code.js` 2.26.7, issue #8).** PR #7 was squash-merged as `cbf12a3`; the
+candidate `6267011` had been tested live in the Audio report's bound script (issue #6). The release commit adds only
+the version line 2.26.7 and its changelog entry; the ledger takes them out again. Deployment record: issue #8.
 
 ## 1. The failure
 

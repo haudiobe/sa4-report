@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.6 (2026-11-11)
+ * Version: 2.26.7 (2026-11-12)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,20 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.7 (2026-11-12)
+ *   - Fixed: a large Full Report Build is saved in parts. When about 2000
+ *     DocumentApp changes are pending, the build saves the report and
+ *     opens it again (saveAndClose + openById, as Google's message asks)
+ *     and goes on with the reopened document; every later access takes
+ *     the current document, never an element of the closed one. A small
+ *     build saves once, as before. A save that fails fails the build.
+ *     previewStatusDropdownRepair() and repairStatusDropdownsAfterBuild(),
+ *     run from the editor, finish the Status dropdowns of a built report
+ *     whose last phase did not complete: only the Status cells, never a
+ *     table twice, a report with doubled TDoc tables refused. (Audio SWG
+ *     SA4#138, 2026-11-11: Full Report Build of 111 TDocs ended in "Too
+ *     many changes applied before saving document".) (LARGE BUILD
+ *     CHECKPOINTS section; docs/LARGE_BUILD_CHECKPOINTS.md.)
  * 2.26.6 (2026-11-11)
  *   - Fixed: the TDoc list is downloaded when its configured address on
  *     ftp.3gpp.org is refused. The configured address is asked first;
