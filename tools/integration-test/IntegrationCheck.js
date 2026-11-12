@@ -1,7 +1,8 @@
 /**
  * INTEGRATION TEST ONLY -- issue #6 / PR #7 (large-build checkpoints).
  *
- * Pushed ONLY into the bound script of a DISPOSABLE COPY of a report, next to
+ * Pushed ONLY into the bound script of a DISPOSABLE COPY of a report (or, with
+ * --target audio-original, the Audio SWG SA4#138 report itself), next to
  * the candidate bundle, by tools/integration-test/push-to-disposable-copy.mjs.
  * It is not part of any release bundle (tools/template-release.js never
  * includes it) and must never be pushed to the master template or a report
@@ -22,10 +23,10 @@
  * so it reads a report exactly as the build and the repair do.
  */
 
-// Documents this file refuses to look at, even read-only: the original Audio
-// report and the master template (it exists for disposable copies only).
+// Documents this file refuses to look at, even read-only: the master template.
+// (The Audio SWG SA4#138 report was authorized as a test target on 2026-11-12;
+// where this file may go at all is decided by push-to-disposable-copy.mjs.)
 var IT6_REFUSED_DOCUMENT_IDS_ = [
-  '1zawfIcbkzCJG-h2HYtnbQSEsm6MCd9OGhYzMgAFYENs', // Audio SWG Minutes SA4#138 (original)
   '11XNUHU3TpAr8BaS7gyFQlwiKEzQFvnvzvGu4ms8lo2s'  // SA4 Report Template (master)
 ];
 var IT6_SNAPSHOT_PREFIX_ = 'IT6_SNAP_';

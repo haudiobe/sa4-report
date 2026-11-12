@@ -3,7 +3,7 @@
 Gate before any release of the large-build checkpoints (`docs/LARGE_BUILD_CHECKPOINTS.md` §5 step 2). The original
 Audio report, the master template and every other report stay untouched.
 
-## Status (2026-11-12): BLOCKED — waiting on manual steps
+## Status (2026-11-12): BLOCKED — waiting on manual steps (see also the Audio-itself variant below)
 
 | Step | State |
 |---|---|
@@ -83,6 +83,46 @@ Send the logs of M4–M6.
 (one line and its test), push again with `--allow-other-base`, make a fresh copy, repeat.
 **If a phase after a checkpoint fails on a closed document** ("Document is closed", "Service Documents failed"):
 NO-GO — reopening a bound script's own document within one execution does not work live, and the design must change.
+
+## Variant: the Audio report itself as the target (authorized 2026-11-12)
+
+The owner authorized testing on the original Audio SWG SA4#138 document (`1zawfI…`), because no minutes have been
+written into it yet. Only that document and its script are permitted (`--target audio-original`,
+`guard.js audioOriginalRefusals`); the master template and every other report stay refused, and the normal mode
+still refuses Audio.
+
+**State 2026-11-12: stopped before changing the script.** The tooling cannot create or verify a backup of the
+document's content: Drive `files.copy` and `files.export` → 403, and `revisions.list` returns nothing. The script part is
+backed up and restorable: `dist/integration-test/audio-original-backup-20261112T070038Z/script` still matches the
+live script file for file (re-checked 2026-11-12), and `--restore` pushes it back with a read-back.
+
+**B1. Backup of the document (by hand).** In the original: *File › Make a copy*, name
+`BACKUP before issue #6 test - Audio SWG Minutes SA4#138 - do not edit`, *My Drive*, untick sharing and comments.
+Open it and confirm by eye that it shows the same content as the original. Optionally, in the original:
+*File › Version history › Name current version* "before issue #6 test" (a second restore path).
+
+**B2. Send the backup's document ID and its Script ID** (*Extensions › Apps Script › Project Settings*). The
+push verifies, and refuses otherwise, that:
+- the backup exists, is a Google Doc, is not in the trash and is named `BACKUP…`;
+- it was created after the original's last change (22:29:47Z on 11 Nov);
+- its own script is bound to it and is T-2026.10.22;
+- the Audio script still equals the local script backup.
+
+```
+node tools/integration-test/push-to-disposable-copy.mjs --target audio-original \
+  --script 1TJAxpoSF2t6RS4FdO9TuCkHeM4eyaI7bDxcZk8v8GkaexZJLiOvKtTN1 --doc 1zawfIcbkzCJG-h2HYtnbQSEsm6MCd9OGhYzMgAFYENs \
+  --backup-doc <backup document ID> --backup-script <backup Script ID>            # dry run, then --write
+```
+
+**B3. Inspection before the build** (read-only, after the push). In the Audio editor, run `it6Snapshot()` (#0):
+- the TDoc tables that persisted, doubled tables, abstracts, Status fields;
+- whether a definition exists, and the mark.
+
+Then run `previewStatusDropdownRepair()`. Then follow M4–M6 above on the Audio report itself; there is no
+Configure Meeting step, because Audio is already configured.
+
+**Restore.** Script: `--target audio-original --script … --doc … --restore dist/integration-test/audio-original-backup-20261112T070038Z/script --write`.
+Content: from the BACKUP copy, or from the named version in the version history.
 
 ## Clean-up after the test
 

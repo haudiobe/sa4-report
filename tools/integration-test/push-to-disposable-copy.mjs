@@ -15,6 +15,14 @@
  *     appsscript.json (checked equal to the repository's), a candidate Release.js, IntegrationCheck.js;
  *  5. --write: clasp push (never --force), pull it back, compare every file's SHA-256.
  * Output: dist/integration-test/<timestamp>/{before,bundle,readback}, evidence.json.
+ *
+ * --target audio-original --backup-doc <id> --backup-script <id>   (authorized 2026-11-12, issue #6)
+ *   The Audio SWG SA4#138 report itself instead of a copy -- that document and its script only
+ *   (guard.js audioOriginalRefusals). Requires a backup copy of the document named "BACKUP...",
+ *   made after the original's last change, whose own bound script is T-2026.10.22; and the
+ *   Audio script equal to the local script backup (dist/integration-test/audio-original-backup-*).
+ * --restore <dir>   push the five files of a script backup (e.g. .../before, or the local backup's
+ *   script/) instead of the candidate, with the same read-back. No backup document needed.
  */
 import path from 'node:path';
 import os from 'node:os';
@@ -24,7 +32,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { pushRefusals, candidateReleaseJs, sha256 } = require('./guard.js');
+const { pushRefusals, audioOriginalRefusals, candidateReleaseJs, sha256 } = require('./guard.js');
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
 
@@ -34,10 +42,19 @@ const write = argv.includes('--write');
 const scriptId = value('--script');
 const documentId = value('--doc');
 const allowOtherBase = argv.includes('--allow-other-base');
+const target = value('--target');
+const audioMode = target === 'audio-original';
+const backupDocId = value('--backup-doc');
+const backupScriptId = value('--backup-script');
+const restoreDir = value('--restore') ? path.resolve(value('--restore')) : null;
+if (target && !audioMode) { console.error('--target accepts only audio-original.'); process.exit(2); }
 
 function fail(lines) { console.error('\nREFUSED:\n' + [].concat(lines).map((l) => '  - ' + l).join('\n')); process.exit(2); }
 
-let refusals = pushRefusals({ scriptId, documentId });
+// One rule set per mode; a restore of a script backup needs no backup document.
+const rules = (facts) => !audioMode ? pushRefusals(facts)
+  : audioOriginalRefusals(Object.assign({ backup: restoreDir ? { documentId: 'restore' } : { documentId: backupDocId } }, facts));
+let refusals = rules({ scriptId, documentId });
 if (refusals.length) fail(refusals);
 
 const git = (...a) => execFileSync('git', a, { cwd: REPO, encoding: 'utf8' }).trim();
@@ -58,16 +75,29 @@ if (!credentials) fail('clasp is not logged in.');
 const project = (await google.script({ version: 'v1', auth: credentials }).projects.get({ scriptId })).data;
 const file = (await google.drive({ version: 'v3', auth: credentials }).files.get({ fileId: documentId, supportsAllDrives: true,
   fields: 'id,name,trashed,createdTime,modifiedTime,version,mimeType' })).data;
-refusals = pushRefusals({ scriptId, documentId, parentId: project.parentId || null, documentName: file.name, documentTrashed: file.trashed });
+const auditBackup = {};
+if (audioMode && !restoreDir) {
+  if (!backupScriptId) fail('--backup-script is required (the Script ID of the backup copy).');
+  const b = (await google.drive({ version: 'v3', auth: credentials }).files.get({ fileId: backupDocId, supportsAllDrives: true,
+    fields: 'id,name,trashed,createdTime,mimeType' })).data;
+  const bp = (await google.script({ version: 'v1', auth: credentials }).projects.get({ scriptId: backupScriptId })).data;
+  Object.assign(auditBackup, { documentId: b.id, name: b.name, mimeType: b.mimeType, trashed: b.trashed, createdTime: b.createdTime, scriptId: backupScriptId, scriptParentId: bp.parentId || null });
+}
+refusals = audioMode
+  ? rules({ scriptId, documentId, parentId: project.parentId || null, originalModifiedTime: file.modifiedTime,
+      backup: restoreDir ? { documentId: 'restore' } : auditBackup })
+  : pushRefusals({ scriptId, documentId, parentId: project.parentId || null, documentName: file.name, documentTrashed: file.trashed });
 if (refusals.length) fail(refusals);
 
 const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 const OUT = path.join(REPO, 'dist', 'integration-test', stamp);
 const dirs = { before: path.join(OUT, 'before'), bundle: path.join(OUT, 'bundle'), readback: path.join(OUT, 'readback') };
+if (audioMode && !restoreDir) dirs.backupScript = path.join(OUT, 'backup-copy-script');
 Object.values(dirs).forEach((d) => fs.mkdirSync(d, { recursive: true }));
 
 function clasp(dir, ...args) {
-  fs.writeFileSync(path.join(dir, '.clasp.json'), JSON.stringify({ scriptId, rootDir: '.' }) + '\n');
+  const id = dir === dirs.backupScript ? backupScriptId : scriptId;
+  fs.writeFileSync(path.join(dir, '.clasp.json'), JSON.stringify({ scriptId: id, rootDir: '.' }) + '\n');
   fs.writeFileSync(path.join(dir, '.claspignore'), '**/**\n!appsscript.json\n!*.js\n');
   const r = spawnSync('clasp', ['-u', claspUser, ...args], { cwd: dir, encoding: 'utf8', shell: process.platform === 'win32' });
   const text = (r.stdout || '') + (r.stderr || '');
@@ -80,7 +110,23 @@ const hashes = (dir) => Object.fromEntries(fs.readdirSync(dir).filter((n) => /\.
 // 3. Backup of the script as it is.
 clasp(dirs.before, 'pull');
 const before = hashes(dirs.before);
-refusals = pushRefusals({ scriptId, documentId, parentId: project.parentId, documentName: file.name, baseCodeSha256: before['Code.js'], allowOtherBase });
+let localBackup = null;
+if (audioMode) {
+  const root = path.join(REPO, 'dist', 'integration-test');
+  const found = fs.readdirSync(root).filter((n) => n.startsWith('audio-original-backup-')).sort().pop();
+  if (!found) fail('No local script backup (dist/integration-test/audio-original-backup-*).');
+  localBackup = path.join(root, found, 'script');
+  if (!restoreDir) {
+    clasp(dirs.backupScript, 'pull');
+    auditBackup.scriptCodeSha256 = hashes(dirs.backupScript)['Code.js'];
+  }
+  const matches = JSON.stringify(hashes(localBackup)) === JSON.stringify(before);
+  refusals = restoreDir ? [] : rules({ scriptId, documentId, parentId: project.parentId, originalModifiedTime: file.modifiedTime, baseCodeSha256: before['Code.js'],
+    allowOtherBase, scriptMatchesLocalBackup: allowOtherBase ? undefined : matches, backup: auditBackup });
+} else {
+  refusals = restoreDir ? pushRefusals({ scriptId, documentId, parentId: project.parentId, documentName: file.name })
+    : pushRefusals({ scriptId, documentId, parentId: project.parentId, documentName: file.name, baseCodeSha256: before['Code.js'], allowOtherBase });
+}
 if (refusals.length) fail(refusals);
 
 // 4. The bundle.
@@ -90,7 +136,11 @@ if (JSON.stringify(sortDeep(JSON.parse(manifest))) !== JSON.stringify(sortDeep(J
   fail('The copy\'s appsscript.json differs from the repository\'s (not only in formatting).');
 }
 const builtAt = new Date().toISOString();
-const bundle = {
+const bundle = restoreDir ? Object.fromEntries(['appsscript.json', 'Code.js', 'HyperLink.js', 'Release.js', 'ReportCreator.js'].map((n) => {
+  const p = path.join(restoreDir, n);
+  if (!fs.existsSync(p)) fail('The restore folder has no ' + n + '.');
+  return [n, fs.readFileSync(p)];
+})) : {
   'Code.js': fs.readFileSync(path.join(REPO, 'Code.js')),
   'HyperLink.js': fs.readFileSync(path.join(REPO, 'HyperLink.js')),
   'ReportCreator.js': fs.readFileSync(path.join(REPO, 'template', 'ReportCreator.js')),
@@ -102,7 +152,8 @@ Object.entries(bundle).forEach(([n, b]) => fs.writeFileSync(path.join(dirs.bundl
 const planned = hashes(dirs.bundle);
 
 const evidence = {
-  action: write ? 'push' : 'dry-run', at: builtAt, branch, commit,
+  action: (restoreDir ? 'restore' : 'push') + (write ? '' : ' (dry run)'), mode: audioMode ? 'audio-original' : 'disposable-copy', at: builtAt, branch, commit,
+  restoreFrom: restoreDir, localScriptBackup: localBackup, backupCopy: audioMode && !restoreDir ? auditBackup : null,
   target: { scriptId, documentId, parentId: project.parentId, scriptTitle: project.title, scriptUpdateTime: project.updateTime,
     documentName: file.name, documentCreated: file.createdTime, documentModified: file.modifiedTime, documentVersion: file.version },
   before, planned, readback: null, readbackMatches: null
@@ -110,7 +161,8 @@ const evidence = {
 
 console.log('Target: script ' + scriptId + ' bound to "' + file.name + '" (' + documentId + ')');
 console.log('Backup of the script as it was: ' + dirs.before);
-console.log('Candidate ' + branch + ' @ ' + commit.slice(0, 7) + ' bundle: ' + dirs.bundle);
+console.log((restoreDir ? 'Restore of ' + restoreDir : 'Candidate ' + branch + ' @ ' + commit.slice(0, 7)) + ' bundle: ' + dirs.bundle);
+if (audioMode && !restoreDir) console.log('Backup copy: "' + auditBackup.name + '" (' + auditBackup.documentId + '), created ' + auditBackup.createdTime + ', script ' + backupScriptId + ' (T-2026.10.22)');
 Object.entries(planned).forEach(([n, h]) => console.log('  ' + n.padEnd(20) + h + (before[n] === h ? '  (unchanged)' : before[n] ? '  (changed)' : '  (new)')));
 
 if (write) {

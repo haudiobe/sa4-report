@@ -23,6 +23,44 @@ const AUDIO_BASE_CODE_SHA256 = '240017f562e60e798cd3c22909c13cddf41c0eea5954e708
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
+// --target audio-original (authorized 2026-11-12 for issue #6: the Audio report has no hand-written minutes yet):
+// exactly this document and its bound script, and only with a verified backup copy of the document.
+const AUDIO_ORIGINAL = { documentId: '1zawfIcbkzCJG-h2HYtnbQSEsm6MCd9OGhYzMgAFYENs', scriptId: '1TJAxpoSF2t6RS4FdO9TuCkHeM4eyaI7bDxcZk8v8GkaexZJLiOvKtTN1' };
+const BACKUP_NAME_PREFIX = 'BACKUP';
+
+/**
+ * Every reason the Audio report itself must not receive the candidate ([] when it may).
+ * facts: { scriptId, documentId, parentId, baseCodeSha256, allowOtherBase, scriptMatchesLocalBackup,
+ *          backup: { documentId, name, mimeType, trashed, createdTime, scriptParentId, scriptCodeSha256 }, originalModifiedTime }
+ */
+function audioOriginalRefusals(facts) {
+  const f = facts || {};
+  const out = [];
+  if (f.scriptId !== AUDIO_ORIGINAL.scriptId || f.documentId !== AUDIO_ORIGINAL.documentId) {
+    out.push('--target audio-original permits only the Audio SWG SA4#138 document ' + AUDIO_ORIGINAL.documentId + ' with its script ' + AUDIO_ORIGINAL.scriptId + '.');
+  }
+  if (f.parentId !== undefined && f.parentId !== AUDIO_ORIGINAL.documentId) out.push('The Apps Script API does not name the Audio document as the parent of the script.');
+  const b = f.backup;
+  if (!b || !b.documentId) out.push('--backup-doc is required: the Audio document is changed only after a backup copy exists.');
+  else {
+    if (b.documentId === AUDIO_ORIGINAL.documentId) out.push('The backup is the original itself.');
+    if (REFUSED_DOCUMENTS[b.documentId] && b.documentId !== AUDIO_ORIGINAL.documentId) out.push('The backup is ' + REFUSED_DOCUMENTS[b.documentId] + '.');
+    if (b.name !== undefined && String(b.name || '').indexOf(BACKUP_NAME_PREFIX) !== 0) out.push('The name of the backup must start with "' + BACKUP_NAME_PREFIX + '" (it is "' + b.name + '").');
+    if (b.mimeType !== undefined && b.mimeType !== 'application/vnd.google-apps.document') out.push('The backup is not a Google Doc.');
+    if (b.trashed) out.push('The backup is in the trash.');
+    if (b.createdTime !== undefined && !(f.originalModifiedTime && b.createdTime >= f.originalModifiedTime)) {
+      out.push('The backup (created ' + b.createdTime + ') is older than the last change of the original (' + f.originalModifiedTime + '): it may not hold the current content.');
+    }
+    if (b.scriptParentId !== undefined && b.scriptParentId !== b.documentId) out.push('--backup-script is not bound to the backup document.');
+    if (b.scriptCodeSha256 !== undefined && b.scriptCodeSha256 !== AUDIO_BASE_CODE_SHA256) out.push('The script of the backup is not T-2026.10.22: it is not a copy of the Audio report as it is.');
+  }
+  if (f.scriptMatchesLocalBackup === false) out.push('The Audio script differs from the local script backup: back it up again first.');
+  if (f.baseCodeSha256 !== undefined && f.baseCodeSha256 !== AUDIO_BASE_CODE_SHA256 && !f.allowOtherBase) {
+    out.push('The Code.js of the Audio script is not T-2026.10.22 (' + (f.baseCodeSha256 || 'missing') + '). (--allow-other-base to push again over a candidate.)');
+  }
+  return out;
+}
+
 /**
  * Every reason the push must not happen ([] when it may).
  * facts: { scriptId, documentId, parentId, documentName, documentTrashed, baseCodeSha256, allowOtherBase }
@@ -76,4 +114,4 @@ function candidateReleaseJs(baseReleaseJs, commit, builtAt) {
     'var SA4_RELEASE_ = ' + JSON.stringify(release, null, 2) + ';\n';
 }
 
-module.exports = { pushRefusals, candidateReleaseJs, sha256, REFUSED_DOCUMENTS, REFUSED_SCRIPTS, DISPOSABLE_NAME_PREFIX, AUDIO_BASE_CODE_SHA256 };
+module.exports = { pushRefusals, audioOriginalRefusals, AUDIO_ORIGINAL, BACKUP_NAME_PREFIX, candidateReleaseJs, sha256, REFUSED_DOCUMENTS, REFUSED_SCRIPTS, DISPOSABLE_NAME_PREFIX, AUDIO_BASE_CODE_SHA256 };
