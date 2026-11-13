@@ -548,9 +548,10 @@ console.log('5. Update Report Now (B): failures are visible');
 {
   const list = updateReport({ failList: true });
   const m1 = thrown(() => list.s.updateReportNow());
-  check('the update itself fails: the menu function throws', [/^The report update failed: TDoc list not reachable/.test(m1 || ''), list.ui.alerts.length], [true, 0]);
+  // After T-2026.10.24 (MAIN MEETING NUMBER section of Code.js): the list is fetched before the report is touched, so a failed download says so.
+  check('the update itself fails: the menu function throws, and says that nothing was changed', [/^The report was not updated: TDoc list not reachable/.test(m1 || ''), /in part/.test(m1 || ''), list.ui.alerts.length], [true, false, 0]);
   check('the lock is released after a failure', [list.lock.tries, list.lock.releases], [1, 1]);
-  check('the failure is logged as well', list.logs.filter((l) => /^Update Report Now failed: The report update failed: TDoc list not reachable/.test(l)).length, 1);
+  check('the failure is logged as well', list.logs.filter((l) => /^Update Report Now failed: The report was not updated: TDoc list not reachable/.test(l)).length, 1);
 
   const email = updateReport({ failEmail: true });
   const m2 = thrown(() => email.s.updateReportNow());

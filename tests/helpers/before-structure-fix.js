@@ -546,6 +546,29 @@ function codeWithoutLargeBuildCheckpoints(code) {
   return { code: view.code.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()'), problems: later.problems.concat(view.problems) };
 }
 
+const MAIN_MEETING_NUMBER_SECTION_START = BAR + '// MAIN MEETING NUMBER (after T-2026.10.24)\n' + BAR;
+const MAIN_MEETING_NUMBER_SECTION_END = BAR + '// END OF MAIN MEETING NUMBER\n' + BAR + '\n';
+const MAIN_MEETING_NUMBER_SECTION_FUNCTIONS = ['mainMeetingFolderOfFtpBase_', 'mainMeetingNumberOfFtpBase_', 'mainMeetingIdentityOfSave_', 'mainMeetingNumberMismatch_'];
+const MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS = ['getReportConfig_', 'continuousUpdateCore_', 'persistConfigurationSettings_', 'assertMeetingReadyToBuild_'];
+// After T-2026.10.24 (GitHub issue #9): the changes outside the section, [now, before], in the order they stand in Code.js.
+const MAIN_MEETING_NUMBER_CHANGES = [
+  ["  // After T-2026.10.24: a number that is not saved is the document folder's before it is SA4#136's (MAIN MEETING NUMBER section).\n  const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || mainMeetingNumberOfFtpBase_(props.getProperty('FTP_BASE')) || '136';\n",
+   "  const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || '136';\n"],
+  ["      // After T-2026.10.24: the list is fetched before the report is touched; a failed download changed nothing either (MAIN MEETING NUMBER section).\n      result.notUpdated = true;\n",
+   "      if (e && e.tdocListIdentity) result.notUpdated = true;\n"],
+  ["  const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);\n  // After T-2026.10.24: a main meeting's folder and number go with its document folder (MAIN MEETING NUMBER section).\n  const mainMeetingIdentity = mainMeetingIdentityOfSave_(config, docProps);\n  if (mainMeetingIdentity.problem) throw new Error(mainMeetingIdentity.problem);\n",
+   "  const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);\n"],
+  ["  if (effectiveType === 'main') {\n    // After T-2026.10.24: taken from the document folder where blank; SA4#136's only without one (MAIN MEETING NUMBER section).\n    setPropertyIfPresent_(docProps, 'MEETING_FOLDER', mainMeetingIdentity.folder);\n    setPropertyIfPresent_(docProps, 'MEETING_NUMBER', mainMeetingIdentity.number);\n",
+   "  if (effectiveType === 'main') {\n    docProps.setProperty('MEETING_FOLDER', config.meetingFolder || 'TSGS4_136_Montreal');\n    docProps.setProperty('MEETING_NUMBER', config.meetingNumber || '136');\n"],
+  ["  assertMeetingConfigured_(context);\n  // After T-2026.10.24: a main meeting whose number is not its document folder's (MAIN MEETING NUMBER section).\n  const meetingNumberProblem = mainMeetingNumberMismatch_(getReportStateStore_(context));\n  if (meetingNumberProblem) throw new Error(meetingNumberProblem);\n  const readiness = getBuildReadiness_(context);\n",
+   "  assertMeetingConfigured_(context);\n  const readiness = getBuildReadiness_(context);\n"]
+];
+
+/** Code.js without the main-meeting number fix: the Code.js of the T-2026.10.24 candidate (2.26.8). { code, problems }. */
+function codeWithoutMainMeetingNumber(code) {
+  return takeOut(code, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_CHANGES, 'MAIN MEETING NUMBER');
+}
+
 const MEETING_TIME_ZONES_SECTION_START = BAR + '// MEETING TIME ZONES (after T-2026.10.23)\n' + BAR;
 const MEETING_TIME_ZONES_SECTION_END = BAR + '// END OF MEETING TIME ZONES\n' + BAR + '\n';
 const MEETING_TIME_ZONES_SECTION_FUNCTIONS = ['isAllowedMeetingTimeZoneId_', 'isValidMeetingTimeZoneSetting_', 'utcOffsetLabelMinutes_', 'formatUtcOffsetLabel_', 'meetingTimeZoneRuleChange_', 'meetingTimeZoneOffsetMinutes_',
@@ -634,7 +657,10 @@ const MEETING_TIME_ZONES_CREATOR_CHANGES = [
 
 /** Code.js without the meeting time zones: the Code.js of T-2026.10.23. { code, problems }. */
 function codeWithoutMeetingTimeZones(code) {
-  return takeOut(code, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_CHANGES, 'MEETING TIME ZONES');
+  // The main-meeting number fix (after T-2026.10.24) came later: taken out first.
+  const later = codeWithoutMainMeetingNumber(code);
+  const view = takeOut(later.code, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_CHANGES, 'MEETING TIME ZONES');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 /** template/ReportCreator.js without the meeting time zones: { code, problems }. */
@@ -734,6 +760,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

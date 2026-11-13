@@ -1329,7 +1329,8 @@ function continuousUpdateCore_(context) {
     try {
       tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context, undefined, 'update'));
     } catch (e) {
-      if (e && e.tdocListIdentity) result.notUpdated = true;
+      // After T-2026.10.24: the list is fetched before the report is touched; a failed download changed nothing either (MAIN MEETING NUMBER section).
+      result.notUpdated = true;
       throw e;
     }
     const allTdocs = [];
@@ -3105,7 +3106,8 @@ function getReportConfig_(context) {
   // 1. MEETING CONFIGURATION
   // ========================================
   const MEETING_FOLDER = props.getProperty('MEETING_FOLDER') || 'TSGS4_136_Montreal';
-  const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || '136';
+  // After T-2026.10.24: a number that is not saved is the document folder's before it is SA4#136's (MAIN MEETING NUMBER section).
+  const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || mainMeetingNumberOfFtpBase_(props.getProperty('FTP_BASE')) || '136';
   const MEETING_ID = props.getProperty('MEETING_ID') || '60777';
   
   // ========================================
@@ -9159,6 +9161,9 @@ function persistConfigurationSettings_(config) {
   const meetingTimeZoneProblem = meetingTimeZoneChoiceProblem_(config, docProps);
   if (meetingTimeZoneProblem) throw new Error(meetingTimeZoneProblem);
   const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);
+  // After T-2026.10.24: a main meeting's folder and number go with its document folder (MAIN MEETING NUMBER section).
+  const mainMeetingIdentity = mainMeetingIdentityOfSave_(config, docProps);
+  if (mainMeetingIdentity.problem) throw new Error(mainMeetingIdentity.problem);
 
   // TEMPLATE-002B (decision 2026-10-01): Email Collection Start Date is a
   // normal Configure Meeting field in the template runtime. Checked with the
@@ -9178,8 +9183,9 @@ function persistConfigurationSettings_(config) {
   // not-yet-resolved fresh document a blank value is simply not written,
   // so no SA4#136 folder/number or fallback portal ID is ever persisted.
   if (effectiveType === 'main') {
-    docProps.setProperty('MEETING_FOLDER', config.meetingFolder || 'TSGS4_136_Montreal');
-    docProps.setProperty('MEETING_NUMBER', config.meetingNumber || '136');
+    // After T-2026.10.24: taken from the document folder where blank; SA4#136's only without one (MAIN MEETING NUMBER section).
+    setPropertyIfPresent_(docProps, 'MEETING_FOLDER', mainMeetingIdentity.folder);
+    setPropertyIfPresent_(docProps, 'MEETING_NUMBER', mainMeetingIdentity.number);
     docProps.setProperty('MEETING_ID', config.meetingId || '60777');
   } else {
     setPropertyIfPresent_(docProps, 'MEETING_FOLDER', config.meetingFolder);
@@ -14495,6 +14501,94 @@ function meetingTimeZoneDialogState_(props) {
 
 // =========================================================
 // END OF MEETING TIME ZONES
+// =========================================================
+
+// =========================================================
+// MAIN MEETING NUMBER (after T-2026.10.24)
+// =========================================================
+//
+// GitHub issue #9 (the integration test of T-2026.10.24 in a copy of Audio
+// SWG SA4#138). The TDoc list of a main meeting is
+//   <document folder>TDoc_List_Meeting_SA4%23<meeting number>.xlsx.
+// Resolve fills the document folder (FTP_BASE) from the Portal, but not the
+// Meeting Folder and Meeting Number fields, and a Configure Meeting save of
+// a main meeting wrote a blank one as the historical default,
+// TSGS4_136_Montreal and 136. A report of SA4#138 configured that way looked
+// for .../TSGS4_138_Calgary/Docs/TDoc_List_Meeting_SA4%23136.xlsx, which does
+// not exist (3GPP answers HTTP 403 for a file that is not there), and
+// Update Report Now failed.
+//
+// Now:
+//   - Configure Meeting, main meeting: a blank Meeting Folder or Number is
+//     taken from the document folder (.../WG4_CODEC/TSGS4_138_Calgary/Docs/
+//     -> TSGS4_138_Calgary, 138; .../TSGS4_137-e/Docs/ -> TSGS4_137-e,
+//     137-e). The SA4#136 defaults are written only when no document folder
+//     is known, as before. A folder or number that contradicts the document
+//     folder is refused before anything is written, unless a TDoc list URL
+//     is given.
+//   - getReportConfig_(): a number that is not saved is the document
+//     folder's before it is 136.
+//   - Update and build: a saved main-meeting number that contradicts the
+//     saved document folder, with no saved TDoc list URL, is refused before
+//     the report is touched and before any download.
+//   - Update: a failed TDoc-list download says that the report was not
+//     updated. The list is fetched before the first change to the report.
+// docs/MAIN_MEETING_NUMBER.md.
+
+/** Pure: { folder, number } of a main meeting's document folder (.../WG4_CODEC/TSGS4_<n>[_<place>]/Docs/), or null. */
+function mainMeetingFolderOfFtpBase_(ftpBase) {
+  const m = String(ftpBase || '').trim().match(/\/WG4_CODEC\/(TSGS4_(\d+(?:-e)?)(?:[_-][A-Za-z0-9_.-]*)?)\/Docs\/?$/i);
+  return m ? { folder: m[1], number: m[2] } : null;
+}
+
+/** Pure: the meeting number of a main meeting's document folder, or ''. */
+function mainMeetingNumberOfFtpBase_(ftpBase) {
+  const of = mainMeetingFolderOfFtpBase_(ftpBase);
+  return of ? of.number : '';
+}
+
+/**
+ * What a Configure Meeting save writes as MEETING_FOLDER and MEETING_NUMBER
+ * (reads the store only): { main, folder, number, problem }. folder and
+ * number '' are not written; a problem refuses the save.
+ */
+function mainMeetingIdentityOfSave_(config, store) {
+  const c = config || {};
+  const text = function (v) { return String(v === null || v === undefined ? '' : v).trim(); };
+  const stored = function (key) { return store ? text(store.getProperty(key)) : ''; };
+  const type = (text(c.meetingType) || stored('MEETING_TYPE')).toLowerCase();
+  if (type !== 'main') return { main: false, folder: '', number: '', problem: '' };
+  const ftpBase = text(c.ftpBase) || stored('FTP_BASE');
+  const of = mainMeetingFolderOfFtpBase_(ftpBase);
+  const folder = text(c.meetingFolder);
+  const number = text(c.meetingNumber);
+  if (of && !text(c.tdocUrl) && ((folder && folder.toLowerCase() !== of.folder.toLowerCase()) || (number && number.toLowerCase() !== of.number.toLowerCase()))) {
+    return { main: true, folder: '', number: '', problem: 'Meeting Folder "' + (folder || '') + '" and Meeting Number "' + (number || '') + '" do not belong to the meeting\'s document folder ' +
+      ftpBase + ' (' + of.folder + ', ' + of.number + '): the TDoc list would be looked for under a wrong name. ' +
+      'Correct them, or clear both to take them from the document folder. Nothing was saved.' };
+  }
+  if (!ftpBase) return { main: true, folder: folder || 'TSGS4_136_Montreal', number: number || '136', problem: '' };
+  return { main: true, folder: folder || (of ? of.folder : ''), number: number || (of ? of.number : ''), problem: '' };
+}
+
+/**
+ * Why the saved meeting number of a main meeting cannot name its TDoc list,
+ * or '' (reads the store only). Only with a saved document folder that
+ * names a meeting and no saved TDoc list URL.
+ */
+function mainMeetingNumberMismatch_(store) {
+  const raw = function (key) { const v = store.getProperty(key); return String(v === null || v === undefined ? '' : v).trim(); };
+  if (raw('MEETING_TYPE').toLowerCase() === 'adhoc' || raw('TDOC_LIST_URL')) return '';
+  const number = raw('MEETING_NUMBER');
+  const ftpBase = raw('FTP_BASE');
+  const of = mainMeetingFolderOfFtpBase_(ftpBase);
+  if (!number || !of || number.toLowerCase() === of.number.toLowerCase()) return '';
+  return 'The saved meeting number ' + number + ' is not the number of the saved document folder ' + ftpBase + ' (' + of.number + '), ' +
+    'so the TDoc list would be looked for as TDoc_List_Meeting_SA4#' + number + '.xlsx. Open Configure Meeting and correct the Meeting Number. Nothing was changed.';
+}
+
+// =========================================================
+// END OF MAIN MEETING NUMBER
 // =========================================================
 
 // =========================================================
@@ -21739,6 +21833,9 @@ function assertMeetingReadyToBuild_(context) {
   if (!context) assertNotTemplateMaster_();
   // After T-2026.10.12: a template report with no saved meeting is not a main meeting by default.
   assertMeetingConfigured_(context);
+  // After T-2026.10.24: a main meeting whose number is not its document folder's (MAIN MEETING NUMBER section).
+  const meetingNumberProblem = mainMeetingNumberMismatch_(getReportStateStore_(context));
+  if (meetingNumberProblem) throw new Error(meetingNumberProblem);
   const readiness = getBuildReadiness_(context);
   if (readiness.ready) return;
   throw new Error('Cannot build report yet.\n\n' +
