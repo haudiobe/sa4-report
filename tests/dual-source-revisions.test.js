@@ -26,7 +26,7 @@
 
 const fs = require('fs');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
-const { codeWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutMainMeetingNumber, codeWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -293,8 +293,10 @@ console.log('6b. refreshing, file names from links, text-only, hand-typed lines 
 // ====================================================================== 7
 console.log('7. what the change is in Code.js (source)');
 {
-  const now = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
-  const view = codeWithoutDualRevisions(now);
+  // The main-meeting number fix (issue #9) came to master later: compared without it (tests/main-meeting-number.test.js).
+  const full = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const now = codeWithoutMainMeetingNumber(full).code;
+  const view = codeWithoutDualRevisions(full);
   check('the take-out finds every change exactly once', view.problems, []);
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));
   const bodyOf = (code, name) => { const at = code.indexOf('\nfunction ' + name + '('); return code.slice(at, code.indexOf('\n}\n', at)); };
