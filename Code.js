@@ -22,6 +22,17 @@
  *     add-on adopts and syncs the zone. No update writes the opening, so
  *     manual edits survive. (GitHub issue #4; MEETING TIME ZONES section;
  *     docs/MEETING_TIME_ZONES.md.)
+ *   - Fixed: Configure Meeting saved a main meeting's blank Meeting
+ *     Folder and Number as SA4#136's (TSGS4_136_Montreal, 136) next to
+ *     the document folder Resolve found, so the TDoc list was looked
+ *     for under a wrong name (HTTP 403 from 3GPP). They are now taken
+ *     from the document folder; a contradicting value is refused
+ *     before anything is written, and an update or build with a saved
+ *     number that contradicts the saved folder is refused before any
+ *     download. A failed TDoc-list download says that the report was
+ *     not updated (nothing is changed before it). A wrong number
+ *     already saved is not migrated. (GitHub issue #9; MAIN MEETING
+ *     NUMBER section; docs/MAIN_MEETING_NUMBER.md.)
  * 2.26.7 (2026-11-12)
  *   - Fixed: a large Full Report Build is saved in parts. When about 2000
  *     DocumentApp changes are pending, the build saves the report and
@@ -1329,7 +1340,7 @@ function continuousUpdateCore_(context) {
     try {
       tdocGroups = perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => downloadAndGroupTdocs_(cfg, context, undefined, 'update'));
     } catch (e) {
-      // After T-2026.10.24: the list is fetched before the report is touched; a failed download changed nothing either (MAIN MEETING NUMBER section).
+      // After T-2026.10.23: the list is fetched before the report is touched; a failed download changed nothing either (MAIN MEETING NUMBER section).
       result.notUpdated = true;
       throw e;
     }
@@ -3106,7 +3117,7 @@ function getReportConfig_(context) {
   // 1. MEETING CONFIGURATION
   // ========================================
   const MEETING_FOLDER = props.getProperty('MEETING_FOLDER') || 'TSGS4_136_Montreal';
-  // After T-2026.10.24: a number that is not saved is the document folder's before it is SA4#136's (MAIN MEETING NUMBER section).
+  // After T-2026.10.23: a number that is not saved is the document folder's before it is SA4#136's (MAIN MEETING NUMBER section).
   const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || mainMeetingNumberOfFtpBase_(props.getProperty('FTP_BASE')) || '136';
   const MEETING_ID = props.getProperty('MEETING_ID') || '60777';
   
@@ -9161,7 +9172,7 @@ function persistConfigurationSettings_(config) {
   const meetingTimeZoneProblem = meetingTimeZoneChoiceProblem_(config, docProps);
   if (meetingTimeZoneProblem) throw new Error(meetingTimeZoneProblem);
   const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);
-  // After T-2026.10.24: a main meeting's folder and number go with its document folder (MAIN MEETING NUMBER section).
+  // After T-2026.10.23: a main meeting's folder and number go with its document folder (MAIN MEETING NUMBER section).
   const mainMeetingIdentity = mainMeetingIdentityOfSave_(config, docProps);
   if (mainMeetingIdentity.problem) throw new Error(mainMeetingIdentity.problem);
 
@@ -9183,7 +9194,7 @@ function persistConfigurationSettings_(config) {
   // not-yet-resolved fresh document a blank value is simply not written,
   // so no SA4#136 folder/number or fallback portal ID is ever persisted.
   if (effectiveType === 'main') {
-    // After T-2026.10.24: taken from the document folder where blank; SA4#136's only without one (MAIN MEETING NUMBER section).
+    // After T-2026.10.23: taken from the document folder where blank; SA4#136's only without one (MAIN MEETING NUMBER section).
     setPropertyIfPresent_(docProps, 'MEETING_FOLDER', mainMeetingIdentity.folder);
     setPropertyIfPresent_(docProps, 'MEETING_NUMBER', mainMeetingIdentity.number);
     docProps.setProperty('MEETING_ID', config.meetingId || '60777');
@@ -14504,7 +14515,7 @@ function meetingTimeZoneDialogState_(props) {
 // =========================================================
 
 // =========================================================
-// MAIN MEETING NUMBER (after T-2026.10.24)
+// MAIN MEETING NUMBER (after T-2026.10.23)
 // =========================================================
 //
 // GitHub issue #9 (the integration test of T-2026.10.24 in a copy of Audio
@@ -21833,7 +21844,7 @@ function assertMeetingReadyToBuild_(context) {
   if (!context) assertNotTemplateMaster_();
   // After T-2026.10.12: a template report with no saved meeting is not a main meeting by default.
   assertMeetingConfigured_(context);
-  // After T-2026.10.24: a main meeting whose number is not its document folder's (MAIN MEETING NUMBER section).
+  // After T-2026.10.23: a main meeting whose number is not its document folder's (MAIN MEETING NUMBER section).
   const meetingNumberProblem = mainMeetingNumberMismatch_(getReportStateStore_(context));
   if (meetingNumberProblem) throw new Error(meetingNumberProblem);
   const readiness = getBuildReadiness_(context);

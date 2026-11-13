@@ -2,6 +2,7 @@
 
 Status: **released as T-2026.10.24 (`Code.js` 2.26.8).** Merged as `23a54e9` (PR #5, GitHub issue #4); release issue #9.
 The live check in a copy of SA4#138 and the deployment are recorded in issue #9.
+T-2026.10.24 also contains the main-meeting number fix found in that check (docs/MAIN_MEETING_NUMBER.md); the time-zone code is unchanged by it.
 
 A meeting can have its local time zone, resolved from the Portal's record, or a time zone selected
 explicitly. Generated meeting times then name the zone that is in force on their own date: CET or

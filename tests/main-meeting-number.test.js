@@ -1,5 +1,5 @@
 /**
- * The main-meeting number (after T-2026.10.24) -- docs/MAIN_MEETING_NUMBER.md, GitHub issue #9.
+ * The main-meeting number (after T-2026.10.23) -- docs/MAIN_MEETING_NUMBER.md, GitHub issue #9.
  *
  * In the integration test of T-2026.10.24 (a copy of Audio SWG SA4#138,
  * meeting 60780), Configure Meeting was saved after Resolve. Resolve fills
@@ -11,7 +11,7 @@
  * with "may have been updated in part", although nothing had been changed.
  *
  *   A.  the meeting folder and number of a document folder (pure)
- *   B.  the save of issue #9: with the candidate (2.26.8) the SA4#136 list, now the SA4#138 list
+ *   B.  the save of issue #9: with 3dd4263 (2.26.8 before the fix) the SA4#136 list, now the SA4#138 list
  *   C.  a folder or number that contradicts the document folder: refused, nothing written
  *   D.  unchanged: no document folder (SA4#136 defaults), ad-hoc, a typed TDoc list URL
  *   E.  a report saved by the candidate: refused before any download and before the report is touched
@@ -253,13 +253,14 @@ console.log('H. what changed in Code.js');
   check('it stands directly after the meeting time zones', FULL.indexOf('// END OF MEETING TIME ZONES\n// =========================================================\n\n' + MAIN_MEETING_NUMBER_SECTION_START) !== -1, true);
   check('of the functions there were, these changed; none removed', [functionNames(view.code).filter((n) => functionSource(FULL, n) !== functionSource(view.code, n)).sort(), functionNames(view.code).filter((n) => functionNames(FULL).indexOf(n) === -1)],
     [MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS.slice().sort(), []]);
-  check('the version is unchanged: 2.26.8 (the candidate of T-2026.10.24)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
+  check('Code.js is version 2.26.8 (released as T-2026.10.24 with the meeting time zones; the ledger takes its changelog entry out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
   let candidate = null;
   let from = '';
-  for (const ref of ['template-release/T-2026.10.24', 'release/T-2026.10.24']) {
+  // 3dd4263: the release commit of the meeting time zones, the candidate the fix was made on (8a47910 changed no Code.js).
+  for (const ref of ['3dd4263']) {
     try { candidate = execFileSync('git', ['show', ref + ':Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); from = ref; break; } catch (e) { candidate = null; }
   }
-  if (candidate === null) console.log('  note: neither template-release/T-2026.10.24 nor release/T-2026.10.24 is in this checkout; the comparison is skipped.');
+  if (candidate === null) console.log('  note: commit 3dd4263 is not in this checkout; the comparison is skipped.');
   else check('without it, Code.js is that of ' + from + ', byte for byte', view.code === candidate, true);
   check('ReportCreator.js, HyperLink.js and appsscript.json are not touched by it (source)', ['template/ReportCreator.js', 'HyperLink.js'].map((f) => /mainMeeting(FolderOf|NumberOf|IdentityOfSave|NumberMismatch)/.test(fs.readFileSync(path.join(ROOT, f), 'utf8'))), [false, false]);
 }

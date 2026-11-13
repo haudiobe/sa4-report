@@ -388,7 +388,7 @@ console.log('I. "CEST" in the code');
 console.log('J. what changed, against T-2026.10.23');
 {
   const RAW = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
-  // The main-meeting number fix (after T-2026.10.24, tests/main-meeting-number.test.js) came later: this ledger is about the layer below it.
+  // The main-meeting number fix (after T-2026.10.23, tests/main-meeting-number.test.js) came later: this ledger is about the layer below it.
   const FULL = codeWithoutMainMeetingNumber(RAW).code;
   const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
   const view = codeWithoutMeetingTimeZones(RAW);

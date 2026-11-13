@@ -546,25 +546,28 @@ function codeWithoutLargeBuildCheckpoints(code) {
   return { code: view.code.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()'), problems: later.problems.concat(view.problems) };
 }
 
-const MAIN_MEETING_NUMBER_SECTION_START = BAR + '// MAIN MEETING NUMBER (after T-2026.10.24)\n' + BAR;
+const MAIN_MEETING_NUMBER_SECTION_START = BAR + '// MAIN MEETING NUMBER (after T-2026.10.23)\n' + BAR;
 const MAIN_MEETING_NUMBER_SECTION_END = BAR + '// END OF MAIN MEETING NUMBER\n' + BAR + '\n';
 const MAIN_MEETING_NUMBER_SECTION_FUNCTIONS = ['mainMeetingFolderOfFtpBase_', 'mainMeetingNumberOfFtpBase_', 'mainMeetingIdentityOfSave_', 'mainMeetingNumberMismatch_'];
 const MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS = ['getReportConfig_', 'continuousUpdateCore_', 'persistConfigurationSettings_', 'assertMeetingReadyToBuild_'];
-// After T-2026.10.24 (GitHub issue #9): the changes outside the section, [now, before], in the order they stand in Code.js.
+// After T-2026.10.23 (GitHub issue #9): the changes outside the section, [now, before], in the order they stand in Code.js.
 const MAIN_MEETING_NUMBER_CHANGES = [
-  ["  // After T-2026.10.24: a number that is not saved is the document folder's before it is SA4#136's (MAIN MEETING NUMBER section).\n  const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || mainMeetingNumberOfFtpBase_(props.getProperty('FTP_BASE')) || '136';\n",
+  // The release of it (T-2026.10.24): its changelog entry under 2.26.8 (the version line is the time zones').
+  [" *     docs/MEETING_TIME_ZONES.md.)\n *   - Fixed: Configure Meeting saved a main meeting's blank Meeting\n *     Folder and Number as SA4#136's (TSGS4_136_Montreal, 136) next to\n *     the document folder Resolve found, so the TDoc list was looked\n *     for under a wrong name (HTTP 403 from 3GPP). They are now taken\n *     from the document folder; a contradicting value is refused\n *     before anything is written, and an update or build with a saved\n *     number that contradicts the saved folder is refused before any\n *     download. A failed TDoc-list download says that the report was\n *     not updated (nothing is changed before it). A wrong number\n *     already saved is not migrated. (GitHub issue #9; MAIN MEETING\n *     NUMBER section; docs/MAIN_MEETING_NUMBER.md.)\n",
+   " *     docs/MEETING_TIME_ZONES.md.)\n"],
+  ["  // After T-2026.10.23: a number that is not saved is the document folder's before it is SA4#136's (MAIN MEETING NUMBER section).\n  const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || mainMeetingNumberOfFtpBase_(props.getProperty('FTP_BASE')) || '136';\n",
    "  const MEETING_NUMBER = props.getProperty('MEETING_NUMBER') || '136';\n"],
-  ["      // After T-2026.10.24: the list is fetched before the report is touched; a failed download changed nothing either (MAIN MEETING NUMBER section).\n      result.notUpdated = true;\n",
+  ["      // After T-2026.10.23: the list is fetched before the report is touched; a failed download changed nothing either (MAIN MEETING NUMBER section).\n      result.notUpdated = true;\n",
    "      if (e && e.tdocListIdentity) result.notUpdated = true;\n"],
-  ["  const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);\n  // After T-2026.10.24: a main meeting's folder and number go with its document folder (MAIN MEETING NUMBER section).\n  const mainMeetingIdentity = mainMeetingIdentityOfSave_(config, docProps);\n  if (mainMeetingIdentity.problem) throw new Error(mainMeetingIdentity.problem);\n",
+  ["  const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);\n  // After T-2026.10.23: a main meeting's folder and number go with its document folder (MAIN MEETING NUMBER section).\n  const mainMeetingIdentity = mainMeetingIdentityOfSave_(config, docProps);\n  if (mainMeetingIdentity.problem) throw new Error(mainMeetingIdentity.problem);\n",
    "  const keptMeetingTimeZone = keptMeetingTimeZoneBeforeSave_(docProps);\n"],
-  ["  if (effectiveType === 'main') {\n    // After T-2026.10.24: taken from the document folder where blank; SA4#136's only without one (MAIN MEETING NUMBER section).\n    setPropertyIfPresent_(docProps, 'MEETING_FOLDER', mainMeetingIdentity.folder);\n    setPropertyIfPresent_(docProps, 'MEETING_NUMBER', mainMeetingIdentity.number);\n",
+  ["  if (effectiveType === 'main') {\n    // After T-2026.10.23: taken from the document folder where blank; SA4#136's only without one (MAIN MEETING NUMBER section).\n    setPropertyIfPresent_(docProps, 'MEETING_FOLDER', mainMeetingIdentity.folder);\n    setPropertyIfPresent_(docProps, 'MEETING_NUMBER', mainMeetingIdentity.number);\n",
    "  if (effectiveType === 'main') {\n    docProps.setProperty('MEETING_FOLDER', config.meetingFolder || 'TSGS4_136_Montreal');\n    docProps.setProperty('MEETING_NUMBER', config.meetingNumber || '136');\n"],
-  ["  assertMeetingConfigured_(context);\n  // After T-2026.10.24: a main meeting whose number is not its document folder's (MAIN MEETING NUMBER section).\n  const meetingNumberProblem = mainMeetingNumberMismatch_(getReportStateStore_(context));\n  if (meetingNumberProblem) throw new Error(meetingNumberProblem);\n  const readiness = getBuildReadiness_(context);\n",
+  ["  assertMeetingConfigured_(context);\n  // After T-2026.10.23: a main meeting whose number is not its document folder's (MAIN MEETING NUMBER section).\n  const meetingNumberProblem = mainMeetingNumberMismatch_(getReportStateStore_(context));\n  if (meetingNumberProblem) throw new Error(meetingNumberProblem);\n  const readiness = getBuildReadiness_(context);\n",
    "  assertMeetingConfigured_(context);\n  const readiness = getBuildReadiness_(context);\n"]
 ];
 
-/** Code.js without the main-meeting number fix: the Code.js of the T-2026.10.24 candidate (2.26.8). { code, problems }. */
+/** Code.js without the main-meeting number fix: the Code.js of 3dd4263, the release commit of the meeting time zones (2.26.8). { code, problems }. */
 function codeWithoutMainMeetingNumber(code) {
   return takeOut(code, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_CHANGES, 'MAIN MEETING NUMBER');
 }
@@ -657,7 +660,7 @@ const MEETING_TIME_ZONES_CREATOR_CHANGES = [
 
 /** Code.js without the meeting time zones: the Code.js of T-2026.10.23. { code, problems }. */
 function codeWithoutMeetingTimeZones(code) {
-  // The main-meeting number fix (after T-2026.10.24) came later: taken out first.
+  // The main-meeting number fix (after T-2026.10.23) came later: taken out first.
   const later = codeWithoutMainMeetingNumber(code);
   const view = takeOut(later.code, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_CHANGES, 'MEETING TIME ZONES');
   return { code: view.code, problems: later.problems.concat(view.problems) };

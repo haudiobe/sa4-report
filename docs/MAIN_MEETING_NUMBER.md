@@ -1,6 +1,6 @@
-# Main-meeting number and the TDoc list (fix after T-2026.10.24)
+# Main-meeting number and the TDoc list (T-2026.10.24, Code.js 2.26.8)
 
-Status: **fix branch `fix/main-meeting-number-from-folder`, on top of the T-2026.10.24 candidate (`Code.js` 2.26.8). Not merged, not released, not deployed.** GitHub issue #9.
+Status: **part of release T-2026.10.24 (`Code.js` 2.26.8), together with the meeting time zones.** Made on `fix/main-meeting-number-from-folder` (`db3030a`), taken into `release/T-2026.10.24` (decision of 2026-11-13, option A). GitHub issue #9. Not yet merged into master, tagged or deployed.
 
 ## What happened
 
@@ -50,7 +50,7 @@ Unchanged:
 - a typed TDoc list URL;
 - a main meeting without a document folder;
 - ReportCreator.js, HyperLink.js and appsscript.json;
-- the version line (2.26.8).
+- the version line (2.26.8); the changelog of 2.26.8 has a second entry, "Fixed: …".
 
 ## Tests
 
