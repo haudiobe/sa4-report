@@ -39,7 +39,8 @@ const CACHE = (id) => 'REVIEWER_NO_SUMMARY_CACHE_' + id;
  *   tdocs     [{ id, agenda, status, revisedTo, uploaded }] -- the TDoc list; `uploaded: true` gives the TDoc its hyperlink
  *   props     more document properties (null removes one)
  *   token     false: no Reviewer token
- *   reviewer  { id: text | 404 | 500 } -- what the Reviewer answers (default 404)
+ *   reviewer  { id: text | 404 | 500 | { throws: message } } -- what the Reviewer answers (default 404);
+ *             { throws } makes UrlFetchApp.fetch() throw, as a timeout or a network error does
  *   release   false: not a template report (so: text statuses, no Docs API use)
  *   docs      false: no Google Docs API service
  *   agenda    another agenda
@@ -90,6 +91,7 @@ function templateReport(options) {
     if (m) {
       r.requests.push(m[1]);
       const answer = Object.prototype.hasOwnProperty.call(r.reviewer, m[1]) ? r.reviewer[m[1]] : 404;
+      if (answer && typeof answer === 'object' && answer.throws) throw new Error(answer.throws);
       if (typeof answer === 'number') return { getResponseCode: () => answer, getContentText: () => '' };
       return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ text: answer }) };
     }

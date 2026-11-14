@@ -5246,6 +5246,16 @@ function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus, options)
       return;
     }
 
+    // After T-2026.10.24: once the Reviewer has failed in this execution
+    // (timeout, network error, 401/403, 5xx -- anything but an answer about
+    // the document), it is not asked again until the next execution. A
+    // Reviewer that hangs costs one timeout per run, not one per TDoc, so the
+    // update reaches its other steps without abstracts.
+    if (REVIEWER_TOKEN_RUN_STATE_.unavailable) {
+      perfCount_('Reviewer requests not made: unavailable in this run');
+      return;
+    }
+
     // PERF-006 (Part A): canonicalize via the central SA4 document-ID
     // registry (never a second parser) before touching the negative
     // cache. Both existing call sites already pass an already-canonical
@@ -5274,14 +5284,21 @@ function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus, options)
     perfCount_('UrlFetchApp.fetch() calls (total)');
     perfCount_('fetch() call site: fetchAndAddAbstract_ (Reviewer API)');
     perfCount_('Reviewer API requests');
-    const response = UrlFetchApp.fetch(apiUrl, {
-      method: 'get',
-      headers: {
-        'X-API-Key': apiToken,
-        'Accept': 'application/json'
-      },
-      muteHttpExceptions: true
-    });
+    let response;
+    try {
+      response = UrlFetchApp.fetch(apiUrl, {
+        method: 'get',
+        headers: {
+          'X-API-Key': apiToken,
+          'Accept': 'application/json'
+        },
+        muteHttpExceptions: true
+      });
+    } catch (e) {
+      // No answer at all (timeout, network): logged below, as before.
+      markReviewerUnavailableForRun_(e.message);
+      throw e;
+    }
 
     const statusCode = response.getResponseCode();
 
@@ -5341,10 +5358,18 @@ function fetchAndAddAbstract_(table, tdocNumber, context, portalStatus, options)
       }
     } else {
       Logger.log(`API error for ${tdocNumber}: ${statusCode}`);
+      markReviewerUnavailableForRun_('HTTP ' + statusCode);
     }
   } catch (e) {
     Logger.log(`Error fetching abstract for ${tdocNumber}: ${e.message}`);
   }
+}
+
+/** After T-2026.10.24: no further Reviewer request in this execution; said once. */
+function markReviewerUnavailableForRun_(reason) {
+  if (REVIEWER_TOKEN_RUN_STATE_.unavailable) return;
+  REVIEWER_TOKEN_RUN_STATE_.unavailable = String(reason || 'no answer');
+  Logger.log('The Reviewer is not available (' + REVIEWER_TOKEN_RUN_STATE_.unavailable + '): it is not asked again in this run. The report is updated without further abstracts.');
 }
 
 function findAbstractInsertIndex_(table) {
@@ -11778,7 +11803,7 @@ function formatFullBuildSummary_(result) {
 // TEMPLATE-002C: the optional Reviewer API token, read once per execution
 // (Apps Script starts every execution with fresh globals). A missing token
 // is logged once, not once per TDoc table.
-var REVIEWER_TOKEN_RUN_STATE_ = { read: false, token: '', missingLogged: false };
+var REVIEWER_TOKEN_RUN_STATE_ = { read: false, token: '', missingLogged: false, unavailable: '' };
 // Set by Full Build while it builds the tables: abstracts get their own phase.
 var SKIP_ABSTRACTS_DURING_BUILD_THIS_RUN_ = false;
 
@@ -11792,6 +11817,7 @@ function resetReviewerTokenRunState_() {
   REVIEWER_TOKEN_RUN_STATE_.token = '';
   REVIEWER_TOKEN_RUN_STATE_.missingLogged = false;
   REVIEWER_TOKEN_RUN_STATE_.resolved = null;
+  REVIEWER_TOKEN_RUN_STATE_.unavailable = '';
 }
 
 /**
