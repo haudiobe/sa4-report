@@ -31,7 +31,7 @@ const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { REPORT_CREATOR_PATH } = require('./helpers/load-template.js');
 const { templateReport } = require('./helpers/template-report.js');
 const { configurableReport } = require('./helpers/config-dialog.js');
-const { codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutSessionTimes, creatorWithoutSessionTimes, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -391,6 +391,9 @@ console.log('J. what changed, against T-2026.10.23');
   const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
   const view = codeWithoutMeetingTimeZones(FULL);
   const creatorView = creatorWithoutMeetingTimeZones(CREATOR);
+  // The session times of issue #11 came later; the functions are compared without them (tests/session-times-main-report.test.js).
+  const FULL_T = codeWithoutSessionTimes(FULL).code;
+  const CREATOR_T = creatorWithoutSessionTimes(CREATOR).code;
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((x) => x.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
@@ -410,13 +413,13 @@ console.log('J. what changed, against T-2026.10.23');
     console.log('  note: template-release/T-2026.10.23 is not available in this checkout; the comparison with it is skipped.');
   } else {
     check('without it, Code.js and ReportCreator.js are those of T-2026.10.23, byte for byte', [view.code === released, creatorView.code === releasedCreator], [true, true]);
-    check('the functions of Code.js that changed', functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL, n) !== functionSource(released, n)).sort(),
+    check('the functions of Code.js that changed', functionNames(released).filter((n, i, all) => all.indexOf(n) === i).filter((n) => functionSource(FULL_T, n) !== functionSource(released, n)).sort(),
       ['adhocSessionWhenText_', 'buildAdhocOpeningDialogModel_', 'buildAdhocOpeningLines_', 'buildAdhocSessionStatusModel_', 'buildAdhocTdocSessionsDialogModel_', 'buildMeetingOpeningSentence_', 'computeResolvedMeetingPreview_',
         'configureAdhocSessions', 'configureMeetingSettings', 'convertUtcWallClockToReportZone_', 'getMeetingStartForOpening_', 'makeAdhocTdocSessionResolver_', 'meetingStartFromResolved_', 'persistConfigurationSettings_',
         'refreshAdhocOpeningSection_', 'resolveMeetingCoreById_', 'storeMeetingStart_']);
-    check('the new functions are those of the section; none removed', [functionNames(FULL).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+    check('the new functions are those of the section; none removed', [functionNames(FULL_T).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(FULL_T).indexOf(n) === -1)],
       [MEETING_TIME_ZONES_SECTION_FUNCTIONS.slice().sort(), []]);
-    check('the functions of ReportCreator.js that changed: the bootstrap config and its check', functionNames(releasedCreator).filter((n) => functionSource(CREATOR, n) !== functionSource(releasedCreator, n)).sort(),
+    check('the functions of ReportCreator.js that changed: the bootstrap config and its check', functionNames(releasedCreator).filter((n) => functionSource(CREATOR_T, n) !== functionSource(releasedCreator, n)).sort(),
       ['buildReportBootstrapPayload_', 'validateBootstrapPayload_']);
     check('untouched: the update, Close Report, the e-mail collector and its deadline parsing, the agenda, the TDoc list',
       ['continuousUpdateCore_', 'closeReportCore_', 'getCollectorConfig_', 'checkRSSFeed_', 'extractDeadlineFromSubject_', 'parseDeadlineCellText_', 'readAgendaWithFallbacks_', 'downloadAndGroupTdocs_', 'computeMeetingTimeZoneLabel_', 'isValidMeetingTimeZoneLabel_']

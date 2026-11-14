@@ -780,6 +780,10 @@ function buildTemplateReportMenu_(ui) {
       .addItem('Assign TDoc Sessions…', 'assignAdhocTdocSessions')
       .addItem('Edit Opening Details…', 'editAdhocOpeningDetails')
       .addItem('Post-meeting Statistics…', 'showAdhocSessionStatistics'));
+  } else if (isMainReportForMenu_()) {
+    // Issue #11: a main-meeting report can have session times, and nothing else of the ad-hoc sessions.
+    menu.addSubMenu(ui.createMenu('🗓 Sessions')
+      .addItem('Configure Sessions…', 'configureAdhocSessions'));
   }
 
   menu.addItem('🔄 Automatic Updates…', 'manageTriggers');
@@ -825,6 +829,15 @@ function addTemplateReportMenuHead_(menu) {
 function isAdhocReportForMenu_() {
   try {
     return String(PropertiesService.getDocumentProperties().getProperty('MEETING_TYPE') || '').trim().toLowerCase() === 'adhoc';
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Issue #11: whether this document is configured as a main-meeting report; read as isAdhocReportForMenu_() reads. */
+function isMainReportForMenu_() {
+  try {
+    return String(PropertiesService.getDocumentProperties().getProperty('MEETING_TYPE') || '').trim().toLowerCase() === 'main';
   } catch (e) {
     return false;
   }

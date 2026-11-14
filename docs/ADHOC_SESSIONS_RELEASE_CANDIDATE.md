@@ -379,3 +379,34 @@ feature. What is known and accepted is in §8.
 No step includes the next. Reports that exist — the live reports among them — keep the
 release they have through A to D. What was tagged, deployed and is live is recorded here
 afterwards.
+
+---
+
+## 11. Session times in a main-meeting report (GitHub issue #11, candidate, not released)
+
+A main-meeting report (`MEETING_TYPE=main`) can have session times. It reuses what is described above;
+nothing new is stored.
+
+| | Main-meeting report | Ad-hoc report |
+|---|---|---|
+| Menu | **🗓 Sessions > Configure Sessions…** (only this item) | unchanged (§2) |
+| Dialog | the same dialog, `configureAdhocSessions` | unchanged |
+| Stored | `ADHOC_SESSIONS` only, same schema (§4). `MEETING_TYPE`, `REPORT_SUFFIX`, `TDOC_LIST_URL`, the agenda and every other property are only read | unchanged |
+| Shown | the **Session administration** section (code, dates, times in the meeting time zone, `docs/MEETING_TIME_ZONES.md`), written or replaced on Save, removed when no session is left. Text outside the section is never touched; an "Online information" block of a main report is ordinary text and is not replaced | unchanged |
+| TDocs | **not affected**: `getAdhocSessions_()` stays `[]` outside an ad-hoc report, so the TDoc selection, the agenda filter, the upload-time grouping and the Session column are as before. Saving runs no download, no build and no update | unchanged |
+
+A report without a meeting type, or with an unknown one, still refuses. Build from Scratch of a main report
+does not write the section; save the sessions again afterwards. Opening details, attendance, TDoc sessions and
+the statistics stay ad-hoc only.
+
+Tests: `tests/session-times-main-report.test.js`; the take-out of the change is `codeWithoutSessionTimes()` /
+`creatorWithoutSessionTimes()` in `tests/helpers/before-structure-fix.js`.
+
+### Manual smoke test (a copy of a main report, never a production report)
+
+1. Open the copy; reopen once so the menu is rebuilt. **SA4 Report > 🗓 Sessions > Configure Sessions…** is there.
+2. Enter one session (date, 09:00–17:30), Save. Under "Opening of the session" a **Session administration** heading
+   appears with `A01: <date>, 09:00–17:30 <zone>`; nothing else in the document changed.
+3. Open the dialog again: the session is shown as saved. Change the end time, Save: only that line changes.
+4. **⚙️ Configure Meeting…** still shows the same meeting type, report family, TDoc list and agenda.
+5. Remove the session and Save: the section is removed.
