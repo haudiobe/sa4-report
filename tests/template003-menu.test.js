@@ -170,6 +170,8 @@ const SESSIONS_SUBMENU = ['  🗓 Sessions and Attendance', '    Configure Sessi
   '    Assign TDoc Sessions… -> assignAdhocTdocSessions', '    Edit Opening Details… -> editAdhocOpeningDetails', '    Post-meeting Statistics… -> showAdhocSessionStatistics'];
 const REALLOCATION_END = REPORT_TREE_AFTER_SETUP.indexOf('    Remove All Reallocations… -> clearAllReallocations') + 1;
 const REPORT_TREE_ADHOC = REPORT_TREE_AFTER_SETUP.slice(0, REALLOCATION_END).concat(SESSIONS_SUBMENU, REPORT_TREE_AFTER_SETUP.slice(REALLOCATION_END));
+// Issue #11: a main-meeting report has session times only -- one submenu with Configure Sessions….
+const REPORT_TREE_MAIN = REPORT_TREE_AFTER_SETUP.slice(0, REALLOCATION_END).concat(['  🗓 Sessions', '    Configure Sessions… -> configureAdhocSessions'], REPORT_TREE_AFTER_SETUP.slice(REALLOCATION_END));
 const SET_UP_MAIN = { SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main', MEETING_ID: '60777', REPORT_SUFFIX: '6G' };
 const REPORT_TREE_BEFORE_SETUP = [REPORT_TREE_AFTER_SETUP[0], '  🚀 Finish Report Setup -> finishReportSetup', '  ---'].concat(REPORT_TREE_AFTER_SETUP.slice(1));
 
@@ -213,9 +215,9 @@ console.log('1. report menu after setup');
     [28, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
   const main = runtime({ docId: REPORT_ID, props: SET_UP_MAIN });
   main.s.onOpen();
-  check('main-meeting report: exact tree, without the Sessions and Attendance submenu', tree(main.ui), REPORT_TREE_AFTER_SETUP);
-  check('main-meeting report: 22 items after setup (two of the Disposition Summary, after T-2026.10.15), 3 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
-    [22, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
+  check('main-meeting report: exact tree, without the Sessions and Attendance submenu, with Sessions > Configure Sessions… (issue #11)', tree(main.ui), REPORT_TREE_MAIN);
+  check('main-meeting report: 23 items after setup (two of the Disposition Summary, after T-2026.10.15; Configure Sessions…, issue #11), 4 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [23, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions', '🛠 Advanced and Repair']]);
   check('a document configured by hand (state "manual") gets the same menu',
     (() => { const m = runtime({ docId: REPORT_ID, props: { SA4_BOOTSTRAP_STATE: 'manual' } }); m.s.onOpen(); return tree(m.ui); })(), REPORT_TREE_AFTER_SETUP);
 }
@@ -255,7 +257,8 @@ console.log('2. hidden operations are still in the code');
       'compareAdhocSessions_', 'configureAdhocSessions', 'defaultAdhocSessionLabel_', 'getAdhocSessions_', 'isAdhocMeetingForSessions_',
       'isValidAdhocSessionDate_', 'isValidAdhocSessionTime_', 'parseAdhocSessionsProperty_', 'salvageAdhocSessionNextId_',
       'saveAdhocSessionsConfiguration', 'saveAdhocSessionsWith_', 'serializeAdhocSessions_', 'sortAdhocSessions_', 'validateAdhocSessions_'];
-    const SESSION_FUNCTIONS_CREATOR = ['isAdhocReportForMenu_'];
+    // Issue #11: the menu check of a main-meeting report.
+    const SESSION_FUNCTIONS_CREATOR = ['isAdhocReportForMenu_', 'isMainReportForMenu_'];
     // The Teams attendance parser (stage C): pure functions, called by nothing yet.
     const TEAMS_PARSER_FUNCTIONS_CODE = ['decodeTeamsAttendanceBytes_', 'formatTeamsDuration_', 'normalizeTeamsDisplayName_', 'normalizeTeamsEmail_',
       'parseTeamsAttendanceReport_', 'parseTeamsDuration_', 'readTeamsDateTimeParts_', 'resolveTeamsDateOrder_', 'scanDelimitedRows_', 'splitDelimitedRows_',

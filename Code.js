@@ -15604,6 +15604,8 @@ function refreshRegistrationTableLinks_(body, allTdocs) {
 // every reader and never throws.
 
 const ADHOC_SESSIONS_KEY_ = 'ADHOC_SESSIONS';
+// Issue #11: sessions need a report configured as an ad-hoc or a main-meeting report.
+const SESSION_TIMES_UNAVAILABLE_ = 'Sessions are available for ad-hoc and main-meeting reports only.';
 const ADHOC_SESSIONS_SCHEMA_VERSION_ = 1;
 const ADHOC_SESSION_LABEL_MAX_LENGTH_ = 16;
 // One property value holds at most 9 KB (see the report state store above).
@@ -15935,6 +15937,32 @@ function isAdhocMeetingForSessions_(context) {
  */
 function getAdhocSessions_(context) {
   if (!isAdhocMeetingForSessions_(context)) return [];
+  return getConfiguredSessions_(context);
+}
+
+/**
+ * Issue #11: the meeting type under which session times can be edited --
+ * 'adhoc' or 'main', as stored; '' for a report without a meeting type or
+ * with one that cannot be read. Never throws.
+ */
+function sessionTimesMeetingType_(context) {
+  try {
+    const raw = getReportStateStore_(context).getProperty('MEETING_TYPE');
+    return String(raw || '').trim() ? normalizeMeetingType_(raw) : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * The stored sessions in chronological order, each with its `displayLabel`,
+ * whatever the meeting type; [] when none can be read. Never throws. Only the
+ * Configure Sessions dialog and the Session administration section of a
+ * main-meeting report read sessions this way (issue #11); everything that
+ * selects, groups or places TDocs reads getAdhocSessions_(), which stays
+ * [] outside an ad-hoc report.
+ */
+function getConfiguredSessions_(context) {
   let stored;
   try {
     stored = parseAdhocSessionsProperty_(getReportStateStore_(context).getProperty(ADHOC_SESSIONS_KEY_));
@@ -15984,7 +16012,7 @@ function adhocSessionsEnabled_(context) {
  * session is not extended to fit.
  */
 function saveAdhocSessionsWith_(store, isAdhoc, rows, attendanceSessionIds, tdocSessionReferences, openingSessionIds, attendanceDays) {
-  if (!isAdhoc) return { ok: false, errors: ['Sessions are available for ad-hoc reports only.'], changed: false, sessions: [] };
+  if (!isAdhoc) return { ok: false, errors: [SESSION_TIMES_UNAVAILABLE_], changed: false, sessions: [] };
   const raw = store.getProperty(ADHOC_SESSIONS_KEY_);
   const edit = applyAdhocSessionsEdit_(raw, rows);
   if (!edit.ok) return { ok: false, errors: edit.errors, changed: false, sessions: [] };
@@ -16106,7 +16134,20 @@ function saveAdhocSessionsConfiguration(rows) {
   } catch (e) {
     openingSessionIds = null;
   }
-  const result = saveAdhocSessionsWith_(getReportStateStore_(), isAdhocMeetingForSessions_(), rows, attendanceSessionIds, tdocSessionReferences, openingSessionIds, attendanceDays);
+  // Issue #11: a main-meeting report can have session times too. Only
+  // ADHOC_SESSIONS is written; the meeting type stays as stored.
+  const meetingType = sessionTimesMeetingType_();
+  const adhoc = meetingType === 'adhoc';
+  const result = saveAdhocSessionsWith_(getReportStateStore_(), meetingType !== '', rows, attendanceSessionIds, tdocSessionReferences, openingSessionIds, attendanceDays);
+
+  // Issue #11: in a main-meeting report the times are shown in the Session
+  // administration section, and nothing else is written: no Online
+  // information, no attendance, no Session column, no TDoc.
+  if (result.ok && !adhoc) {
+    const notice = renderMainSessionAdministration_();
+    if (notice) result.notice = notice;
+    return result;
+  }
 
   // Stage E: the Session administration section says when each session is,
   // so it follows the sessions -- in a report that has the section, or has
@@ -16161,6 +16202,28 @@ function saveAdhocSessionsConfiguration(rows) {
 }
 
 /**
+ * Issue #11: writes the Session administration section of a main-meeting
+ * report from its configured sessions -- their codes, dates and times in the
+ * meeting time zone -- and nothing else. A section that already says this is
+ * left alone; without sessions it is removed. Text outside the section is
+ * never touched. Returns '' or a notice for the dialog.
+ */
+function renderMainSessionAdministration_() {
+  const outcome = withAdhocAttendanceLock_(function () {
+    try {
+      const lines = buildAdhocOpeningLines_(getConfiguredSessions_(), {}, meetingSessionTimeZone_());
+      return { ok: true, rendered: renderAdhocOpeningSection_(currentReportDocument_().getBody(), lines) };
+    } catch (e) {
+      Logger.log('Session times: stored, but the Session administration section could not be written: ' + e.message);
+      return { ok: false, error: e.message };
+    }
+  });
+  if (!outcome.ok) return 'The sessions were saved. The Session administration section could not be written (' + outcome.error + '). Save the sessions again to write it.';
+  if (outcome.rendered.container === 'no-place') return 'The sessions were saved. This report has no "Opening of the session" section to show them in.';
+  return '';
+}
+
+/**
  * What the Configure Sessions dialog shows (pure; reads nothing but its
  * arguments, writes nothing). Without a stored configuration one session is
  * proposed from the meeting date; it is stored only if the user saves.
@@ -16189,8 +16252,10 @@ function buildAdhocSessionsDialogModel_(raw, meetingDateText) {
 function configureAdhocSessions() {
   assertNotTemplateMaster_();
   const ui = DocumentApp.getUi();
-  if (!isAdhocMeetingForSessions_()) {
-    ui.alert('Configure Sessions', 'Sessions are available for ad-hoc reports only.', ui.ButtonSet.OK);
+  // Issue #11: an ad-hoc or a main-meeting report; the meeting type is only read.
+  const meetingType = sessionTimesMeetingType_();
+  if (!meetingType) {
+    ui.alert('Configure Sessions', SESSION_TIMES_UNAVAILABLE_, ui.ButtonSet.OK);
     return;
   }
   const props = getReportStateStore_();
@@ -16218,7 +16283,7 @@ function configureAdhocSessions() {
     </style>
 
     <h2>Sessions</h2>
-    <div class="hint">The meetings of this ad-hoc series. A session can span several days: enter its last day as End date, or leave End date empty for a session of one day. Times are optional and are meant in ${sessionsZoneText}: the start time is on the first day, the end time is the final cut-off on the last day. An empty label is shown as the day and month of the dates.</div>
+    <div class="hint">${meetingType === 'adhoc' ? 'The meetings of this ad-hoc series.' : 'The sessions of this meeting. They are shown in the Session administration section; the TDocs of this report are not changed.'} A session can span several days: enter its last day as End date, or leave End date empty for a session of one day. Times are optional and are meant in ${sessionsZoneText}: the start time is on the first day, the end time is the final cut-off on the last day. An empty label is shown as the day and month of the dates.</div>
     <div id="notice"></div>
 
     <table>

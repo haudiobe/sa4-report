@@ -291,10 +291,12 @@ console.log('6. saving');
   const none = fresh.sandbox.saveAdhocSessionsConfiguration([]);
   check('saving "no sessions" in a report that never had any creates no property', [none.ok, none.changed, freshWrites, fresh.docProps.getKeys()], [true, false, [], ['MEETING_TYPE']]);
 
+  // Issue #11: a main-meeting report can have session times; only the sessions are written (tests/session-times-main-report.test.js).
   const main = open({ MEETING_TYPE: 'main' });
   const mainWrites = writes(main.docProps);
-  check('a main-meeting report: refused, nothing written', [main.sandbox.saveAdhocSessionsConfiguration([session('', '2026-09-22')]), mainWrites],
-    [{ ok: false, errors: ['Sessions are available for ad-hoc reports only.'], changed: false, sessions: [] }, []]);
+  check('a main-meeting report: saved, only ADHOC_SESSIONS written', [main.sandbox.saveAdhocSessionsConfiguration([session('', '2026-09-22')]).ok, mainWrites],
+    [true, ['ADHOC_SESSIONS']]);
+  check('a main-meeting report: no session reaches the ad-hoc readers', main.sandbox.adhocSessionsEnabled_(), false);
   const untyped = open({});
   check('a report without a meeting type: refused, nothing written', [untyped.sandbox.saveAdhocSessionsConfiguration([session('', '2026-09-22')]).ok, untyped.docProps.getKeys()], [false, []]);
 
@@ -443,13 +445,16 @@ console.log('7. the Configure Sessions dialog');
   const c7 = runClient(hostile.ui.dialogs[0].html);
   check('a label with markup stays data: one script element, shown as typed', [c7.scriptCount, c7.rowValues()[0][0], hostile.ui.dialogs[0].html.indexOf('</script><b>')], [1, '</script><b>', -1]);
 
-  // Not an ad-hoc report.
-  ['main', '', 'electronic'].forEach((type) => {
+  // Neither an ad-hoc nor a main-meeting report (issue #11: a main-meeting report gets the dialog).
+  ['', 'electronic'].forEach((type) => {
     const main = withUi(type ? { MEETING_TYPE: type } : {});
     main.s.configureAdhocSessions();
     check(`meeting type "${type}": a message, no dialog, no property`, [main.ui.dialogs.length, main.ui.alerts.map((a) => a[1]), main.docProps.getKeys().length],
-      [0, ['Sessions are available for ad-hoc reports only.'], type ? 1 : 0]);
+      [0, ['Sessions are available for ad-hoc and main-meeting reports only.'], type ? 1 : 0]);
   });
+  const mainDialog = withUi({ MEETING_TYPE: 'main' });
+  mainDialog.s.configureAdhocSessions();
+  check('meeting type "main": the dialog, no alert, no property written', [mainDialog.ui.dialogs.length, mainDialog.ui.alerts.length, mainDialog.docProps.getKeys()], [1, 0, ['MEETING_TYPE']]);
 }
 
 // ================================================================ 8. menu visibility
@@ -491,9 +496,10 @@ console.log('8. menu visibility');
   check('ad-hoc, written differently', openMenu({ MEETING_TYPE: ' AdHoc ' }).sessions.length, 1);
 
   const VALID = stored(2, [session('s1', '2026-09-22')]);
-  check('main-meeting report: no submenu, no mention of sessions', [openMenu({ SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main' }).mentionsSessions, openMenu({ MEETING_TYPE: 'main' }).subNames],
-    [false, ['📄 Report', '🔀 Document Reallocation', '🛠 Advanced and Repair']]);
-  check('main-meeting report that holds the property: still no submenu', openMenu({ MEETING_TYPE: 'main', [KEY]: VALID }).mentionsSessions, false);
+  // Issue #11: a main-meeting report has Sessions > Configure Sessions… and nothing else of the feature.
+  check('main-meeting report: the Sessions submenu with Configure Sessions… only', [openMenu({ SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main' }).sessions.map((m) => [m.name, m.entries]), openMenu({ MEETING_TYPE: 'main' }).subNames],
+    [[['🗓 Sessions', [{ label: 'Configure Sessions…', fn: 'configureAdhocSessions' }]]], ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions', '🛠 Advanced and Repair']]);
+  check('main-meeting report that holds the property: the same submenu', openMenu({ MEETING_TYPE: 'main', [KEY]: VALID }).sessions.map((m) => m.name), ['🗓 Sessions']);
   check('no meeting type yet (a new report before its setup): no submenu', openMenu({}).mentionsSessions, false);
   check('no meeting type, but the property: no submenu', openMenu({ [KEY]: VALID }).mentionsSessions, false);
   check('an unknown meeting type: no submenu', openMenu({ MEETING_TYPE: 'electronic' }).mentionsSessions, false);
