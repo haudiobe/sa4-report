@@ -656,9 +656,50 @@ const SESSION_TIMES_CREATOR_CHANGES = [
    "}\n\nfunction addTemplateReportMenuTail_(menu) {\n  menu.addItem('ℹ️ About This Report', 'showTemplateInfo');\n"]
 ];
 
+/** The Reviewer asked once per execution after a failure (after T-2026.10.24): one new function, two changed, one variable. */
+const REVIEWER_RUN_BREAKER_NEW_FUNCTIONS = ['markReviewerUnavailableForRun_'];
+const REVIEWER_RUN_BREAKER_CHANGED_FUNCTIONS = ['fetchAndAddAbstract_', 'resetReviewerTokenRunState_'];
+const REVIEWER_RUN_BREAKER_CHANGES = [
+  ["      return;\n    }\n\n" +
+   "    // After T-2026.10.24: once the Reviewer has failed in this execution\n" +
+   "    // (timeout, network error, 401/403, 5xx -- anything but an answer about\n" +
+   "    // the document), it is not asked again until the next execution. A\n" +
+   "    // Reviewer that hangs costs one timeout per run, not one per TDoc, so the\n" +
+   "    // update reaches its other steps without abstracts.\n" +
+   "    if (REVIEWER_TOKEN_RUN_STATE_.unavailable) {\n" +
+   "      perfCount_('Reviewer requests not made: unavailable in this run');\n" +
+   "      return;\n    }\n\n    // PERF-006 (Part A): canonicalize",
+   "      return;\n    }\n\n    // PERF-006 (Part A): canonicalize"],
+  ["    let response;\n    try {\n      response = UrlFetchApp.fetch(apiUrl, {\n        method: 'get',\n        headers: {\n          'X-API-Key': apiToken,\n          'Accept': 'application/json'\n        },\n        muteHttpExceptions: true\n      });\n" +
+   "    } catch (e) {\n      // No answer at all (timeout, network): logged below, as before.\n      markReviewerUnavailableForRun_(e.message);\n      throw e;\n    }\n",
+   "    const response = UrlFetchApp.fetch(apiUrl, {\n      method: 'get',\n      headers: {\n        'X-API-Key': apiToken,\n        'Accept': 'application/json'\n      },\n      muteHttpExceptions: true\n    });\n"],
+  ["      Logger.log(`API error for ${tdocNumber}: ${statusCode}`);\n      markReviewerUnavailableForRun_('HTTP ' + statusCode);\n    }\n" +
+   "  } catch (e) {\n    Logger.log(`Error fetching abstract for ${tdocNumber}: ${e.message}`);\n  }\n}\n\n" +
+   "/** After T-2026.10.24: no further Reviewer request in this execution; said once. */\n" +
+   "function markReviewerUnavailableForRun_(reason) {\n" +
+   "  if (REVIEWER_TOKEN_RUN_STATE_.unavailable) return;\n" +
+   "  REVIEWER_TOKEN_RUN_STATE_.unavailable = String(reason || 'no answer');\n" +
+   "  Logger.log('The Reviewer is not available (' + REVIEWER_TOKEN_RUN_STATE_.unavailable + '): it is not asked again in this run. The report is updated without further abstracts.');\n" +
+   "}\n\nfunction findAbstractInsertIndex_(table) {\n",
+   "      Logger.log(`API error for ${tdocNumber}: ${statusCode}`);\n    }\n" +
+   "  } catch (e) {\n    Logger.log(`Error fetching abstract for ${tdocNumber}: ${e.message}`);\n  }\n}\n\nfunction findAbstractInsertIndex_(table) {\n"],
+  ["var REVIEWER_TOKEN_RUN_STATE_ = { read: false, token: '', missingLogged: false, unavailable: '' };\n",
+   "var REVIEWER_TOKEN_RUN_STATE_ = { read: false, token: '', missingLogged: false };\n"],
+  ["  REVIEWER_TOKEN_RUN_STATE_.resolved = null;\n  REVIEWER_TOKEN_RUN_STATE_.unavailable = '';\n}\n",
+   "  REVIEWER_TOKEN_RUN_STATE_.resolved = null;\n}\n"]
+];
+
+/** Code.js without the Reviewer run breaker (after T-2026.10.24): { code, problems }. */
+function codeWithoutReviewerRunBreaker(code) {
+  return takeOut(code, null, null, REVIEWER_RUN_BREAKER_CHANGES, 'REVIEWER RUN BREAKER');
+}
+
 /** Code.js without the session times of issue #11: { code, problems }. */
 function codeWithoutSessionTimes(code) {
-  return takeOut(code, null, null, SESSION_TIMES_CHANGES, 'SESSION TIMES');
+  // The Reviewer run breaker came later: taken out first.
+  const later = codeWithoutReviewerRunBreaker(code);
+  const view = takeOut(later.code, null, null, SESSION_TIMES_CHANGES, 'SESSION TIMES');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 /** template/ReportCreator.js without the session times of issue #11: { code, problems }. */
@@ -774,6 +815,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutReviewerRunBreaker, REVIEWER_RUN_BREAKER_NEW_FUNCTIONS, REVIEWER_RUN_BREAKER_CHANGED_FUNCTIONS, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };
