@@ -102,6 +102,16 @@ console.log('3. answers about a document stop nothing');
   r.update();
   check('404 then 503: the 404 is answered, the 503 stops the run before the third', [r.requests, cacheEntries(r), abstracts(r)], [[A, B], [A], [null, null, null]]);
 }
+{
+  const r = report({ [A]: 'First ' + A + '.', [B]: 'First ' + B + '.', [C]: 'First ' + C + '.' });
+  r.update();
+  IDS.forEach((id) => { r.reviewer[id] = 'Second ' + id + '.'; });
+  r.mark();
+  r.update();
+  r.mark();
+  r.updateAbstracts();
+  check('an Abstract once in the report is never asked for again, nor replaced', [r.requests, abstracts(r)], [[], IDS.map((id) => 'First ' + id + '.')]);
+}
 
 // ====================================================================== 4
 console.log('4. "Update Abstracts"');
