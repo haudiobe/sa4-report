@@ -31,7 +31,7 @@ const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { REPORT_CREATOR_PATH } = require('./helpers/load-template.js');
 const { templateReport } = require('./helpers/template-report.js');
 const { configurableReport } = require('./helpers/config-dialog.js');
-const { codeWithoutMainMeetingNumber, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { creatorWithoutSessionTimes, codeWithoutMainMeetingNumber, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -391,6 +391,8 @@ console.log('J. what changed, against T-2026.10.23');
   // The main-meeting number fix (after T-2026.10.23, tests/main-meeting-number.test.js) came later: this ledger is about the layer below it.
   const FULL = codeWithoutMainMeetingNumber(RAW).code;
   const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
+  // The session times of issue #11 (T-2026.10.25) came later: the functions are compared without them.
+  const CREATOR_T = creatorWithoutSessionTimes(CREATOR).code;
   const view = codeWithoutMeetingTimeZones(RAW);
   const creatorView = creatorWithoutMeetingTimeZones(CREATOR);
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
@@ -399,7 +401,7 @@ console.log('J. what changed, against T-2026.10.23');
   const section = FULL.slice(FULL.indexOf(MEETING_TIME_ZONES_SECTION_START), FULL.indexOf(MEETING_TIME_ZONES_SECTION_END) + MEETING_TIME_ZONES_SECTION_END.length);
   check('the section: these functions, in this order', functionNames(section), MEETING_TIME_ZONES_SECTION_FUNCTIONS);
   check('it stands directly after getMeetingStartForOpening_()', FULL.indexOf('    return none;\n  }\n}\n\n' + MEETING_TIME_ZONES_SECTION_START) !== -1, true);
-  check('Code.js is version 2.26.8 (released as T-2026.10.24; the ledger takes the header out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
+  check('Code.js without the session times (2.26.9) is version 2.26.8 (released as T-2026.10.24; the ledger takes the header out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
   let released = null;
   let releasedCreator = null;
   try {
@@ -418,7 +420,7 @@ console.log('J. what changed, against T-2026.10.23');
         'refreshAdhocOpeningSection_', 'resolveMeetingCoreById_', 'storeMeetingStart_']);
     check('the new functions are those of the section; none removed', [functionNames(FULL).filter((n) => functionNames(released).indexOf(n) === -1).sort(), functionNames(released).filter((n) => functionNames(FULL).indexOf(n) === -1)],
       [MEETING_TIME_ZONES_SECTION_FUNCTIONS.slice().sort(), []]);
-    check('the functions of ReportCreator.js that changed: the bootstrap config and its check', functionNames(releasedCreator).filter((n) => functionSource(CREATOR, n) !== functionSource(releasedCreator, n)).sort(),
+    check('the functions of ReportCreator.js that changed: the bootstrap config and its check', functionNames(releasedCreator).filter((n) => functionSource(CREATOR_T, n) !== functionSource(releasedCreator, n)).sort(),
       ['buildReportBootstrapPayload_', 'validateBootstrapPayload_']);
     check('untouched: the update, Close Report, the e-mail collector and its deadline parsing, the agenda, the TDoc list',
       ['continuousUpdateCore_', 'closeReportCore_', 'getCollectorConfig_', 'checkRSSFeed_', 'extractDeadlineFromSubject_', 'parseDeadlineCellText_', 'readAgendaWithFallbacks_', 'downloadAndGroupTdocs_', 'computeMeetingTimeZoneLabel_', 'isValidMeetingTimeZoneLabel_']

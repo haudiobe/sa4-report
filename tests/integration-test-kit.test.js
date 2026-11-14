@@ -162,7 +162,39 @@ console.log('E. issue #9: a copy of Audio as it runs T-2026.10.23; the time-zone
     '[IT9] session, one day: November 16, 2026, 09:00–17:30 ABT',
     '[IT9] session, over 1 November: October 30 – November 2, 2026 (from 09:00 MDT on the first day, until 17:00 ABT on the last day)',
     '[IT9] uploads (UTC -> Calgary): 2026-11-16T17:59:00 -> 2026-11-16T11:59:00, 2026-11-16T18:01:00 -> 2026-11-16T12:01:00, 2026-11-01T08:30:00 -> 2026-11-01T02:30:00 (ABT)']);
-  truthy('it9TimeZoneCheck writes nothing (source)', !/setProperty|deleteProperty|setText|appendParagraph|insert|clear\(|saveAndClose/.test(check9.slice(check9.indexOf('// Issue #9'))));
+  truthy('it9TimeZoneCheck writes nothing (source)', !/setProperty|deleteProperty|setText|appendParagraph|insert|clear\(|saveAndClose/.test(check9.slice(check9.indexOf('// Issue #9'), check9.indexOf('// Issue #11'))));
+}
+
+// Issue #11 (T-2026.10.25): the session-time snapshot of a main-report copy.
+console.log('F. IntegrationCheck.js: issue #11 (session times in a main report)');
+{
+  const kit = fs.readFileSync(path.join(__dirname, '..', 'tools', 'integration-test', 'IntegrationCheck.js'), 'utf8');
+  const box = {};
+  vm.createContext(box);
+  vm.runInContext(kit, box);
+  const P = (text, heading) => ({ type: 'PARAGRAPH', text: text, heading: heading || 'NORMAL' });
+  const T = (n, minutes) => ({ type: 'TABLE', rows: [['TDoc', n], ['Title', 'Synthetic ' + n], ['Minutes', minutes || '']] });
+  const config = { MEETING_TYPE: 'main', REPORT_SUFFIX: 'Audio', TDOC_LIST_URL: 'https://example.invalid/list.xlsx' };
+  const base = [P('7.1 Opening of the session', 'HEADING2'), P('Typed opening text.'), P('7.1.2 Registration of Documents', 'HEADING3'), P('7.5 IVAS', 'HEADING2'), T('S4-261801', 'Typed minutes.')];
+  const a = box.it11Summarize_({ config: config, selector: { mode: 'prefix', value: '7.' }, sessions: null, elements: base });
+  const withSection = base.slice(0, 2).concat([P('Session administration', 'HEADING3'), P('A01: November 16, 2026, 09:00–17:30 ABT'), P('Minutes typed below it.')], base.slice(2));
+  const b = box.it11Summarize_({ config: config, selector: { mode: 'prefix', value: '7.' }, sessions: '{"v":1}', elements: withSection });
+  check('it11Summarize_: the section, where it is, the TDoc tables', [a.section, b.section, b.before, b.after, b.sectionHeadings, b.tdocTables],
+    [null, ['Session administration', 'A01: November 16, 2026, 09:00–17:30 ABT'], 'Typed opening text.', 'Minutes typed below it.', 1, 1]);
+  const d = box.it11Diff_(a, b);
+  check('it11Diff_ after a save: no config change, same selector, same TDocs and minutes; the text typed below counts as other text',
+    [d.configChanged, d.selectorUnchanged, d.tdocsAdded, d.tdocsRemoved, d.tdocTablesChanged, d.tdocOrderUnchanged, d.sessionsChanged, d.otherTextUnchanged], [[], true, [], [], [], true, true, false]);
+  const c = box.it11Summarize_({ config: config, selector: { mode: 'prefix', value: '7.' }, sessions: '{"v":1}', elements: withSection.slice(0, 3).concat([P('A01: November 16, 2026, 10:00–17:30 ABT')], withSection.slice(4)) });
+  const e = box.it11Diff_(b, c);
+  check('it11Diff_ after editing a time: only the section changed', [e.otherTextUnchanged, e.tdocTablesChanged, e.sectionAfter[1]], [true, [], 'A01: November 16, 2026, 10:00–17:30 ABT']);
+  const changed = box.it11Summarize_({ config: Object.assign({}, config, { REPORT_SUFFIX: 'Video' }), selector: { mode: 'prefix', value: '8.' }, sessions: '{"v":1}',
+    elements: withSection.slice(0, -1).concat([T('S4-261801', 'Other minutes.'), T('S4-261899')]) });
+  const g = box.it11Diff_(b, changed);
+  check('it11Diff_ sees a changed report type, selector, minutes and an added TDoc', [g.configChanged, g.selectorUnchanged, g.tdocTablesChanged, g.tdocsAdded], [['REPORT_SUFFIX'], false, ['S4-261801'], ['S4-261899']]);
+  const it11 = kit.slice(kit.indexOf('// Issue #11'));
+  truthy('the issue #11 part writes only its own snapshots (IT11_*), never the document (source)',
+    !/deleteProperty|setText|appendParagraph|insert|clear\(|saveAndClose|batchUpdate/.test(it11) && (it11.match(/setProperty\(([^,]+),/g) || []).every((x) => /IT11_SNAPSHOT_(PREFIX|COUNT_KEY)_/.test(x)));
+  truthy('it refuses the master template and the Audio original like it6 (source)', /function it11Read_\(\) \{\n  it6AssertDisposable_\(\);/.test(it11.replace(/\r/g, '')) && /function it11CompareLast\(\) \{\n  it6AssertDisposable_\(\);/.test(it11.replace(/\r/g, '')));
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

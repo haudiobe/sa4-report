@@ -472,7 +472,7 @@ console.log('\nG. what changed in Code.js: against T-2026.10.22, one section, si
   check('it stands directly after the TDOC LIST DOWNLOAD section', FULL.indexOf('// END OF TDOC LIST DOWNLOAD\n// =========================================================\n\n' + LARGE_BUILD_SECTION_START) !== -1, true);
   check('it declares its settings and its state, and nothing else at top level', section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm) || [],
     ['var LARGE_BUILD_CHECKPOINT_BUDGET_', 'var LARGE_BUILD_UNITS_', 'var LARGE_BUILD_REOPEN_DELAYS_MS_', 'var LARGE_BUILD_CHECKPOINTS_']);
-  check('Code.js is version 2.26.8 (2.26.7 released it as T-2026.10.23, 2.26.8 the meeting time zones; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
+  check('Code.js is version 2.26.9 (2.26.9 the session times in a main report; 2.26.7 released it as T-2026.10.23, 2.26.8 the meeting time zones; the ledgers take the headers out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.9');
   if (RELEASED === null) {
     console.log('  note: template-release/T-2026.10.22 is not available in this checkout; the comparison with it is skipped.');
   } else {

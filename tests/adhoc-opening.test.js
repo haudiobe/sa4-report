@@ -617,7 +617,16 @@ console.log('6. Build from Scratch');
   const mainReads = [];
   const mainGet = main.docProps.getProperty;
   main.docProps.getProperty = (k) => { mainReads.push(k); return mainGet(k); };
-  check('a main-meeting report: the hook does nothing, and reads nothing but the meeting type', [main.sandbox.finishAdhocOpeningRebuild_({}), mainReads], ['', ['MEETING_TYPE']]);
+  // Issue #11: a main-meeting report with session times gets its section from the sessions alone (tests/session-times-main-build-update.test.js);
+  // it never reads the opening details, which stay ad-hoc only. Here the document has no opening: nothing is written, and the build says so.
+  const mainBody = makeFakeDocumentBody(main.sandbox);
+  check('a main-meeting report: no opening details are read, nothing is written without an opening', [main.sandbox.finishAdhocOpeningRebuild_(mainBody), mainReads.indexOf(KEY), mainBody.getNumChildren()],
+    ['\n\n⚠️ The Session administration section was not written: the report has no "Opening of the session" section.', -1, 0]);
+  const mainNone = loadCode({ documentProperties: { MEETING_TYPE: 'main', [KEY]: stored({ s1: { chair: 'Alex Organizer' } }) } });
+  const mainNoneReads = [];
+  const mainNoneGet = mainNone.docProps.getProperty;
+  mainNone.docProps.getProperty = (k) => { mainNoneReads.push(k); return mainNoneGet(k); };
+  check('a main-meeting report without sessions: the hook does nothing, and reads nothing but the meeting type and the sessions', [mainNone.sandbox.finishAdhocOpeningRebuild_({}), mainNoneReads], ['', ['MEETING_TYPE', 'ADHOC_SESSIONS']]);
   check('the build calls the hook once, after the reallocations are restored (source)', (() => {
     const src = CODE.slice(CODE.indexOf('\nfunction buildSkeletonWithTdocTables('), CODE.indexOf('\nfunction downloadAndGroupTdocs_('));
     return [(src.match(/finishAdhocOpeningRebuild_\(/g) || []).length, src.indexOf('finishAdhocOpeningRebuild_(') > src.indexOf('saveReallocation(tdoc, r.original, r.new, r.reason)')];
@@ -810,7 +819,7 @@ console.log('9. menu, adoption, privacy, and nothing else changed');
   });
   const section = CODE.slice(CODE.indexOf('// AD-HOC SESSIONS (stage A)'), CODE.indexOf('// ARCH-009 -- MEETING-ID RESOLVER CORE'));
   check('outside the ad-hoc sections (and the changelog), Code.js mentions the opening details in the one build hook only', (CODE.replace(section, '').replace(/ \* 2\.18\.0 \(2026-10-02\)\n[\s\S]*? \* 2\.17\.4 \(2026-10-01\)\n/, ' * 2.17.4 (2026-10-01)\n').match(/[A-Za-z_]*AdhocOpening[A-Za-z_]*|ADHOC_[A-Z_]*OPENING[A-Z_]*/g) || []), ['finishAdhocOpeningRebuild_']);
-  check('Code.js is version 2.26.8 (2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token, 2.21.1 the dropdown status in a discussion e-mail, 2.22.0 the shared minutes, 2.23.0 the report structure and the configuration guard, 2.24.0 the 4-hour Reviewer cache, 2.25.0 the Attendance rendering fix, 2.26.0 the Disposition Summary and Close Report, 2.26.1 their meeting scope and the TDoc list identity, 2.26.2 the report-local Disposition Summary, 2.26.3 the Portal-page fallback of Close Report, 2.26.4 the agenda Word conversion, 2.26.5 the agenda readers, 2.26.6 the TDoc-list download fallback, 2.26.7 the large-build checkpoints, 2.26.8 the meeting time zones)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
+  check('Code.js is version 2.26.9 (2.26.9 the session times in a main report; 2.18.0 added the ad-hoc sessions, 2.18.1 the TDoc upload completion, 2.19.0 the status dropdowns, 2.20.0 their conversion in an existing report, 2.21.0 the ad-hoc meeting automation and the personal Reviewer token, 2.21.1 the dropdown status in a discussion e-mail, 2.22.0 the shared minutes, 2.23.0 the report structure and the configuration guard, 2.24.0 the 4-hour Reviewer cache, 2.25.0 the Attendance rendering fix, 2.26.0 the Disposition Summary and Close Report, 2.26.1 their meeting scope and the TDoc list identity, 2.26.2 the report-local Disposition Summary, 2.26.3 the Portal-page fallback of Close Report, 2.26.4 the agenda Word conversion, 2.26.5 the agenda readers, 2.26.6 the TDoc-list download fallback, 2.26.7 the large-build checkpoints, 2.26.8 the meeting time zones)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.9');
   check('ReportCreator.js: one more menu item and the build question, nothing else', (CREATOR.match(/Opening Details|editAdhocOpeningDetails|adhocOpening|ADHOC_OPENING/g) || []).length, 5);
 }
 

@@ -379,3 +379,108 @@ feature. What is known and accepted is in §8.
 No step includes the next. Reports that exist — the live reports among them — keep the
 release they have through A to D. What was tagged, deployed and is live is recorded here
 afterwards.
+
+---
+
+## 11. Session times in a main-meeting report (GitHub issue #11; release candidate T-2026.10.25, `Code.js` 2.26.9)
+
+**Status (2026-11-14): release candidate, prepared on `release/T-2026.10.25`. Not tagged, not released, not deployed.**
+The master template, the Audio original and every other report are unchanged. No Google document was changed.
+
+A main-meeting report (`MEETING_TYPE=main`) can have session times. It reuses what this document describes above; nothing
+new is stored.
+
+### 11.1 Behaviour
+
+| | Main-meeting report | Ad-hoc report |
+|---|---|---|
+| Menu | **🗓 Sessions > Configure Sessions…**, only this item (template reports; it appears the next time the document is opened) | unchanged (§2) |
+| Dialog | the same dialog, `configureAdhocSessions`; its hint says that the TDocs are not changed | unchanged |
+| Stored | `ADHOC_SESSIONS` only, same schema (§4). `MEETING_TYPE`, `REPORT_SUFFIX`, `TDOC_LIST_URL`, the agenda and every other property are only read | unchanged |
+| Shown | the **Session administration** section at the end of the opening (directly before "Registration of Documents"): per session its code, dates and times in the meeting time zone (`docs/MEETING_TIME_ZONES.md`: CET/CEST, MST/MDT, ABT) | unchanged |
+| What is written | only the heading and the generated `A01: …` lines. Text typed below them (minutes of the opening) is kept on every save; with no session left the heading and the lines go and the typed text stays. An "Online information" block of a main report is ordinary text and is never replaced | the whole container, as before |
+| Save | writes or replaces the section; a section that already says this is not touched; no download, no build, no update | unchanged |
+| Build from Scratch | writes the section again from the stored sessions; a main report without sessions is built exactly as before. A report without an opening section gets none, and the build says so | unchanged |
+| Update Report Now | never touches the section; a new TDoc is placed where it was placed before, never between the heading and its lines | unchanged |
+| TDocs | **not affected**: `getAdhocSessions_()` stays `[]` outside an ad-hoc report, so the TDoc selection, the agenda filter, the upload-time grouping and the Session column are as before | unchanged |
+
+A report without a meeting type, or with an unknown one, still refuses. Opening details, attendance, TDoc sessions, the
+Online information block and the statistics stay ad-hoc only. A report that was ad-hoc and became main keeps its stored
+sessions; they are now its session times and are shown by the next save or build.
+
+### 11.2 Code (`Code.js` 2.26.9, `template/ReportCreator.js`)
+
+| | Functions |
+|---|---|
+| New | `sessionTimesMeetingType_`, `getConfiguredSessions_`, `renderMainSessionAdministration_`, `renderMainSessionAdministrationIn_`, `findMainSessionAdministration_`, `renderMainSessionAdministrationSection_`; ReportCreator.js: `isMainReportForMenu_` |
+| Changed | `getAdhocSessions_` (reads through `getConfiguredSessions_`, same gate), `saveAdhocSessionsWith_` (message), `saveAdhocSessionsConfiguration`, `configureAdhocSessions`, `finishAdhocOpeningRebuild_` (the main-report branch before the ad-hoc one); ReportCreator.js: `buildTemplateReportMenu_` |
+| Untouched | the TDoc download and grouping, `continuousUpdateCore_`, `buildSkeletonWithTdocTables`, `insertNewTdoc_`, the Session column, `getMeetingContext_`, the agenda selector, `refreshAdhocOpeningSection_` |
+
+The take-out `codeWithoutSessionTimes()` / `creatorWithoutSessionTimes()` (`tests/helpers/before-structure-fix.js`) gives
+back the `Code.js` and `ReportCreator.js` of `release/T-2026.10.24` (`8edb1a7`) byte for byte (version line and
+changelog entry included).
+
+### 11.3 Tests
+
+| File | Covers |
+|---|---|
+| `tests/session-times-main-report.test.js` | a main Audio reference report: only `ADHOC_SESSIONS` written, every other property, the meeting context and the agenda filter (`7.`) byte-identical; local time across DST (Berlin, Denver) and Alberta's ABT; a zone stored for another meeting not used; save and reopen; the text outside the section unchanged; no download, build, update, TDoc insertion, attendance or Online information call; ad-hoc unchanged; exactly these functions changed |
+| `tests/session-times-main-build-update.test.js` | the real Build from Scratch and the real update: the section at the end of the opening; the same TDocs and registration rows as without sessions (no Video TDoc in the Audio report); new TDocs never inside the section; minutes typed into a TDoc table and below the section kept; editing replaces one line; adding and removing sessions; idempotence of save, update and rebuild; a main report without sessions built exactly as before |
+| `tests/integration-test-kit.test.js` §F | the read-only issue #11 snapshot of the integration kit |
+| updated | `adhoc-sessions-config`, `template003-menu`, `adhoc-opening`, `adhoc-session-codes-opening-info`: the checks that said "a main report has no sessions" now state the issue #11 behaviour; the version checks say 2.26.9 |
+
+On `release/T-2026.10.25`: **123 test files, 0 failures** (8,316 `ok` lines). Mutation checks: removing the ad-hoc gate of
+`getAdhocSessions_`, the build hook, or the protection of the typed text each fails the new tests.
+
+### 11.4 Release candidate
+
+`release/T-2026.10.25` = `release/T-2026.10.24` (`8edb1a7`: meeting time zones and main-meeting number, `Code.js` 2.26.8)
++ issue #11, `Code.js` **2.26.9**. It contains nothing else: PR #10 (bounded update, a candidate of issue #9 still under
+test) is not in it, and neither is anything of master that is not in T-2026.10.24.
+
+T-2026.10.24 itself is not tagged or deployed yet (issue #9). T-2026.10.25 contains it whole, so either release can go
+first; if T-2026.10.24 changes before its release (for example by PR #10), `release/T-2026.10.25` is rebased on it and
+the tests run again.
+
+Steps that need an explicit approval, in this order:
+1. The live test below (11.5), on a disposable copy only.
+2. Tag `template-release/T-2026.10.25` on the candidate commit; `node tools/template-release.js --release T-2026.10.25 --write`
+   (the tool builds only from the tagged, clean HEAD) gives the bundle and `RELEASE-MANIFEST.json`.
+3. Master template: backup, read-back before the push, push without `--force`, read-back after it, compare the SHA-256 of
+   every file; rollback is the push of the backup.
+4. Existing reports only on their own decision (adoption, `--adopt`), never automatically.
+
+### 11.5 Live test on a disposable copy of a main report (manual steps)
+
+Not possible without a person: clasp's login cannot copy a Google Doc (issue #6: `files.copy` → 403), and the build and
+the dialogs run in the Docs UI. The copy of issue #9 (`1ZyUlV13…`, 79 extra TDoc tables from the ad-hoc update test) is
+evidence and is **not** used.
+
+1. **Copy.** Open a main report that runs T-2026.10.22 or T-2026.10.23 (for example Audio SWG SA4#138, used only as the
+   reference) → *File › Make a copy*: name `DISPOSABLE TEST COPY (issue #11) - <report> - delete after test`, untick
+   sharing and comments. Send the copy's document ID and Script ID.
+2. **Push** (dry run, then `--write`; refuses the template, the Audio original and protected projects; backs the script up
+   first; pushes the committed candidate with a NOT RELEASED Release.js and `IntegrationCheck.js`; reads back and compares):
+   `node tools/integration-test/push-to-disposable-copy.mjs --script <id> --doc <id> [--write]`
+3. **Before.** Reload the copy. In the editor run `it11Snapshot()` (#1). Check that **SA4 Report › 🗓 Sessions ›
+   Configure Sessions…** is there and that Configure Meeting shows the report's own settings (Cancel). No automatic updates.
+4. **Save.** Configure Sessions…: two sessions (16 Nov 09:00–17:30, 17 Nov 09:00–18:00), Save. The section appears under
+   the opening, before Registration of Documents, `A01: … 09:00–17:30 ABT` (Calgary). `it11Snapshot()` (#2),
+   `it11CompareLast()`: `configChanged: []`, `selectorUnchanged: true`, no TDoc added, removed or changed,
+   `otherTextUnchanged: true`.
+5. **Typed text and editing.** Type a line directly below the section and minutes into one TDoc table. Change one end time,
+   Save: only that line changes; the typed line and the minutes stay. Save again unchanged: `it11CompareLast()` shows no change.
+6. **Update.** Update Report Now (only if the copy's TDoc list is the meeting's own and the update is small; it is not a
+   mass import): the section, the typed line and the minutes stay; a second update changes nothing.
+7. **Build from Scratch** (on the copy only): the section is there again from the stored sessions; compare the TDoc
+   tables with snapshot #1 (`tdocTables`, `tdocOrder`).
+8. Record the logs and the evidence of step 2 in issue #11. Then the copy may be deleted.
+
+### 11.6 Known limits
+
+- The menu item appears only after the document is opened again.
+- Build from Scratch rebuilds the whole report as before: minutes typed into it before are lost by the build itself (its
+  confirmation says so); the section is written again from the stored sessions.
+- A paragraph typed by hand that begins like a generated line (`A01: `) directly below the heading is taken as generated.
+- CENTRAL / Legacy: the code is shared, the menu item is not (template reports only).
+- The live test of 11.5 has not run; nothing about Apps Script itself is proven by the local tests.
