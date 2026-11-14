@@ -617,7 +617,16 @@ console.log('6. Build from Scratch');
   const mainReads = [];
   const mainGet = main.docProps.getProperty;
   main.docProps.getProperty = (k) => { mainReads.push(k); return mainGet(k); };
-  check('a main-meeting report: the hook does nothing, and reads nothing but the meeting type', [main.sandbox.finishAdhocOpeningRebuild_({}), mainReads], ['', ['MEETING_TYPE']]);
+  // Issue #11: a main-meeting report with session times gets its section from the sessions alone (tests/session-times-main-build-update.test.js);
+  // it never reads the opening details, which stay ad-hoc only. Here the document has no opening: nothing is written, and the build says so.
+  const mainBody = makeFakeDocumentBody(main.sandbox);
+  check('a main-meeting report: no opening details are read, nothing is written without an opening', [main.sandbox.finishAdhocOpeningRebuild_(mainBody), mainReads.indexOf(KEY), mainBody.getNumChildren()],
+    ['\n\n⚠️ The Session administration section was not written: the report has no "Opening of the session" section.', -1, 0]);
+  const mainNone = loadCode({ documentProperties: { MEETING_TYPE: 'main', [KEY]: stored({ s1: { chair: 'Alex Organizer' } }) } });
+  const mainNoneReads = [];
+  const mainNoneGet = mainNone.docProps.getProperty;
+  mainNone.docProps.getProperty = (k) => { mainNoneReads.push(k); return mainNoneGet(k); };
+  check('a main-meeting report without sessions: the hook does nothing, and reads nothing but the meeting type and the sessions', [mainNone.sandbox.finishAdhocOpeningRebuild_({}), mainNoneReads], ['', ['MEETING_TYPE', 'ADHOC_SESSIONS']]);
   check('the build calls the hook once, after the reallocations are restored (source)', (() => {
     const src = CODE.slice(CODE.indexOf('\nfunction buildSkeletonWithTdocTables('), CODE.indexOf('\nfunction downloadAndGroupTdocs_('));
     return [(src.match(/finishAdhocOpeningRebuild_\(/g) || []).length, src.indexOf('finishAdhocOpeningRebuild_(') > src.indexOf('saveReallocation(tdoc, r.original, r.new, r.reason)')];

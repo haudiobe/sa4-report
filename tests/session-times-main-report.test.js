@@ -224,8 +224,8 @@ console.log('7. the change itself');
   check('Code.js: the changed functions', names(view.code).filter((n) => source(CODE, n) !== source(view.code, n)).sort(), SESSION_TIMES_CHANGED_FUNCTIONS.slice().sort());
   check('ReportCreator.js: the new and the changed functions', [names(CREATOR).filter((n) => names(creatorView.code).indexOf(n) === -1), names(creatorView.code).filter((n) => source(CREATOR, n) !== source(creatorView.code, n))],
     [SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS]);
-  check('untouched: the TDoc download and grouping, the update, the build, the Session column, the agenda filter', ['downloadAndGroupTdocs_', 'continuousUpdateCore_', 'buildSkeletonWithTdocTables', 'insertNewTdoc_',
-    'makeAdhocTdocSessionResolver_', 'adhocSessionsEnabled_', 'isAdhocMeetingForSessions_', 'agendaSelectorMatches_', 'getMeetingContext_', 'refreshAdhocOpeningSection_', 'finishAdhocOpeningRebuild_'].filter((n) => source(CODE, n) !== source(view.code, n)), []);
+  check('untouched: the TDoc download and grouping, the update, the build (only its last step, finishAdhocOpeningRebuild_(), changed), the Session column, the agenda filter', ['downloadAndGroupTdocs_', 'continuousUpdateCore_', 'buildSkeletonWithTdocTables', 'insertNewTdoc_',
+    'makeAdhocTdocSessionResolver_', 'adhocSessionsEnabled_', 'isAdhocMeetingForSessions_', 'agendaSelectorMatches_', 'getMeetingContext_', 'refreshAdhocOpeningSection_'].filter((n) => source(CODE, n) !== source(view.code, n)), []);
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nall checks passed');

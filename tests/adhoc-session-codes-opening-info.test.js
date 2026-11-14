@@ -372,11 +372,15 @@ console.log('\n8. reports without sessions and main-meeting reports are unchange
 
   const main = report({ MEETING_TYPE: 'main', REPORT_SUFFIX: 'Audio', AGENDA_ITEM_PREFIX: '4.' });
   const built = main.build();
-  check('a main-meeting report, even with a sessions value left in it: no block, no section, four columns, no code',
-    [built.ok, main.count(INFO), main.count(ADMIN), (main.registration() || [[]])[0].length <= 4, /\bA0\d\b/.test(main.texts().join('\n'))], [true, 0, 0, true, false]);
+  // Issue #11: the sessions of a main-meeting report are its session times; their section is written where the report has an
+  // opening. This one has none: no section, and the build says so. Never an Online information block, a Session column or a code.
+  check('a main-meeting report with a sessions value: no block, no section (no opening to put it in; the build says so), four columns, no code',
+    [built.ok, main.count(INFO), main.count(ADMIN), (main.registration() || [[]])[0].length <= 4, /\bA0\d\b/.test(main.texts().join('\n')), /no "Opening of the session" section/.test(built.note)], [true, 0, 0, true, false, true]);
   check('the lines are for a report with sessions only (source): the block is written from the refresh of the Session administration section, which a build calls with sessions only',
     [(CODE.match(/refreshAdhocMeetingInformationSafely_\(/g) || []).length, /function refreshAdhocOpeningSection_\(body, options\) \{\n  const sessions = getAdhocSessions_\(\);\n  \/\/[^\n]*\n  refreshAdhocMeetingInformationSafely_\(body, sessions, !!\(options && options\.afterRebuild\)\);/.test(CODE),
-      /function finishAdhocOpeningRebuild_\(body\) \{\n  if \(!adhocSessionsEnabled_\(\)\) return '';/.test(CODE)], [2, true, true]);
+      // Issue #11: before that check, a main-meeting report writes only its Session administration section, never the block.
+      (() => { const at = CODE.indexOf('\nfunction finishAdhocOpeningRebuild_(body) {'); const fn = CODE.slice(at, CODE.indexOf('\n}\n', at)); const gate = fn.indexOf("\n  if (!adhocSessionsEnabled_()) return '';\n  try {\n    refreshAdhocOpeningSection_(body, { afterRebuild: true });");
+        return gate !== -1 && !/refreshAdhocOpeningSection_|refreshAdhocMeetingInformationSafely_|renderAdhocMeetingInformation_/.test(fn.slice(0, gate)); })()], [2, true, true]);
   check('no text of a report family is in the code of the block (source)', /MBS|Scribes|shared minutes/i.test(CODE.slice(CODE.indexOf('// --- Online information'), CODE.indexOf('function refreshAdhocOpeningSection_('))), false);
 }
 
