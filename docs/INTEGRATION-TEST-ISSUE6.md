@@ -41,8 +41,8 @@ name `DISPOSABLE TEST COPY (issue #6, PR #7) - Audio SWG Minutes SA4#138 - delet
 *Extensions › Apps Script › Project Settings › Script ID*). Then:
 
 ```
-node tools/integration-test/push-to-disposable-copy.mjs --script <copy Script ID> --doc <copy document ID>
-node tools/integration-test/push-to-disposable-copy.mjs --script <copy Script ID> --doc <copy document ID> --write
+node tools/integration-test/push-to-disposable-copy.mjs --script <copy Script ID> --doc <copy document ID> --candidate-of <T-YYYY.MM.N>
+node tools/integration-test/push-to-disposable-copy.mjs --script <copy Script ID> --doc <copy document ID> --candidate-of <T-YYYY.MM.N> --write
 ```
 
 Expected: "Read-back MATCHES the bundle"; `dist/integration-test/<time>/evidence.json`.

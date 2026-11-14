@@ -98,26 +98,50 @@ function pushRefusals(facts) {
   return out;
 }
 
+/** The Code.js version of a Code.js text ("2.26.8"), or ''. */
+function codeVersionOf(codeText) {
+  const m = /^ \* Version: (\d+\.\d+\.\d+)/m.exec(String(codeText || ''));
+  return m ? m[1] : '';
+}
+
 /**
  * The Release.js of the candidate on the copy: the copy's own, with the
  * candidate's commit. releaseId and the template IDs stay (the runtime
  * validates releaseId as T-YYYY.MM.N and uses templateDocumentId to tell the
  * master from a report); codeVersion and gitTag say it is not a release.
+ *
+ * candidate: { codeVersion, release, branch } -- the Code.js version of the
+ * candidate, the release it is the candidate of, its branch.
+ *
+ * Issue #9: codeVersion and gitTag are written anew from the candidate,
+ * never appended to the copy's: a second push used to append "+ issue #6
+ * candidate (NOT RELEASED)" again. The release the copy was made from is
+ * kept in baseReleaseId / baseCodeVersion -- from the copy's own Release.js
+ * when an earlier push wrote them, else from its release.
  */
-function candidateReleaseJs(baseReleaseJs, commit, builtAt) {
+function candidateReleaseJs(baseReleaseJs, commit, builtAt, candidate) {
   const m = /var SA4_RELEASE_ = (\{[\s\S]*?\});/.exec(String(baseReleaseJs || ''));
   if (!m) throw new Error('The copy has no Release.js with SA4_RELEASE_.');
   const base = JSON.parse(m[1]);
   if (!/^[0-9a-f]{40}$/.test(String(commit || ''))) throw new Error('The candidate commit must be a full SHA-1.');
+  const c = candidate || {};
+  if (!/^\d+\.\d+\.\d+$/.test(String(c.codeVersion || ''))) throw new Error('The candidate needs its Code.js version (x.y.z).');
+  if (!String(c.release || '').trim() || !String(c.branch || '').trim()) throw new Error('The candidate needs the release it is for and its branch.');
+  // An earlier push wrote these; a released Release.js has none, and its codeVersion is a plain version.
+  const baseReleaseId = base.baseReleaseId || base.releaseId;
+  const baseCodeVersion = base.baseCodeVersion || String(base.codeVersion || '').replace(/\s*\+.*$/, '').trim();
   const release = Object.assign({}, base, {
-    codeVersion: base.codeVersion + ' + issue #6 candidate (NOT RELEASED)',
+    codeVersion: c.codeVersion + ' (candidate of ' + c.release + ', NOT RELEASED)',
     gitCommit: commit,
-    gitTag: 'candidate fix/audio-large-build-checkpoint (NOT RELEASED; disposable-copy integration test)',
-    builtAt: builtAt
+    gitTag: 'candidate ' + c.branch + ' (NOT RELEASED; disposable-copy integration test)',
+    builtAt: builtAt,
+    baseReleaseId: baseReleaseId,
+    baseCodeVersion: baseCodeVersion
   });
   return '/**\n * INTEGRATION TEST ONLY -- written by tools/integration-test/push-to-disposable-copy.mjs\n' +
-    ' * into a DISPOSABLE COPY. Base release ' + base.releaseId + ' with the candidate of issue #6.\n */\n' +
+    ' * into a DISPOSABLE COPY of ' + baseReleaseId + ' (Code.js ' + baseCodeVersion + '): the candidate of ' + c.release +
+    ' (Code.js ' + c.codeVersion + ', ' + c.branch + ').\n */\n' +
     'var SA4_RELEASE_ = ' + JSON.stringify(release, null, 2) + ';\n';
 }
 
-module.exports = { pushRefusals, audioOriginalRefusals, AUDIO_ORIGINAL, BACKUP_NAME_PREFIX, candidateReleaseJs, sha256, REFUSED_DOCUMENTS, REFUSED_SCRIPTS, DISPOSABLE_NAME_PREFIX, AUDIO_BASE_CODE_SHA256, COPY_BASE_CODE_SHA256S };
+module.exports = { pushRefusals, audioOriginalRefusals, AUDIO_ORIGINAL, BACKUP_NAME_PREFIX, candidateReleaseJs, codeVersionOf, sha256, REFUSED_DOCUMENTS, REFUSED_SCRIPTS, DISPOSABLE_NAME_PREFIX, AUDIO_BASE_CODE_SHA256, COPY_BASE_CODE_SHA256S };

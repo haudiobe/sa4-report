@@ -33,6 +33,18 @@
  *     not updated (nothing is changed before it). A wrong number
  *     already saved is not migrated. (GitHub issue #9; MAIN MEETING
  *     NUMBER section; docs/MAIN_MEETING_NUMBER.md.)
+ *   - Fixed: Update Report Now ran out of time with many new TDocs and
+ *     lost all its work (Apps Script stops an execution after 6 minutes
+ *     and drops what was not saved). An update now starts no new TDoc
+ *     after 3 minutes and no abstract sweep or e-mail/revisions step
+ *     after 4; what is left is done by the next run, which finds the
+ *     TDocs already in the report and adds only the missing ones. An
+ *     interactive or timer update saves its new TDocs in parts (the
+ *     checkpoints of 2.26.7). Update Report Now says when the report
+ *     was updated in part. The registration table gets the rows of
+ *     the TDocs whose tables the report has, on every update.
+ *     (GitHub issue #9, U5; BOUNDED UPDATE section;
+ *     docs/BOUNDED_UPDATE.md.)
  * 2.26.7 (2026-11-12)
  *   - Fixed: a large Full Report Build is saved in parts. When about 2000
  *     DocumentApp changes are pending, the build saves the report and
@@ -1305,8 +1317,13 @@ function continuousUpdate() {
 function continuousUpdateCore_(context) {
   perfResetState_();
   const perfTotalStart = Date.now();
+  // After T-2026.10.23: an update is bounded in time, and one with the report open saves in parts (BOUNDED UPDATE section).
+  const updateClock = updateClock_();
+  const updatePause = newUpdatePause_();
+  if (!context) beginLargeBuildCheckpoints_();
   const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_(context));
-  const body = getReportBody_(context);
+  // After T-2026.10.23: `let` -- after a checkpoint the body is the reopened document's (BOUNDED UPDATE section).
+  let body = getReportBody_(context);
   perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
   perfCount_('getActiveDocument().getBody() call site: continuousUpdate:initial');
 
@@ -1398,6 +1415,11 @@ function continuousUpdateCore_(context) {
       perfCount_('TDocs processed (loop iterations)');
 
       if (!existingTdocs.has(tdocNumber)) {
+        // After T-2026.10.23: no new TDoc is started once the time for insertions is used up; it is left to the next run.
+        // Before one, a checkpoint when enough changes are pending (BOUNDED UPDATE section).
+        if (!updateMayInsert_(updateClock, updatePause)) { noteUpdateTdocLeft_(updatePause, tdocNumber); return; }
+        const reopened = updateCheckpointIfDue_('update: before ' + tdocNumber);
+        if (reopened) { body = reopened.body; tdocTableIndex = reopened.index; }
         // The title of its agenda item, for a heading the report does not have yet.
         tdocData.agendaTitle = agendaTitleOf(tdocData.agendaItem);
         perfTimedAccum_('new-TDoc insertion (insertNewTdoc_, accumulated)', () => insertNewTdoc_(body, tdocData, cfg, tdocTableIndex, context));
@@ -1411,7 +1433,10 @@ function continuousUpdateCore_(context) {
         newTdocsAdded++;
         // A TDoc that is uploaded when it is inserted has its link from the
         // insertion; its abstract is asked for once, here.
+        // After T-2026.10.23: the changes of a TDoc table and its registration row, for the checkpoints (BOUNDED UPDATE section).
+        largeBuildCount_(LARGE_BUILD_UNITS_.tdocTable + LARGE_BUILD_UNITS_.registrationRow);
         if (perfTimedAccum_('upload completion (completeInsertedUploadedTdoc_, accumulated)', () => completeInsertedUploadedTdoc_(body, tdocNumber, tdocData, tdocTableIndex, context))) {
+          largeBuildCount_(LARGE_BUILD_UNITS_.abstractRow);
           uploadAbstractAttempts++;
           abstractAskedThisRun[tdocNumber] = true;
         }
@@ -1422,6 +1447,11 @@ function continuousUpdateCore_(context) {
         // A TDoc that was inserted before it was uploaded is completed once
         // the list shows the upload: its link and one attempt at its
         // abstract. Independent of the status and of the abstracts setting.
+        // After T-2026.10.23: once a new TDoc was left over, so is the upload completion -- the next run sees the transition again (BOUNDED UPDATE section).
+        if (updatePause.newTdocsLeft) {
+          updatePause.uploadCheckLeft = true;
+          return;
+        }
         const completed = perfTimedAccum_('upload completion (refreshUploadedTdocMetadata_, accumulated)', () => refreshUploadedTdocMetadata_(body, tdocNumber, tdocData, tdocTableIndex, context));
         if (completed.linkAdded) linksAdded++;
         if (completed.abstractAttempted) {
@@ -1431,6 +1461,8 @@ function continuousUpdateCore_(context) {
       }
     });
 
+    // After T-2026.10.23: checkpoints only in the insertions; the rest of the run works on the document open now (BOUNDED UPDATE section).
+    if (!context) endUpdateInsertionCheckpoints_();
     Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);
     const registrationLinksAdded = refreshRegistrationTableLinks_(body, allTdocs);
     Logger.log(`Upload completion: ${linksAdded} TDoc link(s) added, ${uploadAbstractAttempts} abstract attempt(s), ${registrationLinksAdded} registration-table link(s) added`);
@@ -1440,9 +1472,9 @@ function continuousUpdateCore_(context) {
     // sessions. With it, a report that HAS the Session column gets the
     // column brought up to date; a four-column report stays four-column.
     const tdocSessions = makeAdhocTdocSessionResolverSafely_(context);
-    if (newTdocsAdded > 0) {
-      perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, tdocSessions));
-    }
+    // After T-2026.10.23: on every run, for the TDocs whose tables the report has -- not those left to the next run,
+    // and also those a run that was stopped after a checkpoint saved (BOUNDED UPDATE section).
+    perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, tdocsInReportAfterUpdate_(allTdocs, existingTdocs), tdocGroups, tdocSessions));
     const sessionColumnFailure = refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions);
 
     // Revision placement: new TDOCs are appended at the end of their agenda
@@ -1454,7 +1486,9 @@ function continuousUpdateCore_(context) {
 
     // Abstracts are optional on automatic updates (OFF by default).
     // Toggle via: REPORT OPERATIONS -> Manage Auto-Update Trigger.
-    if (getFetchAbstractsSetting_(context)) {
+    // After T-2026.10.23: the sweep is left to the next run when time is short or new TDocs were left over (BOUNDED UPDATE section).
+    const fetchAbstracts = getFetchAbstractsSetting_(context);
+    if (fetchAbstracts && updateMayRunOptionalStep_(updateClock, updatePause, 'the abstract sweep')) {
       // PERF-006B: addAbstractsForTables_() now returns a breakdown, not a
       // bare count -- "candidate tables processed" is NOT the same as
       // "Reviewer requests actually made" (a candidate can resolve via a
@@ -1466,14 +1500,16 @@ function continuousUpdateCore_(context) {
       // candidate either (the list's statuses are passed for that).
       const abstractsResult = perfTimed_('abstracts (addAbstractsForTables_)', () => addAbstractsForTables_(body, context, Object.assign(tdocsNotUploadedYet_(allTdocs), abstractAskedThisRun), tdocListStatuses_(allTdocs)));
       Logger.log(`Abstracts: ${abstractsResult.candidatesProcessed} candidate table(s) processed, ${abstractsResult.requestsMade} Reviewer request(s) made, ${abstractsResult.cacheSkips} negative-cache skip(s), ${abstractsResult.rowsInserted} abstract row(s) inserted`);
-    } else {
+    } else if (!fetchAbstracts) {
       Logger.log('Abstract fetching is disabled (trigger configuration)');
     }
 
     // Collect emails and revisions
     // 2.17.4: the collector's own failures (logged there, never thrown) are
     // passed on in the result. `success` is unchanged by them.
-    const collected = perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context));
+    // After T-2026.10.23: left to the next run when time is short or new TDocs were left over (BOUNDED UPDATE section).
+    const collected = updateMayRunOptionalStep_(updateClock, updatePause, 'e-mail discussions and revisions')
+      ? perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context)) : null;
     // Stage B: a Session column that could not be updated is reported the same way.
     const failures = (sessionColumnFailure ? [sessionColumnFailure] : []).concat((collected && collected.failures) || []);
     if (failures.length) result.collectorFailures = failures;
@@ -1527,6 +1563,12 @@ function continuousUpdateCore_(context) {
     }
 
     Logger.log('=== COMPLETE ===');
+    // After T-2026.10.23: what was left to the next run is part of the result (BOUNDED UPDATE section).
+    const paused = updatePauseResult_(updatePause, newTdocsAdded);
+    if (paused) {
+      result.paused = paused;
+      Logger.log('[UPDATE] paused: ' + JSON.stringify(paused));
+    }
 
   } catch (e) {
     Logger.log('ERROR: ' + e.message);
@@ -1544,6 +1586,11 @@ function continuousUpdateCore_(context) {
     // perfTimed_() the moment it finishes, rather than relying solely on
     // this end-of-run summary -- for a genuine timeout, those per-stage
     // lines (as far as they got) are the only available evidence.
+    // After T-2026.10.23: the checkpoints are on only for this update (BOUNDED UPDATE section).
+    if (!context) {
+      const checkpoints = endLargeBuildCheckpoints_();
+      if (checkpoints) Logger.log('[UPDATE] ' + checkpoints + ' checkpoint(s): the report was saved in parts.');
+    }
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
     perfLogSummary_();
   }
@@ -1614,6 +1661,11 @@ function continuousUpdateForDocument_(documentId) {
       'continuousUpdateForDocument_: continuousUpdateCore_() did not complete successfully for ' +
       documentId + (coreResult && coreResult.error ? (': ' + coreResult.error) : '.')
     );
+  }
+
+  // After T-2026.10.23: an update that left work to the next run is not a completed run; the report stays due (BOUNDED UPDATE section).
+  if (coreResult.paused) {
+    return { documentId: documentId, success: true, paused: coreResult.paused, durationMs: Date.now() - startedAt, lastRunAt: registryEntry.lastRunAt || null };
   }
 
   const updated = updateRegisteredReportDocument_(documentId, { lastRunAt: new Date().toISOString() });
@@ -1711,6 +1763,8 @@ function runAddonScheduler_() {
     return summary;
   }
   summary.lockAcquired = true;
+  // After T-2026.10.23: the time budget of each update counts from the start of this execution (BOUNDED UPDATE section).
+  UPDATE_EXECUTION_STARTED_AT_ = startedAt;
 
   try {
     const registered = listRegisteredReportDocuments_();
@@ -1747,6 +1801,7 @@ function runAddonScheduler_() {
 
     return summary;
   } finally {
+    UPDATE_EXECUTION_STARTED_AT_ = 0;
     lock.releaseLock();
   }
 }
@@ -14600,6 +14655,146 @@ function mainMeetingNumberMismatch_(store) {
 
 // =========================================================
 // END OF MAIN MEETING NUMBER
+// =========================================================
+
+// =========================================================
+// BOUNDED UPDATE (after T-2026.10.23)
+// =========================================================
+//
+// GitHub issue #9 (integration test U5, 2026-11-13). An ad-hoc update of the
+// SA4#138 copy had 280 new TDocs to add. Each one is a table, a scan of the
+// whole document for its agenda section and -- uploaded -- one Reviewer
+// request, all in one unsaved batch. After 6 minutes Apps Script stopped the
+// execution ("Exceeded maximum execution time"); what the Document service
+// had not saved was dropped, and the report was as before. The next run would
+// have done the same work and been stopped the same way.
+//
+// An update is now bounded:
+//   - INSERTIONS. A new TDoc is started only while less than
+//     UPDATE_INSERT_BUDGET_MS_ has passed since the execution started. After
+//     that it, and every later new TDoc, is left to the next run; so is the
+//     upload completion of the TDocs already in the report (its link marks
+//     the transition, so the next run sees it again). A TDoc that was started
+//     is finished: its table and its one Reviewer request.
+//   - OPTIONAL STEPS. The abstract sweep and the e-mail/revisions collector
+//     start only while less than UPDATE_OPTIONAL_STEPS_BUDGET_MS_ has passed
+//     and no new TDoc was left over; otherwise they are left to the next run.
+//   - WHAT FINISHES THE RUN ALWAYS RUNS: the registration rows, the revision
+//     placement, the Disposition Summary, the formatting and the status
+//     dropdowns. The run then ends normally and its work is saved.
+//   - CHECKPOINTS (an update with the report open -- menu or timer -- not the
+//     background scheduler): the checkpoints of a large Full Build
+//     (LARGE BUILD CHECKPOINTS section) are on. Whenever about
+//     LARGE_BUILD_CHECKPOINT_BUDGET_ changes are pending before a new TDoc,
+//     the report is saved and opened again, and the update goes on with the
+//     reopened document and a fresh TDoc index. What was saved stays saved
+//     even if the execution is stopped later. Only the insertions make
+//     checkpoints (endUpdateInsertionCheckpoints_()): the later steps work
+//     on the document open then and make the changes an update always made.
+//   - PROGRESS IS THE DOCUMENT. Nothing but the document records what was
+//     done: every run reads the TDoc tables the report has (as every update
+//     always did) and inserts only what is missing. A run whose changes were
+//     not saved leaves nothing that claims otherwise, and a TDoc that is in
+//     the report is never inserted twice. The registration table gets the
+//     rows of the TDocs whose tables the report has, on every run, so that a
+//     table saved by a run that was stopped later gets its row too.
+//   - THE RESULT SAYS SO: result.paused = { newTdocsAdded, newTdocsLeft,
+//     stepsLeft }. Update Report Now shows it ("updated in part ... run it
+//     again"); the timer's next run goes on by itself; the scheduler leaves
+//     lastRunAt, so that the report stays due.
+// docs/BOUNDED_UPDATE.md.
+
+/** No new TDoc is started after this much time of the execution (Apps Script stops it at 6 minutes). */
+var UPDATE_INSERT_BUDGET_MS_ = 180 * 1000;
+/** No abstract sweep or e-mail/revisions step is started after this much time. */
+var UPDATE_OPTIONAL_STEPS_BUDGET_MS_ = 240 * 1000;
+// When this execution started, if a caller knows it before the update starts (the scheduler); else 0.
+var UPDATE_EXECUTION_STARTED_AT_ = 0;
+
+/** The time now, in ms (a function of its own, so that tests can give the update a clock). */
+function updateNow_() {
+  return Date.now();
+}
+
+/** The clock of one update: { elapsed() } since the start of the execution, or of the update when that is not known. */
+function updateClock_() {
+  const startedAt = UPDATE_EXECUTION_STARTED_AT_ || updateNow_();
+  return { startedAt: startedAt, elapsed: function () { return updateNow_() - startedAt; } };
+}
+
+/** What one update left to the next run. */
+function newUpdatePause_() {
+  return { newTdocsLeft: 0, left: {}, uploadCheckLeft: false, stepsLeft: [] };
+}
+
+/** True while a new TDoc may be started: none was left over yet, and the time for insertions is not used up. */
+function updateMayInsert_(clock, pause) {
+  return pause.newTdocsLeft === 0 && clock.elapsed() < UPDATE_INSERT_BUDGET_MS_;
+}
+
+/** A new TDoc left to the next run (counted once, also when the list has it twice). */
+function noteUpdateTdocLeft_(pause, tdocNumber) {
+  if (pause.left[tdocNumber]) return;
+  pause.left[tdocNumber] = true;
+  pause.newTdocsLeft++;
+}
+
+/** True when an optional step may start; otherwise it is noted as left to the next run. */
+function updateMayRunOptionalStep_(clock, pause, step) {
+  if (pause.newTdocsLeft === 0 && clock.elapsed() < UPDATE_OPTIONAL_STEPS_BUDGET_MS_) return true;
+  pause.stepsLeft.push(step);
+  Logger.log('[UPDATE] ' + step + ': left to the next run (' + Math.round(clock.elapsed() / 1000) + ' s of the execution used' + (pause.newTdocsLeft ? ', ' + pause.newTdocsLeft + ' new TDoc(s) left' : '') + ').');
+  return false;
+}
+
+/** The TDocs of the list whose tables the report has after the loop (the registration table gets rows for these). */
+function tdocsInReportAfterUpdate_(allTdocs, inReport) {
+  return allTdocs.filter(function (td) { return inReport.has(String(td.row[td.tdocCol] || '').trim()); });
+}
+
+/** result.paused of an update, or null when it left nothing to the next run. */
+function updatePauseResult_(pause, newTdocsAdded) {
+  if (!pause.newTdocsLeft && !pause.uploadCheckLeft && !pause.stepsLeft.length) return null;
+  const steps = pause.stepsLeft.slice();
+  if (pause.uploadCheckLeft) steps.unshift('the upload check (link and abstract) of the TDocs already in the report');
+  return { newTdocsAdded: newTdocsAdded, newTdocsLeft: pause.newTdocsLeft, stepsLeft: steps };
+}
+
+/** The text Update Report Now shows for an update that left work to the next run (pure). */
+function describeUpdatePause_(paused) {
+  const p = paused || {};
+  const parts = [];
+  if (p.newTdocsLeft) parts.push(p.newTdocsLeft + ' new TDoc(s) are still to be added');
+  (p.stepsLeft || []).forEach(function (s) { parts.push(s + ' did not run'); });
+  return 'The report was updated in part: the update stopped in time before the Apps Script limit of 6 minutes. ' +
+    (p.newTdocsAdded || 0) + ' new TDoc(s) were added; ' + (parts.length ? parts.join('; ') : 'some steps did not run') + '.\n' +
+    'Nothing was lost or added twice. Run Update Report Now again to go on.';
+}
+
+/**
+ * Before a new TDoc of an update with checkpoints: a checkpoint when enough
+ * changes are pending. Returns null, or { body, index } of the reopened
+ * document (its TDoc index built from one scan). A failed save throws.
+ */
+function updateCheckpointIfDue_(label) {
+  const state = LARGE_BUILD_CHECKPOINTS_;
+  if (!state.enabled || state.pending < LARGE_BUILD_CHECKPOINT_BUDGET_) return null;
+  const body = largeBuildCheckpoint_(label).getBody();
+  return { body: body, index: buildTdocTableIndex_(getTablesCounted_(body, 'continuousUpdate:afterCheckpoint')) };
+}
+
+/**
+ * After the insertions of an update with checkpoints: no more checkpoints.
+ * The document a checkpoint reopened stays the document of the run
+ * (currentReportDocument_()), so every later step works on it; the later
+ * steps make the changes an update always made in one batch.
+ */
+function endUpdateInsertionCheckpoints_() {
+  LARGE_BUILD_CHECKPOINTS_.enabled = false;
+}
+
+// =========================================================
+// END OF BOUNDED UPDATE
 // =========================================================
 
 // =========================================================

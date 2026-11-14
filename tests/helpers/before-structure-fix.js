@@ -546,6 +546,74 @@ function codeWithoutLargeBuildCheckpoints(code) {
   return { code: view.code.split('currentReportDocument_()').join('DocumentApp.getActiveDocument()'), problems: later.problems.concat(view.problems) };
 }
 
+const BOUNDED_UPDATE_SECTION_START = BAR + '// BOUNDED UPDATE (after T-2026.10.23)\n' + BAR;
+const BOUNDED_UPDATE_SECTION_END = BAR + '// END OF BOUNDED UPDATE\n' + BAR + '\n';
+const BOUNDED_UPDATE_SECTION_FUNCTIONS = ['updateNow_', 'updateClock_', 'newUpdatePause_', 'updateMayInsert_', 'noteUpdateTdocLeft_', 'updateMayRunOptionalStep_', 'tdocsInReportAfterUpdate_', 'updatePauseResult_', 'describeUpdatePause_', 'updateCheckpointIfDue_', 'endUpdateInsertionCheckpoints_'];
+const BOUNDED_UPDATE_CHANGED_FUNCTIONS = ['continuousUpdateCore_', 'continuousUpdateForDocument_', 'runAddonScheduler_'];
+const BOUNDED_UPDATE_CREATOR_CHANGED_FUNCTIONS = ['describeUpdateReportNowFailure_'];
+// After T-2026.10.23 (GitHub issue #9, U5): the changes outside the section, [now, before]. The first is its changelog entry under 2.26.8.
+const BOUNDED_UPDATE_CHANGES = [
+  // changelog
+  [" *     NUMBER section; docs/MAIN_MEETING_NUMBER.md.)\n *   - Fixed: Update Report Now ran out of time with many new TDocs and\n *     lost all its work (Apps Script stops an execution after 6 minutes\n *     and drops what was not saved). An update now starts no new TDoc\n *     after 3 minutes and no abstract sweep or e-mail/revisions step\n *     after 4; what is left is done by the next run, which finds the\n *     TDocs already in the report and adds only the missing ones. An\n *     interactive or timer update saves its new TDocs in parts (the\n *     checkpoints of 2.26.7). Update Report Now says when the report\n *     was updated in part. The registration table gets the rows of\n *     the TDocs whose tables the report has, on every update.\n *     (GitHub issue #9, U5; BOUNDED UPDATE section;\n *     docs/BOUNDED_UPDATE.md.)\n",
+   " *     NUMBER section; docs/MAIN_MEETING_NUMBER.md.)\n"],
+  // core start
+  ["  const perfTotalStart = Date.now();\n  // After T-2026.10.23: an update is bounded in time, and one with the report open saves in parts (BOUNDED UPDATE section).\n  const updateClock = updateClock_();\n  const updatePause = newUpdatePause_();\n  if (!context) beginLargeBuildCheckpoints_();\n  const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_(context));\n  // After T-2026.10.23: `let` -- after a checkpoint the body is the reopened document's (BOUNDED UPDATE section).\n  let body = getReportBody_(context);\n",
+   "  const perfTotalStart = Date.now();\n  const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_(context));\n  const body = getReportBody_(context);\n"],
+  // loop new
+  ["      if (!existingTdocs.has(tdocNumber)) {\n        // After T-2026.10.23: no new TDoc is started once the time for insertions is used up; it is left to the next run.\n        // Before one, a checkpoint when enough changes are pending (BOUNDED UPDATE section).\n        if (!updateMayInsert_(updateClock, updatePause)) { noteUpdateTdocLeft_(updatePause, tdocNumber); return; }\n        const reopened = updateCheckpointIfDue_('update: before ' + tdocNumber);\n        if (reopened) { body = reopened.body; tdocTableIndex = reopened.index; }\n        // The title of its agenda item, for a heading the report does not have yet.\n",
+   "      if (!existingTdocs.has(tdocNumber)) {\n        // The title of its agenda item, for a heading the report does not have yet.\n"],
+  // loop abstract
+  ["        // After T-2026.10.23: the changes of a TDoc table and its registration row, for the checkpoints (BOUNDED UPDATE section).\n        largeBuildCount_(LARGE_BUILD_UNITS_.tdocTable + LARGE_BUILD_UNITS_.registrationRow);\n        if (perfTimedAccum_('upload completion (completeInsertedUploadedTdoc_, accumulated)', () => completeInsertedUploadedTdoc_(body, tdocNumber, tdocData, tdocTableIndex, context))) {\n          largeBuildCount_(LARGE_BUILD_UNITS_.abstractRow);\n          uploadAbstractAttempts++;\n",
+   "        if (perfTimedAccum_('upload completion (completeInsertedUploadedTdoc_, accumulated)', () => completeInsertedUploadedTdoc_(body, tdocNumber, tdocData, tdocTableIndex, context))) {\n          uploadAbstractAttempts++;\n"],
+  // loop existing
+  ["        // After T-2026.10.23: once a new TDoc was left over, so is the upload completion -- the next run sees the transition again (BOUNDED UPDATE section).\n        if (updatePause.newTdocsLeft) {\n          updatePause.uploadCheckLeft = true;\n          return;\n        }\n        const completed = perfTimedAccum_('upload completion (refreshUploadedTdocMetadata_, accumulated)', () => refreshUploadedTdocMetadata_(body, tdocNumber, tdocData, tdocTableIndex, context));\n",
+   "        const completed = perfTimedAccum_('upload completion (refreshUploadedTdocMetadata_, accumulated)', () => refreshUploadedTdocMetadata_(body, tdocNumber, tdocData, tdocTableIndex, context));\n"],
+  // registration
+  ["    // After T-2026.10.23: on every run, for the TDocs whose tables the report has -- not those left to the next run,\n    // and also those a run that was stopped after a checkpoint saved (BOUNDED UPDATE section).\n    perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, tdocsInReportAfterUpdate_(allTdocs, existingTdocs), tdocGroups, tdocSessions));\n",
+   "    if (newTdocsAdded > 0) {\n      perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, tdocSessions));\n    }\n"],
+  // abstracts if
+  ["    // After T-2026.10.23: the sweep is left to the next run when time is short or new TDocs were left over (BOUNDED UPDATE section).\n    const fetchAbstracts = getFetchAbstractsSetting_(context);\n    if (fetchAbstracts && updateMayRunOptionalStep_(updateClock, updatePause, 'the abstract sweep')) {\n      // PERF-006B:",
+   "    if (getFetchAbstractsSetting_(context)) {\n      // PERF-006B:"],
+  // abstracts else
+  ["    } else if (!fetchAbstracts) {\n      Logger.log('Abstract fetching is disabled (trigger configuration)');\n    }\n",
+   "    } else {\n      Logger.log('Abstract fetching is disabled (trigger configuration)');\n    }\n"],
+  // collector
+  ["    // After T-2026.10.23: left to the next run when time is short or new TDocs were left over (BOUNDED UPDATE section).\n    const collected = updateMayRunOptionalStep_(updateClock, updatePause, 'e-mail discussions and revisions')\n      ? perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context)) : null;\n",
+   "    const collected = perfTimed_('collectorUpdate_ (RSS/mail + revisions, total)', () => collectorUpdate_(context));\n"],
+  // after loop
+  ["    // After T-2026.10.23: checkpoints only in the insertions; the rest of the run works on the document open now (BOUNDED UPDATE section).\n    if (!context) endUpdateInsertionCheckpoints_();\n    Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);\n",
+   "    Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);\n"],
+  // complete
+  ["    Logger.log('=== COMPLETE ===');\n    // After T-2026.10.23: what was left to the next run is part of the result (BOUNDED UPDATE section).\n    const paused = updatePauseResult_(updatePause, newTdocsAdded);\n    if (paused) {\n      result.paused = paused;\n      Logger.log('[UPDATE] paused: ' + JSON.stringify(paused));\n    }\n",
+   "    Logger.log('=== COMPLETE ===');\n"],
+  // finally
+  ["    // After T-2026.10.23: the checkpoints are on only for this update (BOUNDED UPDATE section).\n    if (!context) {\n      const checkpoints = endLargeBuildCheckpoints_();\n      if (checkpoints) Logger.log('[UPDATE] ' + checkpoints + ' checkpoint(s): the report was saved in parts.');\n    }\n    perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);\n",
+   "    perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);\n"],
+  // for document
+  ["  // After T-2026.10.23: an update that left work to the next run is not a completed run; the report stays due (BOUNDED UPDATE section).\n  if (coreResult.paused) {\n    return { documentId: documentId, success: true, paused: coreResult.paused, durationMs: Date.now() - startedAt, lastRunAt: registryEntry.lastRunAt || null };\n  }\n\n  const updated = updateRegisteredReportDocument_(documentId, { lastRunAt: new Date().toISOString() });\n",
+   "  const updated = updateRegisteredReportDocument_(documentId, { lastRunAt: new Date().toISOString() });\n"],
+  // scheduler start
+  ["  summary.lockAcquired = true;\n  // After T-2026.10.23: the time budget of each update counts from the start of this execution (BOUNDED UPDATE section).\n  UPDATE_EXECUTION_STARTED_AT_ = startedAt;\n\n  try {\n",
+   "  summary.lockAcquired = true;\n\n  try {\n"],
+  // scheduler end
+  ["    return summary;\n  } finally {\n    UPDATE_EXECUTION_STARTED_AT_ = 0;\n    lock.releaseLock();\n  }\n}\n",
+   "    return summary;\n  } finally {\n    lock.releaseLock();\n  }\n}\n"],
+];
+const BOUNDED_UPDATE_CREATOR_CHANGES = [
+  ["  // After T-2026.10.23: an update that stopped in time says what it left to the next run (BOUNDED UPDATE section of Code.js).\n  if (result.paused) return describeUpdatePause_(result.paused);\n  const failures = result.collectorFailures || [];\n",
+   "  const failures = result.collectorFailures || [];\n"],
+];
+
+/** Code.js without the bounded update: the Code.js of 8edb1a7, the T-2026.10.24 candidate with the main-meeting number fix (2.26.8). { code, problems }. */
+function codeWithoutBoundedUpdate(code) {
+  return takeOut(code, BOUNDED_UPDATE_SECTION_START, BOUNDED_UPDATE_SECTION_END, BOUNDED_UPDATE_CHANGES, 'BOUNDED UPDATE');
+}
+
+/** template/ReportCreator.js without the bounded update's message: { code, problems }. */
+function creatorWithoutBoundedUpdate(code) {
+  return takeOut(code, null, null, BOUNDED_UPDATE_CREATOR_CHANGES, 'BOUNDED UPDATE (ReportCreator.js)');
+}
+
 const MAIN_MEETING_NUMBER_SECTION_START = BAR + '// MAIN MEETING NUMBER (after T-2026.10.23)\n' + BAR;
 const MAIN_MEETING_NUMBER_SECTION_END = BAR + '// END OF MAIN MEETING NUMBER\n' + BAR + '\n';
 const MAIN_MEETING_NUMBER_SECTION_FUNCTIONS = ['mainMeetingFolderOfFtpBase_', 'mainMeetingNumberOfFtpBase_', 'mainMeetingIdentityOfSave_', 'mainMeetingNumberMismatch_'];
@@ -569,7 +637,10 @@ const MAIN_MEETING_NUMBER_CHANGES = [
 
 /** Code.js without the main-meeting number fix: the Code.js of 3dd4263, the release commit of the meeting time zones (2.26.8). { code, problems }. */
 function codeWithoutMainMeetingNumber(code) {
-  return takeOut(code, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_CHANGES, 'MAIN MEETING NUMBER');
+  // The bounded update (after T-2026.10.23) came later: taken out first.
+  const later = codeWithoutBoundedUpdate(code);
+  const view = takeOut(later.code, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_CHANGES, 'MAIN MEETING NUMBER');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 const MEETING_TIME_ZONES_SECTION_START = BAR + '// MEETING TIME ZONES (after T-2026.10.23)\n' + BAR;
@@ -668,7 +739,10 @@ function codeWithoutMeetingTimeZones(code) {
 
 /** template/ReportCreator.js without the meeting time zones: { code, problems }. */
 function creatorWithoutMeetingTimeZones(code) {
-  return takeOut(code, null, null, MEETING_TIME_ZONES_CREATOR_CHANGES, 'MEETING TIME ZONES (ReportCreator.js)');
+  // The bounded update's message (after T-2026.10.23) came later: taken out first.
+  const later = creatorWithoutBoundedUpdate(code);
+  const view = takeOut(later.code, null, null, MEETING_TIME_ZONES_CREATOR_CHANGES, 'MEETING TIME ZONES (ReportCreator.js)');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 const TDOC_LIST_DOWNLOAD_SECTION_START = BAR + '// TDOC LIST DOWNLOAD (after T-2026.10.21)\n' + BAR;
@@ -763,6 +837,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutBoundedUpdate, creatorWithoutBoundedUpdate, BOUNDED_UPDATE_SECTION_START, BOUNDED_UPDATE_SECTION_END, BOUNDED_UPDATE_SECTION_FUNCTIONS, BOUNDED_UPDATE_CHANGED_FUNCTIONS, BOUNDED_UPDATE_CREATOR_CHANGED_FUNCTIONS, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

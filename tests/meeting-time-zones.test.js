@@ -390,9 +390,11 @@ console.log('J. what changed, against T-2026.10.23');
   const RAW = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   // The main-meeting number fix (after T-2026.10.23, tests/main-meeting-number.test.js) came later: this ledger is about the layer below it.
   const FULL = codeWithoutMainMeetingNumber(RAW).code;
-  const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
+  const RAW_CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
+  // The bounded update's message (after T-2026.10.23, tests/bounded-update.test.js) came later: ReportCreator.js is compared on the layer below it.
+  const CREATOR = require('./helpers/before-structure-fix.js').creatorWithoutBoundedUpdate(RAW_CREATOR).code;
   const view = codeWithoutMeetingTimeZones(RAW);
-  const creatorView = creatorWithoutMeetingTimeZones(CREATOR);
+  const creatorView = creatorWithoutMeetingTimeZones(RAW_CREATOR);
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((x) => x.replace(/^function\s+|\s*\($/g, ''));
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };

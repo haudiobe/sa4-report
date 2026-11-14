@@ -1211,6 +1211,8 @@ function describeUpdateReportNowFailure_(result) {
     return 'The report update failed: ' + ((result && result.error) || 'no result was returned') +
       '\nThe report may have been updated in part. Nothing is lost; run Update Report Now again once the cause is fixed.';
   }
+  // After T-2026.10.23: an update that stopped in time says what it left to the next run (BOUNDED UPDATE section of Code.js).
+  if (result.paused) return describeUpdatePause_(result.paused);
   const failures = result.collectorFailures || [];
   if (failures.length) {
     return 'The report update finished, but ' + (failures.length === 1 ? 'one part' : failures.length + ' parts') + ' failed:\n' +

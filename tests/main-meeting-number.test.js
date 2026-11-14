@@ -30,7 +30,7 @@ const { execFileSync } = require('child_process');
 const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport, PROPS } = require('./helpers/template-report.js');
 const { makeFakeDrive } = require('./helpers/fake-drive-files.js');
-const { codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutBoundedUpdate, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 const ROOT = path.join(__dirname, '..');
 let failures = 0;
@@ -246,12 +246,14 @@ console.log('H. what changed in Code.js');
 {
   const view = codeWithoutMainMeetingNumber(FULL);
   check('every change is in Code.js exactly once', view.problems, []);
+  // The bounded update (after T-2026.10.23, tests/bounded-update.test.js) came later: the functions are compared on the layer below it.
+  const LAYER = codeWithoutBoundedUpdate(FULL).code;
   const functionNames = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((x) => x.replace(/^function\s+|\s*\($/g, '')).filter((n, i, all) => all.indexOf(n) === i);
   const functionSource = (src, name) => { const start = src.indexOf('\nfunction ' + name + '('); return start === -1 ? null : src.slice(start + 1, src.indexOf('\n}\n', start) + 2); };
   const section = FULL.slice(FULL.indexOf(MAIN_MEETING_NUMBER_SECTION_START), FULL.indexOf(MAIN_MEETING_NUMBER_SECTION_END) + MAIN_MEETING_NUMBER_SECTION_END.length);
   check('the section: these functions, nothing else at top level', [functionNames(section), section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm)], [MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, null]);
   check('it stands directly after the meeting time zones', FULL.indexOf('// END OF MEETING TIME ZONES\n// =========================================================\n\n' + MAIN_MEETING_NUMBER_SECTION_START) !== -1, true);
-  check('of the functions there were, these changed; none removed', [functionNames(view.code).filter((n) => functionSource(FULL, n) !== functionSource(view.code, n)).sort(), functionNames(view.code).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+  check('of the functions there were, these changed; none removed', [functionNames(view.code).filter((n) => functionSource(LAYER, n) !== functionSource(view.code, n)).sort(), functionNames(view.code).filter((n) => functionNames(LAYER).indexOf(n) === -1)],
     [MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS.slice().sort(), []]);
   check('Code.js is version 2.26.8 (released as T-2026.10.24 with the meeting time zones; the ledger takes its changelog entry out)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.8');
   let candidate = null;

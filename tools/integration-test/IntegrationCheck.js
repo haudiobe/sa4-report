@@ -213,6 +213,19 @@ function it6ClearSnapshots() {
 // Issue #9 (T-2026.10.24): the meeting time zones in this Apps Script runtime. Read-only.
 // =========================================================
 
+/**
+ * Pure: the release line of the diagnostics. A candidate on the copy is named as such, with the release the copy
+ * was made from beside it (guard.js candidateReleaseJs); a release as "releaseId / codeVersion / commit".
+ */
+function it9ReleaseLine_(release) {
+  if (!release) return '(no Release.js)';
+  if (release.baseReleaseId) {
+    return 'candidate Code.js ' + release.codeVersion + ' / ' + release.gitCommit + ' / ' + release.gitTag +
+      ' -- on a copy of ' + release.baseReleaseId + ' (Code.js ' + release.baseCodeVersion + ')';
+  }
+  return release.releaseId + ' / ' + release.codeVersion + ' / ' + release.gitCommit;
+}
+
 /** Pure: the lines of it9TimeZoneCheck() from the functions of the runtime; `facts` holds what was read. */
 function it9TimeZoneLines_(facts) {
   const edmonton = 'America/Edmonton';
@@ -251,7 +264,7 @@ function it9TimeZoneCheck() {
     .filter(function (t) { return /opens the session|\b(ABT|MST|MDT|CET|CEST|UTC[+-]\d)/.test(t); })
     .slice(0, 20);
   const lines = it9TimeZoneLines_({
-    release: typeof SA4_RELEASE_ !== 'undefined' ? SA4_RELEASE_.releaseId + ' / ' + SA4_RELEASE_.codeVersion + ' / ' + SA4_RELEASE_.gitCommit : '(no Release.js)',
+    release: it9ReleaseLine_(typeof SA4_RELEASE_ !== 'undefined' ? SA4_RELEASE_ : null),
     stored: stored,
     sessionsZone: meetingSessionTimeZone_(),
     scriptZone: Session.getScriptTimeZone(),
