@@ -16211,8 +16211,7 @@ function saveAdhocSessionsConfiguration(rows) {
 function renderMainSessionAdministration_() {
   const outcome = withAdhocAttendanceLock_(function () {
     try {
-      const lines = buildAdhocOpeningLines_(getConfiguredSessions_(), {}, meetingSessionTimeZone_());
-      return { ok: true, rendered: renderAdhocOpeningSection_(currentReportDocument_().getBody(), lines) };
+      return { ok: true, rendered: renderMainSessionAdministrationIn_(currentReportDocument_().getBody()) };
     } catch (e) {
       Logger.log('Session times: stored, but the Session administration section could not be written: ' + e.message);
       return { ok: false, error: e.message };
@@ -16221,6 +16220,56 @@ function renderMainSessionAdministration_() {
   if (!outcome.ok) return 'The sessions were saved. The Session administration section could not be written (' + outcome.error + '). Save the sessions again to write it.';
   if (outcome.rendered.container === 'no-place') return 'The sessions were saved. This report has no "Opening of the session" section to show them in.';
   return '';
+}
+
+/** Issue #11: the section of a main-meeting report, from its configured sessions, into `body`. Returns what renderMainSessionAdministrationSection_() returns. */
+function renderMainSessionAdministrationIn_(body) {
+  return renderMainSessionAdministrationSection_(body, buildAdhocOpeningLines_(getConfiguredSessions_(), {}, meetingSessionTimeZone_()));
+}
+
+/**
+ * Issue #11: the generated part of a main-meeting report's section --
+ * { start, end } (end exclusive): its heading and the "A01: ..." lines
+ * directly below it -- or null. A main report has no opening details, so
+ * every generated line is such a line; text typed below them (minutes of
+ * the opening) is not part of it and is never replaced or removed.
+ */
+function findMainSessionAdministration_(body) {
+  const found = findAdhocOpeningContainer_(body);
+  if (!found) return null;
+  let end = found.start + 1;
+  while (end < found.end && /^A\d{2,}: /.test(body.getChild(end).asParagraph().getText())) end++;
+  return { start: found.start, end: end };
+}
+
+/**
+ * Issue #11: writes `lines` (buildAdhocOpeningLines_()) as the section of a
+ * main-meeting report. Only the generated part is replaced; one that already
+ * says this is left alone. Without lines the heading and the generated lines
+ * are removed, and text typed below them stays. A new section goes where the
+ * ad-hoc one goes (renderAdhocOpeningSection_()). Returns { container:
+ * 'created' | 'replaced' | 'unchanged' | 'removed' | 'none' | 'no-place' }.
+ */
+function renderMainSessionAdministrationSection_(body, lines) {
+  const existing = findMainSessionAdministration_(body);
+  if (!existing) return renderAdhocOpeningSection_(body, lines);
+  if (lines.length === 0) {
+    for (let i = existing.end - 1; i >= existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    return { container: 'removed' };
+  }
+  const shown = [];
+  for (let i = existing.start + 1; i < existing.end; i++) shown.push(body.getChild(i).asParagraph().getText());
+  if (shown.length === lines.length && shown.every(function (text, i) { return text === lines[i].text; })) return { container: 'unchanged' };
+  for (let i = existing.end - 1; i > existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+  let at = existing.start + 1;
+  lines.forEach(function (line) {
+    // The text is passed as text: nothing in it is interpreted.
+    const p = at >= body.getNumChildren() ? body.appendParagraph(line.text) : body.insertParagraph(at, line.text);
+    p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    p.editAsText().setBold(line.bold);
+    at++;
+  });
+  return { container: 'replaced' };
 }
 
 /**
@@ -19542,6 +19591,17 @@ function refreshAdhocOpeningSection_(body, options) {
 
 /** Build from Scratch, at the end: writes the container again. Returns a note for the build result, '' when all is well. */
 function finishAdhocOpeningRebuild_(body) {
+  // Issue #11: a main-meeting report with session times gets its section again; without sessions nothing is done.
+  if (sessionTimesMeetingType_() === 'main') {
+    if (getConfiguredSessions_().length === 0) return '';
+    try {
+      const rendered = renderMainSessionAdministrationIn_(body);
+      return rendered.container === 'no-place' ? '\n\n⚠️ The Session administration section was not written: the report has no "Opening of the session" section.' : '';
+    } catch (e) {
+      Logger.log('Opening details: the Session administration section of a main-meeting report could not be written after the rebuild: ' + e.message);
+      return '\n\n⚠️ The Session administration section could not be written (' + e.message + '). Save Configure Sessions… again to write it.';
+    }
+  }
   if (!adhocSessionsEnabled_()) return '';
   try {
     refreshAdhocOpeningSection_(body, { afterRebuild: true });
