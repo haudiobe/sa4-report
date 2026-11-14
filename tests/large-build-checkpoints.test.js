@@ -373,7 +373,9 @@ console.log('\nE. outside a Full Build nothing of it runs');
   // (Two counters of the performance log are named after the call; they are strings, not calls.)
   check('no code but currentReportDocument_() asks DocumentApp for the active document (source)', [(CODE_ONLY.match(/DocumentApp\.getActiveDocument\(\)(?!\.getBody\(\) calls \(total\)')/g) || []).length,
     /function currentReportDocument_\(\) \{\n  return LARGE_BUILD_CHECKPOINTS_\.reopened \|\| DocumentApp\.getActiveDocument\(\);\n\}/.test(FULL)], [1, true]);
-  check('checkpoints are switched on in one place: the Full Build (source)', [(FULL.match(/beginLargeBuildCheckpoints_\(\)/g) || []).length - 1, /resetStatusDropdownRun_\(\);\n  \/\/ After T-2026\.10\.22: .*\n  beginLargeBuildCheckpoints_\(\);\n\n  phase\('skeleton'/.test(FULL)], [1, true]);
+  // After T-2026.10.23: and in the insertions of an update with the report open (BOUNDED UPDATE section, tests/bounded-update.test.js).
+  check('checkpoints are switched on in two places: the Full Build, and an update with the report open (source)', [(FULL.match(/beginLargeBuildCheckpoints_\(\)/g) || []).length - 1,
+    /\n  if \(!context\) beginLargeBuildCheckpoints_\(\);\n/.test(FULL), /resetStatusDropdownRun_\(\);\n  \/\/ After T-2026\.10\.22: .*\n  beginLargeBuildCheckpoints_\(\);\n\n  phase\('skeleton'/.test(FULL)], [2, true, true]);
 }
 
 // ====================================================================== F

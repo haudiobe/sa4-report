@@ -3,8 +3,8 @@
  * current commit into the bound script of a DISPOSABLE COPY of the Audio
  * report -- and nowhere else.
  *
- *   node tools/integration-test/push-to-disposable-copy.mjs --script <copy's Script ID> --doc <copy's document ID>          (dry run)
- *   node tools/integration-test/push-to-disposable-copy.mjs --script <id> --doc <id> --write
+ *   node tools/integration-test/push-to-disposable-copy.mjs --script <copy's Script ID> --doc <copy's document ID> --candidate-of T-YYYY.MM.N   (dry run)
+ *   node tools/integration-test/push-to-disposable-copy.mjs --script <id> --doc <id> --candidate-of T-YYYY.MM.N --write
  *
  * Uses clasp's stored login (clasp must be logged in); prints no token.
  *  1. refuses the original Audio report, the master template, protected projects (guard.js);
@@ -21,6 +21,8 @@
  *   (guard.js audioOriginalRefusals). Requires a backup copy of the document named "BACKUP...",
  *   made after the original's last change, whose own bound script is T-2026.10.22; and the
  *   Audio script equal to the local script backup (dist/integration-test/audio-original-backup-*).
+ * --candidate-of <T-YYYY.MM.N>   the release the candidate is for (written into the copy's Release.js;
+ *   required for a candidate push, issue #9).
  * --restore <dir>   push the five files of a script backup (e.g. .../before, or the local backup's
  *   script/) instead of the candidate, with the same read-back. No backup document needed.
  */
@@ -32,7 +34,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { pushRefusals, audioOriginalRefusals, candidateReleaseJs, sha256 } = require('./guard.js');
+const { pushRefusals, audioOriginalRefusals, candidateReleaseJs, codeVersionOf, sha256 } = require('./guard.js');
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // The canonical path (drive letter as the file system spells it): clasp refuses a content directory whose
 // realpath differs from its resolved path ("Content directory is a symlink"), which a lowercase c: triggers.
@@ -50,6 +52,8 @@ const backupDocId = value('--backup-doc');
 const backupScriptId = value('--backup-script');
 const restoreDir = value('--restore') ? path.resolve(value('--restore')) : null;
 if (target && !audioMode) { console.error('--target accepts only audio-original.'); process.exit(2); }
+const candidateOf = value('--candidate-of');
+if (!restoreDir && !/^T-\d{4}\.\d{2}\.\d+$/.test(String(candidateOf || ''))) { console.error('--candidate-of T-YYYY.MM.N is required: the release the candidate is for.'); process.exit(2); }
 
 function fail(lines) { console.error('\nREFUSED:\n' + [].concat(lines).map((l) => '  - ' + l).join('\n')); process.exit(2); }
 
@@ -147,7 +151,8 @@ const bundle = restoreDir ? Object.fromEntries(['appsscript.json', 'Code.js', 'H
   'HyperLink.js': fs.readFileSync(path.join(REPO, 'HyperLink.js')),
   'ReportCreator.js': fs.readFileSync(path.join(REPO, 'template', 'ReportCreator.js')),
   'appsscript.json': Buffer.from(manifest),
-  'Release.js': Buffer.from(candidateReleaseJs(fs.readFileSync(path.join(dirs.before, 'Release.js'), 'utf8'), commit, builtAt)),
+  'Release.js': Buffer.from(candidateReleaseJs(fs.readFileSync(path.join(dirs.before, 'Release.js'), 'utf8'), commit, builtAt,
+    { codeVersion: codeVersionOf(fs.readFileSync(path.join(REPO, 'Code.js'), 'utf8')), release: candidateOf, branch: branch })),
   'IntegrationCheck.js': fs.readFileSync(path.join(HERE, 'IntegrationCheck.js'))
 };
 Object.entries(bundle).forEach(([n, b]) => fs.writeFileSync(path.join(dirs.bundle, n), b));
