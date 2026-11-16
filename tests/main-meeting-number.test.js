@@ -30,7 +30,7 @@ const { execFileSync } = require('child_process');
 const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport, PROPS } = require('./helpers/template-report.js');
 const { makeFakeDrive } = require('./helpers/fake-drive-files.js');
-const { codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 const ROOT = path.join(__dirname, '..');
 let failures = 0;
@@ -276,7 +276,8 @@ console.log('H. what changed in Code.js');
     try { candidate = execFileSync('git', ['show', ref + ':Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); from = ref; break; } catch (e) { candidate = null; }
   }
   if (candidate === null) console.log('  note: neither template-release/T-2026.10.24 nor release/T-2026.10.24 is in this checkout; the comparison is skipped.');
-  else check('without it, Code.js is that of ' + from + ', byte for byte', view.code === candidate, true);
+  // PR #13 (the follow-up of issue #11) was merged after this fix: it is taken out first, alone.
+  else check('without it (and without PR #13, merged after it), Code.js is that of ' + from + ', byte for byte', codeWithoutSessionTimesBuild(view.code).code === candidate, true);
   check('ReportCreator.js, HyperLink.js and appsscript.json are not touched by it (source)', ['template/ReportCreator.js', 'HyperLink.js'].map((f) => /mainMeeting(FolderOf|NumberOf|IdentityOfSave|NumberMismatch)/.test(fs.readFileSync(path.join(ROOT, f), 'utf8'))), [false, false]);
 }
 
