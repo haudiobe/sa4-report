@@ -34,9 +34,20 @@ has uploaded it: the report judges only by what it reads from Drive (`fetchedAt`
 so a delayed upload shows as "stale", never as success. Several files with the same name (a Drive
 conflict copy) — the newest valid one is used. The same scan twice is imported once (`scanId`).
 
-Status: *SA4 Report › 🛠 Advanced and Repair › Check Connections* shows, per report, the last check,
-the newest valid scan, the last import (files, revisions, new, removed) and the agent's last error
-as last synchronized.
+Status: *SA4 Report › 🛠 Advanced and Repair › Check Connections* shows four stages, each from its
+own evidence, so that one is never taken for the next:
+
+1. **LAN scan** — from the agent's `<group>.status.json` (`scanOk`, `lastSuccessAt`, last error), as far as
+   Drive has synchronized it.
+2. **Local write** — from the same file (`writtenAt`). A local write is no proof of an upload.
+3. **In Google Drive** — the newest *valid* listing the report finds in Drive, its scan time and its upload
+   time. Only this proves synchronization.
+4. **Import** — the report's own state: when, files, revisions, new, removed.
+
+Its first line says the result of the last check: imported, unchanged, stale, missing, invalid, unavailable.
+
+Check Connections also tries the TDoc list as the update does (the configured address, then its
+`www.3gpp.org/ftp` twin); a 403 from 3GPP is shown as a refusal by the 3GPP server, usually temporary.
 
 ## Setup in the meeting room (once, about 10 minutes)
 
