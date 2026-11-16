@@ -752,6 +752,7 @@ function buildTemplateReportMenu_(ui) {
     .addSeparator()
     .addItem('Update E-mail Discussions', 'collectEmailDiscussionOnly')
     .addItem('Update TDoc Revisions', 'collectRevisionsOnly')
+    .addItem('Import Local Inbox Listing…', 'importLocalRevisionsListing')
     .addItem('Update Abstracts', 'addAbstractsOnly')
     .addSeparator()
     // After T-2026.10.15: the Disposition Summary at the end of the report, and the checks before it is closed.
