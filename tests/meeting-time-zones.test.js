@@ -31,7 +31,7 @@ const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { REPORT_CREATOR_PATH } = require('./helpers/load-template.js');
 const { templateReport } = require('./helpers/template-report.js');
 const { configurableReport } = require('./helpers/config-dialog.js');
-const { codeWithoutSessionTimes, creatorWithoutSessionTimes, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutMainMeetingNumber, codeWithoutSessionTimes, creatorWithoutSessionTimes, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -387,9 +387,11 @@ console.log('I. "CEST" in the code');
 // ====================================================================== J
 console.log('J. what changed, against T-2026.10.23');
 {
-  const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const RAW = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // The main-meeting number fix (after T-2026.10.24, tests/main-meeting-number.test.js) came later: this ledger is about the layer below it.
+  const FULL = codeWithoutMainMeetingNumber(RAW).code;
   const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
-  const view = codeWithoutMeetingTimeZones(FULL);
+  const view = codeWithoutMeetingTimeZones(RAW);
   const creatorView = creatorWithoutMeetingTimeZones(CREATOR);
   // The session times of issue #11 came later; the functions are compared without them (tests/session-times-main-report.test.js).
   const FULL_T = codeWithoutSessionTimes(FULL).code;

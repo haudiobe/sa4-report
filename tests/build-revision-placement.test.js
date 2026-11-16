@@ -179,7 +179,8 @@ console.log('6. cost and failure');
 console.log('7. the Revisions cell is not part of this');
 {
   check('renderRevisionsCellContent_() still writes one revision per line (source; its own tests: revision-cell-rendering-hotfix)',
-    /const fullText = entries\.map\(e => e\.line\)\.join\('\\n'\);\n  cell\.setText\(fullText\);/.test(functionSource('renderRevisionsCellContent_')), true);
+    // After T-2026.10.25: lines typed by hand and the folders line follow; an unchanged cell is not written (issue #16).
+    /const fullText = entries\.map\(e => e\.line\)\.join\('\\n'\)[^;\n]*;\n(?:  if \(current === fullText[^\n]*\n)?  cell\.setText\(fullText\);/.test(functionSource('renderRevisionsCellContent_')), true);
   const r = templateReport({ tdocs: [t(A, '4.3', B, 'revised'), t(B, '4.4')] });
   r.build();
   check('the build does not write the Revisions cells', [r.field(A, 'Revisions'), r.field(B, 'Revisions')], ['', '']);

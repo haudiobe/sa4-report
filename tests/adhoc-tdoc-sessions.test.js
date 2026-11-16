@@ -1026,7 +1026,7 @@ console.log('11. menu, adoption, and nothing else changed');
   check('a background run reads them from the central copy, the stored clock included', [background.clock, Object.keys(background.overrides)], ['session', ['S4aA269001']]);
   check('a background run of a report without stored assignments uses the Portal\'s clock', (() => { const x = report(); x.s.adoptReportDocumentForAddon_(); return x.s.makeAdhocTdocSessionResolver_({ documentId: REPORT_ID, mode: 'addon-background' }).clock; })(), 'utc');
   check('a document without them: nothing is invented by adoption', (() => { const x = report({ props: ADHOC }); return [x.s.adoptReportDocumentForAddon_().copiedKeys.filter((k) => /ADHOC/.test(k)), x.scriptProps.getKeys().filter((k) => /ADHOC/.test(k))]; })(), [[], []]);
-  check('it is one fixed key, not a family of keys', [r.s.ADDON003_ADOPTION_FIXED_KEYS_.filter((k) => /ADHOC/.test(k)), r.s.ADDON003_ADOPTION_PREFIX_FAMILIES_], [['ADHOC_SESSIONS', KEY], ['DISCUSS_', 'REVIS_', 'A1_EMPTY_CACHE_', 'REVIEWER_NO_SUMMARY_CACHE_']]);
+  check('it is one fixed key, not a family of keys', [r.s.ADDON003_ADOPTION_FIXED_KEYS_.filter((k) => /ADHOC/.test(k)), r.s.ADDON003_ADOPTION_PREFIX_FAMILIES_], [['ADHOC_SESSIONS', KEY], ['DISCUSS_', 'REVIS_', 'A1_EMPTY_CACHE_', 'REVIEWER_NO_SUMMARY_CACHE_', 'LOCALREV_' /* issue #16 */]]);
   check('Clear Collection Caches keeps the manual assignments', (() => { const before = r.docProps.getProperty(KEY); r.s.clearAllCaches(); return r.docProps.getProperty(KEY) === before; })(), true);
 
   // A main-meeting report and an ad-hoc report without sessions: the update is what it was.
