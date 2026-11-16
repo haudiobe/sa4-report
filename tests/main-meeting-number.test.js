@@ -267,8 +267,9 @@ console.log('H. what changed in Code.js');
   check('it stands directly after the meeting time zones', FULL.indexOf('// END OF MEETING TIME ZONES\n// =========================================================\n\n' + MAIN_MEETING_NUMBER_SECTION_START) !== -1, true);
   check('of the functions there were, these changed; none removed', [functionNames(view.code).filter((n) => functionSource(FULL, n) !== functionSource(view.code, n)).sort(), functionNames(view.code).filter((n) => functionNames(FULL).indexOf(n) === -1)],
     [MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS.slice().sort(), []]);
-  // Brought to master after issue #16 (it was on release/T-2026.10.24 only): the version is master's, unchanged by it.
-  check('the version is unchanged by it', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], (view.code.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1]);
+  // Brought to master after issue #16 (it was on release/T-2026.10.24 only); released with T-2026.10.26 (2.26.10),
+  // whose header the ledger takes out with this layer: without it, the version is master's before it (2.26.7).
+  check('the version is 2.26.10 (T-2026.10.26); without this layer and its release header 2.26.7', [(FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], (view.code.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1]], ['2.26.10', '2.26.7']);
   let candidate = null;
   let from = '';
   // master before it (the merge of PR #17); on the release branch it was release/T-2026.10.24.

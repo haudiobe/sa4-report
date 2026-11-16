@@ -565,8 +565,17 @@ const MAIN_MEETING_NUMBER_CHANGES = [
 ];
 
 /** Code.js without the main-meeting number fix: the Code.js of the T-2026.10.24 candidate (2.26.8). { code, problems }. */
+// The release of T-2026.10.26: the version line and the changelog entry of 2.26.10, taken out with the outermost layer.
+const RELEASE_2_26_10_CHANGES = [
+  [" * Version: 2.26.10 (2026-11-16)\n", " * Version: 2.26.7 (2026-11-12)\n"],
+  [" * CHANGELOG\n * 2.26.10 (2026-11-16)\n *   - Added: meeting-local and selected IANA time zones (MEETING_TIME_ZONE,\n *     MEETING_TIME_ZONE_MODE); America/Edmonton written ABT, UTC-6 all year\n *     from 1 November 2026. (GitHub issue #4, PR #5; MEETING TIME ZONES.)\n *   - Added: session times in a main-meeting report (Sessions > Configure\n *     Sessions...), shown in Session administration; Build from Scratch\n *     writes the section again and keeps minutes typed below it. Meeting\n *     type, TDocs and agenda filter unchanged. (Issue #11, PR #12, #13.)\n *   - Fixed: a main meeting's blank Meeting Folder/Number are taken from\n *     its document folder, never saved as SA4#136; a saved number that\n *     contradicts the folder is refused before any download; a failed\n *     TDoc-list download says \"not updated\". (Issue #9, PR #18.)\n *   - Added: the meeting-room revisions folder (LOCAL_REVISIONS_URL,\n *     default http://10.10.10.10/ftp/SA/SA4/Inbox for a main meeting that\n *     is not an e-meeting) is linked next to the 3GPP drafts folder; never\n *     fetched. (PR #15.)\n *   - Added: Import Local Inbox Listing... -- revisions listed on the\n *     meeting-room server (a listing pasted from a browser on its LAN)\n *     are shown with the 3GPP ones ([local], [local only]); 3GPP\n *     detection and revision tables unchanged. (Issue #16, PR #17;\n *     docs/LOCAL_REVISIONS.md.)\n", " * CHANGELOG\n"]
+];
+
 function codeWithoutMainMeetingNumber(code) {
-  return takeOut(code, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_CHANGES, 'MAIN MEETING NUMBER');
+  // The release header of T-2026.10.26 (2.26.10) came last: taken out first.
+  const header = takeOut(code, null, null, RELEASE_2_26_10_CHANGES, 'RELEASE 2.26.10 HEADER');
+  const view = takeOut(header.code, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_CHANGES, 'MAIN MEETING NUMBER');
+  return { code: view.code, problems: header.problems.concat(view.problems) };
 }
 
 const MEETING_TIME_ZONES_SECTION_START = BAR + '// MEETING TIME ZONES (after T-2026.10.23)\n' + BAR;
