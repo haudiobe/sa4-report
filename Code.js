@@ -6572,17 +6572,21 @@ function importAgentListing_(context, deps) {
   if (!localBase) return finish('off', 'This report has no Local Revisions URL; the agent\'s listings are not imported.');
   let read;
   try { read = readAgentListingFiles_(folderId, group); } catch (e) { return finish('unavailable', 'The Drive folder of the local listing agent cannot be read (' + e.message + '). Previously imported revisions are kept.'); }
-  if (read.status) state.agent = { lastSuccessAt: read.status.lastSuccessAt || null, lastAttemptAt: read.status.fetchedAt || null, lastError: read.status.ok ? null : (read.status.error || 'failed') };
+  if (read.status) {
+    state.agent = { lastSuccessAt: read.status.lastSuccessAt || null, lastAttemptAt: read.status.fetchedAt || null, lastError: read.status.ok ? null : (read.status.error || 'failed'),
+      lastWrittenAt: read.status.writtenAt || null };
+  }
   if (!read.files.length) return finish('missing', 'Not checked: no listing of ' + group + ' in the agent\'s Drive folder yet. Previously imported revisions are kept.');
   let chosen = null;
   let firstReason = '';
   read.files.forEach(function (file) {
     if (chosen) return;
     const v = validateAgentListing_(file.raw, { group: group, localBase: localBase }, now, localListingSha256Hex_);
-    if (v.ok) chosen = v.listing; else if (!firstReason) firstReason = v.reason;
+    if (v.ok) { chosen = v.listing; chosen.driveUpdatedAt = file.updated ? file.updated.toISOString() : null; } else if (!firstReason) firstReason = v.reason;
   });
   if (!chosen) return finish(/^stale/.test(firstReason) ? 'stale' : 'invalid', 'Not imported: the newest listing of ' + group + ' is ' + firstReason + '. Previously imported revisions are kept.');
   state.lastScanFetchedAt = chosen.fetchedAt;
+  state.lastScanDriveUpdatedAt = chosen.driveUpdatedAt;
   if (previous.lastScanId === chosen.scanId) return finish('unchanged', 'Scan of ' + chosen.fetchedAt + ' already imported.');
   const parsed = parseLocalRevisionsListing_({ folder: chosen.folder, html: chosen.payload, text: '' }, localBase);
   if (!parsed.ok) return finish('invalid', 'Not imported: ' + parsed.error + ' Previously imported revisions are kept.');
@@ -6612,10 +6616,14 @@ function describeLocalListingAgentStatus_(stateJson, folderId, now) {
   const s = loadJsonObject_(stateJson);
   if (!s.lastCheckAt) return 'Local listing agent: configured; not checked yet (the next update reads it).';
   const ago = function (iso) { const t = Date.parse(iso); if (isNaN(t)) return '?'; const m = Math.round((now.getTime() - t) / 60000); return iso.replace('T', ' ').replace(/:\d\d(\.\d+)?Z$/, ' UTC') + ' (' + m + ' min ago)'; };
+  // Four stages, each from its own evidence: the agent's status file says what the laptop did (as far as Drive has
+  // synchronized it -- a local write is no proof of an upload); the listing found in Drive proves the upload; the
+  // report's own state proves the import.
   const lines = ['Local listing agent (' + (s.group || '?') + '): last check ' + ago(s.lastCheckAt) + ' -- ' + (s.message || s.lastResult || '')];
-  if (s.lastScanFetchedAt) lines.push('  newest valid scan seen: ' + ago(s.lastScanFetchedAt));
-  if (s.lastImportAt) lines.push('  last import: ' + ago(s.lastImportAt) + ', ' + (s.files || 0) + ' file(s), ' + (s.recognized || 0) + ' revision(s), ' + (s.added || 0) + ' new, ' + (s.removed || 0) + ' removed');
-  if (s.agent) lines.push('  agent (as last synchronized): last success ' + (s.agent.lastSuccessAt ? ago(s.agent.lastSuccessAt) : 'never') + (s.agent.lastError ? ', last error: ' + s.agent.lastError : ''));
+  lines.push('  1. LAN scan (agent status, as synchronized): ' + (s.agent ? 'last success ' + (s.agent.lastSuccessAt ? ago(s.agent.lastSuccessAt) : 'never') + (s.agent.lastError ? ', last attempt failed: ' + s.agent.lastError : '') : 'no status file in Drive'));
+  lines.push('  2. local write (agent status, as synchronized): ' + (s.agent && s.agent.lastWrittenAt ? ago(s.agent.lastWrittenAt) : 'not reported'));
+  lines.push('  3. in Google Drive: ' + (s.lastScanFetchedAt ? 'newest valid scan ' + ago(s.lastScanFetchedAt) + (s.lastScanDriveUpdatedAt ? ', uploaded ' + ago(s.lastScanDriveUpdatedAt) : '') : 'no valid scan found'));
+  lines.push('  4. import into this report: ' + (s.lastImportAt ? ago(s.lastImportAt) + ', ' + (s.files || 0) + ' file(s), ' + (s.recognized || 0) + ' revision(s), ' + (s.added || 0) + ' new, ' + (s.removed || 0) + ' removed' : 'none yet'));
   return lines.join('\n');
 }
 
@@ -10172,13 +10180,9 @@ function testAllConnections() {
     if (!url) {
       results.push('   ❌ Not configured');
     } else {
-      const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      if (response.getResponseCode() === 200) {
-        results.push('   ✅ Connected successfully');
-        results.push('   📊 File size: ' + response.getBlob().getBytes().length + ' bytes');
-      } else {
-        results.push('   ❌ HTTP ' + response.getResponseCode());
-      }
+      // After T-2026.10.27: checked as the update downloads it -- the configured address, then its
+      // www.3gpp.org/ftp twin (TDOC LIST DOWNLOAD section) -- so this says what an update will get.
+      tdocListConnectionLines_(url).forEach(function (line) { results.push('   ' + line); });
     }
   } catch (e) {
     results.push('   ❌ Error: ' + e.message);
@@ -11760,6 +11764,29 @@ function tdocListDownloadAttempt_(url) {
     attempt.blob = blob;
   }
   return attempt;
+}
+
+/**
+ * After T-2026.10.27: what Check Connections says about the TDoc list -- the
+ * same addresses and checks as downloadTdocListXlsx_(), one line per address
+ * tried. A refusal (HTTP 403/429/503) from 3GPP's front end is usually
+ * temporary: it is said so, and that the update tries again on its next run.
+ */
+function tdocListConnectionLines_(url) {
+  const lines = [];
+  const candidates = tdocListDownloadCandidates_(url);
+  for (let i = 0; i < candidates.length; i++) {
+    const attempt = tdocListDownloadAttempt_(candidates[i]);
+    const label = i === 0 ? '' : '(alternative) ';
+    if (attempt.ok) {
+      lines.push('✅ ' + label + 'Connected successfully: ' + attempt.url);
+      lines.push('📊 File size: ' + attempt.bytes + ' bytes (Excel workbook)');
+      return lines;
+    }
+    const refused = /^HTTP (403|429|503)\b/.test(attempt.problem);
+    lines.push('❌ ' + label + attempt.problem + ': ' + attempt.url + (refused ? ' -- refused by the 3GPP server (usually temporary; the update tries again on its next run)' : ''));
+  }
+  return lines;
 }
 
 /**

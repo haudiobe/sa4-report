@@ -75,9 +75,11 @@ function Invoke-GroupScan([string]$G) {
   $statusPath = Join-Path $outDir "$G.status.json"
   $previous = $null
   if (Test-Path -LiteralPath $statusPath) { try { $previous = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json } catch { $previous = $null } }
-  $lastSuccess = $null
-  if ($previous) { $lastSuccess = $previous.lastSuccessAt }
-  $status = [ordered]@{ format = 'sa4-local-listing-status'; group = $G; folder = $folder; fetchedAt = $now; ok = $false; lastSuccessAt = $lastSuccess; httpStatus = $null; links = 0; error = $null; agent = $env:COMPUTERNAME }
+  $lastSuccess = $null; $lastWritten = $null
+  if ($previous) { $lastSuccess = $previous.lastSuccessAt; $lastWritten = $previous.writtenAt }
+  # Stages kept apart: scanOk (the LAN read worked), writtenAt (the listing file was written locally). Whether Google Drive
+  # has uploaded it is not known here; the report judges that by what it finds in Drive.
+  $status = [ordered]@{ format = 'sa4-local-listing-status'; group = $G; folder = $folder; fetchedAt = $now; ok = $false; scanOk = $false; lastSuccessAt = $lastSuccess; writtenAt = $lastWritten; httpStatus = $null; links = 0; error = $null; agent = $env:COMPUTERNAME }
   try {
     $r = Invoke-WebRequest -Uri $folder -UseBasicParsing -TimeoutSec $timeout -MaximumRedirection 0 -Headers @{ 'Cache-Control' = 'no-cache' }
     $status.httpStatus = [int]$r.StatusCode
@@ -91,9 +93,10 @@ function Invoke-GroupScan([string]$G) {
     if ($links.Count -eq 0) { throw 'no links in the listing' }
     $payload = ($links -join "`n")
     $sha = Get-Sha256Hex $payload
+    $status.scanOk = $true; $status.lastSuccessAt = $now; $status.links = $links.Count
     $listing = [ordered]@{ format = 'sa4-local-listing'; version = 1; group = $G; folder = $folder; fetchedAt = $now; scanId = $sha; agent = $env:COMPUTERNAME; linkCount = $links.Count; sha256 = $sha; payload = $payload }
-    Write-Atomic (Join-Path $outDir "$G.listing.json") ((New-Object PSObject -Property $listing) | ConvertTo-Json -Depth 3)
-    $status.ok = $true; $status.lastSuccessAt = $now; $status.links = $links.Count
+    try { Write-Atomic (Join-Path $outDir "$G.listing.json") ((New-Object PSObject -Property $listing) | ConvertTo-Json -Depth 3) } catch { throw ('write failed: ' + $_.Exception.Message) }
+    $status.ok = $true; $status.writtenAt = $now
   } catch {
     $status.error = $_.Exception.Message
     try { if ($_.Exception.Response) { $status.httpStatus = [int]$_.Exception.Response.StatusCode } } catch { }

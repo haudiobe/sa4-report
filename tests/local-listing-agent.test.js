@@ -207,14 +207,71 @@ console.log('8. status');
   const { s } = report({});
   check('not configured', s.describeLocalListingAgentStatus_(null, '', NOW), 'Local listing agent: not configured (Configure Meeting > Local listing folder).');
   check('configured, not checked yet', s.describeLocalListingAgentStatus_(null, 'X', NOW), 'Local listing agent: configured; not checked yet (the next update reads it).');
-  const r = report({ 'MBS.listing.json': file(listing([A + '_r1.docx'])), 'MBS.status.json': file(JSON.stringify({ ok: false, fetchedAt: minutesAgo(0), lastSuccessAt: minutesAgo(2), error: 'The operation has timed out.' })) });
+  const r = report({ 'MBS.listing.json': [{ raw: listing([A + '_r1.docx']), updated: new Date(NOW.getTime() - 60000) }],
+    'MBS.status.json': file(JSON.stringify({ ok: false, scanOk: false, fetchedAt: minutesAgo(0), lastSuccessAt: minutesAgo(2), writtenAt: minutesAgo(2), error: 'The operation has timed out.' })) });
   r.importNow();
-  check('last check, newest scan, last import with counts, and the agent\'s own last error',
+  check('four stages, each from its own evidence: LAN scan and local write (agent status), Drive (the file found), import (the report)',
     r.s.describeLocalListingAgentStatus_(r.docProps.getProperty('LOCAL_LISTING_AGENT_STATE'), 'X', NOW).split('\n'), [
       'Local listing agent (MBS): last check 2026-11-17 10:00 UTC (0 min ago) -- Imported the scan of 2026-11-17T09:58:00Z: 1 file(s), 1 revision(s) of SA4 TDocs, 1 new, 0 no longer listed.',
-      '  newest valid scan seen: 2026-11-17 09:58 UTC (2 min ago)',
-      '  last import: 2026-11-17 10:00 UTC (0 min ago), 1 file(s), 1 revision(s), 1 new, 0 removed',
-      '  agent (as last synchronized): last success 2026-11-17 09:58 UTC (2 min ago), last error: The operation has timed out.']);
+      '  1. LAN scan (agent status, as synchronized): last success 2026-11-17 09:58 UTC (2 min ago), last attempt failed: The operation has timed out.',
+      '  2. local write (agent status, as synchronized): 2026-11-17 09:58 UTC (2 min ago)',
+      '  3. in Google Drive: newest valid scan 2026-11-17 09:58 UTC (2 min ago), uploaded 2026-11-17 09:59 UTC (1 min ago)',
+      '  4. import into this report: 2026-11-17 10:00 UTC (0 min ago), 1 file(s), 1 revision(s), 1 new, 0 removed']);
+  const written = report({ 'MBS.status.json': file(JSON.stringify({ ok: true, scanOk: true, fetchedAt: minutesAgo(1), lastSuccessAt: minutesAgo(1), writtenAt: minutesAgo(1) })) });
+  written.importNow();
+  check('written locally but not (yet) in Drive: stage 2 says written, stage 3 says no valid scan -- a local write is not shown as an upload',
+    written.s.describeLocalListingAgentStatus_(written.docProps.getProperty('LOCAL_LISTING_AGENT_STATE'), 'X', NOW).split('\n').slice(2, 5),
+    ['  2. local write (agent status, as synchronized): 2026-11-17 09:59 UTC (1 min ago)', '  3. in Google Drive: no valid scan found', '  4. import into this report: none yet']);
+}
+
+// ====================================================================== 8b
+console.log('8b. all five groups; new revisions during the meeting; the scheduled update');
+{
+  const groups = { MBS: 'MBS', Video: 'Video', '6G': 'FS_6G_MED', RTC: 'RTC', Audio: 'Audio' };
+  const all = {};
+  Object.keys(groups).forEach((suffix) => {
+    const g = groups[suffix];
+    all[g + '.listing.json'] = file(listing([A + '_' + g + '.docx'], { group: g, folder: LOCAL + '/Drafts/' + g + '/' }).replace(new RegExp(FOLDER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), LOCAL + '/Drafts/' + g + '/'));
+  });
+  const fixed = {};
+  Object.keys(all).forEach((name) => {
+    const f = JSON.parse(all[name][0].raw);
+    f.payload = f.payload.split(FOLDER).join(f.folder);
+    f.sha256 = sha(f.payload); f.scanId = f.sha256;
+    fixed[name] = file(JSON.stringify(f));
+  });
+  check('each of the five reports imports only its own group\'s listing', Object.keys(groups).map((suffix) => {
+    const r = report(fixed, { REPORT_SUFFIX: suffix });
+    r.importNow();
+    return [suffix, r.state().group, r.lines(0)];
+  }), Object.keys(groups).map((suffix) => [suffix, groups[suffix], [A + '_' + groups[suffix] + '.docx [local only]']]));
+  const r = report({ 'MBS.listing.json': file(listing([A + '_r1.docx'], { fetchedAt: minutesAgo(4) })) });
+  r.importNow();
+  r.drive = { 'MBS.listing.json': file(listing([A + '_r1.docx', B + '_r1.docx', C + 'r02.docx'], { fetchedAt: minutesAgo(2) })) };
+  const later = r.importNow();
+  check('two scans later in the meeting: the new revisions appear, the earlier one stays, nothing doubled', [later.state.added, r.lines(0), r.lines(1), r.lines(2)],
+    [2, [A + '_r1.docx [local only]'], [B + '_r1.docx [local only]'], [C + 'r02.docx [local only]']]);
+  const code = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const bodyOf = (name) => { const at = code.indexOf('\nfunction ' + name + '('); return code.slice(at, code.indexOf('\n}\n', at)); };
+  check('the scheduled update reaches it: collectorUpdate_() runs updateRevisions_(), whose first step is the agent import (source)',
+    [/updateRevisions_\(/.test(bodyOf('collectorUpdate_')), /^\nfunction updateRevisions_\(cfg, context\) \{\n(?:  \/\/[^\n]*\n)*  importAgentListingSafely_\(context\);/.test(bodyOf('updateRevisions_'))], [true, true]);
+}
+
+// ====================================================================== 8c
+console.log('8c. Check Connections: the TDoc list as the update downloads it');
+{
+  const { s } = report({});
+  const XLSX = [0x50, 0x4b, 0x03, 0x04, 1, 2, 3];
+  const answer = (map) => { s.UrlFetchApp = { fetch: (u) => { const a = map[u]; if (a instanceof Error) throw a; return { getResponseCode: () => a, getBlob: () => ({ getBytes: () => (a === 200 ? XLSX : []), getContentType: () => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) }; } }; };
+  const FTP = 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/TDoc_List_Meeting_SA4%23138.xlsx';
+  const WWW = 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/TDoc_List_Meeting_SA4%23138.xlsx';
+  answer({ [FTP]: 403, [WWW]: 200 });
+  check('ftp.3gpp.org refused, its www twin works: said as the update would get it (not just "HTTP 403")', s.tdocListConnectionLines_(FTP),
+    ['❌ HTTP 403: ' + FTP + ' -- refused by the 3GPP server (usually temporary; the update tries again on its next run)', '✅ (alternative) Connected successfully: ' + WWW, '📊 File size: 7 bytes (Excel workbook)']);
+  answer({ [WWW]: 403 });
+  check('www.3gpp.org refused (Cloudflare, temporary): said so', s.tdocListConnectionLines_(WWW), ['❌ HTTP 403: ' + WWW + ' -- refused by the 3GPP server (usually temporary; the update tries again on its next run)']);
+  answer({ [WWW]: 404 });
+  check('a missing file (wrong number or folder) is not called temporary', s.tdocListConnectionLines_(WWW), ['❌ HTTP 404: ' + WWW]);
 }
 
 // ====================================================================== 9
