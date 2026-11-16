@@ -607,8 +607,17 @@ const SESSION_SECTION_CHANGES = [
 ];
 
 /** Code.js without the session-section fix after the issue #11 live test: { code, problems }. */
+// The release of T-2026.10.27: the version line and the changelog entry of 2.26.11, taken out with the outermost layer.
+const RELEASE_2_26_11_CHANGES = [
+  [" * Version: 2.26.11 (2026-11-16)\n", " * Version: 2.26.7 (2026-11-12)\n"],
+  [" * CHANGELOG\n * 2.26.11 (2026-11-16)\n *   (T-2026.10.27; supersedes the candidate T-2026.10.26 / 2.26.10, which\n *   was never deployed: it lost text typed into a session line.)\n *   - Added: meeting-local and selected IANA time zones (MEETING_TIME_ZONE,\n *     MEETING_TIME_ZONE_MODE); America/Edmonton written ABT, UTC-6 all year\n *     from 1 November 2026. (GitHub issue #4, PR #5.)\n *   - Added: session times in a main-meeting report (Sessions > Configure\n *     Sessions...), shown in Session administration; Build from Scratch\n *     writes the section again and keeps minutes typed below it. Meeting\n *     type, TDocs and agenda filter unchanged. (Issue #11, PR #12, #13.)\n *   - Fixed: saving session times never removes text typed into a session\n *     line (only the generated beginning is replaced); a label that is the\n *     code is not written twice (\"A01: A01\"). (Issue #11, PR #21.)\n *   - Fixed: a main meeting's blank Meeting Folder/Number are taken from\n *     its document folder, never saved as SA4#136; a saved number that\n *     contradicts the folder is refused before any download; a failed\n *     TDoc-list download says \"not updated\". (Issue #9, PR #18.)\n *   - Added: the meeting-room revisions folder (LOCAL_REVISIONS_URL,\n *     default http://10.10.10.10/ftp/SA/SA4/Inbox for a main meeting that\n *     is not an e-meeting) is linked next to the 3GPP drafts folder; never\n *     fetched. (PR #15.)\n *   - Added: Import Local Inbox Listing... -- revisions listed on the\n *     meeting-room server (a listing pasted from a browser on its LAN)\n *     are shown with the 3GPP ones ([local], [local only]); 3GPP\n *     detection and revision tables unchanged. (Issue #16, PR #17;\n *     docs/LOCAL_REVISIONS.md.)\n", " * CHANGELOG\n"]
+];
+
 function codeWithoutSessionSectionFix(code) {
-  return takeOut(code, null, null, SESSION_SECTION_CHANGES, 'SESSION SECTION FIX');
+  // The release header of T-2026.10.27 (2.26.11) came last: taken out first.
+  const header = takeOut(code, null, null, RELEASE_2_26_11_CHANGES, 'RELEASE 2.26.11 HEADER');
+  const view = takeOut(header.code, null, null, SESSION_SECTION_CHANGES, 'SESSION SECTION FIX');
+  return { code: view.code, problems: header.problems.concat(view.problems) };
 }
 
 /** Code.js without the main-meeting number fix: the Code.js of the T-2026.10.24 candidate (2.26.8). { code, problems }. */
