@@ -19,7 +19,7 @@
 const fs = require('fs');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { makeFakeDocumentBody } = require('./helpers/fake-document.js');
-const { codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS,
+const { codeWithoutLocalRevisions, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS,
   SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 const { REPORT_CREATOR_PATH } = require('./helpers/load-template.js');
 
@@ -213,9 +213,11 @@ console.log('6. an ad-hoc report is unchanged');
 // ================================================================ 7
 console.log('7. the change itself');
 {
-  const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // The local revisions folder came later: compared without it (tests/local-revisions-folder.test.js).
+  const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const CODE = codeWithoutLocalRevisions(FULL).code;
   const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
-  const view = codeWithoutSessionTimes(CODE);
+  const view = codeWithoutSessionTimes(FULL);
   const creatorView = creatorWithoutSessionTimes(CREATOR);
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const names = (src) => (src.match(/^function\s+[A-Za-z0-9_$]+\s*\(/gm) || []).map((x) => x.replace(/^function\s+|\s*\($/g, ''));

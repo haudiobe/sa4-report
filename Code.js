@@ -2947,6 +2947,8 @@ var ADDON003_ADOPTION_FIXED_KEYS_ = [
   'REPORT_SUFFIX', 'AGENDA_ITEM_PREFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC', 'AGENDA_CSV_URL', 'MEETING_DATE',
   'SHOW_PREVIEW_SNIPPET',
   'MEETING_TYPE', 'MEETING_NAME', 'REVISIONS_URL', 'MAILING_LIST',
+  // After T-2026.10.25: the local (meeting-room) revisions folder (LOCAL REVISIONS FOLDER).
+  'LOCAL_REVISIONS_URL',
   'FETCH_ABSTRACTS_ON_UPDATE',
   'REVISION_MAP',
   'DEADLINE_EXTENSIONS',
@@ -6027,17 +6029,31 @@ function normalizeRevisionKey_(item) {
  * already-corrupted cell from a prior run for free: the cell's contents
  * are always fully replaced, never appended to.
  */
-function renderRevisionsCellContent_(cell, orderedRevisions) {
+function renderRevisionsCellContent_(cell, orderedRevisions, folders) {
   const entries = orderedRevisions
     .map(item => ({ line: String(item.text || '').trim(), link: item.link }))
     .filter(e => e.line);
+  // After T-2026.10.25: a last line linking both revisions folders, when the
+  // report has a local (meeting-room) folder. Without one, nothing changes.
+  const folderLine = buildRevisionFoldersLine_(folders);
 
   if (!entries.length) {
-    if (!cell.getText().trim()) cell.setText('No revisions available.');
+    const current = cell.getText();
+    if (!folderLine && current.indexOf(REVISION_FOLDERS_PREFIX_) === -1) {
+      if (!current.trim()) cell.setText(REVISIONS_NONE_TEXT_);
+      return;
+    }
+    // Text that is not ours (typed by hand) is left alone, as before.
+    const own = stripRevisionFoldersLine_(current).trim();
+    if (own && own !== REVISIONS_NONE_TEXT_) return;
+    const wanted = folderLine ? REVISIONS_NONE_TEXT_ + '\n' + folderLine.text : REVISIONS_NONE_TEXT_;
+    if (current === wanted) return;
+    cell.setText(wanted);
+    if (folderLine) linkRevisionFoldersLine_(cell.editAsText(), REVISIONS_NONE_TEXT_.length + 1, folderLine);
     return;
   }
 
-  const fullText = entries.map(e => e.line).join('\n');
+  const fullText = entries.map(e => e.line).join('\n') + (folderLine ? '\n' + folderLine.text : '');
   cell.setText(fullText);
 
   const te = cell.editAsText();
@@ -6048,6 +6064,99 @@ function renderRevisionsCellContent_(cell, orderedRevisions) {
     if (e.link) { try { te.setLinkUrl(start, end, e.link); } catch (err) { } }
     offset = end + 2; // skip past this line's '\n' separator
   });
+  if (folderLine) linkRevisionFoldersLine_(te, offset, folderLine);
+}
+
+// ---------------------------------------------------------------------------
+// LOCAL REVISIONS FOLDER (after T-2026.10.25)
+// During a physical SA4 meeting, revised documents can appear first on the
+// meeting-room server (LAN only); the 3GPP folder (REVISIONS_URL) is
+// synchronized from it later. The report links to both folders. The local
+// one is only ever a link: it is never fetched (a private address cannot be
+// reached from Google), and revisions are found, as before, in the 3GPP
+// folder alone. No direct link to a file on the local server is made: its
+// path there cannot be known reliably, so the folder is linked instead.
+//
+// LOCAL_REVISIONS_URL (Document Property, set in Configure Meeting):
+//   absent  -- the default below for a main meeting that is not an
+//              e-meeting (meeting folder "...-e"); no local folder otherwise;
+//   'none'  -- no local folder;
+//   a URL   -- that folder (http or https).
+// ---------------------------------------------------------------------------
+const LOCAL_REVISIONS_URL_DEFAULT_ = 'http://10.10.10.10/ftp/SA/SA4/Inbox';
+const REVISIONS_NONE_TEXT_ = 'No revisions available.';
+const REVISION_FOLDERS_PREFIX_ = 'Revisions folders: ';
+const REVISION_FOLDER_LABELS_ = {
+  local: 'Local \u2013 meeting-room server, may be newer, on-site only',
+  remote: 'Remote \u2013 3GPP server, synchronized, accessible externally'
+};
+
+/**
+ * Pure: the local revisions folder of a report -- { url, source }, source
+ * 'configured' | 'default' | 'off' | 'none'. `stored` is the raw
+ * LOCAL_REVISIONS_URL, `meetingType` 'main' | 'adhoc', `ftpBase` the
+ * meeting's Docs folder (an e-meeting has no meeting room).
+ */
+function resolveLocalRevisionsUrl_(stored, meetingType, ftpBase) {
+  const value = String(stored === null || stored === undefined ? '' : stored).trim();
+  if (/^none$/i.test(value)) return { url: '', source: 'off' };
+  if (isLocalRevisionsUrlValue_(value)) return { url: value, source: 'configured' };
+  if (value) return { url: '', source: 'none' }; // not a URL: never linked
+  if (meetingType !== 'main') return { url: '', source: 'none' };
+  if (/[-_]e\/(?:Docs\/?)?$/i.test(String(ftpBase || '').trim())) return { url: '', source: 'none' };
+  return { url: LOCAL_REVISIONS_URL_DEFAULT_, source: 'default' };
+}
+
+/** Pure: whether a value can be stored as LOCAL_REVISIONS_URL as a folder (http or https, nothing else). */
+function isLocalRevisionsUrlValue_(value) {
+  return /^https?:\/\/[^\s"<>]+$/i.test(String(value || '').trim());
+}
+
+/** The local revisions folder of this report, from its stored configuration ('' when it has none). Never fetched. */
+function localRevisionsUrlFor_(context) {
+  try {
+    const props = getReportStateStore_(context);
+    const identity = getMeetingIdentityConfig_(context);
+    let ftpBase = identity.FTP_BASE;
+    if (!ftpBase && identity.MEETING_TYPE === 'main') ftpBase = String(getReportConfig_(context).FTP_BASE || '');
+    return resolveLocalRevisionsUrl_(props.getProperty('LOCAL_REVISIONS_URL'), identity.MEETING_TYPE, ftpBase).url;
+  } catch (e) {
+    Logger.log('Local revisions folder: not read (' + e.message + ')');
+    return '';
+  }
+}
+
+/**
+ * Pure: the line naming both folders -- { text, links: [{ start, end, url }] }
+ * (offsets within the line, end inclusive) -- or null without a local folder.
+ */
+function buildRevisionFoldersLine_(folders) {
+  const local = String((folders && folders.local) || '').trim();
+  const remote = String((folders && folders.remote) || '').trim();
+  if (!local) return null;
+  const parts = [{ label: REVISION_FOLDER_LABELS_.local, url: local }];
+  if (remote) parts.push({ label: REVISION_FOLDER_LABELS_.remote, url: remote });
+  let text = REVISION_FOLDERS_PREFIX_;
+  const links = [];
+  parts.forEach(function (part, i) {
+    if (i) text += ' \u00b7 ';
+    links.push({ start: text.length, end: text.length + part.label.length - 1, url: part.url });
+    text += part.label;
+  });
+  return { text: text, links: links };
+}
+
+/** Pure: a cell's text without the line written by buildRevisionFoldersLine_(). */
+function stripRevisionFoldersLine_(text) {
+  return String(text || '').split('\n').filter(function (line) { return line.indexOf(REVISION_FOLDERS_PREFIX_) !== 0; }).join('\n');
+}
+
+/** Links the folders line that starts at `offset` of the text, and only its two labels. */
+function linkRevisionFoldersLine_(te, offset, folderLine) {
+  try {
+    te.setLinkUrl(offset, offset + folderLine.text.length - 1, null);
+    folderLine.links.forEach(function (l) { te.setLinkUrl(offset + l.start, offset + l.end, l.url); });
+  } catch (err) { }
 }
 
 function updateRevisions_(cfg, context) {
@@ -6076,6 +6185,8 @@ function updateRevisions_(cfg, context) {
   // complexity/code-quality improvement, not a runtime-bottleneck fix.
   const anchorIndex = buildRevisionAnchorIndex_(anchors, url);
   perfCount_('revision anchors parsed', anchors.length);
+  // After T-2026.10.25: both folders, for the line under the revisions (the local one is never fetched).
+  const folders = { local: localRevisionsUrlFor_(context), remote: url };
 
   let revisionFilesProcessed = 0;
   let matchingMs = 0;
@@ -6137,7 +6248,7 @@ function updateRevisions_(cfg, context) {
     // itself (unchanged, not rewritten here).
     const renderStart = Date.now();
     const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
-    renderRevisionsCellContent_(cell, ordered);
+    renderRevisionsCellContent_(cell, ordered, folders);
     renderingMs += Date.now() - renderStart;
 
     // Also insert the revision tables directly after this TDOC table in the document.
@@ -8525,6 +8636,10 @@ function configureMeetingSettings() {
       <label>Revisions / Drafts URL: <span id="revisionsUrlBadge">${sourceLabel(initialPreview.revisionsUrl.source)}</span></label>
       <input type="text" id="revisionsUrl" value="${esc(initialPreview.revisionsUrl.value)}" placeholder="https://www.3gpp.org/ftp/.../inbox/drafts/" oninput="updateDependentUi()">
       <div class="hint">Suggested drafts/revisions folder. Review if needed.</div>
+
+      <label>Local Revisions URL (meeting-room server):</label>
+      <input type="text" id="localRevisionsUrl" value="${esc(props.getProperty('LOCAL_REVISIONS_URL') || '')}" placeholder="${esc(LOCAL_REVISIONS_URL_DEFAULT_)}">
+      <div class="hint">On-site only and possibly newer than the 3GPP folder above, which the updates keep reading. The report only links to it, never reads it. Blank: ${esc(LOCAL_REVISIONS_URL_DEFAULT_)} for a main meeting that is not an e-meeting; "none": no local link.</div>
     </div>
 
     <div class="section">
@@ -9002,6 +9117,7 @@ function configureMeetingSettings() {
           mailingListMode: mailingListOverridden && document.getElementById('mailingList').value.trim() ? 'override' : 'derived',
           discussionEmailSender: document.getElementById('discussionEmailSender') ? document.getElementById('discussionEmailSender').value : '',
           revisionsUrl: document.getElementById('revisionsUrl').value,
+          localRevisionsUrl: document.getElementById('localRevisionsUrl') ? document.getElementById('localRevisionsUrl').value : undefined,
           reportType: document.getElementById('reportType').value,
           agendaSourceDocId: document.getElementById('agendaSourceDocId').value,
           agendaTdoc: document.getElementById('agendaTdoc').value,
@@ -9103,6 +9219,8 @@ var CONFIG_DIALOG_MANAGED_KEYS_ = [
   'REPORT_SUFFIX', 'AGENDA_SOURCE_DOC_ID', 'AGENDA_TDOC', 'AGENDA_CSV_URL', 'TDOC_LIST_URL',
   'SHOW_PREVIEW_SNIPPET',
   'MEETING_TYPE', 'MEETING_NAME', 'MEETING_DATE', 'FTP_BASE', 'MAILING_LIST', 'REVISIONS_URL',
+  // After T-2026.10.25: the local (meeting-room) revisions folder, read by every update (LOCAL REVISIONS FOLDER).
+  'LOCAL_REVISIONS_URL',
   // After T-2026.10.23: the meeting time zone a save stores -- synced into an adopted document's central state, which
   // every background update reads for the Session column (MEETING TIME ZONES section).
   'MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'
@@ -9251,6 +9369,15 @@ function persistConfigurationSettings_(config) {
   // ARCH-012: same skip-if-blank protection for REVISIONS_URL.
   if (config.revisionsUrl && config.revisionsUrl.trim()) {
     docProps.setProperty('REVISIONS_URL', config.revisionsUrl.trim());
+  }
+  // After T-2026.10.25 (LOCAL REVISIONS FOLDER): only a dialog that has the field changes it. Blank removes it (the
+  // default applies again), "none" switches it off, a folder URL is stored; anything else is not stored.
+  if (config.localRevisionsUrl !== undefined && config.localRevisionsUrl !== null) {
+    const localRevisions = String(config.localRevisionsUrl).trim();
+    if (!localRevisions) docProps.deleteProperty('LOCAL_REVISIONS_URL');
+    else if (/^none$/i.test(localRevisions)) docProps.setProperty('LOCAL_REVISIONS_URL', 'none');
+    else if (isLocalRevisionsUrlValue_(localRevisions)) docProps.setProperty('LOCAL_REVISIONS_URL', localRevisions);
+    else Logger.log('Configure Meeting: the Local Revisions URL was not stored (not an http or https address): ' + localRevisions);
   }
   // ADDON-009 (ported from LEGACY-UPGRADE-006H): the discussion e-mail
   // sender, an independent value (never the Mailing List). Same
@@ -9564,7 +9691,10 @@ function testAllConnections() {
   } catch (e) {
     results.push('   ❌ Error: ' + e.message);
   }
-  
+  // After T-2026.10.25: the local folder is named, never fetched (meeting-room LAN only).
+  const localRevisions = localRevisionsUrlFor_();
+  if (localRevisions) results.push('   🏢 Local (meeting-room server, on-site only, not checked from here): ' + localRevisions);
+
   results.push('\n\n✅ Connection test complete!');
   
   ui.alert('Connection Test Results', results.join('\n'), ui.ButtonSet.OK);
@@ -9886,11 +10016,14 @@ function testRevisionsFolder() {
     const html = response.getContentText();
     const linkCount = (html.match(/<a[^>]+href/gi) || []).length;
     
+    // After T-2026.10.25: the local folder is named, never fetched (meeting-room LAN only).
+    const localRevisions = localRevisionsUrlFor_();
     ui.alert(
       'Revisions Folder Test',
       `✅ Folder accessible!\n\n` +
       `URL: ${url}\n` +
-      `Files found: ~${linkCount}`,
+      `Files found: ~${linkCount}` +
+      (localRevisions ? `\n\nLocal (meeting-room server, on-site only, not checked from here): ${localRevisions}` : ''),
       ui.ButtonSet.OK
     );
   } catch (e) {
@@ -19398,7 +19531,10 @@ function renderAdhocOpeningSection_(body, lines) {
 // later changes of the sessions keep an existing one up to date.
 const ADHOC_MEETING_INFO_HEADING_ = 'Online information';
 // The labels of its lines, in the order they are written. A line of the block is a paragraph that begins with one of them.
-const ADHOC_MEETING_INFO_LABELS_ = ['Meeting name', 'Start Date', 'End Date', 'Portal meeting URL', 'TDoc List URL', 'Excel Docs URL', 'Docs Folder', 'Drafts Folder'];
+const ADHOC_MEETING_INFO_LABELS_ = ['Meeting name', 'Start Date', 'End Date', 'Portal meeting URL', 'TDoc List URL', 'Excel Docs URL', 'Docs Folder', 'Drafts Folder',
+  // After T-2026.10.25: with a local (meeting-room) revisions folder, the drafts folder is named twice (LOCAL REVISIONS FOLDER).
+  'Drafts Folder (local \u2013 meeting-room server, may be newer, on-site only)',
+  'Drafts Folder (remote \u2013 3GPP server, synchronized, accessible externally)'];
 
 /**
  * Pure: the lines of the block -- [{ text, link }], `link` the URL the
@@ -19424,7 +19560,10 @@ function buildAdhocMeetingInformationLines_(sessions, source) {
   add(L[4], id ? 'https://portal.3gpp.org/ngppapp/TdocList.aspx?meetingId=' + id : '', true);
   add(L[5], url(source && source.tdocListUrl), true);
   add(L[6], url(source && source.docsFolder), true);
-  add(L[7], url(source && source.draftsFolder), true);
+  // After T-2026.10.25: a local drafts folder comes first and the 3GPP one is named "remote"; without one, as before.
+  const localDrafts = url(source && source.localDraftsFolder);
+  if (localDrafts) add(L[8], localDrafts, true);
+  add(localDrafts ? L[9] : L[7], url(source && source.draftsFolder), true);
   return lines;
 }
 
@@ -19438,7 +19577,12 @@ function buildAdhocMeetingInformationLines_(sessions, source) {
 function adhocMeetingInformationSource_() {
   const identity = getMeetingIdentityConfig_();
   const named = String(identity.TDOC_LIST_URL || '').match(/^https:\/\/portal\.3gpp\.org\/[^?#\s]*\?(?:[^#\s]*&)?meetingId=(\d+)(?:&|$)/i);
-  return { meetingName: identity.MEETING_NAME, meetingId: named ? named[1] : '', tdocListUrl: identity.TDOC_LIST_URL, docsFolder: identity.FTP_BASE, draftsFolder: identity.REVISIONS_URL };
+  // After T-2026.10.25: a local drafts folder (LOCAL REVISIONS FOLDER) is shown with the 3GPP folder the updates
+  // read -- for a main meeting without a stored one, the folder derived for it.
+  const localDraftsFolder = localRevisionsUrlFor_();
+  const draftsFolder = identity.REVISIONS_URL || (localDraftsFolder && identity.MEETING_TYPE === 'main' ? String(getReportConfig_().REVISIONS_URL || '') : '');
+  return { meetingName: identity.MEETING_NAME, meetingId: named ? named[1] : '', tdocListUrl: identity.TDOC_LIST_URL, docsFolder: identity.FTP_BASE, draftsFolder: draftsFolder,
+    localDraftsFolder: localDraftsFolder };
 }
 
 /**
