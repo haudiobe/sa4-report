@@ -1180,7 +1180,7 @@ console.log('12. adoption');
   check('adoption copies the sessions and none of the attendance: background updates never read it', [adopted.verified, adopted.copiedKeys.filter((k) => /ADHOC/.test(k)), r.scriptProps.getKeys().filter((k) => k.indexOf('ATTENDANCE') !== -1)], [true, ['ADHOC_SESSIONS'], []]);
   check('the attendance stays in the document, untouched', attendanceKeys(r), stored);
   check('no attendance key is an adoption key or an adoption prefix', [r.s.ADDON003_ADOPTION_FIXED_KEYS_.filter((k) => /ATTENDANCE/.test(k)), r.s.ADDON003_ADOPTION_PREFIX_FAMILIES_, r.s.ADDON003_ADOPTION_PREFIX_FAMILIES_.filter((p) => KEY.indexOf(p) === 0 || 'ADHOC_SESSIONS'.indexOf(p) === 0)],
-    [[], ['DISCUSS_', 'REVIS_', 'A1_EMPTY_CACHE_', 'REVIEWER_NO_SUMMARY_CACHE_'], []]);
+    [[], ['DISCUSS_', 'REVIS_', 'A1_EMPTY_CACHE_', 'REVIEWER_NO_SUMMARY_CACHE_', 'LOCALREV_' /* issue #16 */], []]);
   const plain = report({ props: ADHOC });
   check('adoption of a document without attendance copies what it copied before', plain.s.adoptReportDocumentForAddon_().copiedKeys, ['MEETING_ID', 'REPORT_SUFFIX', 'MEETING_DATE', 'MEETING_TYPE', 'MEETING_NAME']);
   check('adoption invents no attendance property anywhere', [attendanceKeys(plain), plain.scriptProps.getKeys().filter((k) => /ATTENDANCE/.test(k))], [[], []]);

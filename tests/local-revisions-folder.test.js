@@ -22,7 +22,7 @@
 
 const fs = require('fs');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
-const { codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutDualRevisions, codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -196,8 +196,10 @@ console.log('5. the Online information block');
 // ====================================================================== 6
 console.log('6. what the change is in Code.js, and nothing else (source)');
 {
-  const now = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
-  const view = codeWithoutLocalRevisions(now);
+  // The listings of issue #16 came later: compared without them (tests/dual-source-revisions.test.js).
+  const full = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const now = codeWithoutDualRevisions(full).code;
+  const view = codeWithoutLocalRevisions(full);
   check('the take-out finds every change exactly once', view.problems, []);
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));
   const bodyOf = (code, name) => { const at = code.indexOf('\nfunction ' + name + '('); return code.slice(at, code.indexOf('\n}\n', at)); };

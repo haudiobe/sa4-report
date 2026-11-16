@@ -2964,7 +2964,9 @@ var ADDON003_ADOPTION_FIXED_KEYS_ = [
 ];
 
 var ADDON003_ADOPTION_PREFIX_FAMILIES_ = [
-  'DISCUSS_', 'REVIS_', 'A1_EMPTY_CACHE_', 'REVIEWER_NO_SUMMARY_CACHE_'
+  'DISCUSS_', 'REVIS_', 'A1_EMPTY_CACHE_', 'REVIEWER_NO_SUMMARY_CACHE_',
+  // Issue #16: the revisions listed on the meeting-room server, per TDoc (LOCAL REVISIONS LISTING).
+  'LOCALREV_'
 ];
 
 /**
@@ -6029,9 +6031,11 @@ function normalizeRevisionKey_(item) {
  * already-corrupted cell from a prior run for free: the cell's contents
  * are always fully replaced, never appended to.
  */
-function renderRevisionsCellContent_(cell, orderedRevisions, folders) {
+function renderRevisionsCellContent_(cell, orderedRevisions, folders, options) {
+  // Issue #16: a revision also seen on the meeting-room server carries
+  // `localLink` and gets a marker after its name; without one, as before.
   const entries = orderedRevisions
-    .map(item => ({ line: String(item.text || '').trim(), link: item.link }))
+    .map(item => revisionCellEntry_(item))
     .filter(e => e.line);
   // After T-2026.10.25: a last line linking both revisions folders, when the
   // report has a local (meeting-room) folder. Without one, nothing changes.
@@ -6041,6 +6045,16 @@ function renderRevisionsCellContent_(cell, orderedRevisions, folders) {
     const current = cell.getText();
     if (!folderLine && current.indexOf(REVISION_FOLDERS_PREFIX_) === -1) {
       if (!current.trim()) cell.setText(REVISIONS_NONE_TEXT_);
+      return;
+    }
+    // Issue #16: a local revision no longer listed leaves the cell; whatever else is in it stays.
+    const withoutLocal = current.split('\n').filter(line => !isLocalRevisionCellLine_(line)).join('\n');
+    if (withoutLocal !== current) {
+      const rest = stripRevisionFoldersLine_(withoutLocal).trim();
+      const keep = rest && rest !== REVISIONS_NONE_TEXT_ ? rest : REVISIONS_NONE_TEXT_;
+      const text = folderLine ? keep + '\n' + folderLine.text : keep;
+      cell.setText(text);
+      if (folderLine) linkRevisionFoldersLine_(cell.editAsText(), keep.length + 1, folderLine);
       return;
     }
     // Text that is not ours (typed by hand) is left alone, as before.
@@ -6053,7 +6067,14 @@ function renderRevisionsCellContent_(cell, orderedRevisions, folders) {
     return;
   }
 
-  const fullText = entries.map(e => e.line).join('\n') + (folderLine ? '\n' + folderLine.text : '');
+  // Issue #16: a line typed into the cell by hand -- one that is not a
+  // revision line, "No revisions available." or the folders line -- is kept,
+  // below the revisions. A cell that already says exactly this is not written
+  // again (options.force: its links changed).
+  const current = cell.getText();
+  const manual = manualRevisionCellLines_(current, entries);
+  const fullText = entries.map(e => e.line).join('\n') + (manual.length ? '\n' + manual.join('\n') : '') + (folderLine ? '\n' + folderLine.text : '');
+  if (current === fullText && !(options && options.force)) return;
   cell.setText(fullText);
 
   const te = cell.editAsText();
@@ -6061,10 +6082,55 @@ function renderRevisionsCellContent_(cell, orderedRevisions, folders) {
   entries.forEach(e => {
     const start = offset;
     const end = start + e.line.length - 1; // setLinkUrl's endOffsetInclusive
-    if (e.link) { try { te.setLinkUrl(start, end, e.link); } catch (err) { } }
+    if (e.link) { try { te.setLinkUrl(start, e.marker ? start + e.name.length - 1 : end, e.link); } catch (err) { } }
+    if (e.marker) { try { te.setLinkUrl(end - e.marker.length + 2, end, e.localLink); } catch (err) { } }
     offset = end + 2; // skip past this line's '\n' separator
   });
+  manual.forEach(line => { offset += line.length + 1; });
   if (folderLine) linkRevisionFoldersLine_(te, offset, folderLine);
+}
+
+/** Pure (issue #16): whether a line of a Revisions cell is a local revision line written by renderRevisionsCellContent_(). */
+function isLocalRevisionCellLine_(line) {
+  const t = String(line || '').trim();
+  if (!LOCAL_REVISION_MARKER_PATTERN_.test(t)) return false;
+  const name = t.replace(LOCAL_REVISION_MARKER_PATTERN_, '');
+  return /\.[A-Za-z0-9]{1,5}$/.test(name) && parseSA4DocumentId_(name).isValid;
+}
+
+/**
+ * Issue #16 (pure): the lines of a Revisions cell that were typed by hand.
+ * Not one: a line of `entries`, a revision line written before (a file name
+ * with an SA4 TDoc number and an extension, with or without a local marker),
+ * "No revisions available.", the folders line, an empty line.
+ */
+function manualRevisionCellLines_(text, entries) {
+  const shown = {};
+  (entries || []).forEach(e => { shown[e.line] = true; shown[e.name] = true; });
+  return String(text || '').split('\n').filter(line => {
+    const t = line.trim();
+    if (!t || t === REVISIONS_NONE_TEXT_ || line.indexOf(REVISION_FOLDERS_PREFIX_) === 0 || shown[t]) return false;
+    const name = t.replace(LOCAL_REVISION_MARKER_PATTERN_, '');
+    if (shown[name]) return false;
+    return !(/\.[A-Za-z0-9]{1,5}$/.test(name) && parseSA4DocumentId_(name).isValid);
+  });
+}
+
+/**
+ * Issue #16 (pure): one line of a Revisions cell. A revision from the 3GPP
+ * folder only is its file name, linked there -- as before. One also listed
+ * on the meeting-room server gets " [local]", linked to its file there; one
+ * listed there only gets " [local only]" and both parts link to the local
+ * file. `marker` is the text after the name, including its leading space.
+ */
+function revisionCellEntry_(item) {
+  const name = String((item && item.text) || '').trim();
+  const localLink = String((item && item.localLink) || '');
+  if (!name || !localLink) return { line: name, name: name, link: item && item.link, marker: '', localLink: '' };
+  // A listing copied as text only gives no file link: the local folder is linked, and the marker says so.
+  const marker = item.localFolderOnly ? (item.link ? LOCAL_REVISION_MARKERS_.bothFolder : LOCAL_REVISION_MARKERS_.localOnlyFolder)
+    : (item.link ? LOCAL_REVISION_MARKERS_.both : LOCAL_REVISION_MARKERS_.localOnly);
+  return { line: name + marker, name: name, link: item.link || localLink, marker: marker, localLink: localLink };
 }
 
 // ---------------------------------------------------------------------------
@@ -6159,6 +6225,318 @@ function linkRevisionFoldersLine_(te, offset, folderLine) {
   } catch (err) { }
 }
 
+// ---------------------------------------------------------------------------
+// LOCAL REVISIONS LISTING (issue #16)
+// The meeting-room server (LOCAL_REVISIONS_URL, e.g. http://10.10.10.10/...)
+// is on the meeting-room LAN only. Apps Script runs at Google and cannot
+// reach it, and the report's dialogs cannot either: they are https pages of
+// googleusercontent.com, so a request to an http address on a private
+// network is blocked (mixed content, Private Network Access, no CORS).
+// What can reach it is the browser of someone in the room, as an ordinary
+// page. So the listing comes from there: open the local folder in the
+// browser, select all, copy, and paste it into "Import Local Inbox
+// Listing…". Nothing is installed, nothing on the LAN is exposed.
+//
+// What is kept: per TDoc of this report, the files of the listing that are
+// revisions of it (the same parser as the 3GPP folder: parseDraftAnchor_()),
+// with the link the listing gave -- never a path built from the 3GPP folder
+// -- in LOCALREV_<tdoc>, which only grows (like REVIS_<tdoc>). A file of
+// another origin than the listed folder is dropped. TDocs that have no
+// table are not imported. The 3GPP folder, its fetch and the tables of
+// revisions are not changed by any of this; a listing that cannot be read
+// changes nothing.
+// ---------------------------------------------------------------------------
+const LOCAL_REVISIONS_KEY_PREFIX_ = 'LOCALREV_';
+const LOCAL_REVISIONS_LAST_IMPORT_KEY_ = 'LOCAL_REVISIONS_LAST_IMPORT';
+const LOCAL_REVISION_MARKERS_ = { both: ' [local]', localOnly: ' [local only]', bothFolder: ' [local folder]', localOnlyFolder: ' [local only, see folder]' };
+const LOCAL_REVISION_MARKER_PATTERN_ = / \[local(?: only)?(?: folder|, see folder)?\]$/;
+
+/** Pure: the identity of a file in either folder -- its decoded name, case ignored. */
+function revisionFileKey_(name) {
+  let n = String(name || '').trim();
+  try { n = decodeURIComponent(n); } catch (e) { }
+  return n.toLowerCase();
+}
+
+/**
+ * Pure: the revisions of the 3GPP folder (`ordered`, as updateRevisions_()
+ * orders them) with the ones of the meeting-room server (`localStore`,
+ * LOCALREV_<tdoc>) -- the same file once, with `localLink`; a file listed
+ * locally only with `link` '' and `localLink`. In the same order. Without
+ * local ones, `ordered` itself.
+ */
+function mergeLocalRevisions_(ordered, localStore) {
+  const locals = Object.keys(localStore || {}).map(function (k) { return localStore[k]; })
+    .filter(function (l) { return l && String(l.text || '').trim() && /^https?:\/\//i.test(String(l.link || '')); });
+  if (!locals.length) return ordered;
+  const byKey = {};
+  const merged = ordered.map(function (item) {
+    const copy = { text: item.text, link: item.link };
+    const key = revisionFileKey_(item.text);
+    if (key && !byKey[key]) byKey[key] = copy;
+    return copy;
+  });
+  locals.forEach(function (l) {
+    const key = revisionFileKey_(l.text);
+    if (byKey[key]) {
+      if (!byKey[key].localLink) { byKey[key].localLink = l.link; if (l.folderOnly) byKey[key].localFolderOnly = true; }
+      return;
+    }
+    const item = { text: String(l.text).trim(), link: '', localLink: l.link };
+    if (l.folderOnly) item.localFolderOnly = true;
+    byKey[key] = item;
+    merged.push(item);
+  });
+  return merged.sort(function (x, y) {
+    const byText = String(x.text || '').localeCompare(String(y.text || ''));
+    return byText !== 0 ? byText : String(x.link || x.localLink || '').localeCompare(String(y.link || y.localLink || ''));
+  });
+}
+
+/** Pure: the revisions of REVIS_<tdoc>, deduplicated and ordered exactly as updateRevisions_() does. */
+function orderedStoredRevisions_(store) {
+  const deduped = {};
+  Object.values(store || {}).forEach(item => {
+    const key = normalizeRevisionKey_(item);
+    if (!key) return;
+    if (!deduped[key]) deduped[key] = item;
+  });
+  return Object.values(deduped).sort((x, y) => {
+    const byText = String(x.text || '').localeCompare(String(y.text || ''));
+    return byText !== 0 ? byText : String(x.link || '').localeCompare(String(y.link || ''));
+  });
+}
+
+/** Pure: `href` of a listing of `folder` as an absolute URL on the same server, or '' (another server, or not a file link). */
+function resolveLocalListingHref_(folder, href) {
+  const h = String(href || '').trim().replace(/&amp;/g, '&');
+  const origin = (String(folder).match(/^(https?:\/\/[^\/?#]+)/i) || [])[1];
+  if (!h || !origin || /^(?:javascript|data|mailto):/i.test(h) || h.charAt(0) === '?' || h.charAt(0) === '#') return '';
+  let url;
+  if (/^https?:\/\//i.test(h)) url = h;
+  else if (h.indexOf('//') === 0) return '';
+  else if (h.charAt(0) === '/') url = origin + h;
+  else url = String(folder).replace(/[?#].*$/, '').replace(/\/?$/, '/') + h;
+  return url.toLowerCase().indexOf(origin.toLowerCase() + '/') === 0 ? url : '';
+}
+
+/**
+ * Pure: what a pasted listing says. `payload` { folder, html, text } is
+ * what the dialog sends: the address of the listed folder, and the
+ * clipboard as HTML (its links) and as text. Returns { ok, error, folder,
+ * anchors: [{ href (absolute), text }], listed, truncated }. Text alone (a
+ * browser that copies no HTML) gives file names; one cut short by the
+ * listing ("..>") is not used. `localBase` is the report's local folder:
+ * only a folder on its server is accepted.
+ */
+function parseLocalRevisionsListing_(payload, localBase) {
+  const folder = String((payload && payload.folder) || '').trim();
+  const fail = function (error) { return { ok: false, error: error, folder: folder, anchors: [], listed: 0, truncated: 0 }; };
+  const baseOrigin = (String(localBase || '').match(/^(https?:\/\/[^\/?#]+)/i) || [])[1];
+  if (!baseOrigin) return fail('This report has no Local Revisions URL (Configure Meeting).');
+  if (!isLocalRevisionsUrlValue_(folder)) return fail('The address of the listed folder is not an http or https address.');
+  if (folder.toLowerCase().indexOf(baseOrigin.toLowerCase() + '/') !== 0 && folder.toLowerCase() !== baseOrigin.toLowerCase()) {
+    return fail('The listed folder is not on the meeting-room server of this report (' + baseOrigin + ').');
+  }
+  const html = String((payload && payload.html) || '');
+  const text = String((payload && payload.text) || '');
+  if (html.length + text.length > 2000000) return fail('The pasted listing is too large.');
+  const anchors = [];
+  let truncated = 0;
+  parseAnchors_(html.replace(/href='([^']*)'/gi, 'href="$1"')).forEach(function (a) {
+    const url = resolveLocalListingHref_(folder, a.href);
+    if (!url) return;
+    // The name is the one of the linked file -- a listing may show it shortened ("S4-2601..>"). A folder link has none.
+    const name = localListingFileName_(url) || (/\/$/.test(url.replace(/[?#].*$/, '')) ? '' : a.text);
+    if (name) anchors.push({ href: url, text: name });
+  });
+  if (!anchors.length && text) {
+    text.split(/[\r\n\t]+|\s{2,}/).forEach(function (token) {
+      const name = token.trim();
+      if (!name) return;
+      if (/\.\.>$|\u2026$/.test(name)) { if (parseSA4DocumentId_(name).isValid) truncated++; return; }
+      if (!/^[^\/\\?#<>"]+\.[A-Za-z0-9]{1,5}$/.test(name)) return;
+      // Text gives no link: the file is linked by its folder (which the user opened), never by a path made up here.
+      anchors.push({ href: folder.replace(/\/?$/, '/'), text: name, folderOnly: true });
+    });
+  }
+  if (!anchors.length) return fail(truncated ? 'The pasted text has only shortened file names. Copy the page again, or use another browser.' : 'The pasted text has no file list. Nothing was changed.');
+  return { ok: true, error: '', folder: folder, anchors: anchors, listed: anchors.length, truncated: truncated };
+}
+
+/** Pure: the decoded last path segment of a file URL; '' for a folder (ending in "/"). */
+function localListingFileName_(url) {
+  const path = String(url || '').replace(/[?#].*$/, '');
+  if (/\/$/.test(path)) return '';
+  const segment = path.slice(path.lastIndexOf('/') + 1);
+  try { return decodeURIComponent(segment).trim(); } catch (e) { return segment.trim(); }
+}
+
+/**
+ * Stores the revisions of a parsed listing for the TDocs in `reportTdocs`
+ * (TDoc numbers that have a table). A listing is the current state of its
+ * folder: an entry from the same folder that the listing no longer has is
+ * removed (renamed, withdrawn), one from another folder is kept; the same
+ * file twice is one entry. A listing without a single revision removes
+ * nothing (a wrong or partial paste). A direct file link is never replaced
+ * by a folder link (a text-only paste of the same folder). Returns {
+ * touched: [tdoc], added, removed, recognized }.
+ */
+function storeLocalRevisions_(props, parsed, reportTdocs) {
+  const folderKey = String(parsed.folder || '').toLowerCase().replace(/\/?$/, '/');
+  const fromFolder = function (e) { return String((e && e.folder) || '').toLowerCase().replace(/\/?$/, '/') === folderKey; };
+  const files = {};
+  parsed.anchors.forEach(function (a) { files[a.href + '\u0000' + a.text] = a; });
+  const index = buildRevisionAnchorIndex_(parsed.anchors.map(function (a) { return { href: a.href, text: a.text }; }), parsed.folder);
+  const wanted = {};
+  (reportTdocs || []).forEach(function (t) { wanted[t] = true; });
+  let recognized = 0;
+  index.forEach(function (drafts) { recognized += drafts.length; });
+  const folderOnly = {};
+  parsed.anchors.forEach(function (a) { if (a.folderOnly) folderOnly[revisionFileKey_(a.text)] = true; });
+
+  // The TDocs with stored entries (one read of the keys), and the ones of this listing.
+  const tdocs = {};
+  (typeof props.getKeys === 'function' ? props.getKeys() : []).forEach(function (k) {
+    if (k.indexOf(LOCAL_REVISIONS_KEY_PREFIX_) === 0 && wanted[k.slice(LOCAL_REVISIONS_KEY_PREFIX_.length)]) tdocs[k.slice(LOCAL_REVISIONS_KEY_PREFIX_.length)] = true;
+  });
+  index.forEach(function (drafts, tdoc) { if (wanted[tdoc]) tdocs[tdoc] = true; });
+
+  let added = 0, removed = 0;
+  const touched = [];
+  Object.keys(tdocs).sort().forEach(function (tdoc) {
+    const key = LOCAL_REVISIONS_KEY_PREFIX_ + tdoc;
+    const store = loadJsonObject_(props.getProperty(key));
+    const listed = {};
+    (index.get(tdoc) || []).forEach(function (d) {
+      const id = revisionFileKey_(d.fileName);
+      if (!id || listed[id]) return;
+      listed[id] = { text: d.fileName, link: d.url, folder: parsed.folder };
+      if (folderOnly[id]) listed[id].folderOnly = true;
+    });
+    let changed = false;
+    if (recognized > 0) {
+      Object.keys(store).forEach(function (id) {
+        if (fromFolder(store[id]) && !listed[id]) { delete store[id]; removed++; changed = true; }
+      });
+    }
+    Object.keys(listed).forEach(function (id) {
+      const before = store[id];
+      const next = listed[id];
+      if (before && before.link && !before.folderOnly && next.folderOnly) return;  // keep the file link
+      if (before && before.link === next.link && !!before.folderOnly === !!next.folderOnly && fromFolder(before)) return;
+      if (!before) added++;
+      store[id] = next;
+      changed = true;
+    });
+    if (!changed) return;
+    if (Object.keys(store).length) props.setProperty(key, JSON.stringify(store)); else props.deleteProperty(key);
+    touched.push(tdoc);
+  });
+  return { touched: touched, added: added, removed: removed, recognized: recognized };
+}
+
+/** Pure: what the report says about the meeting-room server: not checked yet, or when a listing was last imported. */
+function describeLocalRevisionsStatus_(lastImportJson, localBase) {
+  if (!localBase) return 'Local (meeting-room server): none configured.';
+  const last = loadJsonObject_(lastImportJson);
+  if (!last.at) return 'Local (meeting-room server): not checked yet. Import Local Inbox Listing… on the meeting-room network.';
+  return 'Local (meeting-room server): last listing imported ' + last.at + ' from ' + last.folder + ': ' + last.listed + ' file(s), ' +
+    last.recognized + ' revision(s) of SA4 TDocs, ' + (last.added ? last.added + ' new for this report' : 'no new revisions for this report') +
+    (last.removed ? ', ' + last.removed + ' no longer listed (removed)' : '') + '.';
+}
+
+/** Menu: Import Local Inbox Listing… -- the dialog that takes a pasted listing of the meeting-room server. */
+function importLocalRevisionsListing() {
+  const ui = DocumentApp.getUi();
+  const localBase = localRevisionsUrlFor_();
+  if (!localBase) {
+    ui.alert('Import Local Inbox Listing', 'This report has no Local Revisions URL. Set one in Configure Meeting first.', ui.ButtonSet.OK);
+    return;
+  }
+  const esc = function (v) { return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  const status = describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localBase);
+  const html = `<!DOCTYPE html><html><head><base target="_top"><style>
+    body { font-family: Arial, sans-serif; font-size: 13px; margin: 12px; }
+    #paste { border: 1px dashed #888; min-height: 90px; max-height: 160px; overflow: auto; padding: 6px; margin: 6px 0; color: #555; }
+    input[type=text] { width: 100%; box-sizing: border-box; }
+    .hint { color: #555; font-size: 12px; } #result { margin-top: 8px; white-space: pre-wrap; }
+  </style></head><body>
+    <div class="hint">${esc(status)}</div>
+    <ol>
+      <li>On the meeting-room network, open <a href="${esc(localBase)}" target="_blank" rel="noopener">${esc(localBase)}</a> (or the folder of this group under it) in this browser.</li>
+      <li>On that page: Ctrl+A, Ctrl+C. Copy its address too.</li>
+      <li>Paste the address below, click into the box and press Ctrl+V. Then Import.</li>
+    </ol>
+    <label>Address of the listed folder:</label>
+    <input type="text" id="folder" value="${esc(localBase)}">
+    <div id="paste" contenteditable="true">Paste the page here (Ctrl+V)</div>
+    <button id="go" onclick="go()" disabled>Import</button> <button onclick="google.script.host.close()">Close</button>
+    <div id="result"></div>
+    <script>
+      var clip = { html: '', text: '' };
+      document.getElementById('paste').addEventListener('paste', function (e) {
+        e.preventDefault();
+        clip.html = e.clipboardData.getData('text/html') || '';
+        clip.text = e.clipboardData.getData('text/plain') || '';
+        var links = (clip.html.match(/<a[\\s>]/gi) || []).length;
+        this.textContent = 'Pasted: ' + (links ? links + ' link(s)' : clip.text.split(/\\n/).length + ' line(s) of text');
+        document.getElementById('go').disabled = !(clip.html || clip.text);
+      });
+      function go() {
+        document.getElementById('go').disabled = true;
+        document.getElementById('result').textContent = 'Importing…';
+        google.script.run
+          .withSuccessHandler(function (r) { document.getElementById('result').textContent = r.message; document.getElementById('go').disabled = false; })
+          .withFailureHandler(function (e) { document.getElementById('result').textContent = 'Not imported: ' + e.message; document.getElementById('go').disabled = false; })
+          .saveLocalRevisionsListing({ folder: document.getElementById('folder').value, html: clip.html, text: clip.text });
+      }
+    </script></body></html>`;
+  ui.showModalDialog(HtmlService.createHtmlOutput(html).setWidth(560).setHeight(470), 'Import Local Inbox Listing');
+}
+
+/**
+ * The dialog's Import. Stores the revisions the listing has for this
+ * report's TDocs and writes the Revisions cells of those TDocs (from what
+ * is stored for both folders -- nothing is fetched). Returns { ok, message }.
+ */
+function saveLocalRevisionsListing(payload) {
+  const localBase = localRevisionsUrlFor_();
+  const parsed = parseLocalRevisionsListing_(payload, localBase);
+  if (!parsed.ok) return { ok: false, message: parsed.error };
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(30000)) return { ok: false, message: 'The report is being updated. Try again in a minute; nothing was changed.' };
+  try {
+    const props = getReportStateStore_();
+    const body = currentReportDocument_().getBody();
+    const tables = body.getTables().filter(isTDocTable_);
+    const byTdoc = {};
+    tables.forEach(function (t) {
+      const id = parseExactSA4DocumentId_(String(safeCellText_(t, 0, 1) || '').trim());
+      if (id.isValid && !byTdoc[id.raw]) byTdoc[id.raw] = t;
+    });
+    const stored = storeLocalRevisions_(props, parsed, Object.keys(byTdoc));
+    const remoteBase = String(getMeetingContext_().sources.revisionsUrl || '').trim();
+    const folders = { local: localBase, remote: remoteBase ? remoteBase.replace(/\/$/, '') + '/' : '' };
+    stored.touched.forEach(function (tdoc) {
+      const t = byTdoc[tdoc];
+      const ordered = orderedStoredRevisions_(loadJsonObject_(props.getProperty('REVIS_' + tdoc)));
+      const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
+      renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders, { force: true });
+    });
+    const at = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+    const last = { at: at, folder: parsed.folder, listed: parsed.listed, recognized: stored.recognized, added: stored.added, removed: stored.removed };
+    props.setProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_, JSON.stringify(last));
+    Logger.log('Local revisions: ' + JSON.stringify(last) + ', TDocs: ' + stored.touched.join(', '));
+    return { ok: true, message: describeLocalRevisionsStatus_(JSON.stringify(last), localBase) +
+      (stored.touched.length ? '\nUpdated: ' + stored.touched.join(', ') : '') +
+      (parsed.truncated ? '\n' + parsed.truncated + ' shortened file name(s) were not used.' : '') +
+      (parsed.anchors.some(function (a) { return a.folderOnly; }) ? '\nThe browser copied text only: these revisions link to the local folder, not to their files. Paste the page again from Chrome or Edge for file links.' : '') };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function updateRevisions_(cfg, context) {
   const baseUrl = String(getMeetingContext_(context).sources.revisionsUrl || '').trim();
   if (!baseUrl) return;
@@ -6248,7 +6626,9 @@ function updateRevisions_(cfg, context) {
     // itself (unchanged, not rewritten here).
     const renderStart = Date.now();
     const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
-    renderRevisionsCellContent_(cell, ordered, folders);
+    // Issue #16: with the revisions listed on the meeting-room server (LOCALREV_<tdoc>), which are never fetched
+    // from here. Only the 3GPP ones below get a table of their own, as before.
+    renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders);
     renderingMs += Date.now() - renderStart;
 
     // Also insert the revision tables directly after this TDOC table in the document.
@@ -9694,6 +10074,8 @@ function testAllConnections() {
   // After T-2026.10.25: the local folder is named, never fetched (meeting-room LAN only).
   const localRevisions = localRevisionsUrlFor_();
   if (localRevisions) results.push('   🏢 Local (meeting-room server, on-site only, not checked from here): ' + localRevisions);
+  // Issue #16: when a listing of it was last imported.
+  if (localRevisions) results.push('   ' + describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localRevisions));
 
   results.push('\n\n✅ Connection test complete!');
   
@@ -10023,7 +10405,9 @@ function testRevisionsFolder() {
       `✅ Folder accessible!\n\n` +
       `URL: ${url}\n` +
       `Files found: ~${linkCount}` +
-      (localRevisions ? `\n\nLocal (meeting-room server, on-site only, not checked from here): ${localRevisions}` : ''),
+      (localRevisions ? `\n\nLocal (meeting-room server, on-site only, not checked from here): ${localRevisions}` +
+        // Issue #16: when a listing of it was last imported.
+        '\n' + describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localRevisions) : ''),
       ui.ButtonSet.OK
     );
   } catch (e) {
