@@ -10166,6 +10166,29 @@ function buildMeetingSummary_(preview) {
 /**
  * PHASE 1: Test All Connections
  */
+/**
+ * After T-2026.10.27: what Check Connections says about the TDoc list -- the
+ * same addresses and checks as downloadTdocListXlsx_(), one line per address
+ * tried. A refusal (HTTP 403/429/503) from 3GPP's front end is usually
+ * temporary: it is said so, and that the update tries again on its next run.
+ */
+function tdocListConnectionLines_(url) {
+  const lines = [];
+  const candidates = tdocListDownloadCandidates_(url);
+  for (let i = 0; i < candidates.length; i++) {
+    const attempt = tdocListDownloadAttempt_(candidates[i]);
+    const label = i === 0 ? '' : '(alternative) ';
+    if (attempt.ok) {
+      lines.push('✅ ' + label + 'Connected successfully: ' + attempt.url);
+      lines.push('📊 File size: ' + attempt.bytes + ' bytes (Excel workbook)');
+      return lines;
+    }
+    const refused = /^HTTP (403|429|503)\b/.test(attempt.problem);
+    lines.push('❌ ' + label + attempt.problem + ': ' + attempt.url + (refused ? ' -- refused by the 3GPP server (usually temporary; the update tries again on its next run)' : ''));
+  }
+  return lines;
+}
+
 function testAllConnections() {
   const ui = DocumentApp.getUi();
   const results = [];
@@ -11764,29 +11787,6 @@ function tdocListDownloadAttempt_(url) {
     attempt.blob = blob;
   }
   return attempt;
-}
-
-/**
- * After T-2026.10.27: what Check Connections says about the TDoc list -- the
- * same addresses and checks as downloadTdocListXlsx_(), one line per address
- * tried. A refusal (HTTP 403/429/503) from 3GPP's front end is usually
- * temporary: it is said so, and that the update tries again on its next run.
- */
-function tdocListConnectionLines_(url) {
-  const lines = [];
-  const candidates = tdocListDownloadCandidates_(url);
-  for (let i = 0; i < candidates.length; i++) {
-    const attempt = tdocListDownloadAttempt_(candidates[i]);
-    const label = i === 0 ? '' : '(alternative) ';
-    if (attempt.ok) {
-      lines.push('✅ ' + label + 'Connected successfully: ' + attempt.url);
-      lines.push('📊 File size: ' + attempt.bytes + ' bytes (Excel workbook)');
-      return lines;
-    }
-    const refused = /^HTTP (403|429|503)\b/.test(attempt.problem);
-    lines.push('❌ ' + label + attempt.problem + ': ' + attempt.url + (refused ? ' -- refused by the 3GPP server (usually temporary; the update tries again on its next run)' : ''));
-  }
-  return lines;
 }
 
 /**
