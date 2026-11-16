@@ -16750,6 +16750,8 @@ function saveAdhocSessionsConfiguration(rows) {
   const meetingType = sessionTimesMeetingType_();
   const adhoc = meetingType === 'adhoc';
   // The sessions the section was written from, before this save: their lines are recognized in it (issue #11).
+  // Read outside the lock: if two saves overlap, these can be the older ones. A line that then matches none is
+  // kept as it is and the save says so -- nothing is lost, the next save writes it.
   let sessionsBefore = null;
   try { sessionsBefore = adhoc ? null : getConfiguredSessions_(); } catch (e) { sessionsBefore = null; }
   const result = saveAdhocSessionsWith_(getReportStateStore_(), meetingType !== '', rows, attendanceSessionIds, tdocSessionReferences, openingSessionIds, attendanceDays);
@@ -16852,15 +16854,19 @@ function renderMainSessionAdministrationIn_(body, sessionsBefore) {
 }
 
 /**
- * Pure (issue #11): one line per session -- [{ id, text, bold }], in the
- * order of `sessions`. `options.legacyLabels`: as T-2026.10.26 wrote them,
- * with a label that is the code written twice ("A01: A01, ...").
+ * Pure (issue #11): one line per session of a main report -- [{ id, text,
+ * bold }], in the order of `sessions`; a label that is the code is not
+ * written (withoutOwnCodeLabel_()). `options.legacyLabels`: as T-2026.10.26
+ * wrote them, with such a label written twice ("A01: A01, ...").
  */
 function mainSessionLines_(sessions, zone, options) {
   const list = sessions || [];
-  if (!(options && options.legacyLabels)) return buildAdhocOpeningLines_(list, {}, zone).map(function (line, i) { return { id: list[i].id, text: line.text, bold: line.bold }; });
   const codes = adhocSessionCodes_(list);
-  return list.map(function (session) { return { id: session.id, text: codes[session.id] + ': ' + adhocSessionWhenText_(session, zone), bold: true }; });
+  // Main reports only: an ad-hoc report writes its lines (buildAdhocOpeningLines_()) as before.
+  return list.map(function (session) {
+    const shown = options && options.legacyLabels ? session : withoutOwnCodeLabel_(session, codes[session.id]);
+    return { id: session.id, text: codes[session.id] + ': ' + adhocSessionWhenText_(shown, zone), bold: true };
+  });
 }
 
 /**
@@ -16898,7 +16904,7 @@ function renderMainSessionAdministrationSection_(body, lines, written) {
   if (!existing) return renderAdhocOpeningSection_(body, lines);
   const heading = body.getChild(existing.start);
   const known = (written || []).concat(lines);
-  const paras = existing.lines.map(function (i) { const p = body.getChild(i).asParagraph(); return { p: p, text: p.getText(), id: '', prefix: '' }; });
+  const paras = existing.lines.map(function (i, k) { const p = body.getChild(i).asParagraph(); return { p: p, text: p.getText(), id: '', prefix: '', inBlock: i === existing.start + 1 + k }; });
   const taken = {};
   paras.forEach(function (para) {
     let best = null;
@@ -16909,7 +16915,8 @@ function renderMainSessionAdministrationSection_(body, lines, written) {
     });
     if (best) { taken[best.id] = para; para.id = best.id; para.prefix = best.text; }
   });
-  const kept = paras.filter(function (para) { return !para.id; }).length;
+  // Counted (and said) only in the block directly under the heading: "A01: discussed X" typed further below is minutes.
+  const kept = paras.filter(function (para) { return !para.id && para.inBlock; }).length;
   const wanted = {};
   lines.forEach(function (line) { wanted[line.id] = true; });
   let changed = false;
@@ -20007,7 +20014,7 @@ function buildAdhocOpeningLines_(sessions, details, zone) {
   const codes = adhocSessionCodes_(sessions);
   sessions.forEach(function (session) {
     const entry = details[session.id] || {};
-    lines.push({ text: codes[session.id] + ': ' + adhocSessionWhenText_(withoutOwnCodeLabel_(session, codes[session.id]), zone), bold: true });
+    lines.push({ text: codes[session.id] + ': ' + adhocSessionWhenText_(session, zone), bold: true });
     if (entry.chair) lines.push({ text: 'Chair: ' + entry.chair, bold: false });
     if (entry.minuteTakers) lines.push({ text: 'Minute taker(s): ' + entry.minuteTakers, bold: false });
     String(entry.note || '').split('\n').forEach(function (line) {

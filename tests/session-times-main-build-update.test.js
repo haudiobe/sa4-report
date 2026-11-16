@@ -269,5 +269,26 @@ console.log('6. text typed into a session line is never lost; a label that is th
     [res.notice || '', t.section()], ['', [HEADING, 'A01: November 16, 2026, 09:00–17:30 ABT', 'A02: November 17, 2026, 09:00–18:30 ABT This is a test at 13:09']]);
 }
 
+{
+  // Review of PR #21: a session added between two, while the earlier line has text typed into it.
+  const t = report();
+  t.save([row('', '2026-11-16', '09:00', '17:30'), row('', '2026-11-18', '09:00', '12:00')]);
+  t.build();
+  const first = t.body._children.filter((c) => c.getType() !== 'TABLE' && /^A01: /.test(c.getText()))[0];
+  first.setText('A01: November 16, 2026, 09:00–17:30 ABT\u000bTyped into A01.');
+  const res = t.save([row('s1', '2026-11-16', '09:00', '17:30'), row('', '2026-11-17', '09:00', '18:00'), row('s2', '2026-11-18', '09:00', '12:00')]);
+  check('a session added between two: its line goes after the earlier line, whose typed text stays in it; the later line gets its new code',
+    [res.ok, res.notice || '', t.section()], [true, '', [HEADING, 'A01: November 16, 2026, 09:00–17:30 ABT\u000bTyped into A01.', 'A02: November 17, 2026, 09:00–18:00 ABT', 'A03: November 18, 2026, 09:00–12:00 ABT']]);
+  // Minutes further below that happen to begin like a session line: not "changed by hand", never touched.
+  const at = t.texts().indexOf('A03: November 18, 2026, 09:00–12:00 ABT');
+  t.body.insertParagraph(at + 1, 'Typed below the lines.');
+  t.body.insertParagraph(at + 2, 'A01: discussed the agenda');
+  const again = t.save([row('s1', '2026-11-16', '09:00', '17:00'), row('s3', '2026-11-17', '09:00', '18:00'), row('s2', '2026-11-18', '09:00', '12:00')]);
+  check('a line like "A01: discussed ..." below the block: no "changed by hand" notice, and it stays',
+    [again.notice || '', t.section().slice(-2)], ['', ['Typed below the lines.', 'A01: discussed the agenda']]);
+}
+check('ad-hoc reports are unchanged: their lines still read the label as given (buildAdhocOpeningLines_)',
+  report().s.buildAdhocOpeningLines_([{ id: 'x', label: 'A01', date: '2026-11-16', start: '', end: '' }], {}, '').map((l) => l.text), ['A01: A01, November 16, 2026']);
+
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nall checks passed');
 process.exit(failures ? 1 : 0);
