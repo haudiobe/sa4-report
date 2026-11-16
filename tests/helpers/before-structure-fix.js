@@ -597,8 +597,17 @@ const LOCAL_LISTING_AGENT_CHANGES = [
 ];
 
 /** Code.js without the local listing agent: { code, problems }. */
+// The release of T-2026.10.28: the version line and the changelog entry of 2.26.12, taken out with the outermost layer.
+const RELEASE_2_26_12_CHANGES = [
+  [" * Version: 2.26.12 (2026-11-17)\n", " * Version: 2.26.11 (2026-11-16)\n"],
+  [" * CHANGELOG\n * 2.26.12 (2026-11-17)\n *   (T-2026.10.28; on T-2026.10.27 / 2.26.11.)\n *   - Added: the local listing agent. A Windows PowerShell agent on one\n *     laptop in the meeting room reads the listings of MBS, Video,\n *     FS_6G_MED, RTC and Audio every two minutes and writes them (links\n *     only, with a checksum) into a Google Drive folder; every update of a\n *     report imports its own group's listing from there (Configure Meeting\n *     > Local listing folder) with the code of Import Local Inbox Listing...\n *     -- only complete, fresh (30 min), same-group, same-server listings;\n *     a missing, stale or broken one imports nothing and erases nothing.\n *     Check Connections shows scan, write, Drive and import apart.\n *     (tools/local-listing-agent/; docs/LOCAL_LISTING_AGENT.md.)\n *   - Fixed: Check Connections tries the TDoc list like the update (the\n *     configured address, then its www.3gpp.org/ftp twin) and says that a\n *     403 from 3GPP is a refusal, usually temporary.\n", " * CHANGELOG\n"]
+];
+
 function codeWithoutLocalListingAgent(code) {
-  return takeOut(code, null, null, LOCAL_LISTING_AGENT_CHANGES, 'LOCAL LISTING AGENT');
+  // The release header of T-2026.10.28 (2.26.12) came last: taken out first.
+  const header = takeOut(code, null, null, RELEASE_2_26_12_CHANGES, 'RELEASE 2.26.12 HEADER');
+  const view = takeOut(header.code, null, null, LOCAL_LISTING_AGENT_CHANGES, 'LOCAL LISTING AGENT');
+  return { code: view.code, problems: header.problems.concat(view.problems) };
 }
 
 // After the issue #11 live test (2026-11-16): the Session administration section of a main report keeps text typed into

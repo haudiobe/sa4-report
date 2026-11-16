@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.11 (2026-11-16)
+ * Version: 2.26.12 (2026-11-17)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,21 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.12 (2026-11-17)
+ *   (T-2026.10.28; on T-2026.10.27 / 2.26.11.)
+ *   - Added: the local listing agent. A Windows PowerShell agent on one
+ *     laptop in the meeting room reads the listings of MBS, Video,
+ *     FS_6G_MED, RTC and Audio every two minutes and writes them (links
+ *     only, with a checksum) into a Google Drive folder; every update of a
+ *     report imports its own group's listing from there (Configure Meeting
+ *     > Local listing folder) with the code of Import Local Inbox Listing...
+ *     -- only complete, fresh (30 min), same-group, same-server listings;
+ *     a missing, stale or broken one imports nothing and erases nothing.
+ *     Check Connections shows scan, write, Drive and import apart.
+ *     (tools/local-listing-agent/; docs/LOCAL_LISTING_AGENT.md.)
+ *   - Fixed: Check Connections tries the TDoc list like the update (the
+ *     configured address, then its www.3gpp.org/ftp twin) and says that a
+ *     403 from 3GPP is a refusal, usually temporary.
  * 2.26.11 (2026-11-16)
  *   (T-2026.10.27; supersedes the candidate T-2026.10.26 / 2.26.10, which
  *   was never deployed: it lost text typed into a session line.)
