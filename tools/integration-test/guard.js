@@ -18,8 +18,13 @@ const REFUSED_SCRIPTS = {
 };
 // The name the copy must carry, so that nobody takes it for a report.
 const DISPOSABLE_NAME_PREFIX = 'DISPOSABLE TEST COPY';
-// Code.js of T-2026.10.22, the release the Audio report runs (RELEASE-MANIFEST.json): a copy of Audio starts from it.
+// Code.js of T-2026.10.22, the release the Audio report ran for issue #6 (RELEASE-MANIFEST.json).
 const AUDIO_BASE_CODE_SHA256 = '240017f562e60e798cd3c22909c13cddf41c0eea5954e70865cb7d7d14756135';
+// The releases a fresh copy of the Audio report can start from: what Audio has run (issue #9: T-2026.10.23).
+const COPY_BASE_CODE_SHA256S = {
+  '240017f562e60e798cd3c22909c13cddf41c0eea5954e70865cb7d7d14756135': 'T-2026.10.22',
+  '3f9e719eb43c3abb3fb0721b6b8fa6390abe8ee3ade0851fdd1575d3cbaf27a8': 'T-2026.10.23'
+};
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
@@ -85,8 +90,9 @@ function pushRefusals(facts) {
     out.push('The document name must start with "' + DISPOSABLE_NAME_PREFIX + '" (it is "' + f.documentName + '"). Rename the copy first.');
   }
   if (f.documentTrashed) out.push('The document is in the trash.');
-  if (f.baseCodeSha256 !== undefined && f.baseCodeSha256 !== AUDIO_BASE_CODE_SHA256 && !f.allowOtherBase) {
-    out.push('The script\'s Code.js is not T-2026.10.22 (' + (f.baseCodeSha256 || 'missing') + '): this is not a fresh copy of the Audio report. ' +
+  if (f.baseCodeSha256 !== undefined && !COPY_BASE_CODE_SHA256S[f.baseCodeSha256] && !f.allowOtherBase) {
+    out.push('The script\'s Code.js is not a release the Audio report ran (' + Object.keys(COPY_BASE_CODE_SHA256S).map(function (k) { return COPY_BASE_CODE_SHA256S[k]; }).join(', ') +
+      '; it is ' + (f.baseCodeSha256 || 'missing') + '): this is not a fresh copy of the Audio report. ' +
       '(--allow-other-base to push anyway, e.g. into a copy that already has the candidate.)');
   }
   return out;
@@ -114,4 +120,4 @@ function candidateReleaseJs(baseReleaseJs, commit, builtAt) {
     'var SA4_RELEASE_ = ' + JSON.stringify(release, null, 2) + ';\n';
 }
 
-module.exports = { pushRefusals, audioOriginalRefusals, AUDIO_ORIGINAL, BACKUP_NAME_PREFIX, candidateReleaseJs, sha256, REFUSED_DOCUMENTS, REFUSED_SCRIPTS, DISPOSABLE_NAME_PREFIX, AUDIO_BASE_CODE_SHA256 };
+module.exports = { pushRefusals, audioOriginalRefusals, AUDIO_ORIGINAL, BACKUP_NAME_PREFIX, candidateReleaseJs, sha256, REFUSED_DOCUMENTS, REFUSED_SCRIPTS, DISPOSABLE_NAME_PREFIX, AUDIO_BASE_CODE_SHA256, COPY_BASE_CODE_SHA256S };
