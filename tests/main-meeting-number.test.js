@@ -30,7 +30,7 @@ const { execFileSync } = require('child_process');
 const { CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport, PROPS } = require('./helpers/template-report.js');
 const { makeFakeDrive } = require('./helpers/fake-drive-files.js');
-const { codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
+const { codeWithoutSessionSectionFix, codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 const ROOT = path.join(__dirname, '..');
 let failures = 0;
@@ -46,6 +46,8 @@ function check(name, actual, expected) {
 }
 
 const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+// The session-section fix after the issue #11 live test came later: the functions are compared without it (tests/session-times-main-build-update.test.js).
+const OWN = codeWithoutSessionSectionFix(FULL).code;
 const CANDIDATE = codeWithoutMainMeetingNumber(FULL).code;
 
 // SA4#138 as the Portal gives it (MtgDocURL) and as Resolve puts it into the form.
@@ -265,7 +267,7 @@ console.log('H. what changed in Code.js');
   const section = FULL.slice(FULL.indexOf(MAIN_MEETING_NUMBER_SECTION_START), FULL.indexOf(MAIN_MEETING_NUMBER_SECTION_END) + MAIN_MEETING_NUMBER_SECTION_END.length);
   check('the section: these functions, nothing else at top level', [functionNames(section), section.match(/^(?:const|let|var) [A-Za-z0-9_$]+/gm)], [MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, null]);
   check('it stands directly after the meeting time zones', FULL.indexOf('// END OF MEETING TIME ZONES\n// =========================================================\n\n' + MAIN_MEETING_NUMBER_SECTION_START) !== -1, true);
-  check('of the functions there were, these changed; none removed', [functionNames(view.code).filter((n) => functionSource(FULL, n) !== functionSource(view.code, n)).sort(), functionNames(view.code).filter((n) => functionNames(FULL).indexOf(n) === -1)],
+  check('of the functions there were, these changed; none removed', [functionNames(view.code).filter((n) => functionSource(OWN, n) !== functionSource(view.code, n)).sort(), functionNames(view.code).filter((n) => functionNames(FULL).indexOf(n) === -1)],
     [MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS.slice().sort(), []]);
   // Brought to master after issue #16 (it was on release/T-2026.10.24 only): the version is master's, unchanged by it.
   check('the version is unchanged by it', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], (view.code.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1]);

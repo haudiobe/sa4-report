@@ -16749,13 +16749,18 @@ function saveAdhocSessionsConfiguration(rows) {
   // ADHOC_SESSIONS is written; the meeting type stays as stored.
   const meetingType = sessionTimesMeetingType_();
   const adhoc = meetingType === 'adhoc';
+  // The sessions the section was written from, before this save: their lines are recognized in it (issue #11).
+  // Read outside the lock: if two saves overlap, these can be the older ones. A line that then matches none is
+  // kept as it is and the save says so -- nothing is lost, the next save writes it.
+  let sessionsBefore = null;
+  try { sessionsBefore = adhoc ? null : getConfiguredSessions_(); } catch (e) { sessionsBefore = null; }
   const result = saveAdhocSessionsWith_(getReportStateStore_(), meetingType !== '', rows, attendanceSessionIds, tdocSessionReferences, openingSessionIds, attendanceDays);
 
   // Issue #11: in a main-meeting report the times are shown in the Session
   // administration section, and nothing else is written: no Online
   // information, no attendance, no Session column, no TDoc.
   if (result.ok && !adhoc) {
-    const notice = renderMainSessionAdministration_();
+    const notice = renderMainSessionAdministration_(sessionsBefore);
     if (notice) result.notice = notice;
     return result;
   }
@@ -16819,10 +16824,10 @@ function saveAdhocSessionsConfiguration(rows) {
  * left alone; without sessions it is removed. Text outside the section is
  * never touched. Returns '' or a notice for the dialog.
  */
-function renderMainSessionAdministration_() {
+function renderMainSessionAdministration_(sessionsBefore) {
   const outcome = withAdhocAttendanceLock_(function () {
     try {
-      return { ok: true, rendered: renderMainSessionAdministrationIn_(currentReportDocument_().getBody()) };
+      return { ok: true, rendered: renderMainSessionAdministrationIn_(currentReportDocument_().getBody(), sessionsBefore) };
     } catch (e) {
       Logger.log('Session times: stored, but the Session administration section could not be written: ' + e.message);
       return { ok: false, error: e.message };
@@ -16830,57 +16835,130 @@ function renderMainSessionAdministration_() {
   });
   if (!outcome.ok) return 'The sessions were saved. The Session administration section could not be written (' + outcome.error + '). Save the sessions again to write it.';
   if (outcome.rendered.container === 'no-place') return 'The sessions were saved. This report has no "Opening of the session" section to show them in.';
+  if (outcome.rendered.kept) return 'The sessions were saved. ' + outcome.rendered.kept + ' line(s) of the Session administration section were changed by hand and were kept as they are: please check the section.';
   return '';
 }
 
-/** Issue #11: the section of a main-meeting report, from its configured sessions, into `body`. Returns what renderMainSessionAdministrationSection_() returns. */
-function renderMainSessionAdministrationIn_(body) {
-  return renderMainSessionAdministrationSection_(body, buildAdhocOpeningLines_(getConfiguredSessions_(), {}, meetingSessionTimeZone_()));
+/**
+ * Issue #11: the section of a main-meeting report, from its configured
+ * sessions, into `body`. `sessionsBefore` are the sessions the section was
+ * written from (a save passes those before it); without them, the ones now.
+ * Returns what renderMainSessionAdministrationSection_() returns.
+ */
+function renderMainSessionAdministrationIn_(body, sessionsBefore) {
+  const zone = meetingSessionTimeZone_();
+  const sessions = getConfiguredSessions_();
+  const lines = mainSessionLines_(sessions, zone);
+  const written = sessionsBefore || sessions;
+  return renderMainSessionAdministrationSection_(body, lines, mainSessionLines_(written, zone).concat(mainSessionLines_(written, zone, { legacyLabels: true })));
 }
 
 /**
- * Issue #11: the generated part of a main-meeting report's section --
- * { start, end } (end exclusive): its heading and the "A01: ..." lines
- * directly below it -- or null. A main report has no opening details, so
- * every generated line is such a line; text typed below them (minutes of
- * the opening) is not part of it and is never replaced or removed.
+ * Pure (issue #11): one line per session of a main report -- [{ id, text,
+ * bold }], in the order of `sessions`; a label that is the code is not
+ * written (withoutOwnCodeLabel_()). `options.legacyLabels`: as T-2026.10.26
+ * wrote them, with such a label written twice ("A01: A01, ...").
+ */
+function mainSessionLines_(sessions, zone, options) {
+  const list = sessions || [];
+  const codes = adhocSessionCodes_(list);
+  // Main reports only: an ad-hoc report writes its lines (buildAdhocOpeningLines_()) as before.
+  return list.map(function (session) {
+    const shown = options && options.legacyLabels ? session : withoutOwnCodeLabel_(session, codes[session.id]);
+    return { id: session.id, text: codes[session.id] + ': ' + adhocSessionWhenText_(shown, zone), bold: true };
+  });
+}
+
+/**
+ * Issue #11: the section of a main-meeting report -- { start, end, lines }:
+ * its heading (start), the end of its part of the opening (end, exclusive:
+ * the next heading or table), and the paragraphs in it that begin with a
+ * session code ("A01: ...", `lines`, indexes). Text typed between or below
+ * them is part of the opening but never one of `lines`. null without one.
  */
 function findMainSessionAdministration_(body) {
   const found = findAdhocOpeningContainer_(body);
   if (!found) return null;
-  let end = found.start + 1;
-  while (end < found.end && /^A\d{2,}: /.test(body.getChild(end).asParagraph().getText())) end++;
-  return { start: found.start, end: end };
+  const lines = [];
+  for (let i = found.start + 1; i < found.end; i++) if (/^A\d{2,}: /.test(body.getChild(i).asParagraph().getText())) lines.push(i);
+  return { start: found.start, end: found.end, lines: lines };
 }
 
 /**
- * Issue #11: writes `lines` (buildAdhocOpeningLines_()) as the section of a
- * main-meeting report. Only the generated part is replaced; one that already
- * says this is left alone. Without lines the heading and the generated lines
- * are removed, and text typed below them stays. A new section goes where the
- * ad-hoc one goes (renderAdhocOpeningSection_()). Returns { container:
- * 'created' | 'replaced' | 'unchanged' | 'removed' | 'none' | 'no-place' }.
+ * Issue #11: writes `lines` (mainSessionLines_()) as the section of a
+ * main-meeting report, and never removes what was typed by hand.
+ * `written` are the lines the section was written from (previous sessions,
+ * also in the form of T-2026.10.26). Each session line in the section is
+ * recognized by its beginning, which is one of them: only that beginning is
+ * replaced, text typed after it in the same paragraph stays, with its
+ * formatting. A line that is none of them (changed by hand) is kept as it is
+ * and counted (`kept`). A session no longer there loses its line, but not
+ * what was typed into it. A new session gets a paragraph after the line of
+ * the session before it. Text typed between or below the lines is never
+ * touched. Without lines the heading goes too. A section that already says
+ * this is left alone. Returns { container: 'created' | 'replaced' |
+ * 'unchanged' | 'removed' | 'none' | 'no-place', kept }.
  */
-function renderMainSessionAdministrationSection_(body, lines) {
+function renderMainSessionAdministrationSection_(body, lines, written) {
   const existing = findMainSessionAdministration_(body);
   if (!existing) return renderAdhocOpeningSection_(body, lines);
+  const heading = body.getChild(existing.start);
+  const known = (written || []).concat(lines);
+  const paras = existing.lines.map(function (i, k) { const p = body.getChild(i).asParagraph(); return { p: p, text: p.getText(), id: '', prefix: '', inBlock: i === existing.start + 1 + k }; });
+  const taken = {};
+  paras.forEach(function (para) {
+    let best = null;
+    known.forEach(function (k) {
+      if (!k.text || taken[k.id]) return;
+      const fits = para.text === k.text || (para.text.indexOf(k.text) === 0 && !/[0-9A-Za-z]/.test(para.text.charAt(k.text.length)));
+      if (fits && (!best || k.text.length > best.text.length)) best = k;
+    });
+    if (best) { taken[best.id] = para; para.id = best.id; para.prefix = best.text; }
+  });
+  // Counted (and said) only in the block directly under the heading: "A01: discussed X" typed further below is minutes.
+  const kept = paras.filter(function (para) { return !para.id && para.inBlock; }).length;
+  const wanted = {};
+  lines.forEach(function (line) { wanted[line.id] = true; });
+  let changed = false;
+  // A session no longer there: its line goes; text typed into it stays.
+  paras.forEach(function (para) {
+    if (!para.id || wanted[para.id]) return;
+    if (para.text === para.prefix) { removeAdhocBodyChild_(body, para.p); para.removed = true; }
+    else para.p.editAsText().deleteText(0, para.prefix.length - 1);
+    changed = true;
+  });
   if (lines.length === 0) {
-    for (let i = existing.end - 1; i >= existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
-    return { container: 'removed' };
+    removeAdhocBodyChild_(body, heading);
+    return { container: 'removed', kept: kept };
   }
-  const shown = [];
-  for (let i = existing.start + 1; i < existing.end; i++) shown.push(body.getChild(i).asParagraph().getText());
-  if (shown.length === lines.length && shown.every(function (text, i) { return text === lines[i].text; })) return { container: 'unchanged' };
-  for (let i = existing.end - 1; i > existing.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
-  let at = existing.start + 1;
+  let after = heading;
   lines.forEach(function (line) {
+    const para = taken[line.id];
+    if (para && !para.removed) {
+      if (para.prefix !== line.text) {
+        if (para.text === para.prefix) {
+          para.p.setText(line.text);
+          para.p.editAsText().setBold(line.bold);
+        } else {
+          const te = para.p.editAsText();
+          te.deleteText(0, para.prefix.length - 1);
+          te.insertText(0, line.text);
+          te.setBold(0, line.text.length - 1, line.bold);
+        }
+        changed = true;
+      }
+      if (body.getChildIndex(para.p) > body.getChildIndex(after)) after = para.p;
+      return;
+    }
+    const at = body.getChildIndex(after) + 1;
     // The text is passed as text: nothing in it is interpreted.
     const p = at >= body.getNumChildren() ? body.appendParagraph(line.text) : body.insertParagraph(at, line.text);
     p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
     p.editAsText().setBold(line.bold);
-    at++;
+    after = p;
+    changed = true;
   });
-  return { container: 'replaced' };
+  return { container: changed ? 'replaced' : 'unchanged', kept: kept };
 }
 
 /**
@@ -19944,6 +20022,16 @@ function buildAdhocOpeningLines_(sessions, details, zone) {
     });
   });
   return lines;
+}
+
+/**
+ * Pure (issue #11): the session as it is written after its code. A label
+ * that is the code itself ("A01", any case) would read "A01: A01, ...": it
+ * is left out. The code is given by the order of the sessions; the label is
+ * a name of one's own ("Plenary", "Day 1").
+ */
+function withoutOwnCodeLabel_(session, code) {
+  return String((session && session.label) || '').trim().toUpperCase() === String(code || '').toUpperCase() ? Object.assign({}, session, { label: '' }) : session;
 }
 
 /**

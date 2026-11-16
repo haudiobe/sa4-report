@@ -11,7 +11,9 @@
  *   3. editing the times replaces only the generated lines; text typed below
  *      them stays;
  *   4. idempotence: saving, updating and building again change nothing more;
- *   5. a rebuild gives the same section again.
+ *   5. a rebuild gives the same section again;
+ *   6. text typed into a session line (the live test of 2026-11-16) is never lost,
+ *      whatever is saved; a label that is the code is not written twice.
  *
  * All names, TDocs and times are synthetic. Audio is only the reference report type.
  *
@@ -201,6 +203,92 @@ console.log('5. what is never asked for');
     ['main', 'Audio', BASE.TDOC_LIST_URL, 'S4-261800']);
   check('no session reaches the TDoc selection', [r.s.getAdhocSessions_(), r.s.adhocSessionsEnabled_()], [[], false]);
 }
+
+// ================================================================ 6
+console.log('6. text typed into a session line is never lost; a label that is the code is not written twice');
+{
+  const t = report();
+  t.save(SESSIONS);
+  t.build();
+  const A01 = 'A01: Day 1, November 16, 2026, 09:00–17:30 ABT';
+  const A02 = 'A02: November 17, 2026, 09:00–18:00 ABT';
+  const paragraphOf = (rr, start) => rr.body._children.filter((c) => c.getType() !== 'TABLE' && c.getText().indexOf(start) === 0)[0];
+  const S1 = (start, end) => row('s1', '2026-11-16', start || '09:00', end || '17:30', 'Day 1');
+  const S2 = (start, end) => row('s2', '2026-11-17', start || '09:00', end || '18:00');
+  check('the section as built', t.section(), [HEADING, A01, A02]);
+
+  // The live test of 2026-11-16: text typed at the end of the A02 line, then the end time of A02 changed.
+  paragraphOf(t, 'A02: ').setText(A02 + ' This is a test at 13:09');
+  const edited = t.save([S1(), S2('09:00', '18:30')]);
+  check('A02 edited: its new time is written, the text typed after it stays in the same line, A01 untouched',
+    [edited.ok, edited.notice || '', t.section()], [true, '', [HEADING, A01, 'A02: November 17, 2026, 09:00–18:30 ABT This is a test at 13:09']]);
+  const snap = t.snapshot();
+  const again = t.save([S1(), S2('09:00', '18:30')]);
+  check('saved again unchanged: nothing is written', [again.changed, again.notice || '', t.snapshot() === snap], [false, '', true]);
+  t.save([S1('10:00'), S2('09:00', '18:30')]);
+  check('A01 edited: A02 and the text typed into it stay as they are', t.section(),
+    [HEADING, 'A01: Day 1, November 16, 2026, 10:00–17:30 ABT', 'A02: November 17, 2026, 09:00–18:30 ABT This is a test at 13:09']);
+  check('only the generated part of A02 is set in bold', paragraphOf(t, 'A02: ')._boldRanges.slice(-1), [[0, 'A02: November 17, 2026, 09:00–18:30 ABT'.length - 1, true]]);
+
+  // A line break typed in the line (Shift+Enter) is the same paragraph: the same.
+  paragraphOf(t, 'A01: ').setText('A01: Day 1, November 16, 2026, 10:00–17:30 ABT\u000bChair: Alex Organizer');
+  t.save([S1('10:00', '17:00'), S2('09:00', '18:30')]);
+  check('a line break and text typed after A01 stay when A01 changes', t.section()[1], 'A01: Day 1, November 16, 2026, 10:00–17:00 ABT\u000bChair: Alex Organizer');
+
+  // Text typed between the lines, as a paragraph of its own.
+  const between = 'Typed between the session lines.';
+  t.body.insertParagraph(t.texts().indexOf(t.section()[1]) + 1, between);
+  t.save([S1('10:00', '17:00'), S2('09:30', '18:30')]);
+  check('a paragraph typed between the lines stays where it is; A02 is changed in place, not written twice', t.section(),
+    [HEADING, 'A01: Day 1, November 16, 2026, 10:00–17:00 ABT\u000bChair: Alex Organizer', between, 'A02: November 17, 2026, 09:30–18:30 ABT This is a test at 13:09']);
+
+  // A session removed: its line goes, what was typed into it stays.
+  t.save([S1('10:00', '17:00')]);
+  check('A02 removed: its generated text goes, the text typed into it stays', t.section(),
+    [HEADING, 'A01: Day 1, November 16, 2026, 10:00–17:00 ABT\u000bChair: Alex Organizer', between, ' This is a test at 13:09']);
+
+  // A line changed by hand inside its generated part: kept as it is, and said.
+  paragraphOf(t, 'A01: ').setText('A01: Day One (moved to room B), November 16, 2026, 10:00–17:00 ABT');
+  const kept = t.save([S1('10:00', '16:00')]);
+  check('a line changed by hand is kept as it is (below the new line), and the save says so',
+    [kept.ok, /1 line\(s\) of the Session administration section were changed by hand and were kept/.test(kept.notice || ''), t.section().slice(1, 3)],
+    [true, true, ['A01: Day 1, November 16, 2026, 10:00–16:00 ABT', 'A01: Day One (moved to room B), November 16, 2026, 10:00–17:00 ABT']]);
+}
+{
+  const t = report();
+  t.save([row('', '2026-11-16', '09:00', '17:30', 'A01'), row('', '2026-11-17', '09:00', '18:00', 'a02')]);
+  t.build();
+  check('a label that is the session\'s own code is not written twice', t.section(), [HEADING, 'A01: November 16, 2026, 09:00–17:30 ABT', 'A02: November 17, 2026, 09:00–18:00 ABT']);
+  check('a label that is another code is the user\'s name and is kept', t.s.buildAdhocOpeningLines_([{ id: 'x', label: 'A02', date: '2026-11-16', start: '', end: '' }], {}, '').map((l) => l.text), ['A01: A02, November 16, 2026']);
+  // A section written by T-2026.10.26 ("A01: A01, ...") with text typed after A02: recognized, rewritten without the double label, nothing lost.
+  const lines = t.body._children.filter((c) => c.getType() !== 'TABLE' && /^A0\d: /.test(c.getText()));
+  lines[0].setText('A01: A01, November 16, 2026, 09:00–17:30 ABT');
+  lines[1].setText('A02: a02, November 17, 2026, 09:00–18:00 ABT This is a test at 13:09');
+  const res = t.save([row('s1', '2026-11-16', '09:00', '17:30', 'A01'), row('s2', '2026-11-17', '09:00', '18:30', 'a02')]);
+  check('a section of T-2026.10.26: its lines are recognized and rewritten without the double label, without a second line and without loss',
+    [res.notice || '', t.section()], ['', [HEADING, 'A01: November 16, 2026, 09:00–17:30 ABT', 'A02: November 17, 2026, 09:00–18:30 ABT This is a test at 13:09']]);
+}
+
+{
+  // Review of PR #21: a session added between two, while the earlier line has text typed into it.
+  const t = report();
+  t.save([row('', '2026-11-16', '09:00', '17:30'), row('', '2026-11-18', '09:00', '12:00')]);
+  t.build();
+  const first = t.body._children.filter((c) => c.getType() !== 'TABLE' && /^A01: /.test(c.getText()))[0];
+  first.setText('A01: November 16, 2026, 09:00–17:30 ABT\u000bTyped into A01.');
+  const res = t.save([row('s1', '2026-11-16', '09:00', '17:30'), row('', '2026-11-17', '09:00', '18:00'), row('s2', '2026-11-18', '09:00', '12:00')]);
+  check('a session added between two: its line goes after the earlier line, whose typed text stays in it; the later line gets its new code',
+    [res.ok, res.notice || '', t.section()], [true, '', [HEADING, 'A01: November 16, 2026, 09:00–17:30 ABT\u000bTyped into A01.', 'A02: November 17, 2026, 09:00–18:00 ABT', 'A03: November 18, 2026, 09:00–12:00 ABT']]);
+  // Minutes further below that happen to begin like a session line: not "changed by hand", never touched.
+  const at = t.texts().indexOf('A03: November 18, 2026, 09:00–12:00 ABT');
+  t.body.insertParagraph(at + 1, 'Typed below the lines.');
+  t.body.insertParagraph(at + 2, 'A01: discussed the agenda');
+  const again = t.save([row('s1', '2026-11-16', '09:00', '17:00'), row('s3', '2026-11-17', '09:00', '18:00'), row('s2', '2026-11-18', '09:00', '12:00')]);
+  check('a line like "A01: discussed ..." below the block: no "changed by hand" notice, and it stays',
+    [again.notice || '', t.section().slice(-2)], ['', ['Typed below the lines.', 'A01: discussed the agenda']]);
+}
+check('ad-hoc reports are unchanged: their lines still read the label as given (buildAdhocOpeningLines_)',
+  report().s.buildAdhocOpeningLines_([{ id: 'x', label: 'A01', date: '2026-11-16', start: '', end: '' }], {}, '').map((l) => l.text), ['A01: A01, November 16, 2026']);
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nall checks passed');
 process.exit(failures ? 1 : 0);

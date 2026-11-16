@@ -88,7 +88,11 @@ function makeFakeDocumentBody(sandbox, options) {
       copy: () => { const made = makeParagraph(p._text, p._heading); made._bold = p._bold; if (p._links) made._links = p._links.map((l) => l.slice()); return made; },
       removeFromParent: () => { touch(); const i = children.indexOf(p); if (i !== -1) { refuseLastParagraph(p); children.splice(i, 1); } return p; },
       // A link set on a paragraph's text is recorded (_links: [start, end, url]).
-      editAsText: () => ({ setBold: (b) => { p._bold = !!b; }, setLinkUrl: (...args) => { (p._links = p._links || []).push(args); },
+      // setBold(b) for the whole text, setBold(start, end, b) for a part (recorded in _boldRanges); deleteText/insertText as Google Docs.
+      editAsText: () => ({ setBold: (...args) => { if (args.length === 1) p._bold = !!args[0]; else (p._boldRanges = p._boldRanges || []).push([args[0], args[1], !!args[2]]); },
+        setLinkUrl: (...args) => { (p._links = p._links || []).push(args); },
+        deleteText: (start, end) => { touch(); if (start < 0 || end >= p._text.length || end < start) throw new Error('Exception: Invalid range.'); p._text = p._text.slice(0, start) + p._text.slice(end + 1); },
+        insertText: (at, text) => { touch(); if (at < 0 || at > p._text.length || !String(text)) throw new Error('Exception: Invalid insertion.'); p._text = p._text.slice(0, at) + String(text) + p._text.slice(at); },
         getLinkUrl: (i) => { const links = p._links || []; for (let k = links.length - 1; k >= 0; k--) if (i >= links[k][0] && i <= links[k][1]) return links[k][2] || null; return null; } })
     };
     return p;
