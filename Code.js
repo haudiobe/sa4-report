@@ -2976,6 +2976,8 @@ var ADDON003_ADOPTION_FIXED_KEYS_ = [
   'MEETING_TYPE', 'MEETING_NAME', 'REVISIONS_URL', 'MAILING_LIST',
   // After T-2026.10.25: the local (meeting-room) revisions folder (LOCAL REVISIONS FOLDER).
   'LOCAL_REVISIONS_URL',
+  // After T-2026.10.27: the Drive folder of the local listing agent (LOCAL LISTING AGENT).
+  'LOCAL_LISTING_DRIVE_FOLDER_ID',
   'FETCH_ABSTRACTS_ON_UPDATE',
   'REVISION_MAP',
   'DEADLINE_EXTENSIONS',
@@ -6464,6 +6466,193 @@ function storeLocalRevisions_(props, parsed, reportTdocs) {
   return { touched: touched, added: added, removed: removed, recognized: recognized };
 }
 
+/** The TDoc tables of a report body: { <TDoc number>: table }, the first table of each number. */
+function tdocTablesByNumber_(body) {
+  const byTdoc = {};
+  body.getTables().filter(isTDocTable_).forEach(function (t) {
+    const id = parseExactSA4DocumentId_(String(safeCellText_(t, 0, 1) || '').trim());
+    if (id.isValid && !byTdoc[id.raw]) byTdoc[id.raw] = t;
+  });
+  return byTdoc;
+}
+
+/** Writes the Revisions cells of `touched` TDocs from what is stored for both folders (nothing is fetched). */
+function renderStoredLocalRevisions_(props, byTdoc, touched, localBase, context) {
+  if (!touched.length) return;
+  const remoteBase = String(getMeetingContext_(context).sources.revisionsUrl || '').trim();
+  const folders = { local: localBase, remote: remoteBase ? remoteBase.replace(/\/$/, '') + '/' : '' };
+  touched.forEach(function (tdoc) {
+    const t = byTdoc[tdoc];
+    if (!t) return;
+    const ordered = orderedStoredRevisions_(loadJsonObject_(props.getProperty('REVIS_' + tdoc)));
+    const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
+    renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders, { force: true });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// LOCAL LISTING AGENT (after T-2026.10.27)
+// The meeting-room server cannot be read from Google (docs/LOCAL_REVISIONS_
+// AUTODETECT.md). One Windows laptop on the meeting-room network runs the
+// local listing agent (tools/local-listing-agent/): every two minutes it reads
+// the folder listing of each working group and writes <group>.listing.json
+// into a Drive folder that Google Drive for desktop synchronizes. Every update
+// of a report (updateRevisions_()) reads its own group's file from that folder
+// (LOCAL_LISTING_DRIVE_FOLDER_ID) and imports it with the code of Import Local
+// Inbox Listing... -- the same parser, the same per-folder refresh, the same
+// merge and rendering. The manual import stays as it is.
+//
+// The file (written by the agent, atomically: temp file + rename):
+//   { format: 'sa4-local-listing', version: 1, group, folder, fetchedAt (ISO
+//     UTC), scanId, agent, linkCount, sha256 (hex, of `payload` in UTF-8),
+//     payload: '<a href="...">name</a>\n...' -- the listing's links only }
+// A file is imported only when it is complete (parses, payload matches its
+// sha256 and linkCount), is this report's group, lists a folder of this
+// group on the report's meeting-room server, and was fetched at most 30
+// minutes ago (and not in the future). Anything else -- no file, a stale one
+// (agent stopped, network down, Drive not yet synchronized: a local write is
+// no proof of an upload), an incomplete or foreign one -- imports nothing
+// and erases nothing; it is recorded in LOCAL_LISTING_AGENT_STATE and shown
+// in Check Connections. The same scan twice is imported once (scanId).
+// ---------------------------------------------------------------------------
+const LOCAL_LISTING_FOLDER_KEY_ = 'LOCAL_LISTING_DRIVE_FOLDER_ID';
+const LOCAL_LISTING_STATE_KEY_ = 'LOCAL_LISTING_AGENT_STATE';
+const LOCAL_LISTING_FORMAT_ = 'sa4-local-listing';
+const LOCAL_LISTING_MAX_AGE_MINUTES_ = 30;
+const LOCAL_LISTING_MAX_FUTURE_MINUTES_ = 5;
+
+/** Pure: a Drive folder id from an id or a folder URL; '' when it is neither. */
+function localListingFolderIdOf_(value) {
+  const v = String(value || '').trim();
+  const fromUrl = /^https:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})/.exec(v);
+  if (fromUrl) return fromUrl[1];
+  return /^[A-Za-z0-9_-]{10,}$/.test(v) ? v : '';
+}
+
+/** The SHA-256 of a text's UTF-8 bytes, in hex. */
+function localListingSha256Hex_(text) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8);
+  return bytes.map(function (b) { const v = (b < 0 ? b + 256 : b).toString(16); return v.length === 1 ? '0' + v : v; }).join('');
+}
+
+/**
+ * Pure: whether `raw` (the text of a <group>.listing.json) may be imported
+ * into a report of group `expect.group` whose meeting-room server is
+ * `expect.localBase`, at `now` (Date). `sha256` is the digest function.
+ * Returns { ok, reason, listing: { group, folder, fetchedAt, scanId, payload } }.
+ */
+function validateAgentListing_(raw, expect, now, sha256) {
+  const no = function (reason) { return { ok: false, reason: reason, listing: null }; };
+  let f;
+  try { f = JSON.parse(String(raw || '')); } catch (e) { return no('incomplete or unreadable (not complete JSON: still being written or synchronized?)'); }
+  if (!f || f.format !== LOCAL_LISTING_FORMAT_ || f.version !== 1) return no('not a listing written by the local listing agent');
+  if (String(f.group || '') !== String(expect.group || '')) return no('a listing of group ' + f.group + ', not of ' + expect.group);
+  const origin = (String(expect.localBase || '').match(/^(https?:\/\/[^\/?#]+)/i) || [])[1];
+  const folder = String(f.folder || '');
+  if (!origin || folder.toLowerCase().indexOf(origin.toLowerCase() + '/') !== 0) return no('the listed folder ' + folder + ' is not on the meeting-room server of this report');
+  if (!new RegExp('/' + String(expect.group).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/?$', 'i').test(folder)) return no('the listed folder ' + folder + ' is not the folder of group ' + expect.group);
+  const t = Date.parse(f.fetchedAt);
+  if (isNaN(t)) return no('no valid scan time');
+  if (t > now.getTime() + LOCAL_LISTING_MAX_FUTURE_MINUTES_ * 60000) return no('scanned in the future (' + f.fetchedAt + '): the agent laptop\'s clock is wrong');
+  if (now.getTime() - t > LOCAL_LISTING_MAX_AGE_MINUTES_ * 60000) return no('stale: scanned ' + f.fetchedAt + ', more than ' + LOCAL_LISTING_MAX_AGE_MINUTES_ + ' minutes ago (agent stopped, meeting-room network down, or Drive not synchronized)');
+  const payload = String(f.payload || '');
+  if (typeof f.sha256 !== 'string' || sha256(payload) !== f.sha256.toLowerCase()) return no('incomplete: its content does not match its checksum');
+  if ((payload.match(/<a\s/gi) || []).length !== Number(f.linkCount)) return no('incomplete: ' + f.linkCount + ' links announced, ' + (payload.match(/<a\s/gi) || []).length + ' present');
+  return { ok: true, reason: '', listing: { group: f.group, folder: folder, fetchedAt: f.fetchedAt, scanId: String(f.scanId || f.sha256), payload: payload } };
+}
+
+/** The candidate files of a group in the agent's folder, newest first: [{ raw, updated }]; also the agent's status file. */
+function readAgentListingFiles_(folderId, group) {
+  const folder = DriveApp.getFolderById(folderId);
+  const list = [];
+  const files = folder.getFilesByName(group + '.listing.json');
+  while (files.hasNext()) { const file = files.next(); list.push({ raw: file.getBlob().getDataAsString('UTF-8'), updated: file.getLastUpdated() }); }
+  list.sort(function (a, b) { return b.updated.getTime() - a.updated.getTime(); });
+  let status = null;
+  const st = folder.getFilesByName(group + '.status.json');
+  if (st.hasNext()) { try { status = JSON.parse(st.next().getBlob().getDataAsString('UTF-8')); } catch (e) { status = null; } }
+  return { files: list, status: status };
+}
+
+/**
+ * Imports the agent's listing of this report's group, if it may be. Returns
+ * null when no folder is configured; otherwise { result, touched, state }.
+ * Imports nothing and erases nothing unless a complete, fresh listing of
+ * this group and server is found; the state says why.
+ */
+function importAgentListing_(context, deps) {
+  const props = getReportStateStore_(context);
+  const folderId = localListingFolderIdOf_(props.getProperty(LOCAL_LISTING_FOLDER_KEY_));
+  if (!folderId) return null;
+  const now = (deps && deps.now) || new Date();
+  const previous = loadJsonObject_(props.getProperty(LOCAL_LISTING_STATE_KEY_));
+  const state = Object.assign({}, previous, { lastCheckAt: now.toISOString() });
+  const finish = function (result, message, extra) {
+    Object.assign(state, extra || {}, { lastResult: result, message: message });
+    props.setProperty(LOCAL_LISTING_STATE_KEY_, JSON.stringify(state));
+    return { result: result, touched: (extra && extra.touchedList) || [], state: state };
+  };
+  const group = getReportConfig_(context).DRAFTS_FOLDER;
+  const localBase = localRevisionsUrlFor_(context);
+  state.group = group;
+  if (!localBase) return finish('off', 'This report has no Local Revisions URL; the agent\'s listings are not imported.');
+  let read;
+  try { read = readAgentListingFiles_(folderId, group); } catch (e) { return finish('unavailable', 'The Drive folder of the local listing agent cannot be read (' + e.message + '). Previously imported revisions are kept.'); }
+  if (read.status) {
+    state.agent = { lastSuccessAt: read.status.lastSuccessAt || null, lastAttemptAt: read.status.fetchedAt || null, lastError: read.status.ok ? null : (read.status.error || 'failed'),
+      lastWrittenAt: read.status.writtenAt || null };
+  }
+  if (!read.files.length) return finish('missing', 'Not checked: no listing of ' + group + ' in the agent\'s Drive folder yet. Previously imported revisions are kept.');
+  let chosen = null;
+  let firstReason = '';
+  read.files.forEach(function (file) {
+    if (chosen) return;
+    const v = validateAgentListing_(file.raw, { group: group, localBase: localBase }, now, localListingSha256Hex_);
+    if (v.ok) { chosen = v.listing; chosen.driveUpdatedAt = file.updated ? file.updated.toISOString() : null; } else if (!firstReason) firstReason = v.reason;
+  });
+  if (!chosen) return finish(/^stale/.test(firstReason) ? 'stale' : 'invalid', 'Not imported: the newest listing of ' + group + ' is ' + firstReason + '. Previously imported revisions are kept.');
+  state.lastScanFetchedAt = chosen.fetchedAt;
+  state.lastScanDriveUpdatedAt = chosen.driveUpdatedAt;
+  if (previous.lastScanId === chosen.scanId) return finish('unchanged', 'Scan of ' + chosen.fetchedAt + ' already imported.');
+  const parsed = parseLocalRevisionsListing_({ folder: chosen.folder, html: chosen.payload, text: '' }, localBase);
+  if (!parsed.ok) return finish('invalid', 'Not imported: ' + parsed.error + ' Previously imported revisions are kept.');
+  const byTdoc = (deps && deps.byTdoc) || tdocTablesByNumber_(getActiveDocumentBodyCounted_('importAgentListing_', context));
+  const stored = storeLocalRevisions_(props, parsed, Object.keys(byTdoc));
+  renderStoredLocalRevisions_(props, byTdoc, stored.touched, localBase, context);
+  return finish('imported', 'Imported the scan of ' + chosen.fetchedAt + ': ' + parsed.listed + ' file(s), ' + stored.recognized + ' revision(s) of SA4 TDocs, ' +
+    stored.added + ' new, ' + stored.removed + ' no longer listed.',
+    { lastScanId: chosen.scanId, lastImportAt: now.toISOString(), files: parsed.listed, recognized: stored.recognized, added: stored.added, removed: stored.removed, touchedList: stored.touched });
+}
+
+/** importAgentListing_() for an update: never throws (a failure is logged and the update goes on). */
+function importAgentListingSafely_(context) {
+  try {
+    const r = importAgentListing_(context);
+    if (r) Logger.log('Local listing agent: ' + r.result + ' -- ' + r.state.message);
+    return r;
+  } catch (e) {
+    Logger.log('Local listing agent: not imported (' + e.message + ')');
+    return null;
+  }
+}
+
+/** Pure: the status lines of the local listing agent for this report. */
+function describeLocalListingAgentStatus_(stateJson, folderId, now) {
+  if (!folderId) return 'Local listing agent: not configured (Configure Meeting > Local listing folder).';
+  const s = loadJsonObject_(stateJson);
+  if (!s.lastCheckAt) return 'Local listing agent: configured; not checked yet (the next update reads it).';
+  const ago = function (iso) { const t = Date.parse(iso); if (isNaN(t)) return '?'; const m = Math.round((now.getTime() - t) / 60000); return iso.replace('T', ' ').replace(/:\d\d(\.\d+)?Z$/, ' UTC') + ' (' + m + ' min ago)'; };
+  // Four stages, each from its own evidence: the agent's status file says what the laptop did (as far as Drive has
+  // synchronized it -- a local write is no proof of an upload); the listing found in Drive proves the upload; the
+  // report's own state proves the import.
+  const lines = ['Local listing agent (' + (s.group || '?') + '): last check ' + ago(s.lastCheckAt) + ' -- ' + (s.message || s.lastResult || '')];
+  lines.push('  1. LAN scan (agent status, as synchronized): ' + (s.agent ? 'last success ' + (s.agent.lastSuccessAt ? ago(s.agent.lastSuccessAt) : 'never') + (s.agent.lastError ? ', last attempt failed: ' + s.agent.lastError : '') : 'no status file in Drive'));
+  lines.push('  2. local write (agent status, as synchronized): ' + (s.agent && s.agent.lastWrittenAt ? ago(s.agent.lastWrittenAt) : 'not reported'));
+  lines.push('  3. in Google Drive: ' + (s.lastScanFetchedAt ? 'newest valid scan ' + ago(s.lastScanFetchedAt) + (s.lastScanDriveUpdatedAt ? ', uploaded ' + ago(s.lastScanDriveUpdatedAt) : '') : 'no valid scan found'));
+  lines.push('  4. import into this report: ' + (s.lastImportAt ? ago(s.lastImportAt) + ', ' + (s.files || 0) + ' file(s), ' + (s.recognized || 0) + ' revision(s), ' + (s.added || 0) + ' new, ' + (s.removed || 0) + ' removed' : 'none yet'));
+  return lines.join('\n');
+}
+
 /** Pure: what the report says about the meeting-room server: not checked yet, or when a listing was last imported. */
 function describeLocalRevisionsStatus_(lastImportJson, localBase) {
   if (!localBase) return 'Local (meeting-room server): none configured.';
@@ -6536,22 +6725,9 @@ function saveLocalRevisionsListing(payload) {
   if (!lock.tryLock(30000)) return { ok: false, message: 'The report is being updated. Try again in a minute; nothing was changed.' };
   try {
     const props = getReportStateStore_();
-    const body = currentReportDocument_().getBody();
-    const tables = body.getTables().filter(isTDocTable_);
-    const byTdoc = {};
-    tables.forEach(function (t) {
-      const id = parseExactSA4DocumentId_(String(safeCellText_(t, 0, 1) || '').trim());
-      if (id.isValid && !byTdoc[id.raw]) byTdoc[id.raw] = t;
-    });
+    const byTdoc = tdocTablesByNumber_(currentReportDocument_().getBody());
     const stored = storeLocalRevisions_(props, parsed, Object.keys(byTdoc));
-    const remoteBase = String(getMeetingContext_().sources.revisionsUrl || '').trim();
-    const folders = { local: localBase, remote: remoteBase ? remoteBase.replace(/\/$/, '') + '/' : '' };
-    stored.touched.forEach(function (tdoc) {
-      const t = byTdoc[tdoc];
-      const ordered = orderedStoredRevisions_(loadJsonObject_(props.getProperty('REVIS_' + tdoc)));
-      const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
-      renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders, { force: true });
-    });
+    renderStoredLocalRevisions_(props, byTdoc, stored.touched, localBase);
     const at = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
     const last = { at: at, folder: parsed.folder, listed: parsed.listed, recognized: stored.recognized, added: stored.added, removed: stored.removed };
     props.setProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_, JSON.stringify(last));
@@ -6566,6 +6742,9 @@ function saveLocalRevisionsListing(payload) {
 }
 
 function updateRevisions_(cfg, context) {
+  // After T-2026.10.27: the listing the local listing agent wrote to Drive, first (LOCAL LISTING AGENT section).
+  // Never throws, and without a configured folder it does nothing at all.
+  importAgentListingSafely_(context);
   const baseUrl = String(getMeetingContext_(context).sources.revisionsUrl || '').trim();
   if (!baseUrl) return;
 
@@ -9048,6 +9227,10 @@ function configureMeetingSettings() {
       <label>Local Revisions URL (meeting-room server):</label>
       <input type="text" id="localRevisionsUrl" value="${esc(props.getProperty('LOCAL_REVISIONS_URL') || '')}" placeholder="${esc(LOCAL_REVISIONS_URL_DEFAULT_)}">
       <div class="hint">On-site only and possibly newer than the 3GPP folder above, which the updates keep reading. The report only links to it, never reads it. Blank: ${esc(LOCAL_REVISIONS_URL_DEFAULT_)} for a main meeting that is not an e-meeting; "none": no local link.</div>
+
+      <label>Local listing folder (Google Drive, written by the local listing agent):</label>
+      <input type="text" id="localListingFolder" value="${esc(props.getProperty(LOCAL_LISTING_FOLDER_KEY_) || '')}" placeholder="Drive folder ID or https://drive.google.com/drive/folders/...">
+      <div class="hint">Optional. Every update then imports this report's group listing from that folder (at most 30 minutes old), like Import Local Inbox Listing... Blank: no automatic import.</div>
     </div>
 
     <div class="section">
@@ -9526,6 +9709,7 @@ function configureMeetingSettings() {
           discussionEmailSender: document.getElementById('discussionEmailSender') ? document.getElementById('discussionEmailSender').value : '',
           revisionsUrl: document.getElementById('revisionsUrl').value,
           localRevisionsUrl: document.getElementById('localRevisionsUrl') ? document.getElementById('localRevisionsUrl').value : undefined,
+          localListingFolder: document.getElementById('localListingFolder') ? document.getElementById('localListingFolder').value : undefined,
           reportType: document.getElementById('reportType').value,
           agendaSourceDocId: document.getElementById('agendaSourceDocId').value,
           agendaTdoc: document.getElementById('agendaTdoc').value,
@@ -9629,6 +9813,8 @@ var CONFIG_DIALOG_MANAGED_KEYS_ = [
   'MEETING_TYPE', 'MEETING_NAME', 'MEETING_DATE', 'FTP_BASE', 'MAILING_LIST', 'REVISIONS_URL',
   // After T-2026.10.25: the local (meeting-room) revisions folder, read by every update (LOCAL REVISIONS FOLDER).
   'LOCAL_REVISIONS_URL',
+  // After T-2026.10.27: the Drive folder of the local listing agent (LOCAL LISTING AGENT).
+  'LOCAL_LISTING_DRIVE_FOLDER_ID',
   // After T-2026.10.23: the meeting time zone a save stores -- synced into an adopted document's central state, which
   // every background update reads for the Session column (MEETING TIME ZONES section).
   'MEETING_TIME_ZONE', 'MEETING_TIME_ZONE_MODE', 'MEETING_START_BASIS'
@@ -9790,6 +9976,13 @@ function persistConfigurationSettings_(config) {
     else if (/^none$/i.test(localRevisions)) docProps.setProperty('LOCAL_REVISIONS_URL', 'none');
     else if (isLocalRevisionsUrlValue_(localRevisions)) docProps.setProperty('LOCAL_REVISIONS_URL', localRevisions);
     else Logger.log('Configure Meeting: the Local Revisions URL was not stored (not an http or https address): ' + localRevisions);
+  }
+  // After T-2026.10.27 (LOCAL LISTING AGENT): only a dialog that has the field changes it. Blank removes it; an id or a folder URL is stored as the id.
+  if (config.localListingFolder !== undefined && config.localListingFolder !== null) {
+    const listingFolder = String(config.localListingFolder).trim();
+    if (!listingFolder) docProps.deleteProperty(LOCAL_LISTING_FOLDER_KEY_);
+    else if (localListingFolderIdOf_(listingFolder)) docProps.setProperty(LOCAL_LISTING_FOLDER_KEY_, localListingFolderIdOf_(listingFolder));
+    else Logger.log('Configure Meeting: the Local listing folder was not stored (not a Drive folder id or URL): ' + listingFolder);
   }
   // ADDON-009 (ported from LEGACY-UPGRADE-006H): the discussion e-mail
   // sender, an independent value (never the Mailing List). Same
@@ -9999,6 +10192,29 @@ function buildMeetingSummary_(preview) {
 /**
  * PHASE 1: Test All Connections
  */
+/**
+ * After T-2026.10.27: what Check Connections says about the TDoc list -- the
+ * same addresses and checks as downloadTdocListXlsx_(), one line per address
+ * tried. A refusal (HTTP 403/429/503) from 3GPP's front end is usually
+ * temporary: it is said so, and that the update tries again on its next run.
+ */
+function tdocListConnectionLines_(url) {
+  const lines = [];
+  const candidates = tdocListDownloadCandidates_(url);
+  for (let i = 0; i < candidates.length; i++) {
+    const attempt = tdocListDownloadAttempt_(candidates[i]);
+    const label = i === 0 ? '' : '(alternative) ';
+    if (attempt.ok) {
+      lines.push('✅ ' + label + 'Connected successfully: ' + attempt.url);
+      lines.push('📊 File size: ' + attempt.bytes + ' bytes (Excel workbook)');
+      return lines;
+    }
+    const refused = /^HTTP (403|429|503)\b/.test(attempt.problem);
+    lines.push('❌ ' + label + attempt.problem + ': ' + attempt.url + (refused ? ' -- refused by the 3GPP server (usually temporary; the update tries again on its next run)' : ''));
+  }
+  return lines;
+}
+
 function testAllConnections() {
   const ui = DocumentApp.getUi();
   const results = [];
@@ -10013,13 +10229,9 @@ function testAllConnections() {
     if (!url) {
       results.push('   ❌ Not configured');
     } else {
-      const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      if (response.getResponseCode() === 200) {
-        results.push('   ✅ Connected successfully');
-        results.push('   📊 File size: ' + response.getBlob().getBytes().length + ' bytes');
-      } else {
-        results.push('   ❌ HTTP ' + response.getResponseCode());
-      }
+      // After T-2026.10.27: checked as the update downloads it -- the configured address, then its
+      // www.3gpp.org/ftp twin (TDOC LIST DOWNLOAD section) -- so this says what an update will get.
+      tdocListConnectionLines_(url).forEach(function (line) { results.push('   ' + line); });
     }
   } catch (e) {
     results.push('   ❌ Error: ' + e.message);
@@ -10108,6 +10320,8 @@ function testAllConnections() {
   if (localRevisions) results.push('   🏢 Local (meeting-room server, on-site only, not checked from here): ' + localRevisions);
   // Issue #16: when a listing of it was last imported.
   if (localRevisions) results.push('   ' + describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localRevisions));
+  // After T-2026.10.27: the local listing agent (LOCAL LISTING AGENT section).
+  if (localRevisions) results.push('   ' + describeLocalListingAgentStatus_(getReportStateStore_().getProperty(LOCAL_LISTING_STATE_KEY_), localListingFolderIdOf_(getReportStateStore_().getProperty(LOCAL_LISTING_FOLDER_KEY_)), new Date()).split('\n').join('\n   '));
 
   results.push('\n\n✅ Connection test complete!');
   
