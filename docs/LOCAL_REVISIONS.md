@@ -36,9 +36,13 @@ Repeat whenever useful. The automatic updates keep showing what was imported.
 - A computer **on the meeting-room network** whose browser can open `http://10.10.10.10/…`.
 - In that browser, the user is signed in to Google with **edit access** to the report.
 - The server shows a **folder listing** (an HTML page of links). Checked: links with
-  relative, rooted (`/ftp/…`) and absolute hrefs, double- or single-quoted. If a browser
-  copies text only, complete file names are used; names the listing shortened (`…..>`) are
-  not, and the dialog says so.
+  relative, rooted (`/ftp/…`) and absolute hrefs, double- or single-quoted. The file name is
+  taken from the link itself, so a name the listing shows shortened (`S4-2601..>`) is still
+  complete, and each file keeps its actual URL.
+- If a browser copies **text only** (no links), complete file names are still recognized, but
+  no file path is made up: such a revision links to the **listed folder** and is marked
+  `[local only, see folder]` (or `[local folder]`). The dialog says so; pasting the page again
+  from Chrome or Edge gives file links. A later text-only paste never replaces a file link.
 - Unknown until tried in the room: the folder layout under `Inbox` (e.g. whether there is a
   `Drafts/<SWG>` level). It does not matter to the import: any folder of the server can be
   listed, the root included; only files that are revisions of this report's TDocs are kept.
@@ -52,6 +56,7 @@ In the Revisions cell of a TDoc (one line per file, ordered by name):
 | 3GPP only | `S4-260123_r1.docx` | name → 3GPP file (unchanged) |
 | both | `S4-260123_r1.docx [local]` | name → 3GPP file, `[local]` → local file |
 | meeting-room server only | `S4-260123_r2.docx [local only]` | both → local file |
+| from a text-only paste | `… [local only, see folder]` / `… [local folder]` | → the local folder |
 
 Below them, the folder line of PR #15 (`Revisions folders: Local … · Remote …`).
 
@@ -73,8 +78,15 @@ Below them, the folder line of PR #15 (`Revisions folders: Local … · Remote �
 
 ## Stored data
 
-- `LOCALREV_<tdoc>` (Document Property, per TDoc with local revisions): `{ key: { text, link } }`.
-  Only grows, like `REVIS_<tdoc>`. An adoption prefix (copied with the report state).
+- `LOCALREV_<tdoc>` (Document Property, per TDoc with local revisions):
+  `{ key: { text, link, folder, folderOnly? } }`. An adoption prefix (copied with the report state).
+- **Refresh:** a listing is the current state of the folder it lists. Entries from that folder
+  that it no longer has (renamed, withdrawn) are removed, and their lines leave the cells; entries
+  from other folders stay. The same file is stored once. A listing without a single revision
+  removes nothing (a wrong or partial paste). The dialog says how many were added and removed.
+- **Hand-typed text in a Revisions cell is kept:** a line that is not a revision line,
+  "No revisions available." or the folders line stays, below the revisions. A cell whose text
+  would not change is not written again.
 - `LOCAL_REVISIONS_LAST_IMPORT`: when, from which folder, counts. Shown by the dialog and by
   *Check Connections*.
 - No credentials, no tokens. The local server sees only the user's own browser.

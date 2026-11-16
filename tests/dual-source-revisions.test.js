@@ -16,6 +16,9 @@
  *      revision table from a local-only file;
  *   5. offline / malformed / denied: nothing changes;
  *   6. status texts: not checked / no new revisions / new ones;
+ *   6b. a new listing refreshes its folder's entries (removed, added, no duplicates),
+ *      the file name comes from the link, a text-only paste links the folder,
+ *      lines typed by hand are kept, unchanged cells are not written;
  *   7. source: only these functions changed; detection untouched.
  *
  * All values are synthetic. Run: node tests/dual-source-revisions.test.js
@@ -120,7 +123,7 @@ console.log('1. reading a pasted listing');
     p({ html: '<a href="https://evil.example/' + A + '_r1.docx">' + A + '_r1.docx</a><a href="//evil.example/' + A + '.docx">' + A + '.docx</a><a href="javascript:alert(1)">' + A + '_r9.docx</a>' }),
     { ok: false, error: 'The pasted text has no file list. Nothing was changed.', folder: FOLDER, anchors: [], listed: 0, truncated: 0 });
   const text = p({ text: 'Name    Last modified    Size\nParent Directory\n' + A + '_r1.docx    2026-11-16 10:01   20K\n' + B + '_r2_with_a_very_long_name_that_is_cut..>  2026-11-16 10:02  1M\n' });
-  check('text only (a browser that copies no HTML): complete file names, in the listed folder', text.anchors.map((a) => a.href), [FOLDER + A + '_r1.docx']);
+  check('text only (a browser that copies no HTML): complete file names, linked by the listed folder (no file path made up)', text.anchors, [{ href: FOLDER, text: A + '_r1.docx', folderOnly: true }]);
   check('...a name the listing cut short ("..>") is not used, and counted', text.truncated, 1);
   check('a folder on another server is refused', p({ folder: 'https://www.3gpp.org/ftp/x/', html: listing([A + '_r1.docx']) }).error, 'The listed folder is not on the meeting-room server of this report (http://10.10.10.10).');
   check('no local folder configured: refused', s.parseLocalRevisionsListing_({ folder: FOLDER, html: listing([A + '.docx']) }, '').error, 'This report has no Local Revisions URL (Configure Meeting).');
@@ -159,9 +162,9 @@ console.log('3. the import');
   const before = snapshot([tA, tB, tC]);
   const writesC = cellOf(tC).writes;
   const res = r.paste({ html: listing([A + '_r1.docx', A + '_r2.docx', B + '_r1.docx', 'S4-269999_r1.docx', 'README.txt']) });
-  // 6 links: the parent folder and five files (the sort link "?C=N;O=D" is not one); 4 are revisions of SA4 TDocs.
+  // 5 files (the parent folder and the sort link "?C=N;O=D" are not files); 4 are revisions of SA4 TDocs.
   check('the result says what was found and what is new', [res.ok, res.message.split('\n')[0].replace(/imported .*? from /, 'imported <time> from ')],
-    [true, 'Local (meeting-room server): last listing imported <time> from ' + FOLDER + ': 6 file(s), 4 revision(s) of SA4 TDocs, 3 new for this report.']);
+    [true, 'Local (meeting-room server): last listing imported <time> from ' + FOLDER + ': 5 file(s), 4 revision(s) of SA4 TDocs, 3 new for this report.']);
   check('A: the 3GPP revision now also local; the new local one first shown here', linesOf(tA), [A + '_r1.docx [local]', A + '_r2.docx [local only]']);
   check('...each name linked: 3GPP where it is there, else local; the markers to the local files', linked(cellOf(tA)).slice(0, 4), [
     [A + '_r1.docx', remote + A + '_r1.docx'], ['[local]', FOLDER + A + '_r1.docx'], [A + '_r2.docx', FOLDER + A + '_r2.docx'], ['[local only]', FOLDER + A + '_r2.docx']]);
@@ -232,6 +235,59 @@ console.log('6. what the report says about the local source');
   check('no local folder', s.describeLocalRevisionsStatus_(null, ''), 'Local (meeting-room server): none configured.');
   check('checked, no new revisions', s.describeLocalRevisionsStatus_(JSON.stringify({ at: '2026-11-16 10:05', folder: FOLDER, listed: 12, recognized: 3, added: 0 }), LOCAL),
     'Local (meeting-room server): last listing imported 2026-11-16 10:05 from ' + FOLDER + ': 12 file(s), 3 revision(s) of SA4 TDocs, no new revisions for this report.');
+}
+
+// ====================================================================== 6b
+console.log('6b. refreshing, file names from links, text-only, hand-typed lines (release review)');
+{
+  const { sandbox: s } = loadCode({});
+  const p = (payload) => s.parseLocalRevisionsListing_(Object.assign({ folder: FOLDER }, payload), LOCAL);
+  // A listing that shortens the shown name: the name is the one of the linked file.
+  const short = p({ html: '<a href="' + encodeURIComponent(A + '_r1_Ericsson_long_name.docx') + '">' + A + '_r1_Eric..&gt;</a><a href="sub/">sub/</a>' });
+  check('HTML: the actual file URL and its full, decoded name, also when the listing shortens the text; folder links are not files',
+    short.anchors, [{ href: FOLDER + encodeURIComponent(A + '_r1_Ericsson_long_name.docx'), text: A + '_r1_Ericsson_long_name.docx' }]);
+}
+{
+  const tA = tdocTable(A), tB = tdocTable(B);
+  const r = report({}, [tA, tB], listing([]));
+  r.update();
+  r.paste({ html: listing([A + '_r1.docx', A + '_r2.docx', B + '_r1.docx']) });
+  r.paste({ folder: LOCAL + '/Drafts/Other/', html: listing([A + '_r9.docx']) });
+  const res = r.paste({ html: listing([A + '_r2.docx', A + '_r3.docx']) });
+  check('a new listing of the same folder: a file no longer listed is removed, a new one added; another folder\'s entries kept',
+    [linesOf(tA), linesOf(tB)], [[A + '_r2.docx [local only]', A + '_r3.docx [local only]', A + '_r9.docx [local only]'], ['No revisions available.']]);
+  check('...the stored entries match, without duplicates', Object.keys(JSON.parse(r.docProps.getProperty('LOCALREV_' + A))).sort(), [A + '_r2.docx', A + '_r3.docx', A + '_r9.docx'].map((x) => x.toLowerCase()));
+  check('...a TDoc left without local entries has none stored', r.docProps.getProperty('LOCALREV_' + B), null);
+  check('...the result says what was removed', / 1 new for this report, 2 no longer listed \(removed\)\./.test(res.message), true);
+  const before = cellOf(tA).text;
+  r.paste({ html: '<html><body>Index of /Drafts/MBS<a href="../">Parent Directory</a></body></html>' });
+  check('a listing without a single revision (a wrong or partial paste) removes nothing', cellOf(tA).text, before);
+}
+{
+  const tA = tdocTable(A);
+  const r = report({}, [tA], listing([]));
+  r.update();
+  const res = r.paste({ text: 'Index of /ftp/SA/SA4/Inbox/Drafts/MBS\n' + A + '_r1.docx    16-Nov-2026 10:01   20K\n' });
+  check('text only: the revision is shown, linked to the local FOLDER (no file path made up), and the marker says so',
+    [linesOf(tA), linked(cellOf(tA)).slice(0, 2)], [[A + '_r1.docx [local only, see folder]'], [[A + '_r1.docx', FOLDER], ['[local only, see folder]', FOLDER]]]);
+  check('...and the dialog says how to get file links', /The browser copied text only/.test(res.message), true);
+  r.paste({ html: listing([A + '_r1.docx']) });
+  check('the same folder pasted as HTML later: the file link replaces the folder link', linked(cellOf(tA)).slice(0, 1), [[A + '_r1.docx', FOLDER + A + '_r1.docx']]);
+  r.paste({ text: A + '_r1.docx    16-Nov-2026 10:01   20K\n' });
+  check('...and a later text-only paste does not take the file link away', linked(cellOf(tA)).slice(0, 1), [[A + '_r1.docx', FOLDER + A + '_r1.docx']]);
+}
+{
+  const tA = tdocTable(A, A + '_r1.docx\nPresented by the rapporteur, see the e-mail of 15 Nov');
+  const r = report({}, [tA], listing([A + '_r1.docx']));
+  r.update();
+  check('a line typed into the cell by hand is kept by the update (below the revisions, above the folders line)', linesOf(tA), [A + '_r1.docx', 'Presented by the rapporteur, see the e-mail of 15 Nov']);
+  r.paste({ html: listing([A + '_r2.docx']) });
+  check('...and by an import', linesOf(tA), [A + '_r1.docx', A + '_r2.docx [local only]', 'Presented by the rapporteur, see the e-mail of 15 Nov']);
+  r.paste({ html: listing([A + '_r3.docx']) });
+  check('a local file no longer listed disappears from the cell; the typed line stays; nothing is doubled', linesOf(tA), [A + '_r1.docx', A + '_r3.docx [local only]', 'Presented by the rapporteur, see the e-mail of 15 Nov']);
+  const writes = cellOf(tA).writes;
+  r.update(); r.update();
+  check('repeat updates: the cell is not written again', cellOf(tA).writes, writes);
 }
 
 // ====================================================================== 7
