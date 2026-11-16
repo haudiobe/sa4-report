@@ -278,6 +278,10 @@ var IT11_CONFIG_KEYS_ = ['MEETING_TYPE', 'REPORT_SUFFIX', 'TDOC_LIST_URL', 'AGEN
  * `elements` are the body's children in order -- { type: 'PARAGRAPH', text, heading } or { type: 'TABLE', rows }.
  * The Session administration section (its heading and the "A01: ..." lines below it) is read apart; everything
  * else is digested: each TDoc table on its own (its minutes included), the rest as one text.
+ * `facts.generated` (optional): the lines the stored sessions give. Whatever a section line holds beyond the
+ * generated line it begins with -- text typed into it by hand -- is "other text" too (sectionManual), so that
+ * losing it is seen; a line that begins with none of them counts as typed by hand as a whole. Without
+ * `generated` every section line counts as generated (as before).
  */
 function it11Summarize_(facts) {
   const elements = facts.elements || [];
@@ -291,6 +295,17 @@ function it11Summarize_(facts) {
     while (sectionEnd < elements.length && elements[sectionEnd].type === 'PARAGRAPH' && elements[sectionEnd].heading === 'NORMAL' && /^A\d{2,}: /.test(elements[sectionEnd].text)) sectionEnd++;
   }
   const section = sectionAt === -1 ? null : elements.slice(sectionAt, sectionEnd).map(function (e) { return e.text; });
+  // After the live test of 2026-11-16: text typed into a section line is not hidden in the section.
+  const generated = Array.isArray(facts.generated) ? facts.generated : null;
+  const sectionManual = [];
+  if (section && generated) {
+    section.slice(1).forEach(function (text, i) {
+      let prefix = '';
+      generated.forEach(function (g) { if (g && text.indexOf(g) === 0 && g.length > prefix.length) prefix = g; });
+      const typed = text.slice(prefix.length);
+      if (typed) sectionManual.push((prefix ? prefix.slice(0, prefix.indexOf(':')) : 'line ' + (i + 1)) + '|' + typed);
+    });
+  }
   const tdocTables = {};
   const order = [];
   const other = [];
@@ -306,9 +321,10 @@ function it11Summarize_(facts) {
     }
     other.push(e.type === 'TABLE' ? 'T' + JSON.stringify(e.rows) : 'P' + e.heading + '|' + e.text);
   });
+  sectionManual.forEach(function (m) { other.push('S|' + m); });
   return {
     ok: true, config: facts.config, selector: facts.selector, sessions: facts.sessions, section: section, sectionHeadings: sections,
-    sectionAt: sectionAt, before: sectionAt > 0 ? elements[sectionAt - 1].text : null, after: sectionEnd < elements.length && sectionAt !== -1 ? (elements[sectionEnd].text || '[table]') : null,
+    sectionManual: generated ? sectionManual : null, sectionAt: sectionAt, before: sectionAt > 0 ? elements[sectionAt - 1].text : null, after: sectionEnd < elements.length && sectionAt !== -1 ? (elements[sectionEnd].text || '[table]') : null,
     tdocTables: order.length, tdocOrder: it6Digest_(order.join(',')), tdocs: tdocTables, otherDigest: it6Digest_(other.join('\n')), otherLines: other.length
   };
 }
@@ -316,7 +332,9 @@ function it11Summarize_(facts) {
 /** Pure: what changed from snapshot `a` to snapshot `b` (issue #11). */
 function it11Diff_(a, b) {
   const out = { configChanged: [], selectorUnchanged: JSON.stringify(a.selector) === JSON.stringify(b.selector), tdocsAdded: [], tdocsRemoved: [], tdocTablesChanged: [],
-    tdocOrderUnchanged: a.tdocOrder === b.tdocOrder, otherTextUnchanged: a.otherDigest === b.otherDigest, sectionBefore: a.section, sectionAfter: b.section, sessionsChanged: a.sessions !== b.sessions };
+    tdocOrderUnchanged: a.tdocOrder === b.tdocOrder, otherTextUnchanged: a.otherDigest === b.otherDigest, sectionBefore: a.section, sectionAfter: b.section, sessionsChanged: a.sessions !== b.sessions,
+    // Text typed into a section line that is no longer there (also counted in otherTextUnchanged).
+    sectionManualLost: (a.sectionManual || []).filter(function (m) { return (b.sectionManual || []).indexOf(m) === -1; }) };
   Object.keys(Object.assign({}, a.config, b.config)).forEach(function (k) { if ((a.config || {})[k] !== (b.config || {})[k]) out.configChanged.push(k); });
   Object.keys(b.tdocs).forEach(function (n) { if (!Object.prototype.hasOwnProperty.call(a.tdocs, n)) out.tdocsAdded.push(n); });
   Object.keys(a.tdocs).forEach(function (n) {
@@ -349,7 +367,16 @@ function it11Read_() {
       elements.push({ type: 'PARAGRAPH', text: '[' + c.getType() + ']' + (c.getText ? c.getText() : ''), heading: 'NORMAL' });
     }
   }
-  return it11Summarize_({ config: config, selector: selector, sessions: props.getProperty('ADHOC_SESSIONS'), elements: elements });
+  // The lines the stored sessions give, in the form of this release and, when it has it, of T-2026.10.26 ("A01: A01, ...").
+  let generated = null;
+  try {
+    const sessions = getConfiguredSessions_();
+    const zone = meetingSessionTimeZone_();
+    generated = typeof mainSessionLines_ === 'function'
+      ? mainSessionLines_(sessions, zone).concat(mainSessionLines_(sessions, zone, { legacyLabels: true })).map(function (l) { return l.text; })
+      : buildAdhocOpeningLines_(sessions, {}, zone).map(function (l) { return l.text; });
+  } catch (e) { generated = null; }
+  return it11Summarize_({ config: config, selector: selector, sessions: props.getProperty('ADHOC_SESSIONS'), elements: elements, generated: generated });
 }
 
 /** Editor: what the copy holds now for issue #11 (logged and returned). Writes nothing. */
