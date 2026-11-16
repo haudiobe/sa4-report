@@ -191,6 +191,23 @@ console.log('F. IntegrationCheck.js: issue #11 (session times in a main report)'
     elements: withSection.slice(0, -1).concat([T('S4-261801', 'Other minutes.'), T('S4-261899')]) });
   const g = box.it11Diff_(b, changed);
   check('it11Diff_ sees a changed report type, selector, minutes and an added TDoc', [g.configChanged, g.selectorUnchanged, g.tdocTablesChanged, g.tdocsAdded], [['REPORT_SUFFIX'], false, ['S4-261801'], ['S4-261899']]);
+
+  // The live test of 2026-11-16: text typed into the A02 line, then A02's end time changed. T-2026.10.26 lost the text and
+  // otherTextUnchanged still said true, because the whole line was taken as the generated section.
+  const A01 = 'A01: November 16, 2026, 09:00–17:30 ABT', A02 = 'A02: November 17, 2026, 09:00–18:00 ABT', A02b = 'A02: November 17, 2026, 09:00–18:30 ABT';
+  const typed = ' This is a test at 13:09';
+  const sectionWith = (lines) => base.slice(0, 2).concat([P('Session administration', 'HEADING3')], lines.map((t) => P(t)), base.slice(2));
+  const before = box.it11Summarize_({ config: config, selector: null, sessions: '{"v":2}', elements: sectionWith([A01, A02 + typed]), generated: [A01, A02] });
+  check('it11Summarize_ with the generated lines: the text typed into a line is told apart', before.sectionManual, ['A02|' + typed]);
+  const lost = box.it11Summarize_({ config: config, selector: null, sessions: '{"v":3}', elements: sectionWith([A01, A02b]), generated: [A01, A02b] });
+  const dl = box.it11Diff_(before, lost);
+  check('...lost when A02 changes (T-2026.10.26): otherTextUnchanged false, and sectionManualLost names it', [dl.otherTextUnchanged, dl.sectionManualLost], [false, ['A02|' + typed]]);
+  const kept = box.it11Summarize_({ config: config, selector: null, sessions: '{"v":3}', elements: sectionWith([A01, A02b + typed]), generated: [A01, A02b] });
+  const dk = box.it11Diff_(before, kept);
+  check('...kept after the new time (the fix): otherTextUnchanged true, nothing lost', [dk.otherTextUnchanged, dk.sectionManualLost], [true, []]);
+  const handLine = box.it11Summarize_({ config: config, selector: null, sessions: '{"v":2}', elements: sectionWith([A01, 'A02: changed by hand']), generated: [A01, A02] });
+  check('a section line that begins with no generated line counts as typed by hand as a whole', handLine.sectionManual, ['line 2|A02: changed by hand']);
+  check('without the generated lines (older snapshots): as before, nothing is told apart', [box.it11Summarize_({ config: config, selector: null, sessions: null, elements: sectionWith([A01, A02 + typed]) }).sectionManual, box.it11Diff_(b, c).sectionManualLost], [null, []]);
   const it11 = kit.slice(kit.indexOf('// Issue #11'));
   truthy('the issue #11 part writes only its own snapshots (IT11_*), never the document (source)',
     !/deleteProperty|setText|appendParagraph|insert|clear\(|saveAndClose|batchUpdate/.test(it11) && (it11.match(/setProperty\(([^,]+),/g) || []).every((x) => /IT11_SNAPSHOT_(PREFIX|COUNT_KEY)_/.test(x)));
