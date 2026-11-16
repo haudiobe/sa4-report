@@ -179,7 +179,7 @@ console.log('6. cost and failure');
 console.log('7. the Revisions cell is not part of this');
 {
   check('renderRevisionsCellContent_() still writes one revision per line (source; its own tests: revision-cell-rendering-hotfix)',
-    /const fullText = entries\.map\(e => e\.line\)\.join\('\\n'\);\n  cell\.setText\(fullText\);/.test(functionSource('renderRevisionsCellContent_')), true);
+    /const fullText = entries\.map\(e => e\.line\)\.join\('\\n'\)( \+ \(folderLine \? '\\n' \+ folderLine\.text : ''\))?;\n  cell\.setText\(fullText\);/.test(functionSource('renderRevisionsCellContent_')), true);
   const r = templateReport({ tdocs: [t(A, '4.3', B, 'revised'), t(B, '4.4')] });
   r.build();
   check('the build does not write the Revisions cells', [r.field(A, 'Revisions'), r.field(B, 'Revisions')], ['', '']);

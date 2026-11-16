@@ -306,7 +306,8 @@ console.log('updateRevisions_() -- main-meeting source/matching behavior is unch
 
   check('main meeting: updateRevisions_() fetched exactly cfg.REVISIONS_URL', fetchedUrls[0], cfg.REVISIONS_URL.replace(/\/$/, '') + '/');
   check('main meeting: the matching draft file (S4-260123_r1.docx) is still recognized and linked',
-    parentTable.getCell(6, 1).getText().trim(), 'S4-260123_r1.docx');
+    // The line of both folders below (after T-2026.10.25) is tests/local-revisions-folder.test.js.
+    sandbox.stripRevisionFoldersLine_(parentTable.getCell(6, 1).getText()).trim(), 'S4-260123_r1.docx');
 
   // The exact substring-overlap safety property, now verified for the real
   // main-meeting family too -- a fresh sandbox/props so this TDoc's own
@@ -319,7 +320,7 @@ console.log('updateRevisions_() -- main-meeting source/matching behavior is unch
   overlapSandbox.UrlFetchApp = { fetch: () => ({ getResponseCode: () => 200, getContentText: () => overlapHtml }) };
   overlapSandbox.updateRevisions_(overlapSandbox.getCollectorConfig_());
   check('S4-260200 does NOT accidentally match the unrelated, longer S4-2602001\'s draft (digit-boundary safe, unlike the old substring test)',
-    overlapTable.getCell(6, 1).getText().trim(), 'No revisions available.');
+    overlapSandbox.stripRevisionFoldersLine_(overlapTable.getCell(6, 1).getText()).trim(), 'No revisions available.');
 }
 
 // ============================ 6. missing revisions URL ======================
