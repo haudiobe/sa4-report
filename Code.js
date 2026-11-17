@@ -6082,33 +6082,33 @@ function renderRevisionsCellContent_(cell, orderedRevisions, folders, options) {
   const entries = orderedRevisions
     .map(item => revisionCellEntry_(item))
     .filter(e => e.line);
-  // After T-2026.10.25: a last line linking both revisions folders, when the
-  // report has a local (meeting-room) folder. Without one, nothing changes.
-  const folderLine = buildRevisionFoldersLine_(folders);
+  // After T-2026.10.28: no "Revisions folders: ..." line any more (the report links the folders elsewhere);
+  // one written by an earlier release goes at this cell's next write.
+  const folderLine = null;
 
   if (!entries.length) {
+    // After T-2026.10.28: "No revisions available." only where it is known (options.none, revisionNoneMode_()):
+    // 'write' -- every source was read and has none; 'remove' -- the TDoc has revisions as TDocs (REVISION_MAP), so
+    // the sentence would be wrong; 'keep' -- a source could not be read (the local listing is stale or missing):
+    // nothing is claimed, an earlier text stays.
+    const mode = (options && options.none) || 'write';
     const current = cell.getText();
-    if (!folderLine && current.indexOf(REVISION_FOLDERS_PREFIX_) === -1) {
-      if (!current.trim()) cell.setText(REVISIONS_NONE_TEXT_);
+    const lines = current.split('\n');
+    const generated = function (line) { return isLocalRevisionCellLine_(line) || line.indexOf(REVISION_FOLDERS_PREFIX_) === 0 || line.trim() === REVISIONS_NONE_TEXT_; };
+    const typed = lines.filter(function (line) { return line.trim() && !generated(line); }).join('\n').trim();
+    // Text typed by hand is left alone; only lines this code wrote go (a local revision no longer listed, a folders line).
+    if (typed) {
+      const kept = lines.filter(function (line) { return !isLocalRevisionCellLine_(line) && line.indexOf(REVISION_FOLDERS_PREFIX_) !== 0; }).join('\n').trim();
+      if (kept !== current.trim()) cell.setText(kept);
       return;
     }
-    // Issue #16: a local revision no longer listed leaves the cell; whatever else is in it stays.
-    const withoutLocal = current.split('\n').filter(line => !isLocalRevisionCellLine_(line)).join('\n');
-    if (withoutLocal !== current) {
-      const rest = stripRevisionFoldersLine_(withoutLocal).trim();
-      const keep = rest && rest !== REVISIONS_NONE_TEXT_ ? rest : REVISIONS_NONE_TEXT_;
-      const text = folderLine ? keep + '\n' + folderLine.text : keep;
-      cell.setText(text);
-      if (folderLine) linkRevisionFoldersLine_(cell.editAsText(), keep.length + 1, folderLine);
-      return;
-    }
-    // Text that is not ours (typed by hand) is left alone, as before.
-    const own = stripRevisionFoldersLine_(current).trim();
-    if (own && own !== REVISIONS_NONE_TEXT_) return;
-    const wanted = folderLine ? REVISIONS_NONE_TEXT_ + '\n' + folderLine.text : REVISIONS_NONE_TEXT_;
-    if (current === wanted) return;
+    const hadNone = lines.some(function (line) { return line.trim() === REVISIONS_NONE_TEXT_; });
+    let wanted;
+    if (mode === 'write') wanted = REVISIONS_NONE_TEXT_;
+    else if (mode === 'remove') wanted = '';
+    else wanted = hadNone ? REVISIONS_NONE_TEXT_ : '';
+    if (current === wanted || (!current.trim() && !wanted)) return;
     cell.setText(wanted);
-    if (folderLine) linkRevisionFoldersLine_(cell.editAsText(), REVISIONS_NONE_TEXT_.length + 1, folderLine);
     return;
   }
 
@@ -6132,7 +6132,25 @@ function renderRevisionsCellContent_(cell, orderedRevisions, folders, options) {
     offset = end + 2; // skip past this line's '\n' separator
   });
   manual.forEach(line => { offset += line.length + 1; });
-  if (folderLine) linkRevisionFoldersLine_(te, offset, folderLine);
+}
+
+/**
+ * After T-2026.10.28 (pure): whether a Revisions cell without revision lines
+ * may say "No revisions available." -- 'remove' when the TDoc has revisions
+ * as TDocs (`revisionMap`, REVISION_MAP: revised to another, or another
+ * revised to it); 'keep' when a source could not be read (`sourcesRead`
+ * false); otherwise 'write'.
+ */
+function revisionNoneMode_(tdoc, revisionMap, revisedInto, sourcesRead) {
+  if ((revisionMap && revisionMap[tdoc]) || (revisedInto && revisedInto[tdoc])) return 'remove';
+  return sourcesRead ? 'write' : 'keep';
+}
+
+/** Pure: the TDocs some other TDoc was revised into (the values of REVISION_MAP), as { tdoc: true }. */
+function revisedIntoSet_(revisionMap) {
+  const set = {};
+  Object.keys(revisionMap || {}).forEach(function (k) { const v = String(revisionMap[k] || '').trim(); if (v) set[v] = true; });
+  return set;
 }
 
 /** Pure (issue #16): whether a line of a Revisions cell is a local revision line written by renderRevisionsCellContent_(). */
@@ -6501,7 +6519,9 @@ function renderStoredLocalRevisions_(props, byTdoc, touched, localBase, context)
     if (!t) return;
     const ordered = orderedStoredRevisions_(loadJsonObject_(props.getProperty('REVIS_' + tdoc)));
     const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
-    renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders, { force: true });
+    const map = loadJsonObject_(props.getProperty('REVISION_MAP'));
+    renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders,
+      { force: true, none: revisionNoneMode_(tdoc, map, revisedIntoSet_(map), true) });
   });
 }
 
@@ -6625,11 +6645,25 @@ function importAgentListing_(context, deps) {
     const v = validateAgentListing_(file.raw, { group: group, localBase: localBase }, now, localListingSha256Hex_);
     if (v.ok) { chosen = v.listing; chosen.driveUpdatedAt = file.updated ? file.updated.toISOString() : null; } else if (!firstReason) firstReason = v.reason;
   });
+  if (!chosen && /^stale/.test(firstReason)) {
+    // After T-2026.10.28: the agent's scheduled overnight pause is not a synchronization failure (localListingScheduledPause_()).
+    let newest = null;
+    try { newest = JSON.parse(read.files[0].raw).fetchedAt; } catch (e) { newest = null; }
+    const pause = localListingScheduledPause_(meetingSessionTimeZone_(context), newest, now);
+    if (pause) return finish('paused', 'Not imported: scheduled overnight pause. The local listing agent scans from 07:30 to 19:30 meeting time; its last scan of ' + group +
+      ' was at ' + pause.lastScan + ', scanning resumes at ' + pause.resumes + '. This is not a synchronization failure. Previously imported revisions are kept.');
+  }
   if (!chosen) return finish(/^stale/.test(firstReason) ? 'stale' : 'invalid', 'Not imported: the newest listing of ' + group + ' is ' + firstReason + '. Previously imported revisions are kept.');
   state.lastScanFetchedAt = chosen.fetchedAt;
   state.lastScanDriveUpdatedAt = chosen.driveUpdatedAt;
   if (previous.lastScanId === chosen.scanId) return finish('unchanged', 'Scan of ' + chosen.fetchedAt + ' already imported.');
   const parsed = parseLocalRevisionsListing_({ folder: chosen.folder, html: chosen.payload, text: '' }, localBase);
+  // After T-2026.10.28: a complete, fresh scan of the group's folder with no file in it is an answer -- the folder is
+  // empty -- not a failure. Nothing is stored or removed (storeLocalRevisions_() never removes on an empty listing).
+  if (!parsed.ok && !parsed.anchors.length && !parsed.truncated) {
+    return finish('imported', 'Imported the scan of ' + chosen.fetchedAt + ': the folder of ' + group + ' has no files.',
+      { lastScanId: chosen.scanId, lastImportAt: now.toISOString(), files: 0, recognized: 0, added: 0, removed: 0 });
+  }
   if (!parsed.ok) return finish('invalid', 'Not imported: ' + parsed.error + ' Previously imported revisions are kept.');
   const byTdoc = (deps && deps.byTdoc) || tdocTablesByNumber_(getActiveDocumentBodyCounted_('importAgentListing_', context));
   const stored = storeLocalRevisions_(props, parsed, Object.keys(byTdoc));
@@ -6637,6 +6671,37 @@ function importAgentListing_(context, deps) {
   return finish('imported', 'Imported the scan of ' + chosen.fetchedAt + ': ' + parsed.listed + ' file(s), ' + stored.recognized + ' revision(s) of SA4 TDocs, ' +
     stored.added + ' new, ' + stored.removed + ' no longer listed.',
     { lastScanId: chosen.scanId, lastImportAt: now.toISOString(), files: parsed.listed, recognized: stored.recognized, added: stored.added, removed: stored.removed, touchedList: stored.touched });
+}
+
+/**
+ * After T-2026.10.28 (pure): whether a stale listing of the local listing
+ * agent is its scheduled overnight pause rather than a failure. The agent
+ * scans only from 07:30 to 19:30 meeting local time (docs/LOCAL_LISTING_AGENT.md).
+ * It is the pause when `now` is outside that window, or in its first 15
+ * minutes (the first scan of the day is still on its way), AND the newest
+ * listing was scanned at most 30 minutes before the window closed: the agent
+ * worked until the end. A listing that stopped earlier, and any staleness
+ * during the day, stay failures. `zone` is the meeting's IANA zone
+ * (meetingSessionTimeZone_()); without one nothing is taken for the pause.
+ * Returns null, or { lastScan, resumes } as wall-clock texts of the zone
+ * ("2026-11-17 19:28 ABT", "07:30 ABT").
+ */
+function localListingScheduledPause_(zone, fetchedAtIso, now) {
+  const START = '07:30', END = '19:30', GRACE_MINUTES = 15, LAST_SCAN_MINUTES = 30;
+  const t = Date.parse(fetchedAtIso);
+  if (!zone || isNaN(t) || !now || isNaN(now.getTime())) return null;
+  const wall = meetingZoneWallClockOfInstant_(zone, now.getTime());
+  if (!wall) return null;
+  const minutes = function (hhmm) { return parseInt(hhmm.slice(0, 2), 10) * 60 + parseInt(hhmm.slice(3, 5), 10); };
+  const m = minutes(wall.slice(11, 16));
+  let closedOn;
+  if (m >= minutes(END)) closedOn = wall.slice(0, 10);
+  else if (m < minutes(START) + GRACE_MINUTES) closedOn = new Date(Date.parse(wall.slice(0, 10) + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10);
+  else return null;
+  const closedAt = meetingWallClockToInstant_(zone, closedOn, END);
+  if (closedAt === null || t < closedAt - LAST_SCAN_MINUTES * 60000) return null;
+  const scan = meetingZoneWallClockOfInstant_(zone, t);
+  return { lastScan: scan.slice(0, 10) + ' ' + scan.slice(11, 16) + ' ' + meetingTimeZoneAbbreviationAt_(zone, t), resumes: START + ' ' + meetingTimeZoneAbbreviationAt_(zone, now.getTime()) };
 }
 
 /** importAgentListing_() for an update: never throws (a failure is logged and the update goes on). */
@@ -6669,10 +6734,15 @@ function describeLocalListingAgentStatus_(stateJson, folderId, now) {
 }
 
 /** Pure: what the report says about the meeting-room server: not checked yet, or when a listing was last imported. */
-function describeLocalRevisionsStatus_(lastImportJson, localBase) {
+function describeLocalRevisionsStatus_(lastImportJson, localBase, agentStateJson) {
   if (!localBase) return 'Local (meeting-room server): none configured.';
   const last = loadJsonObject_(lastImportJson);
-  if (!last.at) return 'Local (meeting-room server): not checked yet. Import Local Inbox Listing… on the meeting-room network.';
+  if (!last.at) {
+    // After T-2026.10.28: with a valid scan of the local listing agent there is nothing to do by hand.
+    const agent = loadJsonObject_(agentStateJson);
+    if (agent.lastScanFetchedAt && (agent.lastResult === 'imported' || agent.lastResult === 'unchanged')) return '';
+    return 'Local (meeting-room server): not checked yet. Import Local Inbox Listing… on the meeting-room network.';
+  }
   return 'Local (meeting-room server): last listing imported ' + last.at + ' from ' + last.folder + ': ' + last.listed + ' file(s), ' +
     last.recognized + ' revision(s) of SA4 TDocs, ' + (last.added ? last.added + ' new for this report' : 'no new revisions for this report') +
     (last.removed ? ', ' + last.removed + ' no longer listed (removed)' : '') + '.';
@@ -6759,7 +6829,9 @@ function saveLocalRevisionsListing(payload) {
 function updateRevisions_(cfg, context) {
   // After T-2026.10.27: the listing the local listing agent wrote to Drive, first (LOCAL LISTING AGENT section).
   // Never throws, and without a configured folder it does nothing at all.
-  importAgentListingSafely_(context);
+  const agent = importAgentListingSafely_(context);
+  // After T-2026.10.28: with an agent folder, the local source counts as read only when its listing was valid now.
+  const localRead = !agent || agent.result === 'imported' || agent.result === 'unchanged';
   const baseUrl = String(getMeetingContext_(context).sources.revisionsUrl || '').trim();
   if (!baseUrl) return;
 
@@ -6785,6 +6857,9 @@ function updateRevisions_(cfg, context) {
   // complexity/code-quality improvement, not a runtime-bottleneck fix.
   const anchorIndex = buildRevisionAnchorIndex_(anchors, url);
   perfCount_('revision anchors parsed', anchors.length);
+  // After T-2026.10.28: TDocs with revisions as TDocs never say "No revisions available." (revisionNoneMode_()).
+  const revisionMap = loadJsonObject_(props.getProperty('REVISION_MAP'));
+  const revisedInto = revisedIntoSet_(revisionMap);
   // After T-2026.10.25: both folders, for the line under the revisions (the local one is never fetched).
   const folders = { local: localRevisionsUrlFor_(context), remote: url };
 
@@ -6850,7 +6925,8 @@ function updateRevisions_(cfg, context) {
     const cell = findOrFallbackCell_(t, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
     // Issue #16: with the revisions listed on the meeting-room server (LOCALREV_<tdoc>), which are never fetched
     // from here. Only the 3GPP ones below get a table of their own, as before.
-    renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders);
+    renderRevisionsCellContent_(cell, mergeLocalRevisions_(ordered, loadJsonObject_(props.getProperty(LOCAL_REVISIONS_KEY_PREFIX_ + tdoc))), folders,
+      { none: revisionNoneMode_(tdoc, revisionMap, revisedInto, localRead) });
     renderingMs += Date.now() - renderStart;
 
     // Also insert the revision tables directly after this TDOC table in the document.
@@ -10334,7 +10410,8 @@ function testAllConnections() {
   const localRevisions = localRevisionsUrlFor_();
   if (localRevisions) results.push('   🏢 Local (meeting-room server, on-site only, not checked from here): ' + localRevisions);
   // Issue #16: when a listing of it was last imported.
-  if (localRevisions) results.push('   ' + describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localRevisions));
+  const localRevisionsStatus = localRevisions ? describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localRevisions, getReportStateStore_().getProperty(LOCAL_LISTING_STATE_KEY_)) : '';
+  if (localRevisionsStatus) results.push('   ' + localRevisionsStatus);
   // After T-2026.10.27: the local listing agent (LOCAL LISTING AGENT section).
   if (localRevisions) results.push('   ' + describeLocalListingAgentStatus_(getReportStateStore_().getProperty(LOCAL_LISTING_STATE_KEY_), localListingFolderIdOf_(getReportStateStore_().getProperty(LOCAL_LISTING_FOLDER_KEY_)), new Date()).split('\n').join('\n   '));
 
@@ -10668,7 +10745,7 @@ function testRevisionsFolder() {
       `Files found: ~${linkCount}` +
       (localRevisions ? `\n\nLocal (meeting-room server, on-site only, not checked from here): ${localRevisions}` +
         // Issue #16: when a listing of it was last imported.
-        '\n' + describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localRevisions) : ''),
+        '\n' + describeLocalRevisionsStatus_(getReportStateStore_().getProperty(LOCAL_REVISIONS_LAST_IMPORT_KEY_), localRevisions, getReportStateStore_().getProperty(LOCAL_LISTING_STATE_KEY_)) : ''),
       ui.ButtonSet.OK
     );
   } catch (e) {

@@ -136,11 +136,11 @@ console.log('3. the Revisions cell of a main report');
   const run = runRevisions(MAIN, [A, B, C], listing);
   const remote = run.fetched[0];
   check('only the 3GPP folder is fetched, never the local server', [run.fetched.length, run.fetched.some((u) => u.indexOf('10.10.10.10') !== -1)], [1, false]);
-  check('the revisions as before, then the line of both folders', cellOf(A).text, 'S4-260123_r1.docx\nS4-260123_r2.docx\n' + FOLDERS_LINE);
-  check('each revision is linked directly in the 3GPP folder; each folder by its label',
-    linked(cellOf(A)), [['S4-260123_r1.docx', remote + 'S4-260123_r1.docx'], ['S4-260123_r2.docx', remote + 'S4-260123_r2.docx'],
-      ['Local \u2013 meeting-room server, may be newer, on-site only', LOCAL], ['Remote \u2013 3GPP server, synchronized, accessible externally', remote]]);
-  check('a TDoc without revisions: "No revisions available." and the folders (the local one may have one already)', [cellOf(B).text, linked(cellOf(B)).map((l) => l[1])], ['No revisions available.\n' + FOLDERS_LINE, [LOCAL, remote]]);
+  // After T-2026.10.28 the cell has no "Revisions folders" line any more (tests/revisions-cell-cleanup.test.js).
+  check('the revisions as before, without a folders line', cellOf(A).text, 'S4-260123_r1.docx\nS4-260123_r2.docx');
+  check('each revision is linked directly in the 3GPP folder',
+    linked(cellOf(A)), [['S4-260123_r1.docx', remote + 'S4-260123_r1.docx'], ['S4-260123_r2.docx', remote + 'S4-260123_r2.docx']]);
+  check('a TDoc without revisions (every source read): "No revisions available." alone', [cellOf(B).text, linked(cellOf(B))], ['No revisions available.', []]);
   check('text typed by hand is left alone', [cellOf(C).text, cellOf(C).writes], ['Typed by hand: see the chair\'s notes', 0]);
   check('the Minutes are not touched', [A, B, C].map((t) => t.getCell(7, 1).getText()), ['Typed minutes', 'Typed minutes', 'Typed minutes']);
   check('no revision is taken from the line of the folders (no TDoc number in it)', run.sandbox.findSA4DocumentIdsInText_(FOLDERS_LINE), []);
