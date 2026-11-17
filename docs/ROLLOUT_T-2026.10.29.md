@@ -22,18 +22,25 @@ Every step below needs approval. Nothing here has been done in production.
 
 ## 0. Validation on the disposable MBS copy (before any production step)
 
-Target: "DISPOSABLE TEST COPY (issue #16) - MBS SA4#138", which currently runs the T-2026.10.28 candidate.
-1. Push the candidate bundle (`dist/release-candidate/T-2026.10.29/`) into its bound script. Read it
-   back and compare every file with `RELEASE-MANIFEST.json`.
-2. In the copy:
-   - *About This Report* shows T-2026.10.29 / 2.26.13.
-   - *Update TDoc Revisions* runs without error.
-   - Cells with the old folders line lose it; revision lines and their links stay; minutes are untouched.
-   - *Check Connections* shows the local-listing lines.
-3. Overnight check (after 20:00 ABT), with the copy's *Local listing folder* set to the test folder and
-   its meeting time zone set to `America/Edmonton`: *Check Connections*' first line reads
-   `Not imported: scheduled overnight pause. …`. During the day, a stopped agent reads `stale`.
-4. Roll the copy back if anything differs (its `before/` folder).
+Target: "DISPOSABLE TEST COPY (issue #16) - MBS SA4#138".
+1. **Done 2026-11-17 12:00 UTC.** The candidate bundle (`dist/release-candidate/T-2026.10.29/`, from
+   `3927fc3`) was pushed into the copy's bound script. The read-back matches `RELEASE-MANIFEST.json`
+   (Code.js `cc32cbb6…`); the copy ran the T-2026.10.28 candidate before. The later commits on the
+   release branch change tests, tools and documentation only; the runtime files are byte-identical.
+2. In the copy, menu **SA4 Report**:
+   - *ℹ️ About This Report* shows T-2026.10.29 / 2.26.13.
+   - *⚙️ Configure Meeting…*: **Meeting Time Zone** is `America/Edmonton` (shown with ABT), or
+     *Meeting local* resolving to it. **Local listing folder** is the test folder
+     `DISPOSABLE TEST - SA4 local listings (T-2026.10.29)`. Save.
+   - *📄 Report › Update TDoc Revisions* runs without error. Old "Revisions folders: …" lines are
+     gone; revision lines and their links stay; minutes are untouched; no "No revisions available."
+     appears in a cell that had none.
+   - *🛠 Advanced and Repair › Check Connections*: before 07:45 ABT, the agent line reads
+     `Not imported: scheduled overnight pause. … last scan of MBS was at <date> 19:28 ABT, scanning
+     resumes at 07:30 ABT. This is not a synchronization failure.` From 07:45 ABT on, with the same
+     file, it reads `… is stale: scanned …` (the agent did not resume).
+3. Put the copy's *Local listing folder* back to what it was. Roll the copy back if anything differs
+   (`dist/integration-test/rc-T-2026.10.29-20261117T120045Z/before/`).
 
 ## A. Scripts, one report at a time (MBS, Video, 6G Media, RTC, Audio)
 
@@ -58,10 +65,10 @@ For each report:
 
 - In each report, check *Configure Meeting › Meeting time zone*: `America/Edmonton` makes the
   overnight pause show as **paused**. Without it, overnight stays **stale**; nothing else changes.
-- Agent: deploy PR #25 (window in ABT, UTC−6) if approved. The agent installed now scans
-  08:30–20:30 ABT, because this laptop's Windows rules for `Mountain Standard Time` predate
-  Alberta's change. With that agent, the report says **stale** from 07:45 to 08:30 ABT, which is
-  correct: no scan has arrived yet.
+- Agent: PR #25 (window in ABT, UTC−6) was installed on the agent laptop on 2026-11-17. Its task
+  runs daily from 07:30 ABT (13:30 UTC) for 12 hours, every 2 minutes; the backup of the previous
+  files and task is in `C:\SA4Agent\backup-20261117T122830Z\`. The report's 07:45 ABT boundary
+  therefore leaves a quarter of an hour for the first scan to reach Drive.
 
 ## C. Rollback (per report, independent of the others)
 
