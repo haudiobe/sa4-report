@@ -277,9 +277,11 @@ console.log('8c. Check Connections: the TDoc list as the update downloads it');
 // ====================================================================== 9
 console.log('9. what changed in Code.js (source)');
 {
-  // The Revisions-cell cleanup after T-2026.10.28 came later: compared without it (tests/revisions-cell-cleanup.test.js).
+  // The overnight-pause distinction and the Revisions-cell cleanup after T-2026.10.28 came later: compared without them
+  // (tests/local-listing-overnight-pause.test.js, tests/revisions-cell-cleanup.test.js).
   const full = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
-  const now = require('./helpers/before-structure-fix.js').codeWithoutRevisionsCellCleanup(full).code;
+  const later = require('./helpers/before-structure-fix.js');
+  const now = later.codeWithoutRevisionsCellCleanup(later.codeWithoutOvernightPause(full).code).code;
   const view = codeWithoutLocalListingAgent(full);
   check('the take-out finds every change exactly once', view.problems, []);
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));

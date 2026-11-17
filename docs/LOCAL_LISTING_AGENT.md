@@ -44,7 +44,8 @@ own evidence, so that one is never taken for the next:
    time. Only this proves synchronization.
 4. **Import** — the report's own state: when, files, revisions, new, removed.
 
-Its first line says the result of the last check: imported, unchanged, stale, missing, invalid, unavailable.
+Its first line says the result of the last check: imported, unchanged, paused (the scheduled overnight
+pause, see below), stale, missing, invalid, unavailable.
 
 Check Connections also tries the TDoc list as the update does (the configured address, then its
 `www.3gpp.org/ftp` twin); a 403 from 3GPP is shown as a refusal by the 3GPP server, usually temporary.
@@ -80,11 +81,26 @@ scan records the error and keeps the last good listing, exactly as during the da
 automatically once the network is back.
 
 **Expected overnight staleness.** The reports accept a listing for at most 30 minutes. From about
-**20:00 Calgary time until the first scan after 07:30**, *Check Connections* therefore shows the
-groups as **stale**, and automatic updates import no local revisions. Nothing is erased: revisions
-imported during the day stay in the reports. This is expected and not a fault. The first update
-after 07:30 imports again (Drive for desktop needs about a minute to upload). Revisions uploaded
-to the meeting-room server overnight appear after 07:30, or immediately via the manual fallback:
+**20:00 Calgary time until the first scan after 07:30**, automatic updates therefore import no local
+revisions. Nothing is erased: revisions imported during the day stay in the reports, and no
+Revisions cell is newly marked "No revisions available." This is expected and not a fault. The
+first update after 07:30 imports again (Drive for desktop needs about a minute to upload).
+
+**Scheduled pause vs. genuine failure (reports after T-2026.10.28).** The report tells the two apart.
+It does this by itself, because the agent writes nothing while it pauses:
+
+| The report sees a stale listing … | Check Connections says |
+|---|---|
+| at night (19:30 to 07:45 meeting time), and the agent's last scan was at 19:00 or later | **paused**: `Not imported: scheduled overnight pause. … its last scan of MBS was at 2026-11-16 19:28 ABT, scanning resumes at 07:30 ABT. This is not a synchronization failure.` |
+| during the day (from 07:45), or at night when the last scan was before 19:00 | **stale**, as before: agent stopped, meeting-room network down, or Drive not synchronized. Look into it. |
+
+Times are in the meeting's time zone (*Configure Meeting › Meeting time zone*, e.g. `America/Edmonton`,
+which is ABT from 1 November 2026). A report without a meeting time zone guesses nothing and always
+says **stale**. 07:45 allows a quarter of an hour for the first scan of the day to reach Drive.
+"stale" at 08:00 therefore means the agent did not resume.
+
+Revisions uploaded to the meeting-room server overnight appear after 07:30, or immediately via the
+manual fallback:
 
 - *Import Local Inbox Listing…* in the report (unchanged), or
 - a single scan on the laptop outside the window:
@@ -123,7 +139,7 @@ desktop signed in to the account that runs the reports (or one they can read).
 | Situation | Agent | Report |
 |---|---|---|
 | Meeting-room network or server down | records the error, keeps the last good listing | after 30 min: "stale", nothing imported, nothing erased |
-| Outside 07:30–19:30 Calgary time (overnight) | paused: no scan, exit 0, files untouched; resumes at 07:30 | from about 20:00: "stale", nothing imported, nothing erased |
+| Outside 07:30–19:30 Calgary time (overnight) | paused: no scan, exit 0, files untouched; resumes at 07:30 | from about 20:00: "paused" (scheduled; "stale" without a meeting time zone), nothing imported, nothing erased |
 | Laptop asleep | no new scans (the task does not wake the laptop); after waking, a missed run starts once, then every 2 minutes inside the window (paused outside it) | same until the next successful scan |
 | User logged off / agent stopped | no new scans (the task runs only in the logged-on session); after logging on, the next 2-minute run inside the window scans | same |
 | Drive for desktop paused or offline | writes locally, not uploaded | "stale" until the upload arrives |

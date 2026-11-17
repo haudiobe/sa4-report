@@ -6645,6 +6645,14 @@ function importAgentListing_(context, deps) {
     const v = validateAgentListing_(file.raw, { group: group, localBase: localBase }, now, localListingSha256Hex_);
     if (v.ok) { chosen = v.listing; chosen.driveUpdatedAt = file.updated ? file.updated.toISOString() : null; } else if (!firstReason) firstReason = v.reason;
   });
+  if (!chosen && /^stale/.test(firstReason)) {
+    // After T-2026.10.28: the agent's scheduled overnight pause is not a synchronization failure (localListingScheduledPause_()).
+    let newest = null;
+    try { newest = JSON.parse(read.files[0].raw).fetchedAt; } catch (e) { newest = null; }
+    const pause = localListingScheduledPause_(meetingSessionTimeZone_(context), newest, now);
+    if (pause) return finish('paused', 'Not imported: scheduled overnight pause. The local listing agent scans from 07:30 to 19:30 meeting time; its last scan of ' + group +
+      ' was at ' + pause.lastScan + ', scanning resumes at ' + pause.resumes + '. This is not a synchronization failure. Previously imported revisions are kept.');
+  }
   if (!chosen) return finish(/^stale/.test(firstReason) ? 'stale' : 'invalid', 'Not imported: the newest listing of ' + group + ' is ' + firstReason + '. Previously imported revisions are kept.');
   state.lastScanFetchedAt = chosen.fetchedAt;
   state.lastScanDriveUpdatedAt = chosen.driveUpdatedAt;
@@ -6663,6 +6671,37 @@ function importAgentListing_(context, deps) {
   return finish('imported', 'Imported the scan of ' + chosen.fetchedAt + ': ' + parsed.listed + ' file(s), ' + stored.recognized + ' revision(s) of SA4 TDocs, ' +
     stored.added + ' new, ' + stored.removed + ' no longer listed.',
     { lastScanId: chosen.scanId, lastImportAt: now.toISOString(), files: parsed.listed, recognized: stored.recognized, added: stored.added, removed: stored.removed, touchedList: stored.touched });
+}
+
+/**
+ * After T-2026.10.28 (pure): whether a stale listing of the local listing
+ * agent is its scheduled overnight pause rather than a failure. The agent
+ * scans only from 07:30 to 19:30 meeting local time (docs/LOCAL_LISTING_AGENT.md).
+ * It is the pause when `now` is outside that window, or in its first 15
+ * minutes (the first scan of the day is still on its way), AND the newest
+ * listing was scanned at most 30 minutes before the window closed: the agent
+ * worked until the end. A listing that stopped earlier, and any staleness
+ * during the day, stay failures. `zone` is the meeting's IANA zone
+ * (meetingSessionTimeZone_()); without one nothing is taken for the pause.
+ * Returns null, or { lastScan, resumes } as wall-clock texts of the zone
+ * ("2026-11-17 19:28 ABT", "07:30 ABT").
+ */
+function localListingScheduledPause_(zone, fetchedAtIso, now) {
+  const START = '07:30', END = '19:30', GRACE_MINUTES = 15, LAST_SCAN_MINUTES = 30;
+  const t = Date.parse(fetchedAtIso);
+  if (!zone || isNaN(t) || !now || isNaN(now.getTime())) return null;
+  const wall = meetingZoneWallClockOfInstant_(zone, now.getTime());
+  if (!wall) return null;
+  const minutes = function (hhmm) { return parseInt(hhmm.slice(0, 2), 10) * 60 + parseInt(hhmm.slice(3, 5), 10); };
+  const m = minutes(wall.slice(11, 16));
+  let closedOn;
+  if (m >= minutes(END)) closedOn = wall.slice(0, 10);
+  else if (m < minutes(START) + GRACE_MINUTES) closedOn = new Date(Date.parse(wall.slice(0, 10) + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10);
+  else return null;
+  const closedAt = meetingWallClockToInstant_(zone, closedOn, END);
+  if (closedAt === null || t < closedAt - LAST_SCAN_MINUTES * 60000) return null;
+  const scan = meetingZoneWallClockOfInstant_(zone, t);
+  return { lastScan: scan.slice(0, 10) + ' ' + scan.slice(11, 16) + ' ' + meetingTimeZoneAbbreviationAt_(zone, t), resumes: START + ' ' + meetingTimeZoneAbbreviationAt_(zone, now.getTime()) };
 }
 
 /** importAgentListing_() for an update: never throws (a failure is logged and the update goes on). */
