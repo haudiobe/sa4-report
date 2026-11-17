@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.12 (2026-11-17)
+ * Version: 2.26.13 (2026-11-17)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,22 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.13 (2026-11-17)
+ *   (T-2026.10.29; on T-2026.10.28 / 2.26.12.)
+ *   - Changed: the Revisions cell has no "Revisions folders: ..." line any
+ *     more (one from an earlier release goes at the cell's next write);
+ *     "No revisions available." only where every source was read and has
+ *     none -- never for a TDoc with revisions as TDocs (REVISION_MAP), and
+ *     not newly claimed while the local listing is stale or missing. A
+ *     complete, fresh scan of an empty group folder is an answer, not
+ *     "invalid". Check Connections drops the manual-import instruction
+ *     while the local listing agent delivers. (PR #23.)
+ *   - Added: the local listing agent's scheduled overnight pause (it scans
+ *     07:30-19:30 meeting time) is "paused", not "stale": at night in the
+ *     meeting's time zone, when the agent's last scan was at most 30
+ *     minutes before 19:30. Staleness during the day, an earlier last
+ *     scan, or no meeting time zone stay "stale". Nothing is imported or
+ *     erased either way. (docs/LOCAL_LISTING_AGENT.md.)
  * 2.26.12 (2026-11-17)
  *   (T-2026.10.28; on T-2026.10.27 / 2.26.11.)
  *   - Added: the local listing agent. A Windows PowerShell agent on one

@@ -661,14 +661,22 @@ const RELEASE_2_26_12_CHANGES = [
   [" * CHANGELOG\n * 2.26.12 (2026-11-17)\n *   (T-2026.10.28; on T-2026.10.27 / 2.26.11.)\n *   - Added: the local listing agent. A Windows PowerShell agent on one\n *     laptop in the meeting room reads the listings of MBS, Video,\n *     FS_6G_MED, RTC and Audio every two minutes and writes them (links\n *     only, with a checksum) into a Google Drive folder; every update of a\n *     report imports its own group's listing from there (Configure Meeting\n *     > Local listing folder) with the code of Import Local Inbox Listing...\n *     -- only complete, fresh (30 min), same-group, same-server listings;\n *     a missing, stale or broken one imports nothing and erases nothing.\n *     Check Connections shows scan, write, Drive and import apart.\n *     (tools/local-listing-agent/; docs/LOCAL_LISTING_AGENT.md.)\n *   - Fixed: Check Connections tries the TDoc list like the update (the\n *     configured address, then its www.3gpp.org/ftp twin) and says that a\n *     403 from 3GPP is a refusal, usually temporary.\n", " * CHANGELOG\n"]
 ];
 
+// The release of T-2026.10.29: the version line and the changelog entry of 2.26.13, taken out with the outermost layer.
+const RELEASE_2_26_13_CHANGES = [
+  [" * Version: 2.26.13 (2026-11-17)\n", " * Version: 2.26.12 (2026-11-17)\n"],
+  [" * CHANGELOG\n * 2.26.13 (2026-11-17)\n *   (T-2026.10.29; on T-2026.10.28 / 2.26.12.)\n *   - Changed: the Revisions cell has no \"Revisions folders: ...\" line any\n *     more (one from an earlier release goes at the cell's next write);\n *     \"No revisions available.\" only where every source was read and has\n *     none -- never for a TDoc with revisions as TDocs (REVISION_MAP), and\n *     not newly claimed while the local listing is stale or missing. A\n *     complete, fresh scan of an empty group folder is an answer, not\n *     \"invalid\". Check Connections drops the manual-import instruction\n *     while the local listing agent delivers. (PR #23.)\n *   - Added: the local listing agent's scheduled overnight pause (it scans\n *     07:30-19:30 meeting time) is \"paused\", not \"stale\": at night in the\n *     meeting's time zone, when the agent's last scan was at most 30\n *     minutes before 19:30. Staleness during the day, an earlier last\n *     scan, or no meeting time zone stay \"stale\". Nothing is imported or\n *     erased either way. (docs/LOCAL_LISTING_AGENT.md.)\n", " * CHANGELOG\n"]
+];
+
 function codeWithoutLocalListingAgent(code) {
   // The overnight-pause distinction and the Revisions-cell cleanup after T-2026.10.28 came later still: taken out first
   // (newest first); then the release header of T-2026.10.28 (2.26.12).
-  const overnight = codeWithoutOvernightPause(code);
+  // The release header of T-2026.10.29 (2.26.13) came last of all: taken out before everything else.
+  const header13 = takeOut(code, null, null, RELEASE_2_26_13_CHANGES, 'RELEASE 2.26.13 HEADER');
+  const overnight = codeWithoutOvernightPause(header13.code);
   const cleanup = codeWithoutRevisionsCellCleanup(overnight.code);
   const header = takeOut(cleanup.code, null, null, RELEASE_2_26_12_CHANGES, 'RELEASE 2.26.12 HEADER');
   const view = takeOut(header.code, null, null, LOCAL_LISTING_AGENT_CHANGES, 'LOCAL LISTING AGENT');
-  return { code: view.code, problems: overnight.problems.concat(cleanup.problems, header.problems, view.problems) };
+  return { code: view.code, problems: header13.problems.concat(overnight.problems, cleanup.problems, header.problems, view.problems) };
 }
 
 // After the issue #11 live test (2026-11-16): the Session administration section of a main report keeps text typed into
