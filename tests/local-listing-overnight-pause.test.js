@@ -8,6 +8,8 @@
  *
  *   1. localListingScheduledPause_(): boundaries; ABT (America/Edmonton, UTC-6 all year from
  *      2026-11-01) and the night of that change; a zone with DST (Europe/Berlin); no zone
+ *   1b. the same with OUTDATED runtime zone rules (America/Edmonton still UTC-7 in winter): Alberta's
+ *      rule (MEETING_TIME_ZONE_RULE_CHANGES_) decides, and a control shows the old rules would not
  *   2. importAgentListing_() on a fake Drive: paused vs stale, nothing imported or erased either way;
  *      the morning; no meeting zone configured; Check Connections
  *   3. what changed in Code.js (source)
@@ -75,6 +77,42 @@ console.log('1. localListingScheduledPause_() (Calgary: ABT = UTC-6 all year fro
   check('Europe/Berlin, 07:40 CEST the next morning, last scan 19:28 CEST: pause', p('2027-03-29T05:40:00Z', '2027-03-28T17:28:00Z', 'Europe/Berlin'), 'pause 2027-03-28 19:28 CEST / 07:30 CEST');
   check('no meeting zone: never taken for the pause', p('2026-11-17T03:00:00Z', LAST, ''), 'failure');
   check('no scan time: failure', p('2026-11-17T03:00:00Z', 'garbage'), 'failure');
+}
+
+// ====================================================================== 1b
+console.log('1b. with OUTDATED runtime zone rules (America/Edmonton still MST, UTC-7, in winter): Alberta\'s rule decides');
+{
+  // Apps Script's (or Node's) zone data may predate Alberta's change. Simulate that: Utilities.formatDate answers with the
+  // old rules -- MDT (-0600) from the second Sunday of March to the first Sunday of November, MST (-0700) otherwise.
+  const outdated = (s) => {
+    s.Utilities.formatDate = (date, zone, pattern) => {
+      if (pattern !== 'Z') return date.toISOString();
+      if (zone !== EDMONTON) throw new Error('only America/Edmonton is simulated');
+      const t = date.getTime();
+      const summer = (t >= Date.UTC(2026, 2, 8, 9) && t < Date.UTC(2026, 10, 1, 8)) || (t >= Date.UTC(2027, 2, 14, 9) && t < Date.UTC(2027, 10, 7, 8));
+      return summer ? '-0600' : '-0700';
+    };
+  };
+  const { s } = report({});
+  outdated(s);
+  check('the simulation is old: the runtime says -0700 for 17 Nov 2026', s.Utilities.formatDate(new Date('2026-11-17T12:00:00Z'), EDMONTON, 'Z'), '-0700');
+  check('the report still uses UTC-6 (ABT) for 17 Nov 2026 and 15 Jan 2027', [s.meetingTimeZoneOffsetMinutes_(EDMONTON, Date.parse('2026-11-17T12:00:00Z')), s.meetingTimeZoneOffsetMinutes_(EDMONTON, Date.parse('2027-01-15T12:00:00Z'))], [-360, -360]);
+  const p = (now, scan) => { const r = s.localListingScheduledPause_(EDMONTON, scan, new Date(now)); return r ? 'pause ' + r.lastScan + ' / ' + r.resumes : 'failure'; };
+  check('21:00 ABT, last scan 19:28 ABT: pause, said in ABT', p('2026-11-17T03:00:00Z', '2026-11-17T01:28:00Z'), 'pause 2026-11-16 19:28 ABT / 07:30 ABT');
+  check('07:44 ABT (06:44 by the old rules): pause', p('2026-11-17T13:44:00Z', '2026-11-17T01:28:00Z'), 'pause 2026-11-16 19:28 ABT / 07:30 ABT');
+  check('07:45 ABT (06:45 by the old rules, which would still be night): failure', p('2026-11-17T13:45:00Z', '2026-11-17T01:28:00Z'), 'failure');
+  check('last scan 18:59 ABT (17:59 by the old rules): failure', p('2026-11-17T03:00:00Z', '2026-11-17T00:59:00Z'), 'failure');
+  check('winter 2027, 19:30 ABT is 01:30 UTC: 19:29 ABT is still the window (no pause), 19:31 is the pause',
+    [p('2027-01-16T01:29:00Z', '2027-01-16T01:00:00Z'), p('2027-01-16T01:31:00Z', '2027-01-16T01:00:00Z')], ['failure', 'pause 2027-01-15 19:00 ABT / 07:30 ABT']);
+  check('summer 2027 (old rules: MDT, also UTC-6): pause at 21:00 ABT', p('2027-07-02T03:00:00Z', '2027-07-02T01:28:00Z'), 'pause 2027-07-01 19:28 ABT / 07:30 ABT');
+  // The same with the rule table emptied: the outdated runtime then decides, and the result is wrong -- so the checks
+  // above really depend on Alberta's rule, not on the runtime happening to be current.
+  const { s: bare } = report({});
+  outdated(bare);
+  bare.MEETING_TIME_ZONE_RULE_CHANGES_ = {}; // a top-level var of Code.js: a property of the sandbox
+  check('control: without Alberta\'s rule the runtime\'s -0700 is used', bare.meetingTimeZoneOffsetMinutes_(EDMONTON, Date.parse('2026-11-17T03:00:00Z')), -420);
+  check('control: ... and the normal overnight pause (21:00 ABT, last scan 19:28 ABT) would be taken for a failure (the scan looks like 18:28 MST)',
+    bare.localListingScheduledPause_(EDMONTON, '2026-11-17T01:28:00Z', new Date('2026-11-17T03:00:00Z')), null);
 }
 
 // ====================================================================== 2
