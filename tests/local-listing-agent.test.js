@@ -254,7 +254,7 @@ console.log('8b. all five groups; new revisions during the meeting; the schedule
   const code = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const bodyOf = (name) => { const at = code.indexOf('\nfunction ' + name + '('); return code.slice(at, code.indexOf('\n}\n', at)); };
   check('the scheduled update reaches it: collectorUpdate_() runs updateRevisions_(), whose first step is the agent import (source)',
-    [/updateRevisions_\(/.test(bodyOf('collectorUpdate_')), /^\nfunction updateRevisions_\(cfg, context\) \{\n(?:  \/\/[^\n]*\n)*  importAgentListingSafely_\(context\);/.test(bodyOf('updateRevisions_'))], [true, true]);
+    [/updateRevisions_\(/.test(bodyOf('collectorUpdate_')), /^\nfunction updateRevisions_\(cfg, context\) \{\n(?:  \/\/[^\n]*\n)*  (?:const agent = )?importAgentListingSafely_\(context\);/.test(bodyOf('updateRevisions_'))], [true, true]);
 }
 
 // ====================================================================== 8c
@@ -277,8 +277,10 @@ console.log('8c. Check Connections: the TDoc list as the update downloads it');
 // ====================================================================== 9
 console.log('9. what changed in Code.js (source)');
 {
-  const now = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
-  const view = codeWithoutLocalListingAgent(now);
+  // The Revisions-cell cleanup after T-2026.10.28 came later: compared without it (tests/revisions-cell-cleanup.test.js).
+  const full = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const now = require('./helpers/before-structure-fix.js').codeWithoutRevisionsCellCleanup(full).code;
+  const view = codeWithoutLocalListingAgent(full);
   check('the take-out finds every change exactly once', view.problems, []);
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));
   const bodyOf = (code, name) => { const at = code.indexOf('\nfunction ' + name + '('); return code.slice(at, code.indexOf('\n}\n', at)); };
