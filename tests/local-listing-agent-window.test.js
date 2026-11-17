@@ -113,10 +113,14 @@ check('the pause is in the agent log', /paused:/.test(fs.readFileSync(path.join(
 
 console.log('\n4. inside the window the scan proceeds; a broken window is an error');
 const MISSING = config('missing-out.json', { outDir: path.join(tmp, 'does-not-exist'), operatingWindow: EXAMPLE.operatingWindow });
+// Past the gate, a run stops at the missing output folder (exit 2) -- or, when the real scheduled agent of this laptop is
+// scanning at that moment, at the machine-wide one-run-at-a-time lock (exit 0, "skipped"). Both come after the window
+// check; a run stopped by the window would say "paused".
+const pastGate = (r) => !/paused:/.test(r.out) && ((r.code === 2 && /scan not run: output folder/.test(r.out)) || (r.code === 0 && /another scan is still running; skipped/.test(r.out)));
 const day = run(MISSING, ['-AtUtc', '2026-11-17T18:00']);
-check('inside the window: passes the gate (stops at the missing output folder, exit 2)', [day.code, /scan not run: output folder/.test(day.out)], [2, true]);
+check('inside the window: passes the gate (stops at the missing output folder, or at the lock of a live agent)', pastGate(day), true);
 const forced = run(MISSING, ['-AtUtc', '2026-11-18T10:00', '-IgnoreWindow']);
-check('-IgnoreWindow at night: passes the gate (exit 2 as above)', [forced.code, /scan not run: output folder/.test(forced.out)], [2, true]);
+check('-IgnoreWindow at night: passes the gate (as above)', pastGate(forced), true);
 const badZone = run(config('bad-zone.json', { operatingWindow: { timeZone: 'Nowhere/Calgary' } }), ['-AtUtc', '2026-11-17T18:00']);
 check('unknown Windows time zone: exit 2, "operatingWindow is invalid"', [badZone.code, /operatingWindow is invalid/.test(badZone.out)], [2, true]);
 const badOffset = run(config('bad-offset.json', { operatingWindow: { utcOffset: '-6' } }), ['-AtUtc', '2026-11-17T18:00']);
