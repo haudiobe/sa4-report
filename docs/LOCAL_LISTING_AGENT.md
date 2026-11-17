@@ -6,7 +6,7 @@ next to the 3GPP ones (docs/LOCAL_REVISIONS.md). Google cannot reach that server
 listings and hands them over through Google Drive. *Import Local Inbox Listing…* stays as it is.
 
 ```
-meeting-room server  --HTTP GET-->  agent (laptop on the room network, every 2 min)
+meeting-room server  --HTTP GET-->  agent (laptop on the room network, every 2 min, 07:30-19:30 Calgary)
                                       | <group>.listing.json, <group>.status.json
                                       v
                      Drive folder, synchronized by Google Drive for desktop
@@ -49,6 +49,52 @@ Its first line says the result of the last check: imported, unchanged, stale, mi
 Check Connections also tries the TDoc list as the update does (the configured address, then its
 `www.3gpp.org/ftp` twin); a 403 from 3GPP is shown as a refusal by the 3GPP server, usually temporary.
 
+## Operating window and overnight staleness
+
+The agent scans **every 2 minutes from 07:30 to 19:30 Calgary local time, every day** (Windows
+zone `Mountain Standard Time`, daylight saving included). The first scan is at 07:30 and the last
+one starts at 19:28. The window is set in `agent.config.json`:
+
+```json
+"operatingWindow": { "timeZone": "Mountain Standard Time", "start": "07:30", "end": "19:30" }
+```
+
+Without that entry the agent uses the same values. Two layers keep to the window:
+
+- **Task Scheduler** (`install-scheduled-task.ps1`) starts the agent only around the window. If the
+  laptop's clock is set to Calgary time, the trigger is daily at 07:30 local time and lasts 12 hours.
+  If it is set to another time zone (e.g. still on European time when installed), the trigger is
+  fixed in UTC, starts at 06:30 Calgary time and lasts 14 hours. That keeps the window covered if
+  the laptop's time zone changes later, or across a daylight-saving change in Calgary. The installer
+  prints which variant it registered. Run it again after changing the laptop's time zone to get
+  the exact 12-hour trigger.
+- **The agent itself** checks the Calgary time on each run. Outside the window it writes one log
+  line, `paused: … outside the operating window 07:30-19:30; scanning resumes at 07:30 (last listings
+  kept)`, and exits with code **0**. Task Scheduler shows that as success, not an error. It does
+  **not** touch `<group>.listing.json` or `<group>.status.json`. This also covers a run that Windows
+  starts late, for example after the laptop wakes up at night (`StartWhenAvailable`).
+
+**Resuming.** No action is needed: at 07:30 the next scan runs if the laptop is on, the user is
+logged in, and the meeting-room network is reachable. If the network is not reachable yet, each
+scan records the error and keeps the last good listing, exactly as during the day. A scan follows
+automatically once the network is back.
+
+**Expected overnight staleness.** The reports accept a listing for at most 30 minutes. From about
+**20:00 Calgary time until the first scan after 07:30**, *Check Connections* therefore shows the
+groups as **stale**, and automatic updates import no local revisions. Nothing is erased: revisions
+imported during the day stay in the reports. This is expected and not a fault. The first update
+after 07:30 imports again (Drive for desktop needs about a minute to upload). Revisions uploaded
+to the meeting-room server overnight appear after 07:30, or immediately via the manual fallback:
+
+- *Import Local Inbox Listing…* in the report (unchanged), or
+- a single scan on the laptop outside the window:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File C:\SA4Agent\sa4-local-listing-agent.ps1 -ConfigPath C:\SA4Agent\agent.config.json -IgnoreWindow`
+
+To check the window without scanning:
+`… sa4-local-listing-agent.ps1 -ConfigPath C:\SA4Agent\agent.config.json -CheckWindow` (optionally
+`-AtUtc 2026-11-18T14:30`). To check the task: `Get-ScheduledTask 'SA4 local listing agent' |
+Get-ScheduledTaskInfo` (`NextRunTime` in the laptop's local time).
+
 ## Setup in the meeting room (once, about 10 minutes)
 
 Needs: one Windows laptop that stays on the meeting-room network, logged in, with Google Drive for
@@ -64,8 +110,10 @@ desktop signed in to the account that runs the reports (or one they can read).
 3. **Test once.** PowerShell:
    `powershell -NoProfile -ExecutionPolicy Bypass -File C:\SA4Agent\sa4-local-listing-agent.ps1 -ConfigPath C:\SA4Agent\agent.config.json`
    Expected: five lines `ok, N links`. Within a minute the ten files appear in Drive (web).
+   Outside 07:30–19:30 Calgary time the agent prints `paused: …` instead; add `-IgnoreWindow` to test.
 4. **Schedule.** `powershell -NoProfile -ExecutionPolicy Bypass -File C:\SA4Agent\install-scheduled-task.ps1 -ConfigPath C:\SA4Agent\agent.config.json`
-   (every 2 minutes while you are logged on; no admin rights; log:
+   (every 2 minutes from 07:30 to 19:30 Calgary time, daily, while you are logged on; see
+   *Operating window* above; no admin rights; log:
    `%LOCALAPPDATA%\SA4LocalListingAgent\agent.log`). Remove with `-Uninstall`.
 5. **Each report.** *⚙️ Configure Meeting… › Local listing folder*: paste the folder ID or URL,
    Save. The next update (automatic or *Update TDoc Revisions*) imports; *Check Connections* shows it.
@@ -75,7 +123,9 @@ desktop signed in to the account that runs the reports (or one they can read).
 | Situation | Agent | Report |
 |---|---|---|
 | Meeting-room network or server down | records the error, keeps the last good listing | after 30 min: "stale", nothing imported, nothing erased |
-| Laptop asleep / logged off / agent stopped | no new scans | same |
+| Outside 07:30–19:30 Calgary time (overnight) | paused: no scan, exit 0, files untouched; resumes at 07:30 | from about 20:00: "stale", nothing imported, nothing erased |
+| Laptop asleep | no new scans (the task does not wake the laptop); after waking, a missed run starts once, then every 2 minutes inside the window (paused outside it) | same until the next successful scan |
+| User logged off / agent stopped | no new scans (the task runs only in the logged-on session); after logging on, the next 2-minute run inside the window scans | same |
 | Drive for desktop paused or offline | writes locally, not uploaded | "stale" until the upload arrives |
 | File half uploaded | — | "incomplete", the previous valid file (if any) is used |
 | A group's folder missing on the server | that group fails (HTTP 404), others go on | "not checked" for that group |
@@ -94,3 +144,9 @@ read-only with the report accounts and nobody else.
 
 Run `install-scheduled-task.ps1 -Uninstall`, clear *Local listing folder* in each report. Imported
 revisions stay, as after a manual import.
+
+Running the installer again is safe: it replaces the task in place (same name, same settings). To
+be able to go back to a previous task definition, export it first,
+`Export-ScheduledTask 'SA4 local listing agent' | Set-Content task-before.xml -Encoding Unicode`,
+and keep a copy of the agent files. To restore, put those files back and run
+`Register-ScheduledTask -Xml (Get-Content task-before.xml -Raw) -TaskName 'SA4 local listing agent' -Force`.
