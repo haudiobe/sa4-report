@@ -1,0 +1,6 @@
+{
+  "baseUrl": "http://10.10.10.10/ftp/SA/SA4/Inbox/Drafts/",
+  "outDir": "G:\\My Drive\\SA4-138 local listings",
+  "groups": ["MBS", "Video", "FS_6G_MED", "RTC", "Audio"],
+  "timeoutSeconds": 15
+}
