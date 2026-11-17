@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.7 (2026-11-12)
+ * Version: 2.26.12 (2026-11-17)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,47 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.12 (2026-11-17)
+ *   (T-2026.10.28; on T-2026.10.27 / 2.26.11.)
+ *   - Added: the local listing agent. A Windows PowerShell agent on one
+ *     laptop in the meeting room reads the listings of MBS, Video,
+ *     FS_6G_MED, RTC and Audio every two minutes and writes them (links
+ *     only, with a checksum) into a Google Drive folder; every update of a
+ *     report imports its own group's listing from there (Configure Meeting
+ *     > Local listing folder) with the code of Import Local Inbox Listing...
+ *     -- only complete, fresh (30 min), same-group, same-server listings;
+ *     a missing, stale or broken one imports nothing and erases nothing.
+ *     Check Connections shows scan, write, Drive and import apart.
+ *     (tools/local-listing-agent/; docs/LOCAL_LISTING_AGENT.md.)
+ *   - Fixed: Check Connections tries the TDoc list like the update (the
+ *     configured address, then its www.3gpp.org/ftp twin) and says that a
+ *     403 from 3GPP is a refusal, usually temporary.
+ * 2.26.11 (2026-11-16)
+ *   (T-2026.10.27; supersedes the candidate T-2026.10.26 / 2.26.10, which
+ *   was never deployed: it lost text typed into a session line.)
+ *   - Added: meeting-local and selected IANA time zones (MEETING_TIME_ZONE,
+ *     MEETING_TIME_ZONE_MODE); America/Edmonton written ABT, UTC-6 all year
+ *     from 1 November 2026. (GitHub issue #4, PR #5.)
+ *   - Added: session times in a main-meeting report (Sessions > Configure
+ *     Sessions...), shown in Session administration; Build from Scratch
+ *     writes the section again and keeps minutes typed below it. Meeting
+ *     type, TDocs and agenda filter unchanged. (Issue #11, PR #12, #13.)
+ *   - Fixed: saving session times never removes text typed into a session
+ *     line (only the generated beginning is replaced); a label that is the
+ *     code is not written twice ("A01: A01"). (Issue #11, PR #21.)
+ *   - Fixed: a main meeting's blank Meeting Folder/Number are taken from
+ *     its document folder, never saved as SA4#136; a saved number that
+ *     contradicts the folder is refused before any download; a failed
+ *     TDoc-list download says "not updated". (Issue #9, PR #18.)
+ *   - Added: the meeting-room revisions folder (LOCAL_REVISIONS_URL,
+ *     default http://10.10.10.10/ftp/SA/SA4/Inbox for a main meeting that
+ *     is not an e-meeting) is linked next to the 3GPP drafts folder; never
+ *     fetched. (PR #15.)
+ *   - Added: Import Local Inbox Listing... -- revisions listed on the
+ *     meeting-room server (a listing pasted from a browser on its LAN)
+ *     are shown with the 3GPP ones ([local], [local only]); 3GPP
+ *     detection and revision tables unchanged. (Issue #16, PR #17;
+ *     docs/LOCAL_REVISIONS.md.)
  * 2.26.7 (2026-11-12)
  *   - Fixed: a large Full Report Build is saved in parts. When about 2000
  *     DocumentApp changes are pending, the build saves the report and
