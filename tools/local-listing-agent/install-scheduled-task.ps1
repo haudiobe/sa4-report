@@ -50,7 +50,7 @@ if ($sameZone) {
   $duration = $end - $start
   $trigger = New-ScheduledTaskTrigger -Daily -At $first
   $trigger.StartBoundary = $first.ToString("yyyy-MM-dd'T'HH:mm:ss")   # no UTC offset: local time, follows daylight saving
-  $mode = "daily at $($window.start) local time ($($tz.Id)) for $([int]$duration.TotalHours)h $($duration.Minutes)min"
+  $mode = "daily at $($window.start) local time ($($tz.Id)) for $([math]::Floor($duration.TotalHours))h $($duration.Minutes)min"
 } else {
   $meetingToday = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz).Date
   $firstLocal = $meetingToday.Add($start).AddHours(-1)
@@ -59,7 +59,7 @@ if ($sameZone) {
   $duration = ($end - $start) + (New-TimeSpan -Hours 2)
   $trigger = New-ScheduledTaskTrigger -Daily -At $firstFixed.LocalDateTime
   $trigger.StartBoundary = $firstFixed.ToString("yyyy-MM-dd'T'HH:mm:sszzz")
-  $mode = "daily from $($firstFixed.ToString('HH:mm zzz')) (fixed in UTC) for $([int]$duration.TotalHours)h $($duration.Minutes)min; the laptop is on '$((Get-TimeZone).Id)', not '$($tz.Id)', so the trigger is one hour wider on each side and the agent pauses runs outside $($window.start)-$($window.end) $($tz.Id)"
+  $mode = "daily from $($firstFixed.ToString('HH:mm zzz')) (fixed in UTC) for $([math]::Floor($duration.TotalHours))h $($duration.Minutes)min; the laptop is on '$((Get-TimeZone).Id)', not '$($tz.Id)', so the trigger is one hour wider on each side and the agent pauses runs outside $($window.start)-$($window.end) $($tz.Id)"
 }
 $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) -RepetitionDuration $duration).Repetition
 $trigger.Repetition.StopAtDurationEnd = $false   # a scan already running at the end of the window finishes (5-minute limit)
