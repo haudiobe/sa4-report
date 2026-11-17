@@ -22,9 +22,10 @@ is only read.
                                  (only say whether that moment is inside the window; no scan, no file written)
 Windows PowerShell 5.1 or PowerShell 7.
 
-Operating window: scans only from 07:30 to 19:30 in the meeting's local time (Calgary,
-'Mountain Standard Time', daylight saving included), whatever time zone the laptop is set to.
-Configurable with "operatingWindow": { "timeZone", "start", "end" } in agent.config.json. A run
+Operating window: scans only from 07:30 to 19:30 in the meeting's local time: Calgary, UTC-06:00
+(ABT) all year from 1 November 2026, whatever time zone or Windows time-zone rules the laptop has.
+Configurable with "operatingWindow": { "utcOffset", "label", "start", "end" } (or "timeZone", a
+Windows zone id, instead of "utcOffset") in agent.config.json. A run
 outside the window is a normal pause, not an error: one log line, exit code 0, and neither the
 listing nor the status files are touched.
 #>
@@ -118,32 +119,52 @@ function Invoke-GroupScan([string]$G) {
   return $status.ok
 }
 
-# Operating window, in the meeting's local time. Outside it: a normal pause (exit 0), no file touched.
-$window = [ordered]@{ timeZone = 'Mountain Standard Time'; start = '07:30'; end = '19:30' }
-if ($cfg.operatingWindow) {
-  foreach ($k in @('timeZone', 'start', 'end')) { if ($cfg.operatingWindow.$k) { $window[$k] = [string]$cfg.operatingWindow.$k } }
+# Operating window, from "operatingWindow" in the config. Default: 07:30-19:30 at UTC-06:00 (ABT), Calgary's time
+# all year from 1 November 2026 (docs/MEETING_TIME_ZONES.md). A fixed offset does not depend on the laptop's Windows
+# time-zone rules, which may predate Alberta's change ('Mountain Standard Time' there still goes to UTC-7 in winter).
+# "timeZone" (a Windows zone id) without "utcOffset" uses that zone's Windows rules instead, e.g. for a meeting elsewhere.
+function Resolve-OperatingWindow($Config) {
+  $w = [ordered]@{ utcOffset = '-06:00'; label = 'ABT'; timeZone = ''; start = '07:30'; end = '19:30' }
+  $o = $Config.operatingWindow
+  if ($o) {
+    if ($o.timeZone -and -not $o.utcOffset) { $w.utcOffset = ''; $w.label = '' }
+    foreach ($k in @('utcOffset', 'label', 'timeZone', 'start', 'end')) { if ($o.$k) { $w[$k] = [string]$o.$k } }
+  }
+  if ($w.utcOffset) {
+    if ($w.utcOffset -notmatch '^[+-]\d{2}:\d{2}$') { throw "utcOffset must look like -06:00 (it is '$($w.utcOffset)')" }
+    $offset = [timespan]::Parse($w.utcOffset.TrimStart('+'))
+    $name = 'UTC' + $w.utcOffset
+    if ($w.label) { $name = $w.label + ' (' + $name + ')' }
+    $tz = [System.TimeZoneInfo]::CreateCustomTimeZone('SA4 meeting time', $offset, $name, $name)
+    $fixed = $true
+  } else {
+    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($w.timeZone)
+    $name = $w.timeZone
+    $fixed = $false
+  }
+  $start = [timespan]::Parse($w.start); $end = [timespan]::Parse($w.end)
+  if ($start -ge $end) { throw "start ($($w.start)) must be before end ($($w.end))" }
+  return [pscustomobject]@{ tz = $tz; name = $name; fixed = $fixed; start = $start; end = $end; startText = $w.start; endText = $w.end; text = "$($w.start)-$($w.end) $name" }
 }
+
+# Outside the window: a normal pause (exit 0), no file touched.
 if (-not $IgnoreWindow -or $CheckWindow) {
-  try {
-    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($window.timeZone)
-    $start = [timespan]::Parse($window.start); $end = [timespan]::Parse($window.end)
-    if ($start -ge $end) { throw 'start must be before end' }
-  } catch {
-    Write-Log ("scan not run: operatingWindow is invalid ({0} {1}-{2}): {3}" -f $window.timeZone, $window.start, $window.end, $_.Exception.Message)
+  try { $window = Resolve-OperatingWindow $cfg } catch {
+    Write-Log ('scan not run: operatingWindow is invalid: ' + $_.Exception.Message)
     exit 2
   }
   $utcNow = [DateTime]::UtcNow
   if ($PSBoundParameters.ContainsKey('AtUtc')) { $utcNow = [DateTime]::SpecifyKind($AtUtc, [DateTimeKind]::Utc) }
-  $meetingNow = [System.TimeZoneInfo]::ConvertTimeFromUtc($utcNow, $tz)
-  $inside = ($meetingNow.TimeOfDay -ge $start -and $meetingNow.TimeOfDay -lt $end)
-  $when = '{0} {1}' -f $meetingNow.ToString('yyyy-MM-dd HH:mm'), $window.timeZone
+  $meetingNow = [System.TimeZoneInfo]::ConvertTimeFromUtc($utcNow, $window.tz)
+  $inside = ($meetingNow.TimeOfDay -ge $window.start -and $meetingNow.TimeOfDay -lt $window.end)
+  $when = '{0} {1}' -f $meetingNow.ToString('yyyy-MM-dd HH:mm'), $window.name
   if ($CheckWindow) {
     if ($inside) { $verdict = 'inside' } else { $verdict = 'outside' }
-    Write-Host ("{0}Z = {1}: {2} the operating window {3}-{4}" -f $utcNow.ToString('yyyy-MM-ddTHH:mm'), $when, $verdict, $window.start, $window.end)
+    Write-Host ("{0}Z = {1}: {2} the operating window {3}-{4}" -f $utcNow.ToString('yyyy-MM-ddTHH:mm'), $when, $verdict, $window.startText, $window.endText)
     exit 0
   }
   if (-not $inside) {
-    Write-Log ("paused: {0} is outside the operating window {1}-{2}; scanning resumes at {1} (last listings kept)" -f $when, $window.start, $window.end)
+    Write-Log ("paused: {0} is outside the operating window {1}-{2}; scanning resumes at {1} (last listings kept)" -f $when, $window.startText, $window.endText)
     exit 0
   }
 }
