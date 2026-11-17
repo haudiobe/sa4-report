@@ -17,11 +17,23 @@ is only read.
 
   .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json         (one scan of all groups)
   .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json -Group MBS
+  .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json -IgnoreWindow     (scan now, even overnight)
+  .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json -CheckWindow [-AtUtc <time>]
+                                 (only say whether that moment is inside the window; no scan, no file written)
 Windows PowerShell 5.1 or PowerShell 7.
+
+Operating window: scans only from 07:30 to 19:30 in the meeting's local time (Calgary,
+'Mountain Standard Time', daylight saving included), whatever time zone the laptop is set to.
+Configurable with "operatingWindow": { "timeZone", "start", "end" } in agent.config.json. A run
+outside the window is a normal pause, not an error: one log line, exit code 0, and neither the
+listing nor the status files are touched.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$ConfigPath,
-  [string]$Group
+  [string]$Group,
+  [switch]$IgnoreWindow,
+  [switch]$CheckWindow,
+  [datetime]$AtUtc
 )
 $ErrorActionPreference = 'Stop'
 $cfg = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
@@ -104,6 +116,36 @@ function Invoke-GroupScan([string]$G) {
   Write-Atomic $statusPath ((New-Object PSObject -Property $status) | ConvertTo-Json)
   if ($status.ok) { Write-Log ("{0,-10} ok, {1} links" -f $G, $status.links) } else { Write-Log ("{0,-10} FAILED: {1} (last good listing kept)" -f $G, $status.error) }
   return $status.ok
+}
+
+# Operating window, in the meeting's local time. Outside it: a normal pause (exit 0), no file touched.
+$window = [ordered]@{ timeZone = 'Mountain Standard Time'; start = '07:30'; end = '19:30' }
+if ($cfg.operatingWindow) {
+  foreach ($k in @('timeZone', 'start', 'end')) { if ($cfg.operatingWindow.$k) { $window[$k] = [string]$cfg.operatingWindow.$k } }
+}
+if (-not $IgnoreWindow -or $CheckWindow) {
+  try {
+    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($window.timeZone)
+    $start = [timespan]::Parse($window.start); $end = [timespan]::Parse($window.end)
+    if ($start -ge $end) { throw 'start must be before end' }
+  } catch {
+    Write-Log ("scan not run: operatingWindow is invalid ({0} {1}-{2}): {3}" -f $window.timeZone, $window.start, $window.end, $_.Exception.Message)
+    exit 2
+  }
+  $utcNow = [DateTime]::UtcNow
+  if ($PSBoundParameters.ContainsKey('AtUtc')) { $utcNow = [DateTime]::SpecifyKind($AtUtc, [DateTimeKind]::Utc) }
+  $meetingNow = [System.TimeZoneInfo]::ConvertTimeFromUtc($utcNow, $tz)
+  $inside = ($meetingNow.TimeOfDay -ge $start -and $meetingNow.TimeOfDay -lt $end)
+  $when = '{0} {1}' -f $meetingNow.ToString('yyyy-MM-dd HH:mm'), $window.timeZone
+  if ($CheckWindow) {
+    if ($inside) { $verdict = 'inside' } else { $verdict = 'outside' }
+    Write-Host ("{0}Z = {1}: {2} the operating window {3}-{4}" -f $utcNow.ToString('yyyy-MM-ddTHH:mm'), $when, $verdict, $window.start, $window.end)
+    exit 0
+  }
+  if (-not $inside) {
+    Write-Log ("paused: {0} is outside the operating window {1}-{2}; scanning resumes at {1} (last listings kept)" -f $when, $window.start, $window.end)
+    exit 0
+  }
 }
 
 # One run at a time (a scheduled run that overlaps a slow one is skipped).
