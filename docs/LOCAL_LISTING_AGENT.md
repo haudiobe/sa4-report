@@ -51,24 +51,34 @@ Check Connections also tries the TDoc list as the update does (the configured ad
 
 ## Operating window and overnight staleness
 
-The agent scans **every 2 minutes from 07:30 to 19:30 Calgary local time, every day** (Windows
-zone `Mountain Standard Time`, daylight saving included). The first scan is at 07:30 and the last
-one starts at 19:28. The window is set in `agent.config.json`:
+The agent scans **every 2 minutes from 07:30 to 19:30 Calgary local time, every day**. Since 1
+November 2026, Calgary has been on **UTC−6 all year (ABT)** (docs/MEETING_TIME_ZONES.md). The window
+is therefore a fixed offset: 07:30 ABT is 13:30 UTC in every season. The first scan is at 07:30 and
+the last one starts at 19:28. The window is set in `agent.config.json`:
 
 ```json
-"operatingWindow": { "timeZone": "Mountain Standard Time", "start": "07:30", "end": "19:30" }
+"operatingWindow": { "utcOffset": "-06:00", "label": "ABT", "start": "07:30", "end": "19:30" }
 ```
 
-Without that entry the agent uses the same values. Two layers keep to the window:
+Without that entry the agent uses the same values.
 
-- **Task Scheduler** (`install-scheduled-task.ps1`) starts the agent only around the window. If the
-  laptop's clock is set to Calgary time, the trigger is daily at 07:30 local time and lasts 12 hours.
-  If it is set to another time zone (e.g. still on European time when installed), the trigger is
-  fixed in UTC, starts at 06:30 Calgary time and lasts 14 hours. That keeps the window covered if
-  the laptop's time zone changes later, or across a daylight-saving change in Calgary. The installer
-  prints which variant it registered. Run it again after changing the laptop's time zone to get
-  the exact 12-hour trigger.
-- **The agent itself** checks the Calgary time on each run. Outside the window it writes one log
+> **Do not use the Windows zone `Mountain Standard Time` for Calgary.** Windows installations whose
+> time-zone data predates Alberta's change still move it to UTC−7 in winter. With
+> `"timeZone": "Mountain Standard Time"`, such a laptop scans from 08:30 to 20:30 ABT. A
+> `"timeZone"` without `"utcOffset"` uses that Windows zone and its daylight-saving rules; it is
+> meant only for a meeting elsewhere. Check with `-CheckWindow -AtUtc 2026-11-17T13:30`, which must
+> say `07:30 ABT (UTC-06:00): inside`.
+
+Two layers keep to the window:
+
+- **Task Scheduler** (`install-scheduled-task.ps1`) starts the agent only during the window. With a
+  fixed `utcOffset`, the trigger is fixed in UTC: daily at 07:30 ABT (13:30 UTC), lasting 12 hours.
+  The laptop's own time zone and its Windows time-zone rules don't matter, and changing them later
+  needs no new installation. (With a Windows `timeZone` instead: 07:30 local time for 12 hours if
+  the laptop is on that zone. Otherwise the trigger is fixed in UTC and one hour wider on each side,
+  so that daylight saving can't cut the window short.) The installer prints which variant it
+  registered.
+- **The agent itself** checks the meeting time on each run. Outside the window it writes one log
   line, `paused: … outside the operating window 07:30-19:30; scanning resumes at 07:30 (last listings
   kept)`, and exits with code **0**. Task Scheduler shows that as success, not an error. It does
   **not** touch `<group>.listing.json` or `<group>.status.json`. This also covers a run that Windows

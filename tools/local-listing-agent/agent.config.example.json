@@ -3,5 +3,5 @@
   "outDir": "G:\\My Drive\\SA4-138 local listings",
   "groups": ["MBS", "Video", "FS_6G_MED", "RTC", "Audio"],
   "timeoutSeconds": 15,
-  "operatingWindow": { "timeZone": "Mountain Standard Time", "start": "07:30", "end": "19:30" }
+  "operatingWindow": { "utcOffset": "-06:00", "label": "ABT", "start": "07:30", "end": "19:30" }
 }
