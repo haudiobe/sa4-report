@@ -66,7 +66,9 @@ function makeFakeDocumentBody(sandbox, options) {
   const NORMAL = sandbox.DocumentApp.ParagraphHeading.NORMAL;
   const children = [];
   // Unsaved changes, and the state after saveAndClose(): see the header.
-  const state = { dirty: false, closed: false, nextDropdown: 0 };
+  const state = { dirty: false, closed: false, nextDropdown: 0, calls: 0 };
+  // Round 3 (additions only): every call of a DocumentApp method on an element of this document is counted (state.calls).
+  const counted = (o) => { Object.keys(o).forEach((k) => { const f = o[k]; if (typeof f === 'function' && k[0] !== '_') o[k] = function () { if (!state.paused) state.calls++; return f.apply(this, arguments); }; }); return o; };
   // onFirstTouch: called before the first unsaved change, so that the fake Docs API can keep what the saved document says.
   // Large-build checkpoints (after T-2026.10.22), addition only: `changes` counts the changes not saved yet (a test resets it when it saves).
   const touch = () => { if (state.closed) throw new Error('The document is closed: it was saved and closed earlier in this execution.'); if (!state.dirty && state.onFirstTouch) state.onFirstTouch(); state.dirty = true; state.changes = (state.changes || 0) + 1; };
@@ -95,7 +97,7 @@ function makeFakeDocumentBody(sandbox, options) {
         insertText: (at, text) => { touch(); if (at < 0 || at > p._text.length || !String(text)) throw new Error('Exception: Invalid insertion.'); p._text = p._text.slice(0, at) + String(text) + p._text.slice(at); },
         getLinkUrl: (i) => { const links = p._links || []; for (let k = links.length - 1; k >= 0; k--) if (i >= links[k][0] && i <= links[k][1]) return links[k][2] || null; return null; } })
     };
-    return p;
+    return counted(p);
   }
   function makeTable(rowsData, inheritedBold) {
     const rows = [];
@@ -169,8 +171,10 @@ function makeFakeDocumentBody(sandbox, options) {
         if (!inserted && insert) c._parts.unshift({ t: insert });
         c._sync();
       }
+      counted(para);
+      counted(te);
       c.editAsText = () => te;
-      return c;
+      return counted(c);
     }
     function makeRow(cellTexts) {
       const cells = cellTexts.map(makeCell);
@@ -179,7 +183,7 @@ function makeFakeDocumentBody(sandbox, options) {
         getNumCells: () => cells.length, getCell: (i) => cells[i],
         appendTableCell: (t) => { touch(); const c = makeCell(t); cells.push(c); return c; }
       };
-      return row;
+      return counted(row);
     }
     (rowsData || []).forEach(r => rows.push(makeRow(r)));
     const t = {
@@ -202,7 +206,7 @@ function makeFakeDocumentBody(sandbox, options) {
         return made;
       }
     };
-    return t;
+    return counted(t);
   }
 
   /** Google Docs: "Can't remove the last paragraph in a document section." (Only with tableSeparators.) */
@@ -259,6 +263,7 @@ function makeFakeDocumentBody(sandbox, options) {
       return t;
     }
   };
+  counted(body);
   body._state = state;
   body._headingTexts = () => children.filter(c => c.getType() === PARAGRAPH && c.getHeading() !== NORMAL).map(c => c.getText());
   return body;

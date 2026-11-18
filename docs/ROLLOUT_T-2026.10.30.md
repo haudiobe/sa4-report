@@ -6,7 +6,8 @@ T-2026.10.30 is T-2026.10.29 plus (docs/GOES_TO_PLENARY.md, PR #26):
   extra rows.
 - **The SA4 plenary agenda item:** automatic, or typed by hand.
 - **The four disposition tables,** in a landscape section of their own.
-- **The revision relationship** in the TDoc row: `S4-26XXXX (revision of S4-26YYYY)`.
+- **The revision relationship** in the TDoc row: `S4-26XXXX (revision of S4-26YYYY)` -- in **every** report, set up or not.
+- **A faster update** (the summary, the plenary data and the status sync read the document once through the Docs API), and *Advanced and Repair › Check Report Integrity* (read-only).
 
 T-2026.10.29 (`af3779f`, Code.js `cc32cbb6…`) is in production on all five SA4#138 reports,
 deployed 2026-11-17.
@@ -14,62 +15,73 @@ deployed 2026-11-17.
 Release files: Code.js, ReportCreator.js and Release.js change. HyperLink.js and appsscript.json
 are those of T-2026.10.29.
 
-There is **no automatic migration**. A report under T-2026.10.30 behaves exactly as under
-T-2026.10.29 until its rapporteur runs *Report › Set Up Goes to Plenary…*. Before that it has
-the three-table summary in portrait, an unchanged Status row, no revision text and no agenda
-download. The release can therefore go to all five scripts first, and each report can be
-switched on separately.
+There is **no automatic migration** of the Plenary workflow. Until its rapporteur runs *Report ›
+Set Up Goes to Plenary…*, a report keeps:
+- the three-table summary in portrait;
+- its Status rows;
+- its workflow (no agenda download).
+
+What every report gets at once:
+- the revision relationship in its TDoc rows;
+- the faster status sync and formatting;
+- the read-only integrity check.
+
+The release can therefore go to all five scripts first, and each report can be switched on
+separately.
 
 Every step below needs approval. Nothing here has been done in production. The local listing
 agent is not part of this release and is not touched.
 
 ## 0. Validation on the disposable MBS copy (before any production step)
 
-Target: "DISPOSABLE TEST COPY (issue #16) - MBS SA4#138". It holds the first candidate's
-**two-row layout** ("Goes to Plenary" and "Plenary Agenda Item" below Status).
+Target: "DISPOSABLE TEST COPY (issue #16) - MBS SA4#138". It holds the compact Status row
+(migrated by the second candidate), and possibly a partial update: the update of 2026-11-18
+stopped after about 361 s.
 
-1. Push the candidate bundle (`dist/release-candidate/T-2026.10.30/`) into the copy's bound
-   script. The push is guarded: the copy must run the first T-2026.10.30 candidate, and the
-   read-back must match `RELEASE-MANIFEST.json`.
-2. In the copy, take a named version first (*File › Version history › Name current version*:
-   "before compact Status row"). Note the Goes to Plenary selections and any Plenary Agenda Item
-   you typed by hand.
-3. *ℹ️ About This Report* shows T-2026.10.30 / 2.26.14.
-4. **Migration:** *📄 Report › Update Report Now*, then check:
-   - the two rows are gone from every TDoc table;
-   - the Status row reads `[status] Plenary [☐ No/☑ Yes]`, with the same selections as noted;
-   - for ☑ Yes, `A.I.: X.X` follows (8.5 → 15.4, 8.6 → 15.5, 8.7 → 16.3, 8.4 → 14; see the 8.4
-     question);
-   - a value typed by hand in the old "Plenary Agenda Item" row is kept;
-   - the minutes and all other rows are untouched.
-5. **Landscape:** the Disposition Summary starts on a new page, in landscape. Check:
-   - all four tables are there, in the requested order, with the wider Title column;
-   - the report before it is still portrait;
-   - there is no blank page around the section break;
-   - type a line below the summary and *Update Report Now*: that line is on a portrait page
-     again.
-6. **Revision relationship:** a TDoc that the TDoc list names as a revision reads
-   `S4-26XXXX (revision of S4-26YYYY)`.
-   - Both numbers open their TDocs.
-   - A TDoc that is not a revision shows its number alone.
-   - The Revisions row is as before.
-7. **Updates and edits.** Run *Update Report Now* after each step:
-   1. Run it twice more. Nothing changes: no new section break, no duplicated text, the summary
-      unchanged.
-   2. Pick ☑ Yes on an agreed TDoc. Its A.I. appears and it moves to table 1. Change its Status
-      to noted: it moves to table 2, and the selection and A.I. stay.
-   3. Manual values:
-      - type a different value after "A.I.:", which is kept;
-      - pick ☐ No: A.I. is hidden, but the value stays in the summary;
-      - pick ☑ Yes: the value is back;
-      - type `-`: blank;
-      - clear the value to "A.I.:": automatic again.
-   4. *Update TDoc Revisions*, *Update Disposition Summary* and *Close Report*: no selection
-      changes, the tables stay landscape.
-   5. *Build Report from Scratch…* (on the copy only): selections and manual values come back.
-      The next update writes the four landscape tables.
-8. Roll the copy back to the named version and push the earlier candidate back if anything
-   differs (`dist/integration-test/rc-T-2026.10.30-<UTC>/before/`).
+**Done by Claude:** the third candidate bundle (`dist/release-candidate/T-2026.10.30/`) was pushed
+into the copy's bound script. The push was guarded: the copy had to run the second candidate
+(Code.js `ec7e3d17…`). The read-back matches `RELEASE-MANIFEST.json`. No function was run in the
+document.
+
+**By you, in the copy (menu SA4 Report):**
+
+1. *File › Version history › Name current version*: "before third candidate". This is the
+   backup to roll back to.
+2. *ℹ️ About This Report* shows T-2026.10.30 / 2.26.14.
+3. *🛠 Advanced and Repair › Check Report Integrity*. It changes nothing. Note what it lists:
+   - "Status dropdowns missing" (expected: S4-262302, perhaps others, left by the interrupted
+     run);
+   - TDocs with two tables (expected: none);
+   - summary headings (expected: 1);
+   - section breaks;
+   - text typed into the summary (expected: none).
+4. *Update Report Now*.
+   - Then open *Extensions › Apps Script › Executions* and note the duration of that run. It
+     must end without "Exceeded maximum execution time".
+   - The [PERF] lines in its log show the time of each part.
+5. *Check Report Integrity* again: "Status dropdowns missing: none". S4-262302 shows
+   `[reserved ▾] Plenary [☐ No ▾]`.
+6. *Update Report Now* a second time with nothing changed:
+   - its duration is well below the first;
+   - the version history shows no new change by the script.
+7. **The Status rows:** every TDoc reads `[status ▾] Plenary [☐ No/☑ Yes ▾]`, including reserved
+   ones, with no extra rows. Pick ☑ Yes on one agreed TDoc and change the Status of another. Run
+   *Update Report Now*: the first shows `A.I.: X.X` and moves to table 1; the second moves table.
+8. **The four tables**, on landscape pages after a new page break:
+   - tables 1 and 2 (Goes to Plenary) have **six** columns;
+   - tables 3 and 4 (Not Going) have **five**, without SA4 Plenary Agenda Item, and a wider
+     Title;
+   - TDoc numbers are linked;
+   - there is no blank page around the section break, and the report before it is portrait.
+9. **Revision relationships:**
+   - a revision reads `S4-26XXXX (revision of S4-26YYYY)`, and both numbers open their TDocs;
+   - the Revisions row and the minutes are as before.
+10. **Manual values:** an A.I. typed earlier is still there, and minutes typed earlier are
+    unchanged.
+11. If anything differs: restore the named version. Claude can push the second candidate back
+    from `dist/integration-test/rc-T-2026.10.30-<UTC>/before/`.
+
+Please send the integrity results of steps 3 and 5 and the two durations of steps 4 and 6.
 
 ## A. Master template
 
@@ -117,5 +129,6 @@ Per-report rollback: restore the named version, and delete the document property
 | "Is revision of" is not in the TDoc list | The predecessor's "Revised to" alone still gives the relationship; nothing is inferred |
 | A text status in a compact row is rewritten by DocumentApp | Never: it is replaced in front of the code's mark only (tested) |
 | A rapporteur types into the summary | The update refuses and changes nothing; the log names the text |
-| Updates take longer | One label scan per TDoc table, one property read per update, and the agenda is downloaded once per agenda TDoc. No API write when nothing changed |
+| An update runs out of the six minutes (it did on 2026-11-18) | The summary, the plenary data and the status sync read the document once through the API; an unchanged update makes about 7x fewer DocumentApp calls than T-2026.10.29 (fake document); past 240/285 s the formatting and the summary wait for the next update, and the dropdowns are always completed. Real durations are measured in step 0 |
+| The collection of mail/RSS and revisions (96 s on 2026-11-18) | Unchanged in this release; it stays the largest part of an update and depends on the network |
 | A report is switched on during a session | Do it between sessions (step C). The set-up takes the document lock and refuses while an update runs |

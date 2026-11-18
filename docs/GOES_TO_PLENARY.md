@@ -6,13 +6,77 @@ T-2026.10.30 (`release/T-2026.10.30`). Nothing has been pushed to the master tem
 five production reports. The candidate runs only in the disposable MBS copy.
 
 Code: the section `GOES TO PLENARY AND THE FOUR DISPOSITION TABLES (after T-2026.10.29)` of
-`Code.js`, small changes to 21 released functions, and one menu item in
+`Code.js`, small changes to 24 released functions, and two menu items in
 `template/ReportCreator.js`. Tests: `tests/goes-to-plenary.test.js`. The ledger layer is
 `codeWithoutGoesToPlenary()` in `tests/helpers/before-structure-fix.js`; taking it out gives the
 T-2026.10.29 files byte for byte.
 
 **A report changes only when its rapporteur runs Report › Set Up Goes to Plenary….** A report
-that has not been set up behaves exactly as under T-2026.10.29.
+that has not been set up behaves as under T-2026.10.29. The exceptions are general to every
+report:
+- the revision relationship in the TDoc row (§ 4);
+- a faster update (§ 0);
+- the read-only check *Advanced and Repair › Check Report Integrity*.
+
+## 0. Performance: the six-minute limit (third candidate)
+
+On 2026-11-18, *Update Report Now* in the disposable MBS copy (75 TDocs) ran out of Apps Script's
+six minutes after about 361 s.
+
+| Part of the reported log | Time |
+|---|---:|
+| Disposition Summary replacement | about 134 s |
+| Mail/RSS and revision collection | 96 s |
+| Table-width formatting | 28 s |
+| TDoc list | 8 s |
+| Not in the log; see below | about 95 s |
+
+Every DocumentApp call is a round trip, and in a large document each one is slow. Where the
+calls went:
+
+| Cause | DocumentApp calls (75 TDocs, test document) |
+|---|---|
+| **Summary.** Every cell was formatted one call at a time (bold, background, width, spacing). Before that, every summary cell was read back to compare, and every TDoc table was read through a reader that scans its rows four or five times. | 18,900 per update in T-2026.10.29 (whenever a summary exists); more in the second candidate |
+| **Status sync** (pre-existing). For every TDoc, the Status cell was found and read twice, even when nothing changed. Most likely most of the unattributed 95 s. | 10,400 per update |
+| **Formatting** (pre-existing). Any new TDoc re-formatted every row of every table. | about 2 per row of the report |
+| **Collection** (pre-existing, unchanged). Mail/RSS and the revisions folder fetches. | network |
+
+What the third candidate does:
+
+1. **The summary is built from one Docs API read** of the saved document (`plenarySnapshot_()`),
+   which carries all tables, statuses, dropdowns and links. It never reads cell by cell.
+   - What the summary shows is compared from the same read; when equal, nothing is written (0
+     DocumentApp calls).
+   - When something changed, each table is inserted whole (one call).
+   - Its look (landscape widths, header, bold, spacing, links) is set in **one** API batch after
+     the save (`formatPlenarySummaryTables_()`).
+2. **The Goes to Plenary data come from one Docs API read.** The automatic agenda items come from
+   the TDoc list alone. DocumentApp is used only for a table that must change (the update's TDoc
+   index finds it).
+3. **The status sync** decides from statuses the API has already read when a dropdown stays as it
+   is (`statusSyncLeavesDropdown_()`, the same rule). DocumentApp is used only where something
+   changes. A report with text statuses is never read for this.
+4. **Formatting:** the update formats only tables whose row count is not the one it last
+   formatted (`FORMATTED_TABLE_ROWS`).
+5. **A time budget.**
+   - After 240 s the update leaves the formatting to the next run.
+   - After 285 s it leaves the summary to the next run (`deferred`).
+   - The dropdowns (Status, Plenary) are always completed.
+   - Every step is idempotent, so a retried update completes what an interrupted one left (§
+     Recovery).
+
+**Measured on the fake document** (`tests/goes-to-plenary.test.js` § M, and an ad-hoc profile).
+These are counts of DocumentApp calls for the same 75-TDoc report, not times:
+
+| Update | T-2026.10.29 | second candidate (`4c55c3c`) | third candidate |
+|---|---:|---:|---:|
+| unchanged | 34,082 | 48,119 | **5,036** |
+| one Status and one Plenary changed | — | 56,249 | **5,128** |
+| a new TDoc and a Portal status | — | 57,869 | **7,154** |
+
+What remains of an unchanged update is pre-existing upkeep: structure check, upload completion
+and registration links. Real times can only be measured in Google Docs; that is the first step
+of the disposable-copy test.
 
 ## 1. The compact Status row
 
@@ -116,8 +180,11 @@ An ad-hoc meeting has no SA4 plenary agenda: no A.I., and no agenda is read.
 3. Agreed, Endorsed and Approved Documents – Not Going to Plenary
 4. Other Dispositions – Not Going to Plenary
 
-- Columns: TDoc (the number, with the link of its TDoc table), Title, Source, Status, SWG Agenda
-  Item, SA4 Plenary Agenda Item.
+- Columns of tables 1 and 2 (going to plenary), six: TDoc (the number, with the link of its TDoc
+  table), Title, Source, Status, SWG Agenda Item, SA4 Plenary Agenda Item.
+- Columns of tables 3 and 4 (not going to plenary), five: the same **without** SA4 Plenary
+  Agenda Item. The width goes to Title. The value is still kept for those TDocs and comes back
+  when they go to plenary.
 - Each contribution is in exactly one table, in the order of the report.
 - "Positive" means the statuses agreed, partially agreed, endorsed and approved.
   Everything else is "other", including a missing, unknown or conflicting status. The taxonomy
@@ -149,6 +216,13 @@ An ad-hoc meeting has no SA4 plenary agenda: no A.I., and no agenda is read.
 `S4-26XXXX (revision of S4-26YYYY)`, with both numbers linked where the TDoc list has their
 links.
 
+**Every report has it,** whether Goes to Plenary is set up or not: a general part of the TDoc row,
+written by every update and every Build from Scratch (`syncTdocRevisionRelationships_()`).
+- Nothing else of a report changes with it: not its Status, its dropdowns, its summary or its
+  workflow.
+- A TDoc cell that holds anything but the number (and this code's own " (revision of …)") is
+  never touched.
+
 - **Source.** Only the TDoc list's own metadata counts: the predecessor's "Revised to" names the
   revision, or the revision's "Is revision of" names the predecessor. It never comes from
   numbering, titles, or a newer file in a revisions folder.
@@ -178,6 +252,63 @@ migrates it automatically:
 
 **Rollback for one report:** restore the version named before the set-up.
 
+## Why "reserved" showed as plain text
+
+**The cause, most likely, was where the run stopped.** An update writes every Status as text
+first: a new TDoc's status, and a status the TDoc list changed. Its **last** step turns those
+texts into dropdowns (`finalizeStatusDropdowns_()`). The update of 2026-11-18 was stopped by the
+time limit during the formatting, which comes *before* that step, so:
+
+- the new TDoc S4-262302 kept its Portal status as text ("reserved");
+- S4-262301's change from reserved to withdrawn was not written into its dropdown.
+
+Dropdowns that existed before ("revised", "available") were untouched.
+
+Nothing in the compact row converts a Status dropdown to text, and the migration and the
+revision reordering do not either. Tested for every option (§ O), in a compact row and in a
+moved revision table.
+
+**The fixes:**
+- The update now stays well inside the limit (§ 0).
+- Past 4–5 minutes it skips the work that can wait, so the dropdown step always runs.
+- The existing repair makes every text Status that has an option a dropdown again at the next
+  update.
+
+The integrity check lists any that are left. Without access to the document, I couldn't confirm
+from its content that only S4-262302 is affected; run the check first.
+
+## Recovery after an interrupted update
+
+An update stopped by the six-minute limit can leave part of its work undone:
+
+- a TDoc it inserted keeps a text Status and no compact row;
+- a Portal status change is not applied to a dropdown;
+- the summary is not rewritten.
+
+It never leaves half a table or a duplicate. The next update completes all of it, idempotently
+(`tests/goes-to-plenary.test.js` § N):
+
+- **No duplicates.** The TDoc is found by its number, so no second table is made, and the
+  registration table keeps one row.
+- **Dropdowns.** A text Status that has an option becomes a dropdown again (the existing repair
+  of the status dropdowns, also in a compact row). The missing compact row is written.
+- **Summary.** It is compared and rewritten once. Its tables and section breaks are recognised
+  as its own, so they are never duplicated.
+
+**Before testing further, run *Advanced and Repair › Check Report Integrity*.** It reads the
+report once through the Docs API and changes nothing. It lists:
+- TDocs with two tables;
+- statuses that are text although they have an option (a dropdown missing);
+- compact rows without their Plenary dropdown;
+- rows left from the two-row layout;
+- selections still pending;
+- the number of summary headings;
+- the section breaks (landscape or portrait);
+- text typed into the summary.
+
+Then run *Update Report Now* once; it repairs what the check lists, except a second summary
+heading or text typed into the summary, which are left for you. Run the check again.
+
 ## Tests
 
 `node tests/goes-to-plenary.test.js` runs the real build, update, set-up, Update TDoc Revisions,
@@ -197,11 +328,22 @@ mix text and several dropdowns, `insertText`, and section breaks.
 | I | Build from Scratch keeps selections, manual values, revisions; landscape after the next update |
 | J | Close Report |
 | L | Migration of the two-row layout; a failed end of run keeps the selection pending |
-| K | Ledger, never throws, nothing fetched but the agenda, no `setText` on a Status cell, local listing agent untouched |
+| M | DocumentApp and Docs API calls of an update of 75 TDocs: the second candidate against this one (fake document; not a time) |
+| N | An update interrupted after inserting a TDoc: the next one completes it, with no duplicate |
+| O | Every Status option (reserved included) keeps its dropdown in the compact row; a lost dropdown is restored; Check Report Integrity |
+| P | An update that has run long defers the summary and formatting, and still completes the dropdowns |
+| K | Ledger, never throws, nothing fetched but the agenda, no `setText` on a Status cell, the summary read through the API only, local listing agent untouched |
+
+**All of this is mocked:** a fake DocumentApp and a fake Docs API. No test here runs against
+Google Docs. The real integration test is the disposable MBS copy (docs/ROLLOUT_T-2026.10.30.md,
+step 0).
 
 ## What only the disposable copy can show
 
-The fake API models what the code relies on, but not Google Docs' rendering:
+The fake API models what the code relies on, but neither Google Docs' rendering nor its time:
+
+0. How long two consecutive *Update Report Now* take, read from the execution log's [PERF]
+   lines. The second one should be well under the first.
 
 1. The compact row's look: the spacing of the em spaces, and the two dropdowns side by side.
 2. The landscape section:
