@@ -1516,6 +1516,9 @@ function continuousUpdateCore_(context) {
     // After T-2026.10.17: for the TDocs the report has registered -- the
     // TDocs of the list read above among them.
     if (!context) {
+      // After T-2026.10.29: the Goes to Plenary rows and the SA4 plenary agenda items first (GOES TO PLENARY section).
+      const plenary = syncPlenarySelectionOnUpdate_(body, allTdocs);
+      if (plenary.state !== 'off') result.goesToPlenary = plenary.state;
       const summary = syncDispositionSummaryOnUpdate_(body);
       if (summary.state !== 'absent') result.dispositionSummary = summary.state;
     }
@@ -12772,6 +12775,9 @@ function buildSkeletonWithTdocTables(options) {
   // T-2026.10.7: what the status dropdowns say now is kept for the end of this build (nothing is read unless the
   // report has status dropdowns).
   captureStatusDropdownValuesForRebuild_();
+  // After T-2026.10.29: and what the Goes to Plenary rows say, and the list the rows are built from (GOES TO PLENARY section).
+  capturePlenarySelectionForRebuild_();
+  notePlenaryListFacts_(Object.keys(tdocGroups).reduce(function (all, key) { return all.concat(tdocGroups[key].tdocs); }, []));
 
   // Step 2: Clear document, set title
   // After T-2026.10.22: `let` -- after a checkpoint the body is the reopened document's (LARGE BUILD CHECKPOINTS section).
@@ -13312,7 +13318,9 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot, use) {
         row: row,
         richTextRow: richTextValues[i],
         tdocCol, titleCol, sourceCol, contactCol, agendaCol, agendaTopicCol, statusCol, typeCol, forCol,
-        revisedToCol, agendaDescriptionCol
+        revisedToCol, agendaDescriptionCol,
+        // After T-2026.10.29: for the SA4 plenary agenda item (GOES TO PLENARY section).
+        relatedWisCol: tdocListColumnMatching_(headers, /^related\s*wis?$/i), releaseCol: tdocListColumnMatching_(headers, /^release$/i)
       });
       if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];
     }
@@ -15649,6 +15657,8 @@ function buildStatusDocsIndex_(document) {
   });
   const tables = {};
   const duplicates = {};
+  // After T-2026.10.29: the "Goes to Plenary" cell of each TDoc table (GOES TO PLENARY section).
+  const plenary = {};
   ((dt.body && dt.body.content) || []).forEach(function (element) {
     if (!element.table) return;
     const rows = element.table.tableRows || [];
@@ -15664,11 +15674,12 @@ function buildStatusDocsIndex_(document) {
       const key = statusDocsCellText_(cells[0]).trim().toLowerCase();
       if (key === 'tdoc status' || key === 'status') entry = statusDocsCellEntry_(cells[1]);
     }
+    if (!plenary[number]) { const p = plenaryDocsEntryOfRows_(rows); if (p) plenary[number] = p; }
     if (!entry) return;
     if (tables[number]) { duplicates[number] = true; return; }
     tables[number] = entry;
   });
-  return { revisionId: document.revisionId || null, tabId: tab.tabProperties ? tab.tabProperties.tabId : undefined, definitions: definitions, definition: definition, tables: tables, duplicates: duplicates };
+  return { revisionId: document.revisionId || null, tabId: tab.tabProperties ? tab.tabProperties.tabId : undefined, definitions: definitions, definition: definition, tables: tables, duplicates: duplicates, plenary: plenary };
 }
 
 /** One Docs API read, with a field mask; without it should the mask be refused. */
@@ -16004,6 +16015,8 @@ function planStatusDropdownRequests_(index, definition, inserts, updates, forced
  */
 function finalizeStatusDropdowns_(mode) {
   const result = { ran: false, inserted: 0, updated: 0, reason: '' };
+  // After T-2026.10.29: a build gives its TDoc tables the Goes to Plenary rows before the document is saved (GOES TO PLENARY section).
+  if (mode === 'build') preparePlenarySelectionForBuild_();
   const run = statusDropdownRun_();
   try {
     if (!statusDropdownsAvailable_()) { result.reason = 'not available in this runtime'; return result; }
@@ -16086,6 +16099,9 @@ function finalizeStatusDropdowns_(mode) {
     Logger.log('Status dropdowns: not completed (' + e.message + '). Statuses that were not converted stay as text.');
   } finally {
     resetStatusDropdownRun_();
+    // After T-2026.10.29: then the Goes to Plenary dropdowns, the last thing of all (null in a report without them).
+    const plenary = finalizePlenarySelection_(mode, result.ran && !result.saveFailed);
+    if (plenary) result.plenary = plenary;
   }
   return result;
 }
@@ -23311,6 +23327,7 @@ function dispositionSummaryContent_(model) {
 /** True for a paragraph the summary writes (the note, a class line, "None.") -- or one an earlier candidate wrote. */
 function isDispositionSummaryParagraphText_(text) {
   if (text === DISPOSITION_SUMMARY_NOTE_ || text === DISPOSITION_SUMMARY_NONE_ || DISPOSITION_SUMMARY_EARLIER_NOTES_.indexOf(text) !== -1) return true;
+  if (isPlenaryDispositionParagraphText_(text)) return true;
   return DISPOSITION_CLASSES_.map(function (c) { return c.title; }).concat(DISPOSITION_SUMMARY_EARLIER_TITLES_).some(function (title) {
     return text.length > title.length && text.slice(0, title.length) === title && /^ \(\d+\)$/.test(text.slice(title.length));
   });
@@ -23319,6 +23336,7 @@ function isDispositionSummaryParagraphText_(text) {
 /** True for a table the summary writes: its first row is the header of the summary. */
 function isDispositionSummaryTable_(table) {
   try {
+    if (isPlenaryDispositionTable_(table)) return true;
     if (table.getNumRows() < 1) return false;
     const row = table.getRow(0);
     if (row.getNumCells() !== DISPOSITION_SUMMARY_TABLE_HEADER_.length) return false;
@@ -23356,7 +23374,7 @@ function findDispositionSummarySection_(body) {
     if (start === -1) start = i;
   }
   if (start === -1) return null;
-  const last = DISPOSITION_CLASSES_[DISPOSITION_CLASSES_.length - 1];
+  // After T-2026.10.29: the last class line of either form (isLastDispositionClassLine_(), GOES TO PLENARY section).
   // 'heading', 'table', 'none', 'last' (the line of the last class), 'part' (the note, another class line), or '' (not the summary's).
   const kindOf = function (child) {
     if (child.getType() === TABLE) return isDispositionSummaryTable_(child.asTable()) ? 'table' : '';
@@ -23365,7 +23383,7 @@ function findDispositionSummarySection_(body) {
     if (p.getHeading() !== NORMAL) return 'heading';
     const text = p.getText();
     if (text === DISPOSITION_SUMMARY_NONE_) return 'none';
-    if (new RegExp('^' + last.title + ' \\(\\d+\\)$').test(text)) return 'last';
+    if (isLastDispositionClassLine_(text)) return 'last';
     return isDispositionSummaryParagraphText_(text) ? 'part' : '';
   };
   let contentEnd = start + 1;
@@ -23430,7 +23448,8 @@ function readDispositionSummaryContent_(body, section) {
 function formatDispositionSummaryTable_(table) {
   let page = 468;
   try { page = parseInt(getConfig_().TDOC_PAGE_USABLE_WIDTH || '468', 10) || 468; } catch (e) { page = 468; }
-  const widths = DISPOSITION_SUMMARY_TABLE_WIDTHS_.map(function (share) { return Math.round(page * share); });
+  const shares = isPlenaryDispositionTable_(table) ? PLENARY_DISPOSITION_TABLE_WIDTHS_ : DISPOSITION_SUMMARY_TABLE_WIDTHS_;
+  const widths = shares.map(function (share) { return Math.round(page * share); });
   for (let r = 0; r < table.getNumRows(); r++) {
     const row = table.getRow(r);
     row.setMinimumHeight(0);
@@ -23457,7 +23476,7 @@ function formatDispositionSummaryTable_(table) {
  */
 function renderDispositionSummary_(body, model) {
   const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
-  const wanted = dispositionSummaryContent_(model);
+  const wanted = model.plenaryForm ? plenaryDispositionSummaryContent_(model) : dispositionSummaryContent_(model);
   const section = findDispositionSummarySection_(body);
   if (section && section.foreign.length) return { state: 'refused', foreign: section.foreign };
   if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged' };
@@ -23518,8 +23537,10 @@ function writeDispositionSummary_(body, options) {
       Object.keys(scope.numbers).length + ' TDocs in its Registration of Documents table): it does not describe these TDoc tables', read: read, model: buildDispositionSummaryModel_([]), foreign: [] };
   }
   const model = buildDispositionSummaryModel_(read.entries);
+  // After T-2026.10.29: a report with Goes to Plenary has the four tables; `model` keeps the classes Close Report counts.
+  const shown = plenarySelectionEnabled_() ? buildPlenaryDispositionModel_(body, read) : model;
   if (read.unreadable.length) return { state: 'unreadable', read: read, model: model, foreign: [] };
-  const rendered = renderDispositionSummary_(body, model);
+  const rendered = renderDispositionSummary_(body, shown);
   return { state: rendered.state, read: read, model: model, foreign: rendered.foreign || [] };
 }
 
@@ -23532,7 +23553,8 @@ function writeDispositionSummary_(body, options) {
  */
 function syncDispositionSummaryOnUpdate_(body) {
   try {
-    if (!findDispositionSummarySection_(body)) return { state: 'absent' };
+    // After T-2026.10.29: a report with Goes to Plenary is given one (GOES TO PLENARY section).
+    if (!findDispositionSummarySection_(body) && !plenarySelectionEnabled_()) return { state: 'absent' };
     const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
     if (done.state === 'no-scope') Logger.log('Disposition Summary: not updated -- ' + done.error + '.');
     else if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
@@ -23848,6 +23870,915 @@ function closeReportResultHtml_(result) {
 
 // =========================================================
 // END OF DISPOSITION SUMMARY AND CLOSE REPORT
+// =========================================================
+
+// =========================================================
+// GOES TO PLENARY AND THE FOUR DISPOSITION TABLES (after T-2026.10.29)
+// =========================================================
+//
+// docs/GOES_TO_PLENARY.md. Three parts:
+//
+// 1. "Goes to Plenary". In a report that has it (document property
+//    GOES_TO_PLENARY = '1') every TDoc table has, right below its Status row,
+//    a row "Goes to Plenary" -- a native dropdown "☐ No" / "☑ Yes", "☐ No"
+//    for a new TDoc -- and a row "Plenary Agenda Item". A Google Docs
+//    checklist box cannot be read by Apps Script or by the Docs API (neither
+//    has a checked state), so the box is a two-option dropdown, read like the
+//    Status dropdown: the text of the cell, else the value selected in it.
+//    The selection is the rapporteur's. No code clears it, and a change of
+//    the disposition never touches it. The one automatic "☑ Yes": a TDoc
+//    whose Status is the retired option "Plenary" (left to the plenary) --
+//    a TDoc cannot be both "agreed" and "Plenary", so "Plenary" is no Status
+//    any more: such a Status becomes the TDoc list's status ("available"
+//    where that is not known; the status sync moves it on from there), and
+//    the option leaves the report's "Document Status" dropdown.
+// 2. The four disposition tables. In such a report the Disposition Summary
+//    has four tables, in this order: agreed/endorsed/approved -- Goes to
+//    Plenary; other dispositions -- Goes to Plenary; agreed/endorsed/approved
+//    -- Not Going to Plenary; other dispositions -- Not Going to Plenary.
+//    Columns: TDoc, Title, Source, Status, SWG Agenda Item, SA4 Plenary
+//    Agenda Item. The classes are those of DISPOSITION_OF_STATUS_; "other"
+//    is everything that is not agreed/endorsed/approved -- other disposed,
+//    not yet disposed, no status, an unknown status, a conflict. Every
+//    update writes it (and creates it where there is none); it is rewritten
+//    only when it would say something else, and never over text typed into
+//    it (renderDispositionSummary_()). A summary in the three-table form is
+//    rewritten in place.
+// 3. The SA4 plenary agenda item: written into "Plenary Agenda Item" by the
+//    update from the work item and the meeting's agenda (plenaryAgendaAutoValue_())
+//    unless the cell holds a manual value. A value is automatic when the
+//    cell is empty or holds exactly what the update last wrote there
+//    (document property PLENARY_AGENDA_AUTO:<TDoc>). Anything else typed
+//    there is a manual override and is never overwritten; "-" keeps the cell
+//    blank on purpose. A work item that changes moves only automatic values.
+//
+// A report gets it through SA4 Report > Report > Set Up Goes to Plenary…
+// (setUpGoesToPlenary()), and only so; the next update does the rest. A
+// report without it is exactly as before. Build Report from Scratch of a
+// report that has it gives the new TDoc tables the rows and keeps what the
+// rows said before.
+
+const PLENARY_ENABLED_KEY_ = 'GOES_TO_PLENARY';
+const PLENARY_ROW_LABEL_ = 'Goes to Plenary';
+const PLENARY_AGENDA_ROW_LABEL_ = 'Plenary Agenda Item';
+const PLENARY_DROPDOWN_TITLE_ = 'Goes to Plenary';
+const PLENARY_NO_ = '☐ No';
+const PLENARY_YES_ = '☑ Yes';
+// The Status option that is retired: "Goes to Plenary" says it now.
+const PLENARY_STATUS_OPTION_ = 'plenary';
+const PLENARY_AUTO_KEY_PREFIX_ = 'PLENARY_AGENDA_AUTO:';
+const PLENARY_AGENDA_CACHE_KEY_ = 'PLENARY_AGENDA_ITEMS';
+const PLENARY_MANUAL_BLANK_ = '-';
+const PLENARY_DROPDOWN_OPTIONS_ = [
+  { displayValue: PLENARY_NO_, textStyle: { foregroundColor: { color: { rgbColor: { red: 0.263, green: 0.263, blue: 0.263 } } }, backgroundColor: { color: { rgbColor: { red: 0.937, green: 0.937, blue: 0.937 } } } } },
+  { displayValue: PLENARY_YES_, textStyle: { foregroundColor: { color: { rgbColor: { red: 0.035, green: 0.333, blue: 0.122 } } }, backgroundColor: { color: { rgbColor: { red: 0.851, green: 0.918, blue: 0.827 } } } } }
+];
+const PLENARY_DISPOSITION_TABLE_HEADER_ = ['TDoc', 'Title', 'Source', 'Status', 'SWG Agenda Item', 'SA4 Plenary Agenda Item'];
+const PLENARY_DISPOSITION_TABLE_WIDTHS_ = [0.15, 0.33, 0.15, 0.12, 0.12, 0.13];
+const PLENARY_DISPOSITION_NOTE_ = 'Written from the Status and the Goes to Plenary selection of the TDoc tables by SA4 Report > Report > Update Disposition Summary, and kept up to date by every update. Text typed between this line and its last table stops it from being updated; text below it is kept.';
+// The four tables, in the order of the summary.
+const PLENARY_DISPOSITION_CLASSES_ = [
+  { key: 'POSITIVE_PLENARY', title: 'Agreed, Endorsed and Approved Documents – Goes to Plenary', short: 'agreed/endorsed/approved, to plenary', positive: true, plenary: true },
+  { key: 'OTHER_PLENARY', title: 'Other Dispositions – Goes to Plenary', short: 'other, to plenary', positive: false, plenary: true },
+  { key: 'POSITIVE_NOT_PLENARY', title: 'Agreed, Endorsed and Approved Documents – Not Going to Plenary', short: 'agreed/endorsed/approved, not to plenary', positive: true, plenary: false },
+  { key: 'OTHER_NOT_PLENARY', title: 'Other Dispositions – Not Going to Plenary', short: 'other, not to plenary', positive: false, plenary: false }
+];
+// The plenary agenda (PLENARY AGENDA MAPPING): the titles that name its parts. Read from the meeting's agenda, never a
+// number of its own: at SA4#138 (S4-261857) 14 "Release 19 and earlier matters", 15 "Release 20 Features", 16 "Study Items".
+const PLENARY_MAINTENANCE_TITLE_ = /^Release\s+(\d+)\s+and\s+earlier\s+matters\b/i;
+const PLENARY_TARGET_SECTION_TITLES_ = [/^Release\s+\d+\s+Features\b/i, /^Study\s+Items\b/i];
+
+// What one execution knows: whether it changed the document, the Status "Plenary" cells to replace, the "Goes to
+// Plenary" dropdowns to set to "☑ Yes", the TDoc list of a build, what the rows said before a rebuild.
+let PLENARY_RUN_ = null;
+
+function plenaryRun_() {
+  if (!PLENARY_RUN_) PLENARY_RUN_ = { dirty: false, statusReplace: {}, yes: {}, listFacts: null, previous: null };
+  return PLENARY_RUN_;
+}
+
+function resetPlenaryRun_() {
+  PLENARY_RUN_ = null;
+}
+
+/** Whether the report has "Goes to Plenary" (and so the four tables). Never throws. */
+function plenarySelectionEnabled_() {
+  try {
+    return PropertiesService.getDocumentProperties().getProperty(PLENARY_ENABLED_KEY_) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Pure: 'yes', 'no' or 'unknown' for the text of a "Goes to Plenary" cell or the value of its dropdown. Empty is "no". */
+function plenaryChoiceOfText_(text) {
+  const t = String(text === null || text === undefined ? '' : text).replace(/\s+/g, ' ').trim();
+  if (!t) return 'no';
+  if (/^[☑☒✓✔]/.test(t)) return 'yes';
+  if (/^☐/.test(t)) return 'no';
+  const w = t.toLowerCase();
+  if (['yes', 'y', 'x', 'true'].indexOf(w) !== -1) return 'yes';
+  if (['no', 'n', 'false'].indexOf(w) !== -1) return 'no';
+  return 'unknown';
+}
+
+/**
+ * The labels of the rows of a two-column table, in order: lower case,
+ * whitespace as one space; '' for a row that is not two cells. One read of
+ * each row: an update reads every TDoc table, and every getText() is a call.
+ */
+function plenaryLabelsOf_(table) {
+  const labels = [];
+  for (let r = 0; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    labels.push(row.getNumCells() < 2 ? '' : row.getCell(0).getText().replace(/\s+/g, ' ').trim().toLowerCase());
+  }
+  return labels;
+}
+
+/** The index of the first row whose label is `label` (case and whitespace aside), or -1. `labels`: plenaryLabelsOf_(table), read now when not given. */
+function plenaryRowIndexOf_(table, label, labels) {
+  return (labels || plenaryLabelsOf_(table)).indexOf(String(label).toLowerCase());
+}
+
+/** The index of the Status row of a TDoc table ("Status" or "TDoc Status"), or -1. */
+function plenaryStatusRowIndexOf_(table, labels) {
+  const all = labels || plenaryLabelsOf_(table);
+  const s = all.indexOf('status');
+  return s !== -1 ? s : all.indexOf('tdoc status');
+}
+
+/** The text of the value cell beside `label` ('' without that row). */
+function plenaryValueOf_(table, labels, label) {
+  const r = labels.indexOf(String(label).toLowerCase());
+  return r === -1 ? '' : table.getRow(r).getCell(1).getText().trim();
+}
+
+/**
+ * The Status of a TDoc table as readTdocStatus_() reads it -- the text of the
+ * cell, else the value selected in its dropdown ('' when neither can be had)
+ * -- from its row `s`. `key`: the TDoc number as its table has it.
+ */
+function plenaryStatusOf_(table, s, key) {
+  if (s === -1) return '';
+  const cell = table.getRow(s).getCell(1);
+  const text = cell.getText().trim();
+  if (text || !statusCellHoldsDropdown_(cell)) return text;
+  const index = statusDropdownIndex_();
+  const entry = index ? index.tables[key] : null;
+  return entry && entry.kind === 'dropdown' ? String(entry.displayValue || '').trim() : '';
+}
+
+/** A new row at `at`, with the widths of the row `model` and the look Format Report gives a row. */
+function insertPlenaryRow_(table, at, label, value, model) {
+  const row = table.insertTableRow(at);
+  row.appendTableCell(label);
+  row.appendTableCell(value);
+  // The look never decides whether the row is there.
+  try {
+    if (typeof row.setMinimumHeight === 'function') row.setMinimumHeight(0);
+    const from = table.getRow(model);
+    for (let c = 0; c < 2; c++) {
+      const cell = row.getCell(c);
+      const width = typeof from.getCell(c).getWidth === 'function' ? from.getCell(c).getWidth() : null;
+      if (width && typeof cell.setWidth === 'function') cell.setWidth(width);
+      for (let k = 0; k < cell.getNumChildren(); k++) {
+        const child = cell.getChild(k);
+        if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+        child.asParagraph().setSpacingBefore(0);
+        child.asParagraph().setSpacingAfter(0);
+      }
+    }
+  } catch (e) {
+    Logger.log('Goes to Plenary: a row could not be formatted: ' + e.message);
+  }
+  return row;
+}
+
+/**
+ * The two rows below the Status row of a TDoc table, where they are missing:
+ * "Goes to Plenary" ("☑ Yes" for choice 'yes', else "☐ No") and "Plenary
+ * Agenda Item" (empty). A table without a Status row gets none. Returns how
+ * many rows were inserted.
+ */
+function ensurePlenaryRows_(table, choice, labels) {
+  const all = labels || plenaryLabelsOf_(table);
+  const s = plenaryStatusRowIndexOf_(table, all);
+  if (s === -1) return 0;
+  let inserted = 0;
+  let p = all.indexOf(PLENARY_ROW_LABEL_.toLowerCase());
+  const hasAgenda = all.indexOf(PLENARY_AGENDA_ROW_LABEL_.toLowerCase()) !== -1;
+  if (p === -1) {
+    p = s + 1;
+    insertPlenaryRow_(table, p, PLENARY_ROW_LABEL_, choice === 'yes' ? PLENARY_YES_ : PLENARY_NO_, s);
+    inserted++;
+  }
+  if (!hasAgenda) {
+    insertPlenaryRow_(table, p + 1, PLENARY_AGENDA_ROW_LABEL_, '', s);
+    inserted++;
+  }
+  return inserted;
+}
+
+/** Pure: the "Goes to Plenary" cell of the rows of a Docs API table, as statusDocsCellEntry_() reads a cell, or null. */
+function plenaryDocsEntryOfRows_(rows) {
+  for (let r = 0; r < (rows || []).length; r++) {
+    const cells = rows[r].tableCells || [];
+    if (cells.length < 2) continue;
+    if (statusDocsCellText_(cells[0]).replace(/\s+/g, ' ').trim().toLowerCase() === PLENARY_ROW_LABEL_.toLowerCase()) return statusDocsCellEntry_(cells[1]);
+  }
+  return null;
+}
+
+/**
+ * What a TDoc table says about the plenary: { has, choice, agenda, chip }.
+ * choice: 'yes', 'no', 'unknown' (a text it does not understand -- counted
+ * as not going) or 'unreadable' (a dropdown the API could not read). agenda:
+ * the text of "Plenary Agenda Item". Never writes.
+ */
+function readPlenaryOfTable_(table, number, labels) {
+  const all = labels || plenaryLabelsOf_(table);
+  const p = all.indexOf(PLENARY_ROW_LABEL_.toLowerCase());
+  const a = all.indexOf(PLENARY_AGENDA_ROW_LABEL_.toLowerCase());
+  const agenda = a === -1 ? '' : table.getRow(a).getCell(1).getText().replace(/\s+/g, ' ').trim();
+  if (p === -1) return { has: false, choice: 'no', agenda: agenda, chip: false };
+  const cell = table.getRow(p).getCell(1);
+  const text = cell.getText().trim();
+  if (text) return { has: true, choice: plenaryChoiceOfText_(text), agenda: agenda, chip: false };
+  if (!statusCellHoldsDropdown_(cell)) return { has: true, choice: 'no', agenda: agenda, chip: false };
+  const index = statusDropdownIndex_();
+  const entry = index && index.plenary ? index.plenary[number] : null;
+  if (!entry || entry.kind !== 'dropdown') return { has: true, choice: 'unreadable', agenda: agenda, chip: true };
+  return { has: true, choice: plenaryChoiceOfText_(entry.displayValue), agenda: agenda, chip: true };
+}
+
+/** "☑ Yes" in the "Goes to Plenary" row of a table: its text, or -- for a dropdown -- at the end of the execution. */
+function setPlenaryYes_(table, number, labels) {
+  const p = plenaryRowIndexOf_(table, PLENARY_ROW_LABEL_, labels);
+  if (p === -1) return false;
+  const cell = table.getRow(p).getCell(1);
+  const text = cell.getText().trim();
+  if (!text && statusCellHoldsDropdown_(cell)) {
+    plenaryRun_().yes[number] = true;
+    return false;
+  }
+  if (plenaryChoiceOfText_(text) === 'yes' && text) return false;
+  cell.setText(PLENARY_YES_);
+  plenaryRun_().dirty = true;
+  return true;
+}
+
+// --- The four tables
+
+/** Pure: true for a line of a class of either form of the summary that is the last of its form. */
+function isLastDispositionClassLine_(text) {
+  const lastTitles = [DISPOSITION_CLASSES_[DISPOSITION_CLASSES_.length - 1].title, PLENARY_DISPOSITION_CLASSES_[PLENARY_DISPOSITION_CLASSES_.length - 1].title];
+  return lastTitles.some(function (title) { return text.length > title.length && text.slice(0, title.length) === title && /^ \(\d+\)$/.test(text.slice(title.length)); });
+}
+
+/** Pure: true for the note or a class line of the four-table form. */
+function isPlenaryDispositionParagraphText_(text) {
+  if (text === PLENARY_DISPOSITION_NOTE_) return true;
+  return PLENARY_DISPOSITION_CLASSES_.some(function (c) { return text.length > c.title.length && text.slice(0, c.title.length) === c.title && /^ \(\d+\)$/.test(text.slice(c.title.length)); });
+}
+
+/** True for a table of the four-table form: its first row is its header. */
+function isPlenaryDispositionTable_(table) {
+  try {
+    if (table.getNumRows() < 1) return false;
+    const row = table.getRow(0);
+    if (row.getNumCells() !== PLENARY_DISPOSITION_TABLE_HEADER_.length) return false;
+    for (let c = 0; c < row.getNumCells(); c++) if (row.getCell(c).getText().trim() !== PLENARY_DISPOSITION_TABLE_HEADER_[c]) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Pure: the class of the four tables an entry belongs to (one and only one). */
+function plenaryDispositionClassOf_(entry, plenary) {
+  const positive = !!entry && !entry.conflict && entry.disposition === 'AGREED_ENDORSED_APPROVED';
+  return PLENARY_DISPOSITION_CLASSES_.filter(function (c) { return c.positive === positive && c.plenary === !!plenary; })[0];
+}
+
+/**
+ * The four tables for the entries of readReportDispositions_(): the form of
+ * buildDispositionSummaryModel_() -- [{ key, title, short, entries }] -- with
+ * `plenaryForm` set; each entry also has `plenary` and `plenaryAgenda`.
+ * A "Goes to Plenary" dropdown that cannot be read is added to
+ * read.unreadable (nothing is written then). A TDoc with two tables is read
+ * from its first. Read-only.
+ */
+function buildPlenaryDispositionModel_(body, read) {
+  const tables = {};
+  body.getTables().forEach(function (t) {
+    if (!isTDocTable_(t)) return;
+    const raw = safeCellText_(t, 0, 1).trim();
+    const parsed = parseExactSA4DocumentId_(raw);
+    if (parsed.isValid && !tables[parsed.raw]) tables[parsed.raw] = { table: t, key: raw };
+  });
+  const rows = read.entries.map(function (e) {
+    const found = tables[e.tdoc];
+    const st = found ? readPlenaryOfTable_(found.table, found.key) : { choice: 'no', agenda: '' };
+    if (st.choice === 'unreadable' && read.unreadable.indexOf(e.tdoc) === -1) read.unreadable.push(e.tdoc);
+    return Object.assign({}, e, { plenary: st.choice === 'yes', plenaryAgenda: st.agenda === PLENARY_MANUAL_BLANK_ ? '' : st.agenda });
+  });
+  const model = PLENARY_DISPOSITION_CLASSES_.map(function (c) {
+    return { key: c.key, title: c.title, short: c.short, entries: rows.filter(function (e) { return plenaryDispositionClassOf_(e, e.plenary).key === c.key; }) };
+  });
+  model.plenaryForm = true;
+  return model;
+}
+
+/** Pure: what the four-table form says below its heading, in the form of dispositionSummaryContent_(). */
+function plenaryDispositionSummaryContent_(model) {
+  const out = [['p', PLENARY_DISPOSITION_NOTE_]];
+  const line = function (text) { return String(text === null || text === undefined ? '' : text).replace(/\s+/g, ' ').trim(); };
+  model.forEach(function (c) {
+    out.push(['p', c.title + ' (' + c.entries.length + ')']);
+    if (!c.entries.length) {
+      out.push(['p', DISPOSITION_SUMMARY_NONE_]);
+      return;
+    }
+    const rows = [PLENARY_DISPOSITION_TABLE_HEADER_.slice()].concat(c.entries.map(function (e) {
+      return [e.tdoc, line(e.title), line(e.source), line(dispositionSummaryStatusText_(e)), line(e.agendaItem), line(e.plenaryAgenda)];
+    }));
+    out.push(['t', rows, c.entries.map(function (e) { return e.link || ''; })]);
+  });
+  return out;
+}
+
+// --- PLENARY AGENDA MAPPING
+//
+// The SA4 plenary agenda item of a contribution, from the meeting's agenda
+// (its agenda TDoc; main meetings only) and the contribution's work item.
+// Work items: the TDoc list's "Related WIs", the tag of its title
+// ("[AMD_ARCH_Ph2-MED] ..."), and the acronym of its SWG agenda item and of
+// the items above it ("8.5 AMD_ARCH_Ph2-MED (...)", "11 FS_6G_MED (...)").
+// The plenary parts are found by their titles, never by a number of their
+// own: the maintenance item ("Release 19 and earlier matters", 14 at SA4#138)
+// and the items under "Release 20 Features" (15.x) and "Study Items" (16.x).
+// In this order, the first rule that applies decides:
+//   1. a CR to the maintenance release or earlier -> the maintenance item;
+//   2. under an SWG item "Release N and earlier matters" (8.4 at SA4#138)
+//      -> the maintenance item;
+//   3. its work items name exactly one 15.x/16.x item (by acronym) -> that
+//      item; more than one -> blank (ambiguous);
+//   4. a TEI work item of the maintenance release or earlier (TEI19) -> the
+//      maintenance item;
+//   5. its SWG item has the title of exactly one 15.x/16.x item ("Other
+//      Rel-20 matters including TEI") -> that item;
+//   6. otherwise blank, for the rapporteur.
+
+/** Pure: the acronym a title starts with ("AMD_ARCH_Ph2-MED (Architectural ...)" -> "AMD_ARCH_Ph2-MED"), or ''. */
+function plenaryAgendaAcronym_(title) {
+  const m = String(title || '').trim().match(/^([A-Za-z0-9][A-Za-z0-9_.#+\-]*)\s*\(/);
+  return m ? m[1] : '';
+}
+
+/** Pure: the agenda items a report keeps for the mapping: [[number, short title]]; an acronym title as "ACRONYM (…)". */
+function compactPlenaryAgendaItems_(items) {
+  return (items || []).filter(function (i) { return i && /^\d+(\.\d+)*$/.test(String(i.number || '').trim()); }).map(function (i) {
+    const title = String(i.title || '').replace(/\s+/g, ' ').trim();
+    const acronym = plenaryAgendaAcronym_(title);
+    return [String(i.number).trim(), acronym ? acronym + ' (…)' : title.slice(0, 80)];
+  });
+}
+
+/**
+ * Pure: the parts of the plenary agenda, from [[number, title]] (or [{ number,
+ * title }]): { maintenance: { number, release } | null, targets: [{ number,
+ * acronym, title }], byNumber: { number: title } }. null without items.
+ */
+function plenaryAgendaModel_(items) {
+  const list = (items || []).map(function (i) { return Array.isArray(i) ? { number: i[0], title: i[1] } : { number: String(i.number || '').trim(), title: String(i.title || '') }; })
+    .filter(function (i) { return /^\d+(\.\d+)*$/.test(i.number); });
+  if (!list.length) return null;
+  const byNumber = {};
+  list.forEach(function (i) { if (!Object.prototype.hasOwnProperty.call(byNumber, i.number)) byNumber[i.number] = i.title; });
+  const top = list.filter(function (i) { return i.number.indexOf('.') === -1; });
+  let maintenance = null;
+  top.forEach(function (i) {
+    const m = String(i.title).match(PLENARY_MAINTENANCE_TITLE_);
+    if (m && !maintenance) maintenance = { number: i.number, release: parseInt(m[1], 10) };
+  });
+  const sections = top.filter(function (i) { return PLENARY_TARGET_SECTION_TITLES_.some(function (re) { return re.test(i.title); }); }).map(function (i) { return i.number; });
+  const targets = list.filter(function (i) { return sections.some(function (s) { return i.number.indexOf(s + '.') === 0; }); })
+    .map(function (i) { return { number: i.number, acronym: plenaryAgendaAcronym_(i.title), title: i.title }; });
+  return { maintenance: maintenance, targets: targets, byNumber: byNumber };
+}
+
+/** Pure: "Rel-19" -> 19; null when it names no release. */
+function plenaryReleaseNumber_(value) {
+  const m = String(value === null || value === undefined ? '' : value).match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/** Pure: the work items of a contribution (see the section), without duplicates. */
+function plenaryWorkItemsOf_(model, tdoc) {
+  const out = [];
+  const add = function (code) { const c = String(code || '').trim(); if (c && out.map(function (x) { return x.toLowerCase(); }).indexOf(c.toLowerCase()) === -1) out.push(c); };
+  String(tdoc.relatedWis || '').split(/[\s,;]+/).forEach(add);
+  const tag = String(tdoc.title || '').match(/^\s*\[([^\]]+)\]/);
+  if (tag) tag[1].split(/[\s,;/]+/).forEach(add);
+  const swg = String(tdoc.swgItem || '').trim();
+  const parts = swg.split('.');
+  for (let n = parts.length; n >= 1 && swg; n--) {
+    const number = parts.slice(0, n).join('.');
+    if (Object.prototype.hasOwnProperty.call(model.byNumber, number)) add(plenaryAgendaAcronym_(model.byNumber[number]));
+  }
+  return out;
+}
+
+/**
+ * Pure: the SA4 plenary agenda item of a contribution -- { value, rule } --
+ * by the rules of the section. `tdoc`: { swgItem, title, type, release
+ * (number or null), relatedWis }. value '' when no rule gives one item.
+ */
+function plenaryAgendaAutoValue_(model, tdoc) {
+  if (!model) return { value: '', rule: 'no plenary agenda' };
+  const t = tdoc || {};
+  const maintenance = model.maintenance;
+  const swg = String(t.swgItem || '').trim();
+  const swgTitle = Object.prototype.hasOwnProperty.call(model.byNumber, swg) ? String(model.byNumber[swg]) : '';
+  if (maintenance && /^cr$/i.test(String(t.type || '').trim()) && typeof t.release === 'number' && t.release <= maintenance.release) {
+    return { value: maintenance.number, rule: 'CR to Rel-' + t.release };
+  }
+  if (maintenance && swg.indexOf('.') !== -1 && PLENARY_MAINTENANCE_TITLE_.test(swgTitle)) return { value: maintenance.number, rule: 'SWG maintenance item ' + swg };
+  const codes = plenaryWorkItemsOf_(model, t);
+  const lower = codes.map(function (c) { return c.toLowerCase(); });
+  let matched = model.targets.filter(function (x) { return x.acronym && lower.indexOf(x.acronym.toLowerCase()) !== -1; }).map(function (x) { return x.number; });
+  matched = matched.filter(function (n, i, all) { return all.indexOf(n) === i; });
+  // An item and one below it (16.7 and 16.7.1) are one answer: the one below.
+  matched = matched.filter(function (n) { return !matched.some(function (o) { return o !== n && o.indexOf(n + '.') === 0; }); });
+  if (matched.length === 1) return { value: matched[0], rule: 'work item' };
+  if (matched.length > 1) return { value: '', rule: 'ambiguous: ' + matched.join(', ') };
+  if (maintenance && codes.some(function (c) { const m = c.match(/^TEI(\d+)$/i); return m && parseInt(m[1], 10) <= maintenance.release; })) {
+    return { value: maintenance.number, rule: 'TEI of Rel-' + maintenance.release + ' or earlier' };
+  }
+  const norm = function (s) { return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
+  const same = swgTitle ? model.targets.filter(function (x) { return !x.acronym && norm(x.title) === norm(swgTitle); }) : [];
+  if (same.length === 1) return { value: same[0].number, rule: 'SWG item title' };
+  return { value: '', rule: 'no mapping' };
+}
+
+/** Whether the report's plenary agenda items can be derived at all: a main meeting. Never throws. */
+function plenaryAgendaApplies_() {
+  try {
+    return normalizeMeetingType_(PropertiesService.getDocumentProperties().getProperty('MEETING_TYPE')) === 'main';
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The agenda of the meeting for the mapping, [[number, title]]: kept in the
+ * report for its agenda TDoc (PLENARY_AGENDA_ITEMS), else downloaded once
+ * (downloadMeetingAgenda_()) and kept. null for an ad-hoc meeting, without
+ * an agenda TDoc, or when it cannot be had (nothing automatic changes then).
+ */
+function plenaryAgendaItems_(cfg) {
+  try {
+    if (!plenaryAgendaApplies_()) return null;
+    const agendaTdoc = String((cfg && cfg.AGENDA_TDOC) || '').trim();
+    if (!agendaTdoc) return null;
+    const props = PropertiesService.getDocumentProperties();
+    let cached = null;
+    try { cached = JSON.parse(props.getProperty(PLENARY_AGENDA_CACHE_KEY_) || 'null'); } catch (e) { cached = null; }
+    if (cached && cached.agendaTdoc === agendaTdoc && Array.isArray(cached.items) && cached.items.length) return cached.items;
+    const items = compactPlenaryAgendaItems_(downloadMeetingAgenda_(agendaTdoc, cfg.FTP_BASE));
+    if (!items.length) return null;
+    const json = JSON.stringify({ agendaTdoc: agendaTdoc, items: items });
+    if (json.length <= 9000) props.setProperty(PLENARY_AGENDA_CACHE_KEY_, json);
+    else Logger.log('Goes to Plenary: the agenda of ' + agendaTdoc + ' is too large to be kept (' + json.length + ' characters); it is read again next time.');
+    return items;
+  } catch (e) {
+    Logger.log('Goes to Plenary: the meeting agenda could not be read (' + e.message + '); no SA4 plenary agenda item is changed in this run.');
+    return null;
+  }
+}
+
+/** Pure: what the TDoc list says that the mapping and the Status replacement need -- { <TDoc>: { type, release, relatedWis, portalStatus } }. */
+function plenaryListFactsOf_(allTdocs) {
+  const out = {};
+  (allTdocs || []).forEach(function (td) {
+    if (!td || !td.row) return;
+    const raw = String(td.row[td.tdocCol] === null || td.row[td.tdocCol] === undefined ? '' : td.row[td.tdocCol]).trim();
+    const parsed = parseExactSA4DocumentId_(raw);
+    const number = parsed.isValid ? parsed.raw : raw;
+    if (!number || out[number]) return;
+    const cell = function (col) { return col >= 0 && td.row[col] !== null && td.row[col] !== undefined ? String(td.row[col]).trim() : ''; };
+    out[number] = { type: cell(td.typeCol), release: plenaryReleaseNumber_(cell(td.releaseCol === undefined ? -1 : td.releaseCol)),
+      relatedWis: cell(td.relatedWisCol === undefined ? -1 : td.relatedWisCol), portalStatus: tdocListStatus_(td) };
+  });
+  return out;
+}
+
+/** Pure: the column of the TDoc list whose header matches `pattern`, or -1. */
+function tdocListColumnMatching_(headers, pattern) {
+  for (let i = 0; i < (headers || []).length; i++) if (pattern.test(String(headers[i] === null || headers[i] === undefined ? '' : headers[i]).trim())) return i;
+  return -1;
+}
+
+/**
+ * Every TDoc table of the report: the two rows where they are missing; the
+ * retired Status "Plenary" (-> "☑ Yes", and the Status the TDoc list's);
+ * and, with a plenary agenda, the automatic SA4 plenary agenda items.
+ * `facts`: plenaryListFactsOf_(); `agendaItems`: plenaryAgendaItems_() or
+ * null. Adds its counts to `out`. DocumentApp only; the dropdowns follow at
+ * the end of the execution (finalizePlenarySelection_()).
+ */
+function applyPlenarySelectionToTables_(body, facts, agendaItems, out) {
+  const run = plenaryRun_();
+  const props = PropertiesService.getDocumentProperties();
+  const stored = props.getProperties() || {};
+  const model = agendaItems ? plenaryAgendaModel_(agendaItems) : null;
+  const seen = {};
+  const writes = {};
+  const deletes = [];
+  body.getTables().forEach(function (table) {
+    if (!isTDocTable_(table)) return;
+    const raw = safeCellText_(table, 0, 1).trim();
+    const parsed = parseExactSA4DocumentId_(raw);
+    if (!parsed.isValid) return;
+    const number = parsed.raw;
+    const first = !seen[number];
+    seen[number] = true;
+    const fact = facts[number] || {};
+    let labels = plenaryLabelsOf_(table);
+    const s = plenaryStatusRowIndexOf_(table, labels);
+    const retired = statusDropdownLabel_(plenaryStatusOf_(table, s, raw)) === PLENARY_STATUS_OPTION_;
+    const inserted = ensurePlenaryRows_(table, retired ? 'yes' : 'no', labels);
+    if (inserted) {
+      out.rows += inserted;
+      run.dirty = true;
+      labels = plenaryLabelsOf_(table);
+    }
+    if (retired) {
+      setPlenaryYes_(table, raw, labels);
+      const statusCell = table.getRow(s).getCell(1);
+      if (statusCell.getText().trim()) {
+        statusCell.setText(fact.portalStatus && statusDropdownLabel_(fact.portalStatus) !== PLENARY_STATUS_OPTION_ ? fact.portalStatus : 'available');
+        run.dirty = true;
+      } else {
+        run.statusReplace[raw] = fact.portalStatus || '';
+      }
+      out.plenaryStatuses++;
+    }
+    if (!model || !first) return;
+    const a = labels.indexOf(PLENARY_AGENDA_ROW_LABEL_.toLowerCase());
+    if (a === -1) return;
+    const cell = table.getRow(a).getCell(1);
+    const current = cell.getText().replace(/\s+/g, ' ').trim();
+    const key = PLENARY_AUTO_KEY_PREFIX_ + number;
+    const last = Object.prototype.hasOwnProperty.call(stored, key) ? String(stored[key]) : '';
+    if (current && current !== last) { out.manual++; return; }      // a manual value: never overwritten
+    const typeFor = plenaryValueOf_(table, labels, 'Type/For');
+    const auto = plenaryAgendaAutoValue_(model, { swgItem: plenaryValueOf_(table, labels, 'Agenda Item'), title: plenaryValueOf_(table, labels, 'Title'),
+      type: fact.type || (typeFor.match(/^(\S+)/) || ['', ''])[1], release: typeof fact.release === 'number' ? fact.release : null, relatedWis: fact.relatedWis || '' }).value;
+    if (auto !== current) {
+      cell.setText(auto);
+      run.dirty = true;
+      out.agendaWritten++;
+    }
+    if (auto && last !== auto) writes[key] = auto;
+    if (!auto && Object.prototype.hasOwnProperty.call(stored, key)) deletes.push(key);
+  });
+  if (Object.keys(writes).length) props.setProperties(writes);
+  deletes.forEach(function (key) { props.deleteProperty(key); });
+}
+
+/**
+ * The update (after its TDoc tables are in place, before the Disposition
+ * Summary): applyPlenarySelectionToTables_() with the TDoc list of this run.
+ * Nothing for a report without "Goes to Plenary". Never throws.
+ */
+function syncPlenarySelectionOnUpdate_(body, allTdocs) {
+  const out = { state: 'off', rows: 0, plenaryStatuses: 0, agendaWritten: 0, manual: 0 };
+  try {
+    if (!plenarySelectionEnabled_()) return out;
+    resetPlenaryRun_();
+    applyPlenarySelectionToTables_(body, plenaryListFactsOf_(allTdocs), plenaryAgendaItems_(getReportConfig_()), out);
+    out.state = 'done';
+    Logger.log('Goes to Plenary: ' + out.rows + ' row(s) added, ' + out.plenaryStatuses + ' Status "Plenary" moved to Goes to Plenary, ' + out.agendaWritten +
+      ' SA4 plenary agenda item(s) written, ' + out.manual + ' manual value(s) kept.');
+  } catch (e) {
+    out.state = 'failed';
+    out.error = e.message;
+    Logger.log('Goes to Plenary: could not be brought up to date: ' + e.message);
+  }
+  return out;
+}
+
+/** Build Report from Scratch: the TDoc list it builds from, for the end of the build. Never throws. */
+function notePlenaryListFacts_(allTdocs) {
+  try {
+    plenaryRun_().listFacts = plenaryListFactsOf_(allTdocs);
+  } catch (e) {
+    Logger.log('Goes to Plenary: the TDoc list of the build could not be noted: ' + e.message);
+  }
+}
+
+/**
+ * Build Report from Scratch, before the document is cleared: what the rows
+ * say, by TDoc -- { yes, agenda } (agenda: a manual SA4 plenary agenda item,
+ * else '') -- for the end of the build. A Status "Plenary" (typed, or a
+ * dropdown of before the set-up) is "yes": the rebuild writes the statuses
+ * from the TDoc list, and the decision would be lost. Nothing for a report
+ * without "Goes to Plenary". Never throws.
+ */
+function capturePlenarySelectionForRebuild_() {
+  resetPlenaryRun_();
+  try {
+    if (!plenarySelectionEnabled_()) return;
+    const stored = PropertiesService.getDocumentProperties().getProperties() || {};
+    const previous = {};
+    currentReportDocument_().getBody().getTables().forEach(function (table) {
+      if (!isTDocTable_(table)) return;
+      const raw = safeCellText_(table, 0, 1).trim();
+      const parsed = parseExactSA4DocumentId_(raw);
+      if (!parsed.isValid || previous[parsed.raw]) return;
+      const labels = plenaryLabelsOf_(table);
+      const st = readPlenaryOfTable_(table, raw, labels);
+      if (!st.has) return;
+      const last = stored[PLENARY_AUTO_KEY_PREFIX_ + parsed.raw];
+      const retired = statusDropdownLabel_(plenaryStatusOf_(table, plenaryStatusRowIndexOf_(table, labels), raw)) === PLENARY_STATUS_OPTION_;
+      previous[parsed.raw] = { yes: st.choice === 'yes' || retired, agenda: st.agenda && st.agenda !== last ? st.agenda : '' };
+    });
+    plenaryRun_().previous = previous;
+  } catch (e) {
+    Logger.log('Goes to Plenary: the selections could not be read before the rebuild (' + e.message + '); every TDoc starts as "' + PLENARY_NO_ + '".');
+  }
+}
+
+/**
+ * The end of a Build Report from Scratch, before the document is saved
+ * (finalizeStatusDropdowns_('build')), in a report that has "Goes to
+ * Plenary": every TDoc table its rows; what the rows said before the rebuild
+ * back; the automatic SA4 plenary agenda items. A report without it stays
+ * without it (Set Up Goes to Plenary… is the one way in). Never throws.
+ */
+function preparePlenarySelectionForBuild_() {
+  try {
+    if (!statusDropdownsAvailable_() || !plenarySelectionEnabled_()) return;
+    const run = plenaryRun_();
+    const body = currentReportDocument_().getBody();
+    const out = { rows: 0, plenaryStatuses: 0, agendaWritten: 0, manual: 0 };
+    applyPlenarySelectionToTables_(body, run.listFacts || {}, plenaryAgendaItems_(getReportConfig_()), out);
+    const previous = run.previous || {};
+    let restored = 0;
+    body.getTables().forEach(function (table) {
+      if (!isTDocTable_(table)) return;
+      const raw = safeCellText_(table, 0, 1).trim();
+      const parsed = parseExactSA4DocumentId_(raw);
+      const before = parsed.isValid ? previous[parsed.raw] : null;
+      if (!before) return;
+      const labels = plenaryLabelsOf_(table);
+      if (before.yes && setPlenaryYes_(table, raw, labels)) restored++;
+      const a = labels.indexOf(PLENARY_AGENDA_ROW_LABEL_.toLowerCase());
+      if (before.agenda && a !== -1 && table.getRow(a).getCell(1).getText().trim() !== before.agenda) {
+        table.getRow(a).getCell(1).setText(before.agenda);
+        run.dirty = true;
+        restored++;
+      }
+    });
+    Logger.log('Goes to Plenary (build): ' + out.rows + ' row(s), ' + out.agendaWritten + ' SA4 plenary agenda item(s) written, ' + restored + ' selection(s) kept from before the rebuild.');
+  } catch (e) {
+    Logger.log('Goes to Plenary: the rows could not be prepared in the build: ' + e.message);
+  }
+}
+
+/** Pure: the "Goes to Plenary" definition of the report ({ id, options }), or null. */
+function plenaryDefinitionOf_(index) {
+  let found = null;
+  Object.keys((index && index.definitions) || {}).sort().forEach(function (id) {
+    const props = index.definitions[id].dropdownDefinitionProperties || {};
+    if (!found && props.title === PLENARY_DROPDOWN_TITLE_ && (props.options || []).length >= 2) found = { id: id, options: props.options };
+  });
+  return found;
+}
+
+/** Pure: the option of a "Goes to Plenary" definition for 'yes' or 'no', or null. */
+function plenaryOptionOf_(definition, choice) {
+  return ((definition && definition.options) || []).filter(function (o) { return o.optionId && plenaryChoiceOfText_(o.displayValue) === choice; })[0] || null;
+}
+
+/**
+ * Pure: the requests that name a dropdown or a definition by its id (no
+ * position), from ONE read of the report (`index`) and the run's wishes:
+ *   - every Status dropdown that selects the retired "Plenary": the option of
+ *     the TDoc list's status (run.statusReplace, or the list of a build) or
+ *     "available"; its "Goes to Plenary" becomes "☑ Yes";
+ *   - "Goes to Plenary" dropdowns to set to "☑ Yes" (run.yes);
+ *   - "Plenary" out of the "Document Status" definition (any chip that would
+ *     still select it -- a TDoc with two tables -- gets "available").
+ * Returns { requests, statusesReplaced, updated, optionRemoved, yes }.
+ */
+function planPlenaryUpdateRequests_(index, run) {
+  const out = { requests: [], statusesReplaced: 0, updated: 0, optionRemoved: false, yes: Object.assign({}, (run && run.yes) || {}) };
+  const withTab = function (o) { if (index.tabId) o.tabId = index.tabId; return o; };
+  const statusDef = index.definition;
+  const options = (statusDef && statusDef.options) || [];
+  const retired = statusDropdownOptionByName_(PLENARY_STATUS_OPTION_, options);
+  const available = statusDropdownOptionByName_('available', options);
+  if (statusDef && retired) {
+    Object.keys(index.tables).sort().forEach(function (number) {
+      const entry = index.tables[number];
+      if (index.duplicates[number] || entry.kind !== 'dropdown' || entry.definitionId !== statusDef.id || entry.selectedOptionId !== retired.optionId) return;
+      const listed = run && run.listFacts && run.listFacts[number] ? run.listFacts[number].portalStatus : '';
+      const option = mapPortalStatusToDropdownOption_(((run && run.statusReplace) || {})[number] || listed || '', options) || available;
+      if (!option) return;
+      out.requests.push({ updateDropdownProperties: withTab({ dropdownId: entry.dropdownId, dropdownProperties: { selectedOptionId: option.optionId }, fields: 'selectedOptionId' }) });
+      out.statusesReplaced++;
+      out.yes[number] = true;
+    });
+  }
+  const definition = plenaryDefinitionOf_(index);
+  const yesOption = plenaryOptionOf_(definition, 'yes');
+  Object.keys(out.yes).sort().forEach(function (number) {
+    const entry = index.plenary && index.plenary[number];
+    if (!entry || entry.kind !== 'dropdown' || !yesOption || entry.definitionId !== definition.id || entry.selectedOptionId === yesOption.optionId || index.duplicates[number]) return;
+    out.requests.push({ updateDropdownProperties: withTab({ dropdownId: entry.dropdownId, dropdownProperties: { selectedOptionId: yesOption.optionId }, fields: 'selectedOptionId' }) });
+    out.updated++;
+  });
+  if (statusDef && retired && available) {
+    const remaining = options.filter(function (o) { return o.optionId !== retired.optionId; }).map(function (o) {
+      const option = { optionId: o.optionId, displayValue: o.displayValue };
+      if (o.textStyle) option.textStyle = o.textStyle;
+      return option;
+    });
+    const replacements = {};
+    replacements[retired.optionId] = available.optionId;
+    out.requests.push({ updateDropdownDefinitionProperties: withTab({ dropdownDefinitionId: statusDef.id, dropdownDefinitionProperties: { options: remaining },
+      selectedOptionIdReplacements: replacements, fields: 'options' }) });
+    out.optionRemoved = true;
+  }
+  return out;
+}
+
+/**
+ * Pure: a "Goes to Plenary" dropdown for every such cell that is text --
+ * "☑ Yes" for "yes" (or a TDoc in `yes`), "☐ No" for "no" or empty; a text it
+ * does not understand stays text. Insert pairs as planStatusDropdownRequests_()
+ * makes them, from the END of the document to its beginning.
+ */
+function planPlenaryInsertPairs_(index, definition, yes) {
+  const pairs = [];
+  const withTab = function (o) { if (index.tabId) o.tabId = index.tabId; return o; };
+  Object.keys(index.plenary || {}).forEach(function (number) {
+    const entry = index.plenary[number];
+    if (entry.kind !== 'text' || index.duplicates[number]) return;
+    const choice = (yes && yes[number]) ? 'yes' : plenaryChoiceOfText_(entry.text);
+    if (choice === 'unknown') return;
+    const option = plenaryOptionOf_(definition, choice);
+    if (!option) return;
+    const insert = function (at) { return { insertDropdown: { location: withTab({ index: at }), dropdownDefinitionId: definition.id, selectedOptionId: option.optionId } }; };
+    if (entry.insertable) pairs.push({ number: number, start: entry.start, requests: [{ deleteContentRange: { range: withTab({ startIndex: entry.start, endIndex: entry.end }) } }, insert(entry.start)] });
+    else if (entry.text === '' && typeof entry.at === 'number') pairs.push({ number: number, start: entry.at, requests: [insert(entry.at)] });
+  });
+  pairs.sort(function (a, b) { return b.start - a.start; });
+  return pairs;
+}
+
+/**
+ * The end of a build, an update, an Update TDoc Revisions or the set-up,
+ * after the status dropdowns (from finalizeStatusDropdowns_()): THE LAST
+ * thing that touches the document. `saved`: the status dropdowns saved it
+ * already. Saves it, reads it once through the API, and sends: the Status
+ * "Plenary" replacements, the "☑ Yes" of their rows, "Plenary" out of the
+ * Status dropdown (planPlenaryUpdateRequests_()); then the "Goes to Plenary"
+ * definition where the report has none, and a dropdown for every such cell
+ * that is text, in batches tied to the revision they were planned on.
+ * null for a report without "Goes to Plenary". Never throws.
+ */
+function finalizePlenarySelection_(mode, saved) {
+  if (!plenarySelectionEnabled_()) {
+    resetPlenaryRun_();
+    return null;
+  }
+  const run = plenaryRun_();
+  const result = { ran: false, inserted: 0, updated: 0, statusesReplaced: 0, optionRemoved: false, reason: '' };
+  try {
+    if (!statusDropdownsAvailable_()) { result.reason = 'not available in this runtime'; return result; }
+    const doc = currentReportDocument_();
+    const documentId = doc.getId();
+    if (!saved) {
+      try {
+        doc.saveAndClose();
+      } catch (e) {
+        throw new Error('the document could not be saved (' + e.message + ')');
+      }
+    }
+    result.ran = true;
+    const index = buildStatusDocsIndex_(statusDocsGet_(documentId, STATUS_DOCS_REPORT_FIELDS_));
+    if (!index) throw new Error('the document has no readable tab');
+    let revision = index.revisionId;
+    const plan = planPlenaryUpdateRequests_(index, run);
+    if (plan.requests.length) {
+      const reply = Docs.Documents.batchUpdate({ requests: plan.requests }, documentId);
+      revision = (reply && reply.writeControl && reply.writeControl.requiredRevisionId) || null;
+      result.statusesReplaced = plan.statusesReplaced;
+      result.updated = plan.updated;
+      result.optionRemoved = plan.optionRemoved;
+    }
+    const wanted = Object.keys(index.plenary || {}).some(function (n) { return index.plenary[n].kind === 'text' && !index.duplicates[n]; });
+    if (wanted) {
+      let definition = plenaryDefinitionOf_(index);
+      if (!definition) {
+        const request = { createDropdownDefinition: { dropdownDefinition: { dropdownDefinitionProperties: { title: PLENARY_DROPDOWN_TITLE_, options: PLENARY_DROPDOWN_OPTIONS_ } } } };
+        if (index.tabId) request.createDropdownDefinition.tabId = index.tabId;
+        const reply = Docs.Documents.batchUpdate({ requests: [request] }, documentId);
+        const made = reply.replies[0].createDropdownDefinition.dropdownDefinition;
+        definition = { id: made.dropdownDefinitionId, options: made.dropdownDefinitionProperties.options };
+        revision = (reply.writeControl && reply.writeControl.requiredRevisionId) || null;
+      }
+      const progress = { sent: 0 };
+      try {
+        sendStatusDropdownInsertPairs_(documentId, planPlenaryInsertPairs_(index, definition, plan.yes), revision, progress);
+      } finally {
+        result.inserted = progress.sent;
+      }
+    }
+    Logger.log('Goes to Plenary dropdowns (' + mode + '): ' + result.inserted + ' inserted, ' + result.updated + ' set to "' + PLENARY_YES_ + '", ' + result.statusesReplaced +
+      ' Status "Plenary" replaced' + (result.optionRemoved ? ', "Plenary" removed from the Status dropdown' : '') + '.');
+  } catch (e) {
+    result.reason = e.message;
+    Logger.log('Goes to Plenary dropdowns: not completed (' + e.message + '). Cells that were not converted stay as text; the next update tries again.');
+  } finally {
+    resetPlenaryRun_();
+  }
+  return result;
+}
+
+// --- An existing report: "Set Up Goes to Plenary…"
+
+/** What the set-up would do: { tables, missing, retired: [TDoc], enabled }. Read-only. */
+function planPlenarySetup_(body) {
+  const out = { tables: 0, missing: 0, retired: [], enabled: plenarySelectionEnabled_() };
+  body.getTables().forEach(function (table) {
+    if (!isTDocTable_(table) || plenaryStatusRowIndexOf_(table) === -1) return;
+    out.tables++;
+    if (plenaryRowIndexOf_(table, PLENARY_ROW_LABEL_) === -1 || plenaryRowIndexOf_(table, PLENARY_AGENDA_ROW_LABEL_) === -1) out.missing++;
+    const info = findStatusInDocTable_(table);
+    const number = safeCellText_(table, 0, 1).trim();
+    if (info && statusDropdownLabel_(readTdocStatus_(table, info.cell.getText())) === PLENARY_STATUS_OPTION_ && out.retired.indexOf(number) === -1) out.retired.push(number);
+  });
+  return out;
+}
+
+/** Pure: the question of the set-up. */
+function formatPlenarySetupPreview_(plan) {
+  return 'This adds two rows below the Status of every TDoc table that does not have them yet:\n' +
+    '• "Goes to Plenary" -- a dropdown ' + PLENARY_NO_ + ' / ' + PLENARY_YES_ + ', ' + PLENARY_NO_ + ' to start with;\n' +
+    '• "Plenary Agenda Item" -- filled in by the updates from the work item; a value typed there is kept.\n\n' +
+    'TDoc tables: ' + plan.tables + ' (' + plan.missing + ' without the rows).\n' +
+    (plan.retired.length ? 'Status "Plenary" (' + plan.retired.length + '): ' + plan.retired.join(', ') + ' -- these get ' + PLENARY_YES_ + ', and their Status becomes "available" ' +
+      '(the next update moves it on to the TDoc list\'s status).\n' : '') +
+    'The option "Plenary" leaves the Status dropdown of this report. Nothing else is changed: no status, no minutes, no other row.\n\n' +
+    'The next update (Update Report Now, or the automatic one) fills in the SA4 plenary agenda items and writes the Disposition Summary as four tables.\n\nContinue?';
+}
+
+/** Menu: Report > Set Up Goes to Plenary…. Asks first; safe to run again. */
+function setUpGoesToPlenary() {
+  assertNotTemplateMaster_();
+  const ui = DocumentApp.getUi();
+  const TITLE = 'Set Up Goes to Plenary';
+  if (!statusDropdownsAvailable_()) {
+    ui.alert(TITLE, 'This report cannot have Goes to Plenary: it needs a template report with the Google Docs API service. Nothing was changed.', ui.ButtonSet.OK);
+    return { ok: false, error: 'not available' };
+  }
+  const plan = planPlenarySetup_(currentReportDocument_().getBody());
+  if (plan.enabled && plan.missing === 0 && plan.retired.length === 0) {
+    ui.alert(TITLE, 'Goes to Plenary is set up already: all ' + plan.tables + ' TDoc tables have the rows. Nothing was changed.', ui.ButtonSet.OK);
+    return { ok: true, plan: plan, nothingToDo: true };
+  }
+  if (ui.alert(TITLE, formatPlenarySetupPreview_(plan), ui.ButtonSet.YES_NO) !== ui.Button.YES) return { ok: false, cancelled: true };
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    ui.alert(TITLE, 'Nothing was changed: an update of this report is running right now. Try again in a minute.', ui.ButtonSet.OK);
+    return { ok: false, error: 'locked' };
+  }
+  let result;
+  try {
+    resetStatusDropdownRun_();
+    resetPlenaryRun_();
+    const out = { rows: 0, plenaryStatuses: 0, agendaWritten: 0, manual: 0 };
+    PropertiesService.getDocumentProperties().setProperty(PLENARY_ENABLED_KEY_, '1');
+    applyPlenarySelectionToTables_(currentReportDocument_().getBody(), {}, null, out);
+    const done = finalizePlenarySelection_('setup', false);
+    result = { ok: !!done && !done.reason, rows: out.rows, plenaryStatuses: out.plenaryStatuses, dropdowns: done };
+  } finally {
+    lock.releaseLock();
+  }
+  ui.alert(TITLE, (result.ok ? 'Goes to Plenary is set up.' : 'Goes to Plenary is set up, but not completely: ' + result.dropdowns.reason + '. Run it again.') + '\n\n' +
+    result.rows + ' row(s) added; ' + result.dropdowns.inserted + ' dropdown(s) made; ' + result.plenaryStatuses + ' Status "Plenary" moved to ' + PLENARY_YES_ + '.' +
+    (result.dropdowns.optionRemoved ? '\n"Plenary" was removed from the Status dropdown.' : '') +
+    '\n\nThe next update fills in the SA4 plenary agenda items and writes the Disposition Summary as four tables.', ui.ButtonSet.OK);
+  return result;
+}
+
+// =========================================================
+// END OF GOES TO PLENARY
 // =========================================================
 
 // =========================================================

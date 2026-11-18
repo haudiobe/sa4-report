@@ -15,7 +15,12 @@
  *     displayValue }.
  *   - Documents.batchUpdate() knows createDropdownDefinition,
  *     deleteContentRange, insertDropdown and updateDropdownProperties, and
- *     nothing else. Requests are applied in order, each against the indexes
+ *     (after T-2026.10.29) updateDropdownDefinitionProperties with the field
+ *     mask "options": the options are the complete new list, an option with
+ *     the optionId of an existing one keeps it, and an option that is
+ *     removed while a dropdown selects it needs a replacement in
+ *     selectedOptionIdReplacements (else the request is refused, as the API
+ *     answers 400); nothing else. Requests are applied in order, each against the indexes
  *     AS THEY ARE AFTER the requests before it. A batch is applied as a
  *     whole or not at all.
  *   - A read sees the SAVED document: while the document has unsaved
@@ -167,6 +172,31 @@ function makeFakeDocsApi(options) {
       return {};
     }
 
+    if (kind === 'updateDropdownDefinitionProperties') {
+      checkTab(r.tabId);
+      const def = definitions[r.dropdownDefinitionId];
+      if (!def) throw bad('The dropdown definition ' + r.dropdownDefinitionId + ' does not exist.');
+      if (!/(^|,)\s*options\s*(,|$)/.test(String(r.fields || ''))) throw bad('The field mask must name options.');
+      const wanted = (r.dropdownDefinitionProperties && r.dropdownDefinitionProperties.options) || [];
+      if (wanted.length < 2 || wanted.length > 50) throw bad('A dropdown definition must have at least 2 options and at most 50 options.');
+      const old = def.dropdownDefinitionProperties.options;
+      const made = wanted.map((o, k) => {
+        Object.keys(o).forEach((key) => { if (['displayValue', 'optionId', 'textStyle'].indexOf(key) === -1) throw bad('Unknown field ' + key + '.'); });
+        if (o.optionId && !old.some((x) => x.optionId === o.optionId)) throw bad('The option ' + o.optionId + ' is not an option of the dropdown definition.');
+        return Object.assign(clone(o), { optionId: o.optionId || 'dropdownItem.u' + (++counters.definition) + 'o' + k });
+      });
+      const kept = made.map((o) => o.optionId);
+      const replacements = r.selectedOptionIdReplacements || {};
+      allCells().forEach((c) => {
+        if (!c._dropdown || c._dropdown.definitionId !== r.dropdownDefinitionId || kept.indexOf(c._dropdown.optionId) !== -1) return;
+        const to = replacements[c._dropdown.optionId];
+        if (!to || kept.indexOf(to) === -1) throw bad('The option ' + c._dropdown.optionId + ' is selected in a dropdown and has no replacement.');
+        c._dropdown.optionId = to;
+      });
+      def.dropdownDefinitionProperties.options = made;
+      return {};
+    }
+
     throw bad('This request is not supported by the fake Docs API.');
   }
 
@@ -240,6 +270,34 @@ function makeFakeDocsApi(options) {
     const def = definitions[cell._dropdown.definitionId];
     cell._dropdown.optionId = def.dropdownDefinitionProperties.options.filter((o) => o.displayValue === displayValue)[0].optionId;
     counters.revision++;
+  };
+  /** After T-2026.10.29: the value cell beside `label` in the TDoc table of `number` (the first such table), or null. */
+  api.cellOf = (number, label) => {
+    const tables = body._children.filter((c) => c.getType() === 'TABLE' && c.getRow(0).getNumCells() === 2 && c.getRow(0).getCell(0).getText() === 'TDoc' && c.getRow(0).getCell(1).getText() === number);
+    if (!tables.length) return null;
+    for (let r = 0; r < tables[0].getNumRows(); r++) if (tables[0].getRow(r).getCell(0).getText() === label) return tables[0].getRow(r).getCell(1);
+    return null;
+  };
+  /** What a reader sees in the cell beside `label` of `number`, in the form of shown(). */
+  api.shownIn = (number, label) => {
+    const cell = api.cellOf(number, label);
+    if (!cell) return 'none';
+    const parts = [];
+    if (cell._t) parts.push('text:' + cell._t);
+    if (cell._dropdown) { const option = optionOf(cell._dropdown); parts.push('dropdown:' + (option ? option.displayValue : '?')); }
+    return parts.join('+') || 'empty';
+  };
+  /** A user picks an option in the dropdown beside `label` of `number`. */
+  api.pickIn = (number, label, displayValue) => {
+    const cell = api.cellOf(number, label);
+    const def = definitions[cell._dropdown.definitionId];
+    cell._dropdown.optionId = def.dropdownDefinitionProperties.options.filter((o) => o.displayValue === displayValue)[0].optionId;
+    counters.revision++;
+  };
+  /** The report's definition of that title: { id, options: [displayValue] }, or null. */
+  api.definitionTitled = (title) => {
+    const id = Object.keys(definitions).filter((k) => definitions[k].dropdownDefinitionProperties.title === title)[0];
+    return id ? { id: id, options: definitions[id].dropdownDefinitionProperties.options.map((o) => o.displayValue) } : null;
   };
   /** Somebody edited the document outside this execution (the test changed the fake document itself): it is at a new revision. */
   api.edited = () => { counters.revision++; };

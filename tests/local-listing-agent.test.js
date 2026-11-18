@@ -281,7 +281,8 @@ console.log('9. what changed in Code.js (source)');
   // (tests/local-listing-overnight-pause.test.js, tests/revisions-cell-cleanup.test.js).
   const full = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const later = require('./helpers/before-structure-fix.js');
-  const now = later.codeWithoutRevisionsCellCleanup(later.codeWithoutOvernightPause(full).code).code;
+  // After T-2026.10.29: and without Goes to Plenary (tests/goes-to-plenary.test.js).
+  const now = later.codeWithoutRevisionsCellCleanup(later.codeWithoutOvernightPause(later.codeWithoutGoesToPlenary(full).code).code).code;
   const view = codeWithoutLocalListingAgent(full);
   check('the take-out finds every change exactly once', view.problems, []);
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));

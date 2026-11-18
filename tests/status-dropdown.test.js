@@ -49,7 +49,8 @@ function check(name, actual, expected) {
   }
 }
 
-const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+// After T-2026.10.29: the source checks of this file read Code.js without Goes to Plenary (tests/goes-to-plenary.test.js pins that layer).
+const CODE = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
 const REPORT_ID = 'REPORTdoc000000000000000000000000000000000';
 const TEMPLATE_ID = 'TEMPLATEdoc0000000000000000000000000000000';
 const OTHER_ID = 'OTHERdoc00000000000000000000000000000000000';

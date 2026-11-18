@@ -667,16 +667,77 @@ const RELEASE_2_26_13_CHANGES = [
   [" * CHANGELOG\n * 2.26.13 (2026-11-17)\n *   (T-2026.10.29; on T-2026.10.28 / 2.26.12.)\n *   - Changed: the Revisions cell has no \"Revisions folders: ...\" line any\n *     more (one from an earlier release goes at the cell's next write);\n *     \"No revisions available.\" only where every source was read and has\n *     none -- never for a TDoc with revisions as TDocs (REVISION_MAP), and\n *     not newly claimed while the local listing is stale or missing. A\n *     complete, fresh scan of an empty group folder is an answer, not\n *     \"invalid\". Check Connections drops the manual-import instruction\n *     while the local listing agent delivers. (PR #23.)\n *   - Added: the local listing agent's scheduled overnight pause (it scans\n *     07:30-19:30 meeting time) is \"paused\", not \"stale\": at night in the\n *     meeting's time zone, when the agent's last scan was at most 30\n *     minutes before 19:30. Staleness during the day, an earlier last\n *     scan, or no meeting time zone stay \"stale\". Nothing is imported or\n *     erased either way. (docs/LOCAL_LISTING_AGENT.md.)\n", " * CHANGELOG\n"]
 ];
 
+// After T-2026.10.29: Goes to Plenary, the four disposition tables and the SA4 plenary agenda item
+// (docs/GOES_TO_PLENARY.md). The newest layer, taken out before everything else: its section whole, and its changes to
+// released functions, [now, before], in the order of Code.js.
+const PLENARY_SECTION_START = BAR + '// GOES TO PLENARY AND THE FOUR DISPOSITION TABLES (after T-2026.10.29)\n' + BAR;
+const PLENARY_SECTION_END = BAR + '// END OF GOES TO PLENARY\n' + BAR + '\n';
+const PLENARY_SECTION_FUNCTIONS = ["plenaryRun_","resetPlenaryRun_","plenarySelectionEnabled_","plenaryChoiceOfText_","plenaryLabelsOf_","plenaryRowIndexOf_","plenaryStatusRowIndexOf_","plenaryValueOf_","plenaryStatusOf_","insertPlenaryRow_","ensurePlenaryRows_","plenaryDocsEntryOfRows_","readPlenaryOfTable_","setPlenaryYes_","isLastDispositionClassLine_","isPlenaryDispositionParagraphText_","isPlenaryDispositionTable_","plenaryDispositionClassOf_","buildPlenaryDispositionModel_","plenaryDispositionSummaryContent_","plenaryAgendaAcronym_","compactPlenaryAgendaItems_","plenaryAgendaModel_","plenaryReleaseNumber_","plenaryWorkItemsOf_","plenaryAgendaAutoValue_","plenaryAgendaApplies_","plenaryAgendaItems_","plenaryListFactsOf_","tdocListColumnMatching_","applyPlenarySelectionToTables_","syncPlenarySelectionOnUpdate_","notePlenaryListFacts_","capturePlenarySelectionForRebuild_","preparePlenarySelectionForBuild_","plenaryDefinitionOf_","plenaryOptionOf_","planPlenaryUpdateRequests_","planPlenaryInsertPairs_","finalizePlenarySelection_","planPlenarySetup_","formatPlenarySetupPreview_","setUpGoesToPlenary"];
+const PLENARY_CHANGED_FUNCTIONS = ['buildStatusDocsIndex_', 'finalizeStatusDropdowns_', 'continuousUpdateCore_', 'syncDispositionSummaryOnUpdate_', 'writeDispositionSummary_',
+  'renderDispositionSummary_', 'formatDispositionSummaryTable_', 'isDispositionSummaryParagraphText_', 'isDispositionSummaryTable_', 'findDispositionSummarySection_',
+  'downloadAndGroupTdocs_', 'buildSkeletonWithTdocTables'];
+const PLENARY_CHANGES = [
+  ["  const tables = {};\n  const duplicates = {};\n  // After T-2026.10.29: the \"Goes to Plenary\" cell of each TDoc table (GOES TO PLENARY section).\n  const plenary = {};\n  ((dt.body && dt.body.content) || []).forEach(function (element) {",
+   "  const tables = {};\n  const duplicates = {};\n  ((dt.body && dt.body.content) || []).forEach(function (element) {"],
+  ["      if (key === 'tdoc status' || key === 'status') entry = statusDocsCellEntry_(cells[1]);\n    }\n    if (!plenary[number]) { const p = plenaryDocsEntryOfRows_(rows); if (p) plenary[number] = p; }\n    if (!entry) return;",
+   "      if (key === 'tdoc status' || key === 'status') entry = statusDocsCellEntry_(cells[1]);\n    }\n    if (!entry) return;"],
+  ["definitions: definitions, definition: definition, tables: tables, duplicates: duplicates, plenary: plenary };\n}",
+   "definitions: definitions, definition: definition, tables: tables, duplicates: duplicates };\n}"],
+  ["function finalizeStatusDropdowns_(mode) {\n  const result = { ran: false, inserted: 0, updated: 0, reason: '' };\n  // After T-2026.10.29: a build gives its TDoc tables the Goes to Plenary rows before the document is saved (GOES TO PLENARY section).\n  if (mode === 'build') preparePlenarySelectionForBuild_();\n  const run = statusDropdownRun_();\n",
+   "function finalizeStatusDropdowns_(mode) {\n  const result = { ran: false, inserted: 0, updated: 0, reason: '' };\n  const run = statusDropdownRun_();\n"],
+  ["    Logger.log('Status dropdowns: not completed (' + e.message + '). Statuses that were not converted stay as text.');\n  } finally {\n    resetStatusDropdownRun_();\n    // After T-2026.10.29: then the Goes to Plenary dropdowns, the last thing of all (null in a report without them).\n    const plenary = finalizePlenarySelection_(mode, result.ran && !result.saveFailed);\n    if (plenary) result.plenary = plenary;\n  }\n  return result;\n}",
+   "    Logger.log('Status dropdowns: not completed (' + e.message + '). Statuses that were not converted stay as text.');\n  } finally {\n    resetStatusDropdownRun_();\n  }\n  return result;\n}"],
+  ["    if (!context) {\n      // After T-2026.10.29: the Goes to Plenary rows and the SA4 plenary agenda items first (GOES TO PLENARY section).\n      const plenary = syncPlenarySelectionOnUpdate_(body, allTdocs);\n      if (plenary.state !== 'off') result.goesToPlenary = plenary.state;\n      const summary = syncDispositionSummaryOnUpdate_(body);",
+   "    if (!context) {\n      const summary = syncDispositionSummaryOnUpdate_(body);"],
+  ["    // After T-2026.10.29: a report with Goes to Plenary is given one (GOES TO PLENARY section).\n    if (!findDispositionSummarySection_(body) && !plenarySelectionEnabled_()) return { state: 'absent' };\n    const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });",
+   "    if (!findDispositionSummarySection_(body)) return { state: 'absent' };\n    const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });"],
+  ["  const model = buildDispositionSummaryModel_(read.entries);\n  // After T-2026.10.29: a report with Goes to Plenary has the four tables; `model` keeps the classes Close Report counts.\n  const shown = plenarySelectionEnabled_() ? buildPlenaryDispositionModel_(body, read) : model;\n  if (read.unreadable.length) return { state: 'unreadable', read: read, model: model, foreign: [] };\n  const rendered = renderDispositionSummary_(body, shown);",
+   "  const model = buildDispositionSummaryModel_(read.entries);\n  if (read.unreadable.length) return { state: 'unreadable', read: read, model: model, foreign: [] };\n  const rendered = renderDispositionSummary_(body, model);"],
+  ["  const wanted = model.plenaryForm ? plenaryDispositionSummaryContent_(model) : dispositionSummaryContent_(model);\n  const section = findDispositionSummarySection_(body);",
+   "  const wanted = dispositionSummaryContent_(model);\n  const section = findDispositionSummarySection_(body);"],
+  ["  const shares = isPlenaryDispositionTable_(table) ? PLENARY_DISPOSITION_TABLE_WIDTHS_ : DISPOSITION_SUMMARY_TABLE_WIDTHS_;\n  const widths = shares.map(function (share) { return Math.round(page * share); });",
+   "  const widths = DISPOSITION_SUMMARY_TABLE_WIDTHS_.map(function (share) { return Math.round(page * share); });"],
+  ["  if (text === DISPOSITION_SUMMARY_NOTE_ || text === DISPOSITION_SUMMARY_NONE_ || DISPOSITION_SUMMARY_EARLIER_NOTES_.indexOf(text) !== -1) return true;\n  if (isPlenaryDispositionParagraphText_(text)) return true;",
+   "  if (text === DISPOSITION_SUMMARY_NOTE_ || text === DISPOSITION_SUMMARY_NONE_ || DISPOSITION_SUMMARY_EARLIER_NOTES_.indexOf(text) !== -1) return true;"],
+  ["function isDispositionSummaryTable_(table) {\n  try {\n    if (isPlenaryDispositionTable_(table)) return true;\n    if (table.getNumRows() < 1) return false;",
+   "function isDispositionSummaryTable_(table) {\n  try {\n    if (table.getNumRows() < 1) return false;"],
+  ["  // After T-2026.10.29: the last class line of either form (isLastDispositionClassLine_(), GOES TO PLENARY section).\n  // 'heading'",
+   "  const last = DISPOSITION_CLASSES_[DISPOSITION_CLASSES_.length - 1];\n  // 'heading'"],
+  ["    if (isLastDispositionClassLine_(text)) return 'last';",
+   "    if (new RegExp('^' + last.title + ' \\\\(\\\\d+\\\\)$').test(text)) return 'last';"],
+  ["        tdocCol, titleCol, sourceCol, contactCol, agendaCol, agendaTopicCol, statusCol, typeCol, forCol,\n        revisedToCol, agendaDescriptionCol,\n        // After T-2026.10.29: for the SA4 plenary agenda item (GOES TO PLENARY section).\n        relatedWisCol: tdocListColumnMatching_(headers, /^related\\s*wis?$/i), releaseCol: tdocListColumnMatching_(headers, /^release$/i)\n      });",
+   "        tdocCol, titleCol, sourceCol, contactCol, agendaCol, agendaTopicCol, statusCol, typeCol, forCol,\n        revisedToCol, agendaDescriptionCol\n      });"],
+  ["  captureStatusDropdownValuesForRebuild_();\n  // After T-2026.10.29: and what the Goes to Plenary rows say, and the list the rows are built from (GOES TO PLENARY section).\n  capturePlenarySelectionForRebuild_();\n  notePlenaryListFacts_(Object.keys(tdocGroups).reduce(function (all, key) { return all.concat(tdocGroups[key].tdocs); }, []));\n",
+   "  captureStatusDropdownValuesForRebuild_();\n"]
+];
+const PLENARY_CREATOR_CHANGED_FUNCTIONS = ['buildTemplateReportMenu_'];
+const PLENARY_CREATOR_CHANGES = [
+  ["    .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns')\n    // After T-2026.10.29: an existing report gets the Goes to Plenary rows and the four disposition tables.\n    .addItem('Set Up Goes to Plenary…', 'setUpGoesToPlenary'));\n",
+   "    .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns'));\n"]
+];
+
+/** Code.js without Goes to Plenary: the Code.js of T-2026.10.29. { code, problems }. */
+function codeWithoutGoesToPlenary(code) {
+  return takeOut(code, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_CHANGES, 'GOES TO PLENARY');
+}
+
+/** template/ReportCreator.js without its menu item: { code, problems }. */
+function creatorWithoutGoesToPlenary(code) {
+  return takeOut(code, null, null, PLENARY_CREATOR_CHANGES, 'GOES TO PLENARY (ReportCreator.js)');
+}
+
 function codeWithoutLocalListingAgent(code) {
   // The overnight-pause distinction and the Revisions-cell cleanup after T-2026.10.28 came later still: taken out first
   // (newest first); then the release header of T-2026.10.28 (2.26.12).
   // The release header of T-2026.10.29 (2.26.13) came last of all: taken out before everything else.
-  const header13 = takeOut(code, null, null, RELEASE_2_26_13_CHANGES, 'RELEASE 2.26.13 HEADER');
+  // Goes to Plenary (after T-2026.10.29) came after that release: taken out before it.
+  const plenary = codeWithoutGoesToPlenary(code);
+  const header13 = takeOut(plenary.code, null, null, RELEASE_2_26_13_CHANGES, 'RELEASE 2.26.13 HEADER');
   const overnight = codeWithoutOvernightPause(header13.code);
   const cleanup = codeWithoutRevisionsCellCleanup(overnight.code);
   const header = takeOut(cleanup.code, null, null, RELEASE_2_26_12_CHANGES, 'RELEASE 2.26.12 HEADER');
   const view = takeOut(header.code, null, null, LOCAL_LISTING_AGENT_CHANGES, 'LOCAL LISTING AGENT');
-  return { code: view.code, problems: header13.problems.concat(overnight.problems, cleanup.problems, header.problems, view.problems) };
+  return { code: view.code, problems: plenary.problems.concat(header13.problems, overnight.problems, cleanup.problems, header.problems, view.problems) };
 }
 
 // After the issue #11 live test (2026-11-16): the Session administration section of a main report keeps text typed into
@@ -872,7 +933,10 @@ function codeWithoutDualRevisions(code) {
 
 /** template/ReportCreator.js without them: { code, problems }. */
 function creatorWithoutDualRevisions(code) {
-  return takeOut(code, null, null, DUAL_REVISIONS_CREATOR_CHANGES, 'DUAL REVISIONS (ReportCreator.js)');
+  // The menu item of Goes to Plenary (after T-2026.10.29) came later: taken out first.
+  const later = creatorWithoutGoesToPlenary(code);
+  const view = takeOut(later.code, null, null, DUAL_REVISIONS_CREATOR_CHANGES, 'DUAL REVISIONS (ReportCreator.js)');
+  return { code: view.code, problems: later.problems.concat(view.problems) };
 }
 
 // The local revisions folder (after T-2026.10.25): a link to the meeting-room server next to the 3GPP drafts folder.
@@ -1098,6 +1162,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutOvernightPause, OVERNIGHT_PAUSE_NEW_FUNCTIONS, OVERNIGHT_PAUSE_CHANGED_FUNCTIONS, codeWithoutRevisionsCellCleanup, CELL_CLEANUP_NEW_FUNCTIONS, CELL_CLEANUP_CHANGED_FUNCTIONS, codeWithoutLocalListingAgent, LOCAL_LISTING_AGENT_NEW_FUNCTIONS, LOCAL_LISTING_AGENT_CHANGED_FUNCTIONS, codeWithoutSessionSectionFix, SESSION_SECTION_NEW_FUNCTIONS, SESSION_SECTION_CHANGED_FUNCTIONS, codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutDualRevisions, creatorWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS, DUAL_REVISIONS_CREATOR_CHANGED_FUNCTIONS, codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS, PLENARY_CREATOR_CHANGED_FUNCTIONS, codeWithoutOvernightPause, OVERNIGHT_PAUSE_NEW_FUNCTIONS, OVERNIGHT_PAUSE_CHANGED_FUNCTIONS, codeWithoutRevisionsCellCleanup, CELL_CLEANUP_NEW_FUNCTIONS, CELL_CLEANUP_CHANGED_FUNCTIONS, codeWithoutLocalListingAgent, LOCAL_LISTING_AGENT_NEW_FUNCTIONS, LOCAL_LISTING_AGENT_CHANGED_FUNCTIONS, codeWithoutSessionSectionFix, SESSION_SECTION_NEW_FUNCTIONS, SESSION_SECTION_CHANGED_FUNCTIONS, codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutDualRevisions, creatorWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS, DUAL_REVISIONS_CREATOR_CHANGED_FUNCTIONS, codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

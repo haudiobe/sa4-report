@@ -46,6 +46,8 @@ const CACHE = (id) => 'REVIEWER_NO_SUMMARY_CACHE_' + id;
  *   code      another Code.js to run (its source text; without a Drive only), e.g. a released one
  *   drive     a fake Drive of tests/helpers/fake-drive-files.js: the Drive of the user the report runs as
  *   tableSeparators  true: the document keeps a paragraph between two tables and its last paragraph, as Google Docs does
+ *   columns   after T-2026.10.29: more columns of the TDoc list (e.g. ['Release', 'Related WIs']); a TDoc gives its value by
+ *             the column's name (t['Related WIs']); a TDoc can also give its `title` and `type`
  *   endParagraph     true (with tableSeparators): a table placed last gets the empty paragraph Google Docs keeps after it
  */
 function templateReport(options) {
@@ -98,11 +100,13 @@ function templateReport(options) {
   s.DriveApp = { createFile: () => ({ setTrashed() {} }) };
   if (o.drive) o.drive.install(s);
   r.drive = o.drive || null;
+  const header = HEADER.concat(o.columns || []);
   s.SpreadsheetApp = { open: () => {
     const listed = r.tdocs.concat(r.listAgenda && !r.tdoc(r.listAgenda) ? [{ id: r.listAgenda, agenda: '', status: 'available', type: 'agenda' }] : []);
-    const values = [HEADER].concat(listed.map((t) => [t.id, 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', t.type || 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', '', '', '', t.revisedTo || '']));
+    const values = [header].concat(listed.map((t) => [t.id, t.title || 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', t.type || 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', '', '', '', t.revisedTo || '']
+      .concat((o.columns || []).map((name) => (t[name] === undefined ? '' : t[name])))));
     const noLink = { getLinkUrl: () => null };
-    const rich = [HEADER.map(() => noLink)].concat(listed.map((t) => HEADER.map((h, col) => (col === 0 && t.uploaded ? { getLinkUrl: () => zip(t.id) } : noLink))));
+    const rich = [header.map(() => noLink)].concat(listed.map((t) => header.map((h, col) => (col === 0 && t.uploaded ? { getLinkUrl: () => zip(t.id) } : noLink))));
     const sheet = { getDataRange: () => ({ getValues: () => values, getRichTextValues: () => rich }),
       getRange: (row, col, rows) => ({ getDisplayValues: () => [['Uploaded']].concat(listed.map(() => [''])).slice(row - 1, row - 1 + rows) }) };
     return { getSheets: () => [sheet], getSpreadsheetTimeZone: () => 'UTC' };

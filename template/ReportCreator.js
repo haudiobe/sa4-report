@@ -761,7 +761,9 @@ function buildTemplateReportMenu_(ui) {
     .addSeparator()
     .addItem('Report Status Summary', 'analyzeReportStatus')
     // T-2026.10.8: an existing report gets its status dropdowns without a rebuild.
-    .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns'));
+    .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns')
+    // After T-2026.10.29: an existing report gets the Goes to Plenary rows and the four disposition tables.
+    .addItem('Set Up Goes to Plenary…', 'setUpGoesToPlenary'));
 
   menu.addItem('💬 Prepare Discussion E-mails…', 'prepareTdocDiscussionEmails');
 
