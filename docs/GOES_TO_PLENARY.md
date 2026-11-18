@@ -1,205 +1,213 @@
-# Goes to Plenary, the four disposition tables and the SA4 plenary agenda item
+# Goes to Plenary, the compact Status row, the four disposition tables and the revision relationship
 
-**Status: CANDIDATE, not released and not deployed.** Developed on branch
-`feature/plenary-dispositions` from `af3779f` (T-2026.10.29, `Code.js` 2.26.13). It is
-planned for template release T-2026.10.30. Nothing has been pushed to the master template or
-to the five production reports.
+**Status: CANDIDATE, not released and not deployed.** Branch `feature/plenary-dispositions`
+(PR #26) is based on `af3779f` (T-2026.10.29, `Code.js` 2.26.13). The release candidate is
+T-2026.10.30 (`release/T-2026.10.30`). Nothing has been pushed to the master template or to the
+five production reports. The candidate runs only in the disposable MBS copy.
 
 Code: the section `GOES TO PLENARY AND THE FOUR DISPOSITION TABLES (after T-2026.10.29)` of
-`Code.js`, twelve small changes to released functions, and one menu item in
+`Code.js`, small changes to 21 released functions, and one menu item in
 `template/ReportCreator.js`. Tests: `tests/goes-to-plenary.test.js`. The ledger layer is
 `codeWithoutGoesToPlenary()` in `tests/helpers/before-structure-fix.js`; taking it out gives the
 T-2026.10.29 files byte for byte.
 
-## What it does
+**A report changes only when its rapporteur runs Report › Set Up Goes to Plenary….** A report
+that has not been set up behaves exactly as under T-2026.10.29.
 
-1. **Goes to Plenary.** Every TDoc table of a report that is set up gets two rows right below
-   its Status:
+## 1. The compact Status row
 
-   ```
-   | Disposition         | Revised to S4-26xxxx |
-   | Status              | [agreed ▾]           |
-   | Goes to Plenary     | [☐ No ▾]             |   ← new: "☐ No" / "☑ Yes"
-   | Plenary Agenda Item | 15.4                 |   ← new: automatic, or typed by hand
-   ```
+```
+| TDoc   | S4-262013 (revision of S4-262012)                       |
+| …      |                                                         |
+| Status | [agreed ▾]  Plenary [☑ Yes ▾]  A.I.: 15.4               |
+```
 
-   - The selection is independent of the disposition. It is "☐ No" for every existing and
-     every new contribution.
-   - The selection belongs to the rapporteur. No code clears it, and a change of Status never
-     touches it.
-   - It is kept by every update, every TDoc-list refresh, Update TDoc Revisions, Import Local
-     Inbox Listing and Build Report from Scratch.
-2. **Four disposition tables.** The Disposition Summary at the end of the report has four
-   tables, in this order:
-   1. Agreed, Endorsed and Approved Documents – Goes to Plenary
-   2. Other Dispositions – Goes to Plenary
-   3. Agreed, Endorsed and Approved Documents – Not Going to Plenary
-   4. Other Dispositions – Not Going to Plenary
+- **No extra rows.** The Status cell holds the status, exactly as before (a dropdown, or text
+  for a status without an option), then the code's own part:
+  - "Plenary": a native dropdown, ☐ No / ☑ Yes, ☐ No by default.
+  - "A.I.: X.X": shown only when Plenary is ☑ Yes and the SA4 plenary agenda item is known.
+- **Why a dropdown.** A Google Docs checklist box cannot be read by Apps Script or by the Docs
+  API (the API's `Bullet` has no checked state), so it could never decide the tables.
+- **The A.I. refreshes on the next update.** Google Docs cannot show or hide text when a
+  dropdown changes, so A.I. appears or disappears at the next update, not at once.
+- **The selection belongs to the rapporteur.** No code clears it, a change of Status never
+  touches it, and it is kept by every update, TDoc-list refresh, Update TDoc Revisions, Import
+  Local Inbox Listing and Build Report from Scratch.
+- **How the code finds its part.** The code's part begins with an invisible mark: a zero-width
+  space and an em space before "Plenary". Every reader of the Status reads only what stands
+  before it. That covers the status sync, the Disposition Summary, Close Report, Report Status
+  Summary, the discussion e-mails and the Docs API index. The changes are in
+  `findStatusInDocTable_`, `readTdocStatus_`, `findStatusText_` and `statusDocsCellEntry_`.
+- **How the part is written.**
+  - The code's part is written only through the Docs API, at the positions of one read, in
+    batches tied to its revision (`finalizePlenarySelection_()`).
+  - DocumentApp never rewrites such a cell. A status that is text is replaced in front of the
+    mark (`setStatusCellText_()`), and it still becomes a dropdown as soon as it has an option.
+- **The Status "Plenary" is retired.** A TDoc cannot be both "agreed" and "Plenary", so (the
+  rapporteur's decision, 2026-11-18):
+  - a Status "Plenary" becomes Plenary ☑ Yes;
+  - the Status becomes the TDoc list's status, or "available" until the next update moves it
+    on;
+  - the option leaves the report's "Document Status" dropdown.
 
-   The columns are TDoc (with the link of its TDoc table), Title, Source, Status, SWG Agenda
-   Item and SA4 Plenary Agenda Item. Each contribution is in exactly one table, in the order of
-   the report. Close Report writes the same tables, and its counts and its "not yet disposed"
-   list are unchanged.
-3. **Automatic regeneration.** Every Update Report Now and every automatic update writes the
-   summary, creating it where there is none. The menu command **Report › Update Disposition
-   Summary** stays. The update behaves as follows:
-   - It rewrites the summary only when the summary would say something else. A second update
-     with nothing new writes nothing at all, not even an API call.
-   - It never writes over text typed into the summary. The dialog or the log names the text.
-     Text typed below the summary is kept.
-   - It writes nothing when a Status or a selection cannot be read. It never guesses.
-4. **SA4 plenary agenda item.** The update fills in "Plenary Agenda Item" from the work item and
-   the meeting's agenda (§ Mapping). A value typed by hand is a manual override and is never
-   overwritten.
+## 2. The SA4 plenary agenda item
 
-## Why a dropdown and not a checkbox
+The value lives in document properties, so that it is kept while A.I. is hidden:
 
-A Google Docs checklist box cannot be read by Apps Script or by the Docs API. The API's
-`Bullet` has only `listId`, `nestingLevel` and `textStyle`, and nothing else in the document
-records whether a box is ticked. A real checkbox could therefore never be authoritative for
-the tables.
-
-"Goes to Plenary" is instead a native two-option dropdown, "☐ No" / "☑ Yes". It is read exactly
-like the Status dropdown: the text of the cell, else the value selected in it, through the same
-single API read per execution (`buildStatusDocsIndex_()`). The rapporteur chose this option on
-2026-11-18.
-
-## The status taxonomy (unchanged)
-
-The classes are those of `DISPOSITION_OF_STATUS_`, the classification the Disposition Summary
-and Close Report already use (docs/DISPOSITION_SUMMARY.md). No status value was added.
-
-| Table | Statuses |
+| Property | Holds |
 |---|---|
-| positive (tables 1 and 3) | agreed, partially agreed, endorsed, approved |
-| other (tables 2 and 4) | noted, revised, merged, withdrawn, replied (replied to); available, reserved, parked, postponed, other; no status; a status that is not an option ("(not a known status)"); two tables of one TDoc with different statuses ("conflicting: …") |
+| `PLENARY_AGENDA_AUTO:<TDoc>` | what the update derived (§ Mapping) |
+| `PLENARY_AGENDA_MANUAL:<TDoc>` | what the rapporteur typed over "A.I.: …" |
+| `PLENARY_AGENDA_SHOWN:<TDoc>` | what the code last wrote there, to tell an edit from its own text |
 
-Missing and unknown dispositions are safe: they are never counted as positive, and they show
-as they are written.
+What the rapporteur can do with "A.I.: …":
 
-### The Status "Plenary" is retired
+| Action | Result |
+|---|---|
+| Type over the value | Manual override; never overwritten, kept while Plenary is ☐ No |
+| `-` | Blank on purpose; no A.I. shown |
+| Clear it to "A.I.:" | Automatic again |
+| A work item changes | Only the automatic value moves |
 
-The manual-only Status option "Plenary" (left to the plenary) said what "Goes to Plenary" says
-now, and a TDoc cannot be both "agreed" and "Plenary". The rapporteur decided on 2026-11-18 that
-"Plenary" leaves the Status dropdown:
+The Disposition Summary shows the item for every TDoc, also for those not going to plenary.
 
-- **Set Up Goes to Plenary…** gives a TDoc whose Status is "Plenary" (a dropdown or typed) the
-  value "☑ Yes" and sets its Status to "available". The next update moves the Status on to the
-  TDoc list's status, by the normal status sync. "Plenary" is then removed from the report's
-  "Document Status" dropdown (`updateDropdownDefinitionProperties`).
-- **An update** of a set-up report handles a "Plenary" that appears later the same way, using
-  the TDoc list's status directly.
-- **Build Report from Scratch** keeps it as "☑ Yes".
-- The master template's dropdown still has the option until the template is changed
-  (docs/ROLLOUT_T-2026.10.30.md). New reports built from it lose the option at their set-up.
+### Mapping
 
-## Mapping: the SA4 plenary agenda item
+The sources (nothing is invented):
 
-Sources (nothing is invented):
-
-- **The meeting's agenda TDoc.** For SA4#138 this is S4-261857, which the build already
-  downloads. The update reads it once and keeps it in the report (`PLENARY_AGENDA_ITEMS`).
-- **The contribution's work items:**
-  - the TDoc list's **Related WIs** column;
-  - the tag of its title (`[AMD_ARCH_Ph2-MED] …`);
-  - the acronym of its SWG agenda item and of the items above it (`8.5 AMD_ARCH_Ph2-MED (…)`,
-    `11 FS_6G_MED (…)`).
+- **The meeting's agenda TDoc.** For SA4#138 this is S4-261857. It is read once and kept in
+  the report.
+- **The work items:**
+  - the TDoc list's **Related WIs**;
+  - the title tag (`[AMD_ARCH_Ph2-MED] …`);
+  - the acronym of the SWG agenda item and of the items above it.
 - **A CR's Release.** This is the TDoc list's **Release** column.
 
-The parts of the plenary agenda are found by their titles, never by a number in the code. At
-SA4#138 they are:
+The plenary parts are found by their titles:
 
 | Part | SA4#138 |
 |---|---|
-| maintenance: top-level "Release N and earlier matters" | **14** "Release 19 and earlier matters" |
-| work items: the items under "Release N Features" | 15.1–15.7 |
-| study items: the items under "Study Items" | 16.1–16.7 |
+| maintenance: top-level "Release N and earlier matters" | **14** |
+| the items under "Release N Features" | 15.1–15.7 |
+| the items under "Study Items" | 16.1–16.7 |
 
 Rules, first match wins:
 
-| # | Rule | SA4#138 example |
+| # | Rule | SA4#138 |
 |---|---|---|
-| 1 | A CR to the maintenance release or earlier → maintenance item | CR to Rel-19 under 8.5 → 14 |
-| 2 | Under an SWG item "Release N and earlier matters" → maintenance item | anything under 7.4 / **8.4** / 9.4 / 10.4 → 14 |
-| 3 | The work items name exactly one 15.x/16.x item → that item; more than one → blank (ambiguous) | 8.5 → 15.4; 8.7 → 16.3; 11.3.1 → 16.7; "AMD_ARCH_Ph2-MED, Energy_PRO-MED" → blank |
-| 4 | A TEI of the maintenance release or earlier → maintenance item | TEI19 under 8.8 → 14 |
-| 5 | The SWG item has the title of exactly one 15.x/16.x item → that item | 8.8 "Other Rel-20 matters including TEI" → 15.7 |
-| 6 | Otherwise blank, for the rapporteur | 8.3 Reports/Liaisons, 8.9 AOB → blank |
+| 1 | A CR to the maintenance release or earlier | → 14 |
+| 2 | Under an SWG "Release N and earlier matters" item (7.4 / **8.4** / 9.4 / 10.4) | → 14 |
+| 3 | The work items name exactly one 15.x/16.x item; more than one → blank | 8.5 → 15.4, 11.x → 16.7 |
+| 4 | TEI of the maintenance release or earlier (TEI19) | → 14 |
+| 5 | The SWG item has the title of exactly one 15.x/16.x item | 8.8 → 15.7 |
+| 6 | Otherwise blank, for the rapporteur | 8.3, 8.9 |
 
-> **To confirm:** the request said "Maintenance: use 8.4". In the SA4#138 agenda, 8.4 is the
-> **MBS SWG's** item "Release 19 and earlier matters"; the plenary item of that name is **14**.
-> The candidate therefore maps every SWG maintenance item (7.4, 8.4, 9.4, 10.4) to 14. If the
-> plenary column is to show 8.4 literally, that is a one-line change to rule 2.
+> **To confirm:** "Maintenance: use 8.4". In S4-261857, 8.4 is the MBS SWG item; the plenary
+> item of that name is 14. The candidate writes 14 (a one-line change for 8.4).
 
-An ad-hoc meeting has no SA4 plenary agenda. Its column stays empty and no agenda is read.
+An ad-hoc meeting has no SA4 plenary agenda: no A.I., and no agenda is read.
 
-### Manual values
+## 3. The four disposition tables, on landscape pages
 
-| The cell holds … | The update … |
-|---|---|
-| nothing | writes the automatic value |
-| exactly what the update last wrote there (`PLENARY_AGENDA_AUTO:<TDoc>`) | treats it as automatic, and moves it when the work item changes |
-| anything else (typed by hand) | keeps it: a manual override, never overwritten |
-| `-` | keeps it, and the summary shows the cell as blank on purpose |
+**Content.** The Disposition Summary at the end of the report has four tables, in this order:
 
-Emptying a manual cell makes it automatic again.
+1. Agreed, Endorsed and Approved Documents – Goes to Plenary
+2. Other Dispositions – Goes to Plenary
+3. Agreed, Endorsed and Approved Documents – Not Going to Plenary
+4. Other Dispositions – Not Going to Plenary
 
-## Migration of existing reports
+- Columns: TDoc (the number, with the link of its TDoc table), Title, Source, Status, SWG Agenda
+  Item, SA4 Plenary Agenda Item.
+- Each contribution is in exactly one table, in the order of the report.
+- "Positive" means the statuses agreed, partially agreed, endorsed and approved.
+  Everything else is "other", including a missing, unknown or conflicting status. The taxonomy
+  is the existing one (`DISPOSITION_OF_STATUS_`).
 
-**A report changes only when the rapporteur runs Report › Set Up Goes to Plenary….** Before
-that, a report under this release behaves exactly as under T-2026.10.29: three-table summary, no
-rows, no agenda download.
+**Regeneration.** Every update writes the summary, creating it where there is none:
+- It rewrites the summary only when the content changes; a repeated update makes no API write.
+- It never writes over text typed into the summary. Text typed below it is kept.
+- It writes nothing when a status or a selection cannot be read.
+- *Update Disposition Summary* stays, and Close Report writes the same tables. Close Report's
+  counts and its "not yet disposed" list are unchanged.
 
-The set-up:
+**Landscape.** The summary stands in a section of its own:
 
-- Asks first, with the numbers.
-- Adds the two rows to every TDoc table that does not have them.
-- Retires the Status "Plenary" (above).
-- Makes the dropdowns, in batches tied to the document revision they were planned on, as the
-  Status dropdowns are made.
-- Changes no status, no minutes and no other row.
-- Is safe to run again ("set up already").
+- **The section:** a NEXT_PAGE section break before its heading, with
+  `SectionStyle.flipPageOrientation`. The rest of the report (agenda, TDoc tables, minutes) stays
+  portrait. Text typed below the summary gets a portrait section again.
+- **Page size:** the document's. The Docs API can change only the orientation of a section, so
+  an A4 report gets A4 landscape and a Letter report gets Letter landscape.
+- **Column widths:** taken from the real page (its height less the side margins), with the Title
+  widest. The tables flow over as many landscape pages as they need.
+- **Repeated updates** add no break and change no orientation: each step is checked against a
+  fresh read.
+- **When it is set:** after every update, Build from Scratch, Update Disposition Summary and Close
+  Report.
 
-The next update fills in the plenary agenda items and writes the four tables. If the report
-has a three-table summary, that summary is rewritten in place. The existing presentation
-decision that is recovered is the Status "Plenary" (→ "☑ Yes"); all others start "☐ No".
+## 4. The revision relationship in the TDoc row
 
-Rollback for one report:
+`S4-26XXXX (revision of S4-26YYYY)`, with both numbers linked where the TDoc list has their
+links.
 
-- Restore the document from its version history (taken before the set-up).
-- Or remove the two rows, delete the document property `GOES_TO_PLENARY`, and push the
-  T-2026.10.29 bundle.
+- **Source.** Only the TDoc list's own metadata counts: the predecessor's "Revised to" names the
+  revision, or the revision's "Is revision of" names the predecessor. It never comes from
+  numbering, titles, or a newer file in a revisions folder.
+- **Several generations.** Each revision names its immediate predecessor (001 ← 012 ← 013).
+- **Shown without a link:** a predecessor of another meeting.
+- **Nothing shown:** two different predecessors, or a cycle.
+- **Kept as it was:** the Revisions row and the minutes.
+- **Updates.** Every update with the TDoc list refreshes the relationship, and removes it when
+  the list no longer says so.
+- **Readers.** Every reader of the TDoc number reads the part before " (revision of …)"
+  (`safeCellText_`, the Docs API index, the upload completion).
+
+## Migration
+
+**Reports not set up yet:** run *Report › Set Up Goes to Plenary…*. It asks first, makes every
+Status row compact (☐ No), retires the Status "Plenary", and is safe to run again. The next
+update fills in A.I., the revision relationships and the four landscape tables.
+
+**The disposable MBS copy (the first candidate's two-row layout):** the next update or Set Up
+migrates it automatically:
+
+1. The selection of each "Goes to Plenary" row is kept in `PLENARY_CHOICE_PENDING:<TDoc>`, and a
+   manual "Plenary Agenda Item" becomes `PLENARY_AGENDA_MANUAL`.
+2. Then the two rows are removed and the compact row is written.
+3. A selection stays pending until its dropdown stands. A failed end of the run never loses one;
+   the next update completes it.
+
+**Rollback for one report:** restore the version named before the set-up.
 
 ## Tests
 
-`node tests/goes-to-plenary.test.js`. It runs the real build, update, set-up, summary and Close
-Report on the fake document and fake Docs API, as an MBS report of SA4#138 with the real
-agenda.
+`node tests/goes-to-plenary.test.js` runs the real build, update, set-up, Update TDoc Revisions,
+summary and Close Report on the fake document and fake Docs API. The fake now models cells that
+mix text and several dropdowns, `insertText`, and section breaks.
 
 | | What is tested |
 |---|---|
-| A | Every mapping rule on S4-261857, precedence, missing and ambiguous mappings, the taxonomy |
-| B | A report that is not set up: unchanged, and no agenda read; an ad-hoc report |
-| C | The set-up: rows, dropdowns, Status "Plenary", option removed, writes tied to revisions, run again |
-| D | The four tables: order, counts, columns, each TDoc once, links |
-| E | Two more updates: same document element by element, zero API writes |
-| F | The selection survives status changes, new TDocs, the Portal sync and Update TDoc Revisions |
-| G | Manual values, `-`, an emptied cell, work-item changes, an agenda that cannot be read |
-| H | Minutes, text below and into the summary, an unreadable selection |
-| I | Build from Scratch keeps selections and manual values; "Plenary" does not come back |
+| A | Every mapping rule on S4-261857; the cell parsers; predecessors (chain, conflict, cycle, other meeting) |
+| B | A report that is not set up: unchanged; an ad-hoc report |
+| C | Set-up: compact rows, exact layout, status readers, retired "Plenary", writes, run again |
+| D | A.I. only for ☑ Yes; the four tables; landscape section and widths; revision relationships and links |
+| E | Repeated updates: same document, zero API writes, nothing duplicated |
+| F | Status changes, the Portal sync of a text status in a compact row, new TDocs, Update TDoc Revisions |
+| G | Manual A.I., hidden while ☐ No, "-", cleared, work-item changes, agenda unreadable |
+| H | Text below (portrait again) and into the summary; unreadable selection; Update Disposition Summary |
+| I | Build from Scratch keeps selections, manual values, revisions; landscape after the next update |
 | J | Close Report |
-| K | The ledger: what changed and nothing else; never throws; nothing fetched but the agenda; the local listing agent is untouched |
+| L | Migration of the two-row layout; a failed end of run keeps the selection pending |
+| K | Ledger, never throws, nothing fetched but the agenda, no `setText` on a Status cell, local listing agent untouched |
 
-Nine older test files read their source checks through the new ledger view, the menu test has
-the new item, and one field list has the two new list columns. Every other test is unchanged.
+## What only the disposable copy can show
 
-## Open points for the disposable-copy test
+The fake API models what the code relies on, but not Google Docs' rendering:
 
-These cannot be shown with the fake API and are checked in the disposable MBS copy:
-
-1. `updateDropdownDefinitionProperties` with the existing `optionId`s keeps every other Status
-   selection.
-2. The real TDoc list of SA4#138 has the columns "Related WIs" and "Release" under those names.
-   Without them, rules 1 and 4 and the Related-WIs part of rule 3 do not apply; the title tag
-   and the SWG item still do.
-3. The look of the two new rows next to the Status row.
+1. The compact row's look: the spacing of the em spaces, and the two dropdowns side by side.
+2. The landscape section:
+   - Is the Disposition Summary on landscape pages, with the rest portrait?
+   - Is there no blank page? (Google Docs puts an empty paragraph before a section break.)
+   - Is the section kept when the summary is rewritten?
+3. Removing "Plenary" from the Status dropdown keeps every other selection.
+4. Does the SA4#138 TDoc list have "Related WIs", "Release" and "Is revision of" under those
+   names? Without "Is revision of", only the predecessor's "Revised to" gives the relationship.

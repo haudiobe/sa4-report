@@ -47,7 +47,7 @@ const CACHE = (id) => 'REVIEWER_NO_SUMMARY_CACHE_' + id;
  *   drive     a fake Drive of tests/helpers/fake-drive-files.js: the Drive of the user the report runs as
  *   tableSeparators  true: the document keeps a paragraph between two tables and its last paragraph, as Google Docs does
  *   columns   after T-2026.10.29: more columns of the TDoc list (e.g. ['Release', 'Related WIs']); a TDoc gives its value by
- *             the column's name (t['Related WIs']); a TDoc can also give its `title` and `type`
+ *             the column's name (t['Related WIs']); a TDoc can also give its `title`, `type` and `isRevisionOf`
  *   endParagraph     true (with tableSeparators): a table placed last gets the empty paragraph Google Docs keeps after it
  */
 function templateReport(options) {
@@ -103,7 +103,7 @@ function templateReport(options) {
   const header = HEADER.concat(o.columns || []);
   s.SpreadsheetApp = { open: () => {
     const listed = r.tdocs.concat(r.listAgenda && !r.tdoc(r.listAgenda) ? [{ id: r.listAgenda, agenda: '', status: 'available', type: 'agenda' }] : []);
-    const values = [header].concat(listed.map((t) => [t.id, t.title || 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', t.type || 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', '', '', '', t.revisedTo || '']
+    const values = [header].concat(listed.map((t) => [t.id, t.title || 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', t.type || 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', '', '', t.isRevisionOf || '', t.revisedTo || '']
       .concat((o.columns || []).map((name) => (t[name] === undefined ? '' : t[name])))));
     const noLink = { getLinkUrl: () => null };
     const rich = [header.map(() => noLink)].concat(listed.map((t) => header.map((h, col) => (col === 0 && t.uploaded ? { getLinkUrl: () => zip(t.id) } : noLink))));
@@ -137,15 +137,17 @@ function templateReport(options) {
   r.mark = () => { r.requests.length = 0; r.cacheWrites.length = 0; r.tokenReads = 0; r.logs.length = 0; };
   r.tdoc = (id) => r.tdocs.filter((t) => t.id === id)[0];
   r.tdocTables = () => body._children.filter((c) => c.getType() === 'TABLE' && c.getRow(0).getNumCells() === 2 && c.getRow(0).getCell(0).getText() === 'TDoc');
-  r.table = (id) => r.tdocTables().filter((t) => t.getRow(0).getCell(1).getText() === id)[0];
+  // After T-2026.10.29: a TDoc row can read "S4-26XXXX (revision of S4-26YYYY)"; its number is the part before.
+  const numberOf = (cell) => cell.getText().replace(/\s*\(revision of [^)]*\)\s*$/, '');
+  r.table = (id) => r.tdocTables().filter((t) => numberOf(t.getRow(0).getCell(1)) === id)[0];
   r.field = (id, label) => { const t = r.table(id); if (!t) return undefined; for (let i = 0; i < t.getNumRows(); i++) if (t.getRow(i).getCell(0).getText() === label) return t.getRow(i).getCell(1).getText(); return undefined; };
   r.linkOf = (id) => { const t = r.table(id); return t ? t.getRow(0).getCell(1).editAsText().getLinkUrl(0) : undefined; };
   r.shown = (id) => api.shown(id);
   /** The TDoc numbers of the TDoc tables, in the order of the document. */
-  r.order = () => r.tdocTables().map((t) => t.getRow(0).getCell(1).getText());
+  r.order = () => r.tdocTables().map((t) => numberOf(t.getRow(0).getCell(1)));
   /** The document as headings and TDoc numbers, in order: ['# 4.3 ...', 'S4aA269001', ...]. */
   r.outline = () => body._children.map((c) => {
-    if (c.getType() === 'TABLE') return c.getRow(0).getNumCells() === 2 && c.getRow(0).getCell(0).getText() === 'TDoc' ? c.getRow(0).getCell(1).getText() : null;
+    if (c.getType() === 'TABLE') return c.getRow(0).getNumCells() === 2 && c.getRow(0).getCell(0).getText() === 'TDoc' ? numberOf(c.getRow(0).getCell(1)) : null;
     return c.getHeading && c.getHeading() !== 'NORMAL' ? '# ' + c.getText() : null;
   }).filter(Boolean);
   return r;
