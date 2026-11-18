@@ -39,6 +39,7 @@
  *   R.  28 Status values left as text in a report that is not marked: the update restores them, Plenary and A.I. kept
  *   S.  the summary where the Docs API and DocumentApp count the body differently: replaced, or kept with the reason
  *   T.  the count of existing TDocs; a failed stage makes the update incomplete
+ *   U.  somebody edits the document while the set-up (or an update) writes the compact rows: read again, bounded, resumable
  *   K.  what changed in Code.js and ReportCreator.js, and nothing else
  *
  * Run: node tests/goes-to-plenary.test.js
@@ -49,7 +50,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS,
+const { codeWithoutRelease2_26_15Header, codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS,
   PLENARY_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
@@ -901,13 +902,128 @@ console.log('T. the count of existing TDocs, and what makes an update incomplete
   check('the next one completes it', [u2.incomplete, u2.dispositionSummary], [undefined, 'replaced']);
 }
 
+// ====================================================================== U
+console.log('U. somebody edits the document while Set Up Goes to Plenary writes it (the Audio incident of 2026-11-18)');
+{
+  const COMPACT = (requests) => requests.some((q) => q.insertText && String(q.insertText.text).indexOf(EM + 'Plenary') !== -1);
+  // A delegate types at the top of the minutes: every position after it moves, and the revision changes.
+  const typeAtTop = (m, text) => {
+    const st = m.body._state;
+    const wasClosed = st.closed;
+    st.closed = false;
+    const p = m.body._children.filter((c) => !isTable(c) && c.getText().length > 0)[0];
+    p.editAsText().insertText(0, text);
+    st.dirty = false;
+    st.closed = wasClosed;
+    return p;
+  };
+  const markers = (m) => m.tdocTables().map((t) => { const s = rowsOf(t).findIndex((x) => x[0] === 'Status'); return s === -1 ? 0 : t.getRow(s).getCell(1).getText().split(MARK).length - 1; });
+  const statusesOf = (m) => m.tdocs.map((t) => (m.c(t.id) || {}).status);
+
+  // 1. One edit, just before the first batch of compact rows: the API refuses that batch -- the failure of the Audio report.
+  {
+    const m = mbs({ tdocs: TDOCS() });
+    m.build();
+    m.update();
+    const statuses = statusesOf(m);
+    let edits = 0;
+    m.api.beforeWrite = (requests) => { if (COMPACT(requests) && edits < 1) { edits++; typeAtTop(m, 'Typed by a delegate. '); } };
+    m.logs.length = 0;
+    const r = m.setUp();
+    m.api.beforeWrite = null;
+    const refused = m.api.calls.filter((c) => c.call === 'batchUpdate' && c.requiredRevisionId).length;
+    check('the set-up reads again and completes: every Status row compact, once', [r.ok, r.dropdowns.inserted, markers(m).every((n) => n === 1), m.tdocTables().length], [true, m.tdocTables().length, true, m.tdocTables().length]);
+    check('what the delegate typed is kept, and every Status is as it was (each marker after its own status)', [m.body._children.some((c) => !isTable(c) && c.getText().indexOf('Typed by a delegate. ') === 0), statusesOf(m)], [true, statuses]);
+    check('the log says so: the document changed while it was written, read again', m.logs.some((l) => /changed by someone else while the rows were written \(attempt 1 of \d\)/.test(l)), true);
+    check('the summary is written, and it is not called "unreadable"', [r.dropdowns.summary === 'created' || r.dropdowns.summary === 'replaced', refused >= 2], [true, true]);
+  }
+
+  // 2. Somebody types all the time: the retries are bounded; nothing is written in a wrong place; the set-up says how far it got.
+  {
+    const m = mbs({ tdocs: TDOCS() });
+    m.build();
+    m.update();
+    m.api.beforeWrite = (requests) => { if (COMPACT(requests)) typeAtTop(m, 'x'); };
+    const r = m.setUp();
+    m.api.beforeWrite = null;
+    const tries = m.api.calls.filter((c) => c.call === 'batchUpdate' && COMPACT(c.requests)).length;
+    check('the set-up gives up after a bounded number of attempts, and says it is not complete', [r.ok, tries >= 2 && tries <= 5], [false, true]);
+    check('the reason is precise: edited by someone else, how many rows are left, nothing in a wrong place, when to run it again',
+      /edited by someone else[\s\S]*\d+ Status row\(s\) not made compact yet[\s\S]*nothing was written in a wrong place[\s\S]*nobody is editing/.test(r.dropdowns.reason), true);
+    check('the summary is "not reached", not "unreadable"; the document has no marker anywhere (the batches are all or nothing)', [r.dropdowns.summary, markers(m).every((n) => n === 0)], ['not reached', true]);
+    check('the dialog says so: set up, but not completely; the summary not written yet', /set up, but not completely[\s\S]*Disposition Summary: not written yet/.test(m.ui.alerts[m.ui.alerts.length - 1][1]), true);
+    check('Goes to Plenary stays switched on, so the set-up (or an update) can complete it', m.docProps.getProperty('GOES_TO_PLENARY'), '1');
+    const again = m.setUp();
+    check('run again with nobody editing: complete, every row compact once, the summary written', [again.ok, markers(m).every((n) => n === 1), m.headings()], [true, true, 1]);
+  }
+
+  // 3. Interrupted after the first batch (60 TDocs, batches of 50): the second set-up completes the rest, the first 50 untouched.
+  {
+    const list = Array.from({ length: 60 }, (_, k) => ({ id: 'S4-2625' + String(k).padStart(2, '0'), agenda: ['8.5', '8.6'][k % 2], status: ['agreed', 'noted', 'available'][k % 3], title: '[AMD_ARCH_Ph2-MED] c' + k, uploaded: true }));
+    const m = mbs({ tdocs: list });
+    m.build();
+    m.update();
+    let n = 0;
+    m.api.fail.batchUpdate = (requests) => (COMPACT(requests) && ++n === 2 ? 'Service unavailable' : null);
+    const r = m.setUp();
+    m.api.fail.batchUpdate = null;
+    const counts = markers(m);
+    check('interrupted: 50 rows compact, 10 not; reported as not complete', [r.ok, counts.filter((x) => x === 1).length, counts.filter((x) => x === 0).length], [false, 50, 10]);
+    m.user(() => m.api.pickPlenary(m.tdocs[59].id, YES));
+    const firstDone = m.tdocTables().filter((t, i) => counts[i] === 1).map((t) => JSON.stringify(rowsOf(t)));
+    const again = m.setUp();
+    check('the second set-up completes the 10, does not touch the 50 again, keeps the Yes chosen meanwhile', [again.ok, markers(m).every((x) => x === 1),
+      m.tdocTables().filter((t, i) => counts[i] === 1).map((t) => JSON.stringify(rowsOf(t))).every((x, i) => x === firstDone[i]), m.c(m.tdocs[59].id).plenary], [true, true, true, YES]);
+  }
+
+  // 4. The same in an update of a report that has Goes to Plenary: a new TDoc, and somebody types while its row is written.
+  {
+    const m = mbs({ tdocs: TDOCS() });
+    m.build();
+    m.setUp();
+    m.update();
+    m.tdocs.push({ id: 'S4-262030', agenda: '8.6', status: 'available', title: '[Energy_PRO-MED] arrived late', uploaded: true });
+    let edits = 0;
+    m.api.beforeWrite = (requests) => { if (COMPACT(requests) && edits < 1) { edits++; typeAtTop(m, 'Typed during the update. '); } };
+    const u = m.update();
+    m.api.beforeWrite = null;
+    check('the update reads again and completes the new row; complete, nothing left over', [u.success, u.incomplete, m.c('S4-262030').plenary, markers(m).every((x) => x === 1)], [true, undefined, NO, true]);
+  }
+  // 5. Somebody types while the summary tables are formatted and while the landscape section is set: read again, completed.
+  {
+    const m = mbs({ tdocs: TDOCS() });
+    m.build();
+    m.update();
+    const FORMAT = (requests) => requests.some((q) => q.updateTableColumnProperties);
+    const LANDSCAPE = (requests) => requests.some((q) => q.insertSectionBreak || q.updateSectionStyle);
+    const seen = { format: 0, landscape: 0 };
+    m.api.beforeWrite = (requests) => {
+      if (FORMAT(requests) && seen.format < 1) { seen.format++; typeAtTop(m, 'f'); }
+      if (LANDSCAPE(requests) && seen.landscape < 1) { seen.landscape++; typeAtTop(m, 'l'); }
+    };
+    const r = m.setUp();
+    m.api.beforeWrite = null;
+    check('an edit during the formatting and one during the landscape step: both read again; the set-up is complete', [seen, r.ok, r.dropdowns.format.indexOf('formatted') === 0, r.dropdowns.landscape, m.api.sectionBreaks().length > 0],
+      [{ format: 1, landscape: 1 }, true, true, 'set', true]);
+    // A step that cannot be done: the set-up does not say "set up"; it names the step.
+    const k = mbs({ tdocs: TDOCS() });
+    k.build();
+    k.update();
+    k.api.beforeWrite = (requests) => { if (LANDSCAPE(requests)) typeAtTop(k, 'y'); };
+    const kr = k.setUp();
+    k.api.beforeWrite = null;
+    check('the landscape section cannot be set (somebody types all the time): "not completely", the step named', [kr.ok, /set up, but not completely: [\s\S]*landscape section failed/.test(k.ui.alerts[k.ui.alerts.length - 1][1])], [false, true]);
+  }
+}
+
+
 // ====================================================================== K
 console.log('K. what changed in Code.js and ReportCreator.js, and nothing else');
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const CREATOR = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
   // The release header of T-2026.10.30 (2.26.14) is taken out first.
-  const view = codeWithoutGoesToPlenary(codeWithoutRelease2_26_14Header(FULL).code);
+  const view = codeWithoutGoesToPlenary(codeWithoutRelease2_26_14Header(codeWithoutRelease2_26_15Header(FULL).code).code);
   const creatorView = creatorWithoutGoesToPlenary(CREATOR);
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const names = (src) => (src.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));

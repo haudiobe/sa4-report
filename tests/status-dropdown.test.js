@@ -639,7 +639,7 @@ console.log('\n11. reports with text statuses: unchanged, and no API call');
   check('the manifest: the Google Docs API service beside Drive, and no new scope', (() => { const m = JSON.parse(fs.readFileSync(require('path').join(__dirname, '..', 'appsscript.json'), 'utf8')); return [m.dependencies.enabledAdvancedServices, m.oauthScopes.length, m.oauthScopes.filter((x) => /documents$/.test(x)).length, m.timeZone, m.runtimeVersion]; })(),
     [[{ userSymbol: 'Drive', serviceId: 'drive', version: 'v3' }, { userSymbol: 'Docs', serviceId: 'docs', version: 'v1' }], 6, 1, 'Europe/Berlin', 'V8']);
   check('the feature stores one property of its own and reads one more (source)', [(CODE.match(/const STATUS_DROPDOWN_[A-Z_]*KEY_ = '[A-Z_]+';/g) || []).length, /STATUS_DROPDOWN/.test(JSON.stringify(S.ADDON003_ADOPTION_FIXED_KEYS_))], [2, false]);
-  check('Code.js is version 2.26.14 (2.26.14 released Goes to Plenary as T-2026.10.30; 2.26.13 the Revisions-cell cleanup and the overnight pause as T-2026.10.29; 2.26.12 the local listing agent as T-2026.10.28; 2.26.11 all before it as T-2026.10.27; the status dropdowns came with 2.19.0)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.14');
+  check('Code.js is version 2.26.15 (2.26.15 the concurrent-edit hotfix as T-2026.10.31; 2.26.14 released Goes to Plenary as T-2026.10.30; 2.26.13 the Revisions-cell cleanup and the overnight pause as T-2026.10.29; 2.26.12 the local listing agent as T-2026.10.28; 2.26.11 all before it as T-2026.10.27; the status dropdowns came with 2.19.0)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.26.15');
 }
 
 // ================================================================ 12. a dropdown that could not be made

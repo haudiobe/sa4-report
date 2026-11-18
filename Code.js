@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.14 (2026-11-18)
+ * Version: 2.26.15 (2026-11-18)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,20 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.15 (2026-11-18)
+ *   (T-2026.10.31, a hotfix on T-2026.10.30 / 2.26.14.)
+ *   - Fixed: Set Up Goes to Plenary (and an update of a report that has
+ *     it) stopped with "The required revision ID ... does not match the
+ *     latest revision" when somebody else edited the report while the
+ *     compact Status rows were written (the Audio report, 2026-11-18).
+ *     The rows are now planned again from a new read of the document,
+ *     at most four times; a row done is not done twice; nothing is
+ *     written at a position of an older read. The summary formatting and
+ *     the landscape section do the same.
+ *   - Fixed: a set-up or update that stopped after reading the document
+ *     reported the Disposition Summary as "unreadable"; it is "not
+ *     reached". The set-up says "set up" only when every step is done,
+ *     and names the steps that are not.
  * 2.26.14 (2026-11-18)
  *   (T-2026.10.30; on T-2026.10.29 / 2.26.13.)
  *   - Added: Goes to Plenary. Report > Set Up Goes to Plenary... gives
@@ -24976,6 +24990,23 @@ function planCompactStatusPairs_(index, definition, choiceOf, agendaOf) {
  * says something else), its formatting, and its landscape section. null for
  * a report without Goes to Plenary. Never throws.
  */
+/** Round 6: how often the compact rows are planned again from a new read when the document changed meanwhile. */
+const PLENARY_WRITE_ATTEMPTS_ = 4;
+
+/** Round 6, pure: whether a Docs API error says the document changed since it was read (requiredRevisionId). */
+function isStaleRevisionProblem_(e) {
+  return /required revision id|does not match the latest revision/i.test(String((e && e.message) || e || ''));
+}
+
+/** Round 6: a short pause before the next read (1 s, 2 s, 3 s), so that a burst of typing can end. */
+function pausePlenaryRetry_(attempt) {
+  try {
+    if (typeof Utilities !== 'undefined' && Utilities && typeof Utilities.sleep === 'function') Utilities.sleep(Math.min(3000, 1000 * attempt));
+  } catch (e) {
+    // no pause: the next read is made at once
+  }
+}
+
 function finalizePlenarySelection_(mode, saved) {
   if (!plenarySelectionEnabled_()) {
     resetPlenaryRun_();
@@ -24997,6 +25028,8 @@ function finalizePlenarySelection_(mode, saved) {
     result.ran = true;
     let index = buildStatusDocsIndex_(statusDocsGet_(documentId, STATUS_DOCS_REPORT_FIELDS_));
     if (!index) throw new Error('the document has no readable tab');
+    // Round 6: from here on the document was read -- a stop below is no "unreadable" summary, the summary is "not reached".
+    result.read = true;
     const plan = planPlenaryUpdateRequests_(index, run);
     let definition = plenaryDefinitionOf_(index);
     const requests = plan.requests.slice();
@@ -25018,30 +25051,53 @@ function finalizePlenarySelection_(mode, saved) {
     const props = PropertiesService.getDocumentProperties();
     const stored = props.getProperties() || {};
     const numberOf = function (key) { return tdocNumberOfCellText_(key).trim(); };
-    const pairs = planCompactStatusPairs_(index, definition,
-      function (key) { return plan.yes[key] || stored[PLENARY_PENDING_KEY_PREFIX_ + numberOf(key)] === 'yes' ? 'yes' : 'no'; },
-      function (key) { return plenaryAgendaValueOf_(numberOf(key), stored, null).value; });
-    const sending = pairs.filter(function (p) { return p.requests.length; });
-    const progress = { sent: 0 };
-    let problem = null;
-    try {
-      sendStatusDropdownInsertPairs_(documentId, sending, index.revisionId, progress);
-    } catch (e) {
-      problem = e;
-    }
-    // What the rows show now: for the pairs sent, and for every row that needed nothing.
+    const choiceOf = function (key) { return plan.yes[key] || stored[PLENARY_PENDING_KEY_PREFIX_ + numberOf(key)] === 'yes' ? 'yes' : 'no'; };
+    const agendaOf = function (key) { return plenaryAgendaValueOf_(numberOf(key), stored, null).value; };
+    // Round 6 (the Audio report, 2026-11-18): every batch of compact rows is tied to the revision of the read it was planned
+    // from. When somebody else edits the document meanwhile -- a live session -- the API refuses the batch and nothing of it
+    // is written. The rows are then planned again from a new read (a row done is not planned twice, a Yes chosen meanwhile is
+    // read), at most PLENARY_WRITE_ATTEMPTS_ times; then the set-up or update stops and says how far it got.
     const done = {};
-    sending.slice(0, progress.sent).forEach(function (p) { done[p.number] = p; });
-    pairs.filter(function (p) { return !p.requests.length; }).forEach(function (p) { done[p.number] = p; });
+    let problem = null;
+    let left = 0;
+    for (let attempt = 1; ; attempt++) {
+      const pairs = planCompactStatusPairs_(index, definition, choiceOf, agendaOf);
+      const sending = pairs.filter(function (p) { return p.requests.length; });
+      const progress = { sent: 0 };
+      problem = null;
+      try {
+        sendStatusDropdownInsertPairs_(documentId, sending, index.revisionId, progress);
+      } catch (e) {
+        problem = e;
+      }
+      // What the rows show now: for the pairs sent, and for every row that needed nothing.
+      sending.slice(0, progress.sent).forEach(function (p) { done[p.number] = { p: p, kind: index.plenary[p.number].kind }; if (p.inserted) result.inserted++; else result.refreshed++; });
+      pairs.filter(function (p) { return !p.requests.length; }).forEach(function (p) { done[p.number] = { p: p, kind: index.plenary[p.number].kind }; });
+      left = sending.length - progress.sent;
+      if (!problem || !isStaleRevisionProblem_(problem) || attempt >= PLENARY_WRITE_ATTEMPTS_) {
+        if (problem && isStaleRevisionProblem_(problem)) {
+          problem = new Error('the document was being edited by someone else while it was written (the Docs API refused ' + attempt + ' time(s)): ' + left +
+            ' Status row(s) not made compact yet, ' + (result.inserted + result.refreshed) + ' done; nothing was written in a wrong place. Run it again when nobody is editing the report');
+        }
+        break;
+      }
+      result.staleRetries = attempt;
+      Logger.log('Goes to Plenary: the document was changed by someone else while the rows were written (attempt ' + attempt + ' of ' + PLENARY_WRITE_ATTEMPTS_ + '); ' +
+        progress.sent + ' row(s) written in this attempt, ' + left + ' left; reading it again.');
+      pausePlenaryRetry_(attempt);
+      index = buildStatusDocsIndex_(statusDocsGet_(documentId, STATUS_DOCS_REPORT_FIELDS_));
+      if (!index) throw new Error('the document has no readable tab');
+      definition = plenaryDefinitionOf_(index) || definition;
+    }
+    result.compactLeft = left;
     const writes = {};
     const deletes = [];
     Object.keys(done).forEach(function (key) {
-      const p = done[key];
+      const p = done[key].p;
       const n = numberOf(key);
       if (p.shown) { if (stored[PLENARY_SHOWN_KEY_PREFIX_ + n] !== p.shown) writes[PLENARY_SHOWN_KEY_PREFIX_ + n] = p.shown; }
       else if (Object.prototype.hasOwnProperty.call(stored, PLENARY_SHOWN_KEY_PREFIX_ + n)) deletes.push(PLENARY_SHOWN_KEY_PREFIX_ + n);
-      if (Object.prototype.hasOwnProperty.call(stored, PLENARY_PENDING_KEY_PREFIX_ + n) && (p.inserted || index.plenary[key].kind === 'dropdown')) deletes.push(PLENARY_PENDING_KEY_PREFIX_ + n);
-      if (p.requests.length) { if (p.inserted) result.inserted++; else result.refreshed++; }
+      if (Object.prototype.hasOwnProperty.call(stored, PLENARY_PENDING_KEY_PREFIX_ + n) && (p.inserted || done[key].kind === 'dropdown')) deletes.push(PLENARY_PENDING_KEY_PREFIX_ + n);
     });
     if (Object.keys(writes).length) props.setProperties(writes);
     deletes.forEach(function (key) { props.deleteProperty(key); });
@@ -25082,8 +25138,9 @@ function finalizePlenarySelection_(mode, saved) {
       '; landscape: ' + result.landscape + '.');
   } catch (e) {
     result.reason = e.message;
-    // The summary was not reached: nothing of it was written (an update reports it so).
-    if (!result.summary && (mode === 'update' || mode === 'setup')) result.summary = 'unreadable';
+    // The summary was not reached: nothing of it was written (an update reports it so). Round 6: "unreadable" only when the
+    // document could not be read; a stop after the read is "not reached" (the Audio set-up said "unreadable" wrongly).
+    if (!result.summary && (mode === 'update' || mode === 'setup')) result.summary = result.read ? 'not reached' : 'unreadable';
     Logger.log('Goes to Plenary: not completed (' + e.message + '). Rows that were not changed stay as they are; the next update tries again.');
     if (mode === 'update') reportUpdateStageFailed_('Goes to Plenary', 'failed: ' + e.message);
   } finally {
@@ -25164,6 +25221,7 @@ function ensurePlenaryLandscape_(documentId, content) {
   try {
     let changed = false;
     let known = content || null;
+    let stale = 0;
     for (let step = 0; step < 6; step++) {
       let list = known;
       let revisionId = null;
@@ -25184,7 +25242,16 @@ function ensurePlenaryLandscape_(documentId, content) {
       const request = next.insert !== undefined
         ? { insertSectionBreak: { location: withTab({ index: next.insert }), sectionType: 'NEXT_PAGE' } }
         : { updateSectionStyle: { range: withTab({ startIndex: next.at, endIndex: next.at + 1 }), sectionStyle: { flipPageOrientation: next.flip }, fields: 'flipPageOrientation' } };
-      Docs.Documents.batchUpdate({ requests: [request], writeControl: { requiredRevisionId: revisionId } }, documentId);
+      try {
+        Docs.Documents.batchUpdate({ requests: [request], writeControl: { requiredRevisionId: revisionId } }, documentId);
+      } catch (e) {
+        // Round 6: somebody else edited the document since the read (nothing was written): read and plan the step again, bounded.
+        if (!isStaleRevisionProblem_(e) || ++stale >= PLENARY_WRITE_ATTEMPTS_) throw e;
+        Logger.log('Goes to Plenary: the document was changed by someone else while the landscape section was set (attempt ' + stale + ' of ' + PLENARY_WRITE_ATTEMPTS_ + '); reading it again.');
+        pausePlenaryRetry_(stale);
+        step--;
+        continue;
+      }
       changed = true;
     }
     return 'not completed in six steps';
@@ -25663,12 +25730,22 @@ function planPlenarySummaryFormat_(snapshot) {
  */
 function formatPlenarySummaryTables_(documentId, snapshot) {
   try {
-    const read = snapshot || plenarySnapshot_(documentId);
-    if (!read) return 'not read';
-    const requests = planPlenarySummaryFormat_(read);
-    if (!requests.length) return 'unchanged';
-    Docs.Documents.batchUpdate({ requests: requests, writeControl: { requiredRevisionId: read.revisionId } }, documentId);
-    return 'formatted (' + requests.length + ' requests)';
+    let read = snapshot || plenarySnapshot_(documentId);
+    // Round 6: when somebody else edits the document meanwhile, the batch is refused (nothing written): read and plan again, bounded.
+    for (let attempt = 1; ; attempt++) {
+      if (!read) return 'not read';
+      const requests = planPlenarySummaryFormat_(read);
+      if (!requests.length) return 'unchanged';
+      try {
+        Docs.Documents.batchUpdate({ requests: requests, writeControl: { requiredRevisionId: read.revisionId } }, documentId);
+        return 'formatted (' + requests.length + ' requests)';
+      } catch (e) {
+        if (!isStaleRevisionProblem_(e) || attempt >= PLENARY_WRITE_ATTEMPTS_) throw e;
+        Logger.log('Goes to Plenary: the document was changed by someone else while the summary tables were formatted (attempt ' + attempt + ' of ' + PLENARY_WRITE_ATTEMPTS_ + '); reading it again.');
+        pausePlenaryRetry_(attempt);
+        read = plenarySnapshot_(documentId);
+      }
+    }
   } catch (e) {
     Logger.log('Goes to Plenary: the summary tables could not be formatted (' + e.message + '); the next update tries again.');
     return 'failed: ' + e.message;
@@ -26609,15 +26686,21 @@ function setUpGoesToPlenary() {
     PropertiesService.getDocumentProperties().setProperty(PLENARY_ENABLED_KEY_, '1');
     applyPlenarySelectionFromSnapshot_(plenarySnapshot_(currentReportDocument_().getId()), buildTdocTableIndex_(body.getTables()), {}, null, out);
     const done = finalizePlenarySelection_('setup', false);
-    result = { ok: !!done && !done.reason && !out.unreadable.length, migrated: out.migrated, plenaryStatuses: out.plenaryStatuses, unreadable: out.unreadable, dropdowns: done };
+    // Round 6: set up only when every step is done -- the rows, the summary, its look and the landscape section; else which not.
+    const notDone = !done ? ['not run'] : [done.reason,
+      ['created', 'replaced', 'unchanged'].indexOf(done.summary) === -1 ? 'Disposition Summary ' + (done.summary === 'not reached' ? 'not written yet' : done.summary + (done.summaryError ? ' (' + done.summaryError + ')' : '')) : '',
+      /^failed/.test(done.format || '') ? 'summary formatting ' + done.format : '',
+      /^(failed|not completed)/.test(done.landscape || '') ? 'landscape section ' + done.landscape : ''].filter(Boolean);
+    result = { ok: !!done && !notDone.length && !out.unreadable.length, notDone: notDone, migrated: out.migrated, plenaryStatuses: out.plenaryStatuses, unreadable: out.unreadable, dropdowns: done };
   } finally {
     lock.releaseLock();
   }
-  ui.alert(TITLE, (result.ok ? 'Goes to Plenary is set up.' : 'Goes to Plenary is set up, but not completely' + (result.dropdowns && result.dropdowns.reason ? ': ' + result.dropdowns.reason : '') +
+  ui.alert(TITLE, (result.ok ? 'Goes to Plenary is set up.' : 'Goes to Plenary is set up, but not completely' + (result.notDone.length ? ': ' + result.notDone.join('; ') : '') +
     (result.unreadable.length ? ' (not read: ' + result.unreadable.join(', ') + ')' : '') + '. Run it again.') + '\n\n' +
-    result.dropdowns.inserted + ' Status row(s) made compact' + (result.migrated ? ' (' + result.migrated + ' from the two rows of the first candidate, their selections kept)' : '') + '; ' +
+    result.dropdowns.inserted + ' Status row(s) made compact' + (result.dropdowns.compactLeft ? ', ' + result.dropdowns.compactLeft + ' not yet' : '') + (result.migrated ? ' (' + result.migrated + ' from the two rows of the first candidate, their selections kept)' : '') + '; ' +
     result.plenaryStatuses + ' Status "Plenary" moved to ' + PLENARY_YES_ + '.' + (result.dropdowns.optionRemoved ? '\n"Plenary" was removed from the Status dropdown.' : '') +
-    (result.dropdowns.summary ? '\nDisposition Summary: ' + result.dropdowns.summary + '.' : '') +
+    (result.dropdowns.summary ? '\nDisposition Summary: ' + (result.dropdowns.summary === 'not reached' ? 'not written yet (the set-up stopped before it)' : result.dropdowns.summary) + '.' : '') +
+    (result.ok ? '' : '\nGoes to Plenary is switched on: Set Up Goes to Plenary or Update Report Now completes it; what is done is not done twice.') +
     '\n\nThe next update fills in the SA4 plenary agenda items and keeps the four tables up to date.', ui.ButtonSet.OK);
   return result;
 }

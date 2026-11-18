@@ -18,6 +18,95 @@ report:
 - a faster update (§ 0);
 - the read-only check *Advanced and Repair › Check Report Integrity*.
 
+## Incident: Set Up Goes to Plenary in the production Audio report (2026-11-18), fixed in T-2026.10.31
+
+**What happened.** *Set Up Goes to Plenary* in "Audio SWG Minutes SA4#138" stopped with "The
+required revision ID … does not match the latest revision". The dialog showed:
+
+- 0 Status rows made compact;
+- 0 Status "Plenary" moved;
+- Disposition Summary "unreadable";
+- set up, but not completely.
+
+**The sequence** (`setUpGoesToPlenary()`, holding the document lock):
+
+1. The setup stores `GOES_TO_PLENARY = 1`, so the report is switched on from here.
+2. It reads the report once through the API (`applyPlenarySelectionFromSnapshot_()`). It moves a
+   Status "Plenary" (none in Audio) and keeps choices in document properties. No DocumentApp write
+   happened in Audio.
+3. `finalizePlenarySelection_('setup')`:
+   - **a.** `saveAndClose()`.
+   - **b.** Read #1.
+   - **c.** One batch **without** a revision guard. It removes the option "Plenary" from the
+     report's Status dropdown, which is intended at set-up (ROLLOUT_T-2026.10.30 § A.2), and
+     creates the "Goes to Plenary" Yes/No dropdown definition. Both name their target by ID, not
+     by position.
+   - **d.** Read #2, which gives the revision ID.
+   - **e.** The compact rows, in batches of 50 pairs. Each pair inserts the marker text and a
+     dropdown at positions taken from read #2, under `requiredRevisionId` = read #2's revision.
+   - **f.** The summary, its formatting, and the landscape section.
+
+**The failing operation** is step 3e, the first batch: "0 rows made compact" means no batch was
+accepted.
+
+Between read #2 and that batch, this execution writes nothing. Another script execution cannot
+write either: an update takes the same document lock. So the revision was changed by somebody
+editing the report. The document went from Drive version 817 at 18:05 UTC to 841 at 18:40 UTC.
+
+The revision guard did its job: positions from an older read are refused, never applied at the
+wrong place. What was missing was a new read and a new plan. The disposable MBS copy did not show
+it, because nobody else edited it during its test.
+
+**What may have succeeded before the failure:**
+
+| Item | Status |
+|---|---|
+| `GOES_TO_PLENARY = 1` | Set |
+| Status dropdown | Option "Plenary" removed; no Status had it selected (0 moved) |
+| "Goes to Plenary" Yes/No dropdown definition | Created; not used by any row yet |
+| Compact rows | None (each batch is all or nothing) |
+| Summary, its formatting, the landscape section | Not reached; the three-table summary is as it was |
+| Minutes, dispositions, Status values | Not touched |
+
+**Why "unreadable".** When the set-up stopped, its catch block labelled every summary it had not
+reached "unreadable", even after a successful read. It now says "not reached". "Unreadable" is used
+only when the document could not be read.
+
+**Does a second set-up resume?** Yes. The compact rows are planned from the document as it is, so a
+row done is not planned again; § U of the tests covers this, including an interruption after 50 of
+60 rows. While `GOES_TO_PLENARY = 1`, *Update Report Now* (and a scheduled update) also continue
+the set-up. With T-2026.10.30, they meet the same refusal whenever somebody types at that moment.
+That is safe, and is reported as "updated only in part".
+
+**The fix (T-2026.10.31, `finalizePlenarySelection_()`):**
+
+- **Bounded retries.** When the API refuses a batch of compact rows for a changed revision, the
+  report is read again and the rows planned again from that read. This happens at most
+  `PLENARY_WRITE_ATTEMPTS_` (4) times, with a 1–3 s pause between attempts.
+  - Rows done are not planned again.
+  - A Yes chosen meanwhile, or text typed meanwhile, is read and kept.
+  - Nothing is written at a position of an older read.
+- **When the attempts run out.** The set-up says how many rows are done and how many are left, that
+  nothing was written in a wrong place, and to run it again when nobody is editing.
+- **Summary formatting and landscape section** do the same, and are just as bounded.
+- **The set-up's verdict.** It says "set up" only when every step is done (rows, summary, its
+  formatting, the landscape section), and names the steps that are not.
+- **What is unchanged:** the order of the steps, what is written, and the performance (§ M and § Q
+  measure the same).
+
+**Tests** (`tests/goes-to-plenary.test.js` § U; the fake Docs API refuses a stale revision, and a
+test types into the document at the moment of a write):
+
+1. One edit during the set-up. The deployed code gives the production result (the same API
+   message, 0 rows, "unreadable"); the fix completes the set-up.
+2. Somebody types all the time: bounded attempts, an accurate dialog, no marker anywhere, then a
+   complete set-up when the typing stops.
+3. Interrupted after 50 of 60 rows: the next set-up completes the 10, does not touch the 50, and
+   keeps a Yes chosen meanwhile.
+4. The same race in an update of a report that has Goes to Plenary.
+5. An edit during the formatting and one during the landscape step: both read again. A step that
+   cannot be done is named.
+
 ## 0. Fifth candidate: the two blockers found in the fourth candidate's real validation
 
 The fourth candidate's update ran in about 95.5 s in the disposable MBS copy, so the performance
