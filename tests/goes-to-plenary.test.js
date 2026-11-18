@@ -49,7 +49,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS,
+const { codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS,
   PLENARY_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
@@ -906,7 +906,8 @@ console.log('K. what changed in Code.js and ReportCreator.js, and nothing else')
 {
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const CREATOR = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
-  const view = codeWithoutGoesToPlenary(FULL);
+  // The release header of T-2026.10.30 (2.26.14) is taken out first.
+  const view = codeWithoutGoesToPlenary(codeWithoutRelease2_26_14Header(FULL).code);
   const creatorView = creatorWithoutGoesToPlenary(CREATOR);
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const names = (src) => (src.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));
