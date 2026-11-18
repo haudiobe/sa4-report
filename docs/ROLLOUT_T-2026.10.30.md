@@ -34,63 +34,64 @@ agent is not part of this release and is not touched.
 
 ## 0. Validation on the disposable MBS copy (before any production step)
 
-Target: "DISPOSABLE TEST COPY (issue #16) - MBS SA4#138". It runs the third candidate. Its second
-update on 2026-11-18 ran past ten minutes and may have stopped part-way.
+Target: "DISPOSABLE TEST COPY (issue #16) - MBS SA4#138". It runs the fourth candidate. Its last
+update took about 95.5 s. Its log said "summary: failed", and Check Report Integrity listed 28
+TDocs with text Status values (S4-262281 to S4-262293, S4-262302 and others).
 
 **Done by Claude:**
 
-- The fourth candidate bundle (`dist/release-candidate/T-2026.10.30/`) was pushed into the copy's
+- The fifth candidate bundle (`dist/release-candidate/T-2026.10.30/`) was pushed into the copy's
   bound script.
-- The push was guarded: the copy had to run the third candidate (Code.js `0b9eba40…`).
+- The push was guarded: the copy had to run the fourth candidate (Code.js `23c15120…`).
 - The read-back matches `RELEASE-MANIFEST.json`.
 - No function was run in the document.
 
 **By you, in the copy (menu SA4 Report):**
 
-1. **Back up.** *File › Version history › Name current version*: "before fourth candidate".
-2. **Check the version.** *ℹ️ About This Report* shows T-2026.10.30 / 2.26.14.
-3. **First update.** Run *Update Report Now*. This run may still have repairs to make after the
-   interrupted run. In *Extensions › Apps Script › Executions*, note:
-   - (a) its **duration**;
-   - (b) that it ends without "Exceeded maximum execution time";
-   - (c) from its log:
-     - the line `[PERF] report snapshot … ms`;
-     - the lines "Revisions: N cell(s) compared …, W written" and "E-mail discussions: …";
-     - any `[PERF] left to the next update: …`;
-     - any TDoc table "not in the TDoc list".
+1. **Back up.** *File › Version history › Name current version*: "before fifth candidate".
+2. **Before.** Run *🛠 Advanced and Repair › Check Report Integrity*. Expected:
+   - "Status dropdowns missing": the 28;
+   - "Marked as a report with Status dropdowns: no (the next update marks it …)".
 
-   If the dialog says "updated only in part", that is correct behaviour, not a failure. Run step 4.
-4. **Second update, nothing changed.** Run *Update Report Now* again and note the same three
-   items. Expected:
-   - well under six minutes;
-   - "Revisions: … 0 written";
-   - "E-mail discussions: … 0 written";
-   - no stage left over;
-   - *Version history* shows no new edit by the script.
-5. **Run the integrity check.** *🛠 Advanced and Repair › Check Report Integrity* (read-only).
-   Expected:
+   If it says "Convert Status Fields to Dropdowns… makes them dropdowns" instead, the report has no
+   Status dropdown to go by. Run that command (it checks before it changes anything), then
+   continue with step 3.
+3. **First update.** Run *Update Report Now*. In *Extensions › Apps Script › Executions*, note the
+   duration and these log lines:
+   - `Status dropdowns: 28 inserted …`;
+   - "… it is marked now";
+   - `Goes to Plenary (update): … summary: replaced; landscape: unchanged`;
+   - `Found N existing TDOCs`;
+   - a line "Disposition Summary: DocumentApp counts … before it than the Docs API", if one is
+     there.
+
+   If the dialog says "updated only in part", note the stages and reasons it names.
+4. **After.** Run *Check Report Integrity* again. Expected:
    - "Status dropdowns missing: none";
-   - one summary heading;
-   - the TDoc table(s) "not in the TDoc list" that explain 75 against 76. Nothing has been
-     deleted; you decide.
-6. **Spot-check one real change.** Change one Status and set one Plenary to ☑ Yes, then run
-   *Update Report Now*. Expected:
-   - both move to the right disposition table;
-   - the Revisions rows, the minutes and the manual A.I. values are unchanged.
-7. **The look,** unchanged from the third candidate:
-   - compact Status rows;
-   - four tables on landscape pages: six columns for tables 1–2, five for tables 3–4;
-   - `S4-26XXXX (revision of S4-26YYYY)` with both numbers linked.
-8. **If anything is wrong:** restore the named version. Claude can push the third candidate back
+   - "Marked … : yes";
+   - "TDoc tables" equals N from step 3.
+5. **Look at the report.**
+   - S4-262281 and S4-262302 show `[status ▾] Plenary [☐ No ▾]`, with the same status value as
+     before.
+   - Any Plenary Yes and A.I. values are as they were.
+   - The minutes are unchanged.
+   - The Disposition Summary has four tables on landscape pages: six columns for the two
+     "Goes to Plenary" tables, five for the two "Not Going" tables.
+   - TDoc numbers are linked.
+6. **Second update, nothing changed.** Run *Update Report Now* again. Expected:
+   - "summary: unchanged", and no "Status dropdowns: N inserted" line;
+   - no "updated only in part";
+   - no new script edit in the version history.
+7. **One real change.** Set one Plenary to ☑ Yes and run *Update Report Now*. The TDoc moves to a
+   "Goes to Plenary" table, and the log says "summary: replaced".
+8. **If anything is wrong:** restore the named version. Claude can push the fourth candidate back
    from `dist/integration-test/rc-T-2026.10.30-<UTC>/before/`.
 
 Please send:
 
-- the durations of steps 3 and 4;
-- their "Revisions" and "E-mail discussions" lines and any "left to the next update" lines;
-- the integrity result of step 5.
-
-The timeout counts as fixed only when step 4 finishes well within six minutes.
+- the log lines of step 3 (above all, the `summary:` line);
+- the integrity results of steps 2 and 4;
+- the durations of steps 3 and 6.
 
 ## A. Master template
 
@@ -138,6 +139,8 @@ Per-report rollback: restore the named version, and delete the document property
 | "Is revision of" is not in the TDoc list | The predecessor's "Revised to" alone still gives the relationship; nothing is inferred |
 | A text status in a compact row is rewritten by DocumentApp | Never: it is replaced in front of the code's mark only (tested) |
 | A rapporteur types into the summary | The update refuses and changes nothing; the log names the text |
+| Status values left as text in a report with Goes to Plenary that was never marked (the copy had 28) | The update restores them when the report already has Status dropdowns, and marks it; with none, Check Report Integrity names Convert Status Fields to Dropdowns…. Only the status part is replaced; Plenary, A.I., minutes untouched. Checked in step 0 |
+| The Disposition Summary is not rewritten ("summary: failed" in the copy) | Found in DocumentApp and checked element by element; the new summary is written before the old one is taken out; on failure the old one stays, the reason is logged, and the update says "updated only in part". Checked in step 0 |
 | An update runs out of the six minutes (the first and the second update did, on 2026-11-18) | One Docs API read per update; revisions, discussions, existing TDocs and the structure check compare against it and write only cells that change (an unchanged update: 620 DocumentApp calls against 95,154 for the third candidate, fake document). Collectors have a 150/215 s budget, formatting 240 s, summary 285 s; a stage left over is reported as "updated only in part" and completed by the next update. Real durations are measured in step 0 |
 | The collection of mail/RSS and revisions (96 s on 2026-11-18) | Unchanged in this release; it stays the largest part of an update and depends on the network |
 | A report is switched on during a session | Do it between sessions (step C). The set-up takes the document lock and refuses while an update runs |

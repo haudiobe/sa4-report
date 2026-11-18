@@ -36,6 +36,9 @@
  *   Q.  the REAL collectors on 75 TDocs with some 150 revision links: an unchanged update writes nothing (document,
  *       stores, API); one new file writes one cell; a lost link is restored; a stale agent clears nothing; the
  *       collectors keep to the time budget, and an incomplete update says so
+ *   R.  28 Status values left as text in a report that is not marked: the update restores them, Plenary and A.I. kept
+ *   S.  the summary where the Docs API and DocumentApp count the body differently: replaced, or kept with the reason
+ *   T.  the count of existing TDocs; a failed stage makes the update incomplete
  *   K.  what changed in Code.js and ReportCreator.js, and nothing else
  *
  * Run: node tests/goes-to-plenary.test.js
@@ -699,7 +702,8 @@ function collectorsReport(code) {
   const late = m.update();
   m.s.reportUpdateElapsedMs_ = elapsed;
   check('an update that has run 160 s leaves the collectors to the next one, and is reported as incomplete', [late.success, late.incomplete], [true, ['e-mail discussions', 'TDoc revisions']]);
-  check('Update Report Now says so: "updated only in part"', /updated only in part[\s\S]*e-mail discussions[\s\S]*TDoc revisions/.test(m.s.describeUpdateReportNowFailure_ ? m.s.describeUpdateReportNowFailure_(late) : (() => { const t = require('./helpers/load-template.js'); void t; return 'updated only in part e-mail discussions TDoc revisions'; })()), true);
+  const describeQ = (() => { const src = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, ''); const f = src.match(/function describeUpdateReportNowFailure_\(result\) \{[\s\S]*?\n\}\n/)[0]; return new Function(f + '\nreturn describeUpdateReportNowFailure_;')(); })();
+  check('Update Report Now says so: "updated only in part"', /updated only in part[\s\S]*e-mail discussions[\s\S]*TDoc revisions/.test(describeQ(late)), true);
   let ticks = 0;
   m.s.reportUpdateElapsedMs_ = () => (++ticks > 20 ? 220000 : 1000);
   m.files.push('S4-263070-r8.docx');
@@ -718,6 +722,183 @@ function collectorsReport(code) {
     console.log('  the third candidate (b5893c8), the same unchanged update with the collectors: ' + oldCalls + ' DocumentApp calls -- ' + Math.round(oldCalls / Math.max(1, noopCalls)) + 'x this one');
     check('the third candidate made at least 20x more DocumentApp calls for it', oldCalls >= 20 * noopCalls, true);
   }
+}
+
+// ====================================================================== R
+console.log('R. 28 Status values left as text in a report with Goes to Plenary that is not marked as a dropdown report: the update restores them');
+{
+  const describe = (() => { const src = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, ''); const f = src.match(/function describeUpdateReportNowFailure_\(result\) \{[\s\S]*?\n\}\n/)[0]; return new Function(f + '\nreturn describeUpdateReportNowFailure_;')(); })();
+  const STATUSES = ['agreed', 'noted', 'available', 'revised', 'endorsed', 'reserved', 'approved'];
+  const list = Array.from({ length: 35 }, (_, k) => ({ id: 'S4-2622' + String(81 + k).padStart(2, '0'), agenda: ['8.5', '8.6', '8.7', '8.4'][k % 4], status: STATUSES[k % STATUSES.length], title: '[AMD_ARCH_Ph2-MED] contribution ' + k, uploaded: true }));
+  const m = mbs({ tdocs: list });
+  m.build();
+  m.setUp();
+  m.update();
+  // The rapporteur's choices: Plenary Yes on two of the TDocs that will lose their Status dropdown, a manual A.I. on one; minutes below the summary.
+  m.user(() => m.api.pickPlenary('S4-262281', YES));
+  m.user(() => m.api.pickPlenary('S4-262285', YES));
+  m.update();
+  m.typeAgenda('S4-262285', '15.6');
+  m.user(() => m.body.appendParagraph('Minutes typed below the summary by hand.'));
+  m.update();
+  // What the copy shows: no STATUS_DROPDOWNS mark (the setup does not need it), and 28 Status values as plain text before "Plenary".
+  m.docProps.deleteProperty('STATUS_DROPDOWNS');
+  const lost = list.slice(0, 28).map((t) => t.id);
+  m.user(() => lost.forEach((id) => {
+    const value = m.c(id).status.replace(/^dropdown:/, '');
+    const c = m.api.statusCell(id);
+    const rest = c._allParts().slice(1);
+    c._parts = [{ t: value + rest[0].t }].concat(rest.slice(1));
+    c._sync();
+  }));
+  const before = {};
+  list.forEach((t) => { before[t.id] = { status: m.c(t.id).status, plenary: m.c(t.id).plenary, ai: m.c(t.id).ai }; });
+  const otherCells = () => m.tdocTables().map((t) => rowsOf(t).filter((x) => x[0] !== 'Status'));
+  const others = JSON.stringify([otherCells(), m.body._children.filter((c) => !isTable(c)).map((c) => c.getText())]);
+  const integrity = () => m.exec(() => m.s.checkReportIntegrity());
+  const p0 = integrity();
+  check('(28 Status values are plain text; Check Report Integrity names them, and says the report is not marked)', [p0.textStatusesWithOption.length, p0.textStatusesWithOption.indexOf('S4-262281') !== -1, p0.marked], [28, true, false]);
+  const u = m.update();
+  check('the next update restores all 28 dropdowns, each with the value its text had', lost.map((id) => m.c(id).status), lost.map((id) => 'dropdown:' + before[id].status.replace(/^text:/, '')));
+  check('the Plenary dropdowns and the A.I. values are kept -- the automatic one and the one typed by hand', list.map((t) => [m.c(t.id).plenary, m.c(t.id).ai]), list.map((t) => [before[t.id].plenary, before[t.id].ai]));
+  check('nothing else in the report changed: the other rows of every TDoc table, every paragraph (minutes included)', JSON.stringify([otherCells(), m.body._children.filter((c) => !isTable(c)).map((c) => c.getText())]) === others, true);
+  check('the update is complete, and the report is marked a dropdown report from now on', [u.success, u.incomplete, m.docProps.getProperty('STATUS_DROPDOWNS'), integrity().textStatusesWithOption], [true, undefined, '1', []]);
+  check('the update says what it did', m.logs.some((l) => /Status dropdowns: 28 inserted/.test(l)), true);
+  const writes = m.writes();
+  const snap = m.snapshot();
+  const u2 = m.update();
+  check('the next update writes nothing: no API write, the document as it was', [u2.success, m.writes() - writes, m.snapshot() === snap], [true, 0, true]);
+  // A report that is neither marked nor has Goes to Plenary is not read for this at all (the rule of the status dropdowns, unchanged).
+  const t = mbs({ tdocs: TDOCS().slice(0, 4) });
+  t.build();
+  t.docProps.deleteProperty('STATUS_DROPDOWNS');
+  t.user(() => { const c = t.api.statusCell('S4-262002'); c._dropdown = null; c._t = 'noted'; });
+  const tu = t.update();
+  check('a report not marked and without Goes to Plenary: as before -- its text status stays text, it is not marked', [tu.success, t.c('S4-262002') ? t.c('S4-262002').status : t.api.statusCell('S4-262002').getText(), t.docProps.getProperty('STATUS_DROPDOWNS')], [true, 'text:noted', null]);
+  // A batch the API refuses: the update says it is incomplete, names the stage, and the next one completes it.
+  m.user(() => lost.slice(0, 3).forEach((id) => { const value = m.c(id).status.replace(/^dropdown:/, ''); const c = m.api.statusCell(id); const rest = c._allParts().slice(1); c._parts = [{ t: value + rest[0].t }].concat(rest.slice(1)); c._sync(); }));
+  const realBatch = m.s.Docs.Documents.batchUpdate;
+  let refused = false;
+  m.s.Docs.Documents.batchUpdate = function (resource, id) { if (!refused && (resource.requests || []).some((q) => q.insertDropdown)) { refused = true; throw new Error('synthetic: the revision of the document has changed'); } return realBatch.apply(this, arguments); };
+  const u3 = m.update();
+  m.s.Docs.Documents.batchUpdate = realBatch;
+  check('a refused batch: the update is incomplete and says so ("Status dropdowns")', [u3.success, (u3.incomplete || []).some((x) => /^Status dropdowns/.test(x)), /updated only in part[\s\S]*Status dropdowns/.test(describe(u3))], [true, true, true]);
+  const u4 = m.update();
+  check('the next update completes it', [u4.incomplete, lost.slice(0, 3).map((id) => m.c(id).status.indexOf('dropdown:') === 0)], [undefined, [true, true, true]]);
+}
+
+{
+  // Every Status of the report is text and it is not marked: an update leaves them (it has nothing to go by); Check Report
+  // Integrity says so and names the command; Convert Status Fields to Dropdowns… restores them, Plenary and A.I. kept.
+  const list = Array.from({ length: 6 }, (_, k) => ({ id: 'S4-2623' + String(10 + k), agenda: '8.5', status: ['agreed', 'noted', 'reserved'][k % 3], title: '[AMD_ARCH_Ph2-MED] c' + k, uploaded: true }));
+  const m = mbs({ tdocs: list });
+  m.build();
+  m.setUp();
+  m.user(() => m.api.pickPlenary('S4-262310', YES));
+  m.update();
+  m.docProps.deleteProperty('STATUS_DROPDOWNS');
+  m.user(() => list.forEach((t) => { const value = m.c(t.id).status.replace(/^dropdown:/, ''); const c = m.api.statusCell(t.id); const rest = c._allParts().slice(1); c._parts = [{ t: value + rest[0].t }].concat(rest.slice(1)); c._sync(); }));
+  const keep = list.map((t) => [m.c(t.id).plenary, m.c(t.id).ai]);
+  m.update();
+  const p = m.exec(() => m.s.checkReportIntegrity());
+  check('every Status text, not marked: the update leaves them; Check Report Integrity names the command', [list.every((t) => m.c(t.id).status.indexOf('text:') === 0), /Convert Status Fields to Dropdowns/.test(m.s.formatReportIntegrity_(p, true)), p.marked], [true, true, false]);
+  const r = m.exec(() => m.s.repairStatusDropdowns_({}));
+  check('Convert Status Fields to Dropdowns… restores all of them in the compact rows, keeps Plenary and the A.I., and marks the report',
+    [r.ok, r.converted, list.map((t) => m.c(t.id).status), list.map((t) => [m.c(t.id).plenary, m.c(t.id).ai]), m.docProps.getProperty('STATUS_DROPDOWNS')],
+    [true, 6, ['dropdown:agreed', 'dropdown:noted', 'dropdown:reserved', 'dropdown:agreed', 'dropdown:noted', 'dropdown:reserved'], keep, '1']);
+  const again = m.exec(() => m.s.repairStatusDropdowns_({}));
+  check('run again, it has nothing to do', [again.ok, again.toConvert, again.converted], [true, 0, 0]);
+}
+
+// ====================================================================== S
+console.log('S. the summary where the Docs API and DocumentApp count the body differently (section breaks): replaced, never lost');
+{
+  const describe = (() => { const src = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, ''); const f = src.match(/function describeUpdateReportNowFailure_\(result\) \{[\s\S]*?\n\}\n/)[0]; return new Function(f + '\nreturn describeUpdateReportNowFailure_;')(); })();
+  [['the API shows the paragraph Google Docs puts before a section break; DocumentApp does not', (m) => { m.api.model.paragraphBeforeBreak = true; }],
+    ['DocumentApp shows an empty paragraph before the summary that the API does not', (m) => { let extra = null; m.user(() => { const at = m.body._children.findIndex((c) => !isTable(c) && c.getText() === SUMMARY); extra = m.body.insertParagraph(at - 2, ''); }); m.api.model.docOnly = (c) => c === extra; }]
+  ].forEach(([name, mismatch]) => {
+    console.log('  -- ' + name);
+    const m = mbs({ tdocs: TDOCS() });
+    m.build();
+    m.setUp();
+    m.user(() => m.body.appendParagraph('Minutes typed below the summary by hand.'));
+    m.update();
+    mismatch(m);
+    m.user(() => m.api.pickPlenary('S4-262003', YES));
+    m.tdoc('S4-262009').status = 'agreed';
+    const u = m.update();
+    check('the summary is replaced (not "failed"), the update complete', [u.dispositionSummary, u.incomplete], ['replaced', undefined]);
+    const s = m.summary();
+    check('four tables in their order: six columns for Goes to Plenary, five for Not Going', [s.map((c) => c[0].replace(/ \(\d+\)$/, '')), s.map((c) => (Array.isArray(c[1]) ? c[1][0].length : c[1]))],
+      [TITLES, [6, 6, 5, 5].map((n, k) => (Array.isArray(s[k][1]) ? n : 'None.'))]);
+    check('the changes are in it: S4-262003 goes to plenary, S4-262009 is agreed', [m.inTable(0).indexOf('S4-262003') !== -1, m.inTable(2).indexOf('S4-262009') !== -1], [true, true]);
+    check('one summary, its TDoc numbers linked, the minutes below it kept, landscape kept', [m.headings(), m.body._children.filter(isTable).filter((t) => [5, 6].indexOf(t.getRow(0).getNumCells()) !== -1 && t.getRow(0).getCell(0).getText() === 'TDoc')
+      .every((t) => t.getNumRows() < 2 || !!t.getRow(1).getCell(0).editAsText().getLinkUrl(0)), m.body._children[m.body._children.length - 1].getText(), m.api.sectionBreaks()],
+      [1, true, 'Minutes typed below the summary by hand.', [{ before: SUMMARY, flip: true }, { before: 'Minutes typed below the summary by hand.', flip: false }]]);
+    const snap = m.snapshot();
+    const writes = m.writes();
+    const u2 = m.update();
+    check('an unchanged update does not rewrite it: "unchanged", no API write, the document the same', [u2.dispositionSummary, m.writes() - writes, m.snapshot() === snap], ['unchanged', 0, true]);
+  });
+  // A failure while it is written: the summary as it was, the precise reason in the log, the update incomplete.
+  const m = mbs({ tdocs: TDOCS() });
+  m.build();
+  m.setUp();
+  m.update();
+  const was = JSON.stringify(m.summary());
+  m.user(() => m.api.pickPlenary('S4-262003', YES));
+  const insertTable = m.body.insertTable;
+  const appendTable = m.body.appendTable;
+  let n = 0;
+  m.body.insertTable = function () { if (++n === 2) throw new Error('synthetic: Service Documents failed while accessing document'); return insertTable.apply(this, arguments); };
+  m.body.appendTable = function () { if (++n === 2) throw new Error('synthetic: Service Documents failed while accessing document'); return appendTable.apply(this, arguments); };
+  m.logs.length = 0;
+  const u = m.update();
+  m.body.insertTable = insertTable;
+  m.body.appendTable = appendTable;
+  check('a failure while writing: the summary as it was, one heading', [JSON.stringify(m.summary()) === was, m.headings()], [true, 1]);
+  check('the precise reason is in the log', m.logs.some((l) => /summary: failed \(.*synthetic: Service Documents failed/.test(l)), true);
+  check('the update is reported as incomplete, naming the summary and the reason', [u.success, (u.incomplete || []).some((x) => /^Disposition Summary \(failed: .*synthetic/.test(x)), /updated only in part[\s\S]*Disposition Summary/.test(describe(u))], [true, true, true]);
+  const u2 = m.update();
+  check('the next update writes it', [u2.dispositionSummary, u2.incomplete, m.inTable(0).indexOf('S4-262003') !== -1], ['replaced', undefined, true]);
+  // When the summary cannot be found where the read shows it at all: nothing is written, the reason says what differs.
+  const k = mbs({ tdocs: TDOCS() });
+  k.build();
+  k.setUp();
+  k.update();
+  const kept = JSON.stringify(k.summary());
+  k.user(() => k.api.pickPlenary('S4-262003', YES));
+  k.user(() => { const at = k.body._children.findIndex((c) => !isTable(c) && c.getText() === SUMMARY); k.body.insertParagraph(at + 2, 'x'); });
+  let hidden = null;
+  k.api.model.docOnly = (c) => { if (hidden === null) hidden = k.body._children.filter((x) => !isTable(x) && x.getText() === 'x')[0] || false; return c === hidden; };
+  k.logs.length = 0;
+  const ku = k.update();
+  check('elements inside the summary that the read does not show: not written, the summary kept, the reason precise, incomplete',
+    [JSON.stringify(k.summary()) === kept, k.logs.some((l) => /summary: failed \(the elements after the summary heading are not those the Docs API shows/.test(l)), (ku.incomplete || []).some((x) => /^Disposition Summary \(failed/.test(x))], [true, true, true]);
+}
+
+// ====================================================================== T
+console.log('T. the count of existing TDocs, and what makes an update incomplete');
+{
+  const m = mbs({ tdocs: TDOCS() });
+  m.build();
+  m.setUp();
+  m.update();
+  m.logs.length = 0;
+  m.update();
+  const found = (m.logs.filter((l) => /^Found \d+ existing TDOCs$/.test(l))[0] || '').match(/\d+/);
+  const p = m.exec(() => m.s.checkReportIntegrity());
+  check('the update counts the TDoc tables Check Report Integrity counts (the four summary tables are not TDocs)', [found ? Number(found[0]) : null, p.tdocTables], [p.tdocTables, p.tdocTables]);
+  check('no empty "TDoc" among the tables not in the TDoc list', m.logs.filter((l) => /not in the TDoc list/.test(l)).every((l) => !/: ,|: $|""/.test(l)), true);
+  // A Goes to Plenary step that throws: incomplete, never plain success.
+  const real = m.s.planCompactStatusPairs_;
+  m.user(() => m.api.pickPlenary('S4-262003', YES));
+  m.s.planCompactStatusPairs_ = () => { throw new Error('synthetic: compact rows'); };
+  const u = m.update();
+  m.s.planCompactStatusPairs_ = real;
+  check('Goes to Plenary not completed: the update is incomplete, with the reason', [u.success, (u.incomplete || []).some((x) => /^Goes to Plenary \(failed: synthetic: compact rows\)/.test(x))], [true, true]);
+  const u2 = m.update();
+  check('the next one completes it', [u2.incomplete, u2.dispositionSummary], [undefined, 'replaced']);
 }
 
 // ====================================================================== K
