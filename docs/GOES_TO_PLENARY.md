@@ -18,7 +18,110 @@ report:
 - a faster update (§ 0);
 - the read-only check *Advanced and Repair › Check Report Integrity*.
 
-## 0. Performance: the six-minute limit (fourth candidate)
+## 0. Fifth candidate: the two blockers found in the fourth candidate's real validation
+
+The fourth candidate's update ran in about 95.5 s in the disposable MBS copy, so the performance
+fix held. Two blockers remained.
+
+### Blocker 1: 28 Status values stayed plain text
+
+**Cause.** An update turns a text Status back into a dropdown only in a report marked
+`STATUS_DROPDOWNS`. Only *Build Report from Scratch* and *Convert Status Fields to Dropdowns…*
+set that mark. *Set Up Goes to Plenary* does not require it. A report that got its Status
+dropdowns another way, as the copy did, is therefore never healed.
+
+*Check Report Integrity* uses the same rule for which statuses count as missing, but ignores the
+mark. It said "the next Update Report Now makes them dropdowns", which was wrong for this
+report.
+
+**Fix.**
+- **The update.** In a report with Goes to Plenary, the update's single read is used to check
+  whether the report already has Status dropdowns: the definition is present and at least one TDoc
+  Status is a dropdown of it (`statusDropdownReportByEvidence_()`).
+  - If so, every text Status that has an option is restored as a dropdown, in the same batches as
+    before.
+  - Only the status part, before "Plenary", is replaced. The Plenary dropdown, the A.I., the
+    minutes and the dispositions are untouched.
+  - Afterwards the report is marked.
+- **No wasted writes.** Dropdowns that are already right are not written. A second update makes
+  no API write.
+- **Reports with text statuses** (no Status dropdown at all) are unchanged by this. Without the
+  mark or Goes to Plenary, the update still does not read the report for this.
+- **The targeted command.** If every Status is text, the update has nothing to go by.
+  *Advanced and Repair › Convert Status Fields to Dropdowns…* (`repairStatusDropdowns_()`):
+  - converts them, compact rows included;
+  - checks that nothing else changed;
+  - marks the report.
+- **Check Report Integrity** now shows "Marked as a report with Status dropdowns: yes/no". For text
+  statuses it says whether the update or the command will convert them.
+- **A refused batch** now makes the update incomplete: "Status dropdowns (failed: …)".
+
+### Blocker 2: "summary: failed"
+
+**Cause.** The summary writer computed where the summary heading is among DocumentApp's children
+from the Docs API's list of body elements. It skipped section breaks.
+
+Google Docs adds a paragraph in front of every section break it inserts. The API lists that
+paragraph; DocumentApp counts the body differently. After the landscape section breaks went in,
+the computed position no longer held the heading. The writer then returned `failed`, and the
+reason ("the summary is not where the Docs API shows it") was not logged.
+
+The fake document used by the tests did not model that paragraph, so the tests missed it. It
+does now, in both directions (`api.model` in `tests/helpers/fake-docs-api.js`). Both reproduce
+the real "failed" on the fourth candidate.
+
+**Fix.**
+- **Finding the summary** (`plenaryLocateSummaryInBody_()`).
+  - The heading is looked for near the computed position, within the number of section breaks
+    before it.
+  - Every element after it must be the kind the read shows (paragraph or table).
+  - Otherwise nothing is written, and the reason names the element that differs.
+- **Writing it.** The new summary is written right after the old one. The old one is removed only
+  when the new one is complete. If writing fails, what was written is taken out again and the
+  existing summary stays.
+- **Logging.**
+  - The reason is logged: `summary: failed (<reason>)`.
+  - When DocumentApp's count differs from the API's, the offset is logged too.
+- **Incomplete reporting.** A summary that is not written (failed, refused, unreadable, no scope),
+  a formatting or landscape step that fails, or a Goes to Plenary step that throws now makes the
+  update incomplete.
+  - *Update Report Now* says "The report was updated only in part. These parts were not completed
+    (out of time, or a step failed) …".
+  - It names the stage and the reason.
+- **Unchanged update.** An unchanged update still does not rewrite the summary: `unchanged`, no
+  write.
+
+### 79 against 80
+
+*Check Report Integrity* counts TDoc tables: two columns, "TDoc" and a TDoc number. The update's
+"Found N existing TDOCs" counted every table whose header begins with "TDoc". The four summary
+tables begin with "TDoc | Title | …", so one extra entry was counted: the empty key in the fourth
+candidate, "Title" in the old scan. The update now counts only TDoc tables, so both say 79. The
+"not in the TDoc list" log already ignored the extra entry. Nothing is deleted.
+
+### Evidence
+
+The fake-document tests (`tests/goes-to-plenary.test.js` §§ R, S, T) failed on the fourth
+candidate and pass now.
+
+| Section | What it covers |
+|---|---|
+| R | 28 text statuses in an unmarked report, all restored with their values, Plenary and A.I. kept, nothing else changed, then no write; a refused batch reported as incomplete and completed next time; the command for a report with only text statuses |
+| S | Both mismatches: summary replaced with four tables (6, 6, 5, 5 columns), links, minutes and landscape kept, then `unchanged`; a failure while writing: old summary kept, reason logged, update incomplete; a mismatch inside the summary: nothing written, the reason precise |
+| T | The existing-TDoc count equals the integrity count; a failing Goes to Plenary step makes the update incomplete |
+
+Performance on the fake is unchanged:
+
+| Update | DocumentApp calls |
+|---|---:|
+| Unchanged | 198 |
+| Unchanged, with the collectors | 620 |
+| Summary rewrite | 309 (290 before; 19 calls for the position check) |
+
+Whether the real report's summary is found depends on how Google Docs counts that paragraph. The
+fix handles either way, and the log of the first real update says which it is.
+
+## 0b. Performance: the six-minute limit (fourth candidate)
 
 ### What failed
 

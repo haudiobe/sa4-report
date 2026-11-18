@@ -16069,7 +16069,10 @@ function finalizeStatusDropdowns_(mode) {
   try {
     if (!statusDropdownsAvailable_()) { result.reason = 'not available in this runtime'; return result; }
     const props = PropertiesService.getDocumentProperties();
-    const marked = props.getProperty(STATUS_DROPDOWN_ENABLED_KEY_) === '1';
+    const markedBefore = props.getProperty(STATUS_DROPDOWN_ENABLED_KEY_) === '1';
+    // After T-2026.10.29: a report with Status dropdowns that was never marked is one all the same (GOES TO PLENARY section, round 5).
+    const byEvidence = mode === 'update' && !markedBefore && statusDropdownReportByEvidence_();
+    const marked = markedBefore || byEvidence;
     const previous = mode === 'build' && run.previous ? run.previous : {};
     // A marked report: is a Status still text although it has an option? Seen in the read this update already made for
     // its sync, or in one read made now. A report that is not marked is never read for this.
@@ -16141,10 +16144,14 @@ function finalizeStatusDropdowns_(mode) {
       result.updated = plan.updated.length;
     }
     if (insertProblem) throw insertProblem;
+    // After T-2026.10.29: from now on it is marked (GOES TO PLENARY section, round 5).
+    if (byEvidence) { props.setProperty(STATUS_DROPDOWN_ENABLED_KEY_, '1'); Logger.log('Status dropdowns: the report has Status dropdowns but was not marked (' + STATUS_DROPDOWN_ENABLED_KEY_ + '); it is marked now.'); }
     Logger.log('Status dropdowns: ' + result.inserted + ' inserted, ' + result.updated + ' updated' + (plan.left.length ? ', ' + plan.left.length + ' left as they are' : '') + (result.reason ? ' (' + result.reason + ')' : '') + '.');
   } catch (e) {
     result.reason = e.message;
     Logger.log('Status dropdowns: not completed (' + e.message + '). Statuses that were not converted stay as text.');
+    // After T-2026.10.29: the update is incomplete, and says so (GOES TO PLENARY section, round 5).
+    if (mode === 'update') reportUpdateStageFailed_('Status dropdowns', 'failed: ' + e.message + (result.inserted ? '; ' + result.inserted + ' made dropdowns before it' : ''));
   } finally {
     resetStatusDropdownRun_();
     // After T-2026.10.29: then the compact Status rows and the landscape section, the last thing of all (null in a report without them).
@@ -24755,6 +24762,7 @@ function syncPlenarySelectionOnUpdate_(body, allTdocs, index) {
     out.state = 'failed';
     out.error = e.message;
     Logger.log('Goes to Plenary: could not be brought up to date: ' + e.message);
+    reportUpdateStageFailed_('Goes to Plenary data', 'failed: ' + e.message);
   }
   return out;
 }
@@ -25032,6 +25040,7 @@ function finalizePlenarySelection_(mode, saved) {
         const reopened = reopenReportDocument_(documentId);
         const written = writePlenaryDispositionSummary_(reopened.getBody(), { documentId: documentId });
         result.summary = written.state;
+        if (written.error) result.summaryError = written.error;
         if (written.foreign && written.foreign.length) result.foreign = written.foreign;
         if (written.rewritten) {
           reopened.saveAndClose();
@@ -25040,18 +25049,27 @@ function finalizePlenarySelection_(mode, saved) {
           result.format = written.format || 'unchanged';
         }
         result.landscape = ensurePlenaryLandscape_(documentId, written.rewritten ? null : written.content);
+        // Round 5: what did not get done makes the update incomplete -- never plain success.
+        if (mode === 'update') {
+          if (['unchanged', 'created', 'replaced'].indexOf(result.summary) === -1) {
+            reportUpdateStageFailed_('Disposition Summary', result.summary + (result.summaryError ? ': ' + result.summaryError : result.foreign ? ': text typed into it ("' + result.foreign.join('", "') + '") -- move it below the summary' : ''));
+          }
+          if (result.format && !/^(unchanged|formatted)/.test(result.format)) reportUpdateStageFailed_('Disposition Summary formatting', result.format);
+          if (/^(failed|not completed)/.test(result.landscape || '')) reportUpdateStageFailed_('landscape section', result.landscape);
+        }
       }
     } else {
       result.landscape = ensurePlenaryLandscape_(documentId, null);
     }
     Logger.log('Goes to Plenary (' + mode + '): ' + result.inserted + ' Status row(s) made compact, ' + result.refreshed + ' A.I. refreshed, ' + result.updated + ' set to "' + PLENARY_YES_ + '", ' +
-      result.statusesReplaced + ' Status "Plenary" replaced' + (result.optionRemoved ? ', "Plenary" removed from the Status dropdown' : '') + '; summary: ' + (result.summary || '-') +
+      result.statusesReplaced + ' Status "Plenary" replaced' + (result.optionRemoved ? ', "Plenary" removed from the Status dropdown' : '') + '; summary: ' + (result.summary || '-') + (result.summaryError ? ' (' + result.summaryError + ')' : '') +
       '; landscape: ' + result.landscape + '.');
   } catch (e) {
     result.reason = e.message;
     // The summary was not reached: nothing of it was written (an update reports it so).
     if (!result.summary && (mode === 'update' || mode === 'setup')) result.summary = 'unreadable';
     Logger.log('Goes to Plenary: not completed (' + e.message + '). Rows that were not changed stay as they are; the next update tries again.');
+    if (mode === 'update') reportUpdateStageFailed_('Goes to Plenary', 'failed: ' + e.message);
   } finally {
     resetPlenaryRun_();
   }
@@ -25446,32 +25464,100 @@ function writePlenaryDispositionSummary_(body, options) {
   }
   const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
   let at;
+  let place = null;
+  const added = [];
   if (section) {
-    const startChild = plenaryChildIndexOf_(snapshot.content, section.start);
-    const endChild = plenaryChildIndexOf_(snapshot.content, section.contentEnd);
-    const heading = startChild < body.getNumChildren() ? body.getChild(startChild) : null;
-    if (!heading || heading.getType() !== DocumentApp.ElementType.PARAGRAPH || !isDispositionSummaryHeadingText_(heading.asParagraph().getText())) {
-      return { state: 'failed', error: 'the summary is not where the Docs API shows it', read: read, model: model, foreign: [] };
-    }
-    for (let i = endChild - 1; i > startChild; i--) removeAdhocBodyChild_(body, body.getChild(i));
-    at = startChild + 1;
+    // Round 5: where the summary is in DocumentApp is found and checked, not computed from the read alone -- Google Docs
+    // shows a paragraph before a section break through the API that DocumentApp may not count (the real report failed so).
+    place = plenaryLocateSummaryInBody_(body, snapshot.content, section);
+    if (place.error) return { state: 'failed', error: place.error, read: read, model: model, foreign: [] };
+    if (place.offset) Logger.log('Disposition Summary: DocumentApp counts ' + (place.offset > 0 ? place.offset + ' element(s) more' : (-place.offset) + ' element(s) fewer') + ' before it than the Docs API (' + place.breaks + ' section break(s) before it); found and checked there.');
+    // The new summary first, right after the old one; the old one is taken out only when the new one is complete.
+    at = place.end;
   } else {
-    body.appendParagraph(DISPOSITION_SUMMARY_HEADING_).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+    const heading = body.appendParagraph(DISPOSITION_SUMMARY_HEADING_);
+    heading.setHeading(DocumentApp.ParagraphHeading.HEADING1);
+    added.push(heading);
     at = body.getNumChildren();
   }
-  wanted.forEach(function (item, k) {
-    if (item[0] === 'p') {
-      const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
-      p.setHeading(NORMAL);
-      // The line of a class is bold; the note and "None." are not.
-      p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);
-      at++;
-      return;
+  try {
+    wanted.forEach(function (item, k) {
+      if (item[0] === 'p') {
+        const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
+        added.push(p);
+        p.setHeading(NORMAL);
+        // The line of a class is bold; the note and "None." are not.
+        p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);
+        at++;
+        return;
+      }
+      const table = at >= body.getNumChildren() ? body.appendTable(item[1]) : body.insertTable(at, item[1]);
+      added.push(table);
+      at = body.getChildIndex(table) + 1;
+    });
+  } catch (e) {
+    // What was written of the new summary is taken out again: the summary as it was stays.
+    for (let k = added.length - 1; k >= 0; k--) { try { removeAdhocBodyChild_(body, added[k]); } catch (ignored) { /* the next update finds it */ } }
+    return { state: 'failed', error: 'the summary could not be written (' + e.message + '); the summary as it was is kept', read: read, model: model, foreign: [], rewritten: !!section };
+  }
+  if (place) {
+    try {
+      for (let i = place.end - 1; i > place.start; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    } catch (e) {
+      return { state: 'failed', error: 'the new summary is written, but the old one could not be taken out (' + e.message + ')', read: read, model: model, foreign: [], rewritten: true };
     }
-    const table = at >= body.getNumChildren() ? body.appendTable(item[1]) : body.insertTable(at, item[1]);
-    at = body.getChildIndex(table) + 1;
-  });
+  }
   return { state: section ? 'replaced' : 'created', read: read, model: model, foreign: [], rewritten: true };
+}
+
+/**
+ * Round 5: where the summary of a read (`section` of `content`) is among the
+ * body's children in DocumentApp: { start, end, offset, breaks } -- the heading
+ * at `start`, its content up to `end` (exclusive) -- or { error }. The Docs
+ * API and DocumentApp need not count the body alike before it (Google Docs puts
+ * a paragraph before each section break it inserts): the heading is looked for
+ * near the position the read gives, within the number of section breaks before
+ * it; then every element after it must be of the kind the read shows (paragraph
+ * or table), else nothing is written. Some 15 DocumentApp calls.
+ */
+function plenaryLocateSummaryInBody_(body, content, section) {
+  const ET = DocumentApp.ElementType;
+  const n = body.getNumChildren();
+  const expected = plenaryChildIndexOf_(content, section.start);
+  const breaks = content.slice(1, section.start).filter(function (e) { return e.sectionBreak; }).length;
+  const isHeadingAt = function (i) {
+    if (i < 0 || i >= n) return false;
+    const child = body.getChild(i);
+    if (child.getType() !== ET.PARAGRAPH) return false;
+    const p = child.asParagraph();
+    return isDispositionSummaryHeadingText_(p.getText()) && p.getHeading() !== DocumentApp.ParagraphHeading.NORMAL;
+  };
+  let start = -1;
+  const reach = breaks * 2 + 2;
+  for (let d = 0; d <= reach && start === -1; d++) {
+    if (isHeadingAt(expected + d)) start = expected + d;
+    else if (d && isHeadingAt(expected - d)) start = expected - d;
+  }
+  if (start === -1) {
+    return { error: 'the summary heading is not where the Docs API shows it, nor near it (child ' + expected + ' of ' + n + ' in DocumentApp, ' + breaks + ' section break(s) before it)' };
+  }
+  const kinds = [];
+  for (let i = section.start + 1; i < section.contentEnd; i++) {
+    const e = content[i];
+    if (e.sectionBreak) continue;
+    kinds.push(e.table ? 'table' : e.paragraph ? 'paragraph' : 'other');
+  }
+  const found = kinds.map(function (x, k) {
+    const i = start + 1 + k;
+    if (i >= n) return 'end';
+    const type = body.getChild(i).getType();
+    return type === ET.TABLE ? 'table' : type === ET.PARAGRAPH ? 'paragraph' : String(type).toLowerCase();
+  });
+  if (found.join() !== kinds.join()) {
+    const at = found.findIndex(function (x, k) { return x !== kinds[k]; });
+    return { error: 'the elements after the summary heading are not those the Docs API shows (element ' + (at + 1) + ' of ' + kinds.length + ': ' + found[at] + ' where the read has a ' + kinds[at] + ')' };
+  }
+  return { start: start, end: start + 1 + kinds.length, offset: start - expected, breaks: breaks };
 }
 
 /** Pure: an "#RRGGBB" colour as a Docs API colour. */
@@ -25648,6 +25734,18 @@ const REPORT_UPDATE_REVISIONS_STOP_MS_ = 215000;
 let REPORT_UPDATE_DEFERRED_ = [];
 
 /** A stage left to the next update (the update reports it as incomplete, never as a full success). */
+/**
+ * Round 5: a stage of this update that failed: the update is incomplete
+ * (result.incomplete; Update Report Now says "updated only in part") and says
+ * why. `reason` begins with what happened ("failed: …", "refused: …").
+ */
+function reportUpdateStageFailed_(stage, reason) {
+  const text = stage + ' (' + String(reason || 'failed').slice(0, 300) + ')';
+  Logger.log('Update stage not completed: ' + text + '. The next update tries again.');
+  if (!REPORT_UPDATE_STARTED_AT_) return;
+  if (REPORT_UPDATE_DEFERRED_.indexOf(text) === -1) REPORT_UPDATE_DEFERRED_.push(text);
+}
+
 function deferReportUpdateStage_(stage) {
   if (REPORT_UPDATE_DEFERRED_.indexOf(stage) === -1) REPORT_UPDATE_DEFERRED_.push(stage);
   Logger.log('[PERF] left to the next update: ' + stage + ' (the update has run ' + Math.round(reportUpdateElapsedMs_() / 1000) + ' s).');
@@ -25724,7 +25822,8 @@ function existingTdocScanFromSnapshot_(body) {
   const positions = [];
   snap.tables.forEach(function (t, i) {
     if (t.header[0] !== 'TDoc') return;
-    if (t.header.length > 1) existing.add(t.key);
+    // Round 5: a TDoc table only -- two columns and a number (the summary tables' header begins with "TDoc" as well).
+    if (t.key) existing.add(t.key);
     if (t.number) { index.set(t.number, tables[i]); positions.push(i); }
   });
   const check = function (i) { return tdocNumberOfCellText_(safeCellText_(tables[i], 0, 1)).trim() === snap.tables[i].key; };
@@ -25910,6 +26009,32 @@ function reallocationMapFromSnapshot_(snap) {
     });
   });
   return map;
+}
+
+/**
+ * Round 5, pure: whether a read (buildStatusDocsIndex_()) shows a report with
+ * Status dropdowns: the Status definition is in it, and at least one TDoc's
+ * Status is a dropdown of that definition.
+ */
+function statusDropdownEvidenceOf_(index) {
+  if (!index || !index.definition) return false;
+  return Object.keys(index.tables).some(function (n) { const e = index.tables[n]; return e.kind === 'dropdown' && e.definitionId === index.definition.id; });
+}
+
+/**
+ * Round 5: a report not marked as one with Status dropdowns (STATUS_DROPDOWNS)
+ * that is one all the same -- seen in the read this update made already (only
+ * a report with Goes to Plenary has that read without the mark); its Status
+ * values left as text are then made dropdowns as in a marked report. A report
+ * with text statuses has no Status dropdown: never so. Never throws.
+ */
+function statusDropdownReportByEvidence_() {
+  try {
+    if (!reportRunSnapshot_()) return false;
+    return statusDropdownEvidenceOf_(statusDropdownIndex_());
+  } catch (e) {
+    return false;
+  }
 }
 
 /** Pure: the value cell of the first row of a snapshot table whose label is one of `labels` (lower case), or null. */
@@ -26346,6 +26471,8 @@ function planReportIntegrity_(snapshot, stored, enabled) {
   const section = plenarySummarySectionOfContent_(snapshot.content);
   return {
     tdocTables: tables.length,
+    marked: (stored || {})[STATUS_DROPDOWN_ENABLED_KEY_] === '1',
+    dropdownEvidence: statusDropdownEvidenceOf_(index),
     duplicates: Object.keys(numbers).filter(function (n) { return numbers[n] > 1; }),
     statusDefinition: !!(index && index.definition),
     textStatusesWithOption: missing,
@@ -26366,7 +26493,10 @@ function formatReportIntegrity_(plan, enabled) {
   const list = function (a) { return a.length ? a.slice(0, 12).join(', ') + (a.length > 12 ? ' and ' + (a.length - 12) + ' more' : '') : 'none'; };
   const lines = [
     'TDoc tables: ' + plan.tdocTables + (plan.duplicates.length ? ' -- TDocs with two tables: ' + list(plan.duplicates) : ''),
-    'Status dropdowns missing (text status that has an option): ' + list(plan.textStatusesWithOption) + (plan.textStatusesWithOption.length ? ' -- the next Update Report Now makes them dropdowns.' : ''),
+    'Status dropdowns missing (text status that has an option): ' + list(plan.textStatusesWithOption) + (!plan.textStatusesWithOption.length ? ''
+      : plan.marked || (enabled && plan.dropdownEvidence) ? ' -- the next Update Report Now makes them dropdowns.'
+        : ' -- Advanced and Repair › Convert Status Fields to Dropdowns… makes them dropdowns (an update does not: the report has no Status dropdown it could go by).'),
+    'Marked as a report with Status dropdowns: ' + (plan.marked ? 'yes' : 'no' + (enabled && plan.dropdownEvidence ? ' (the next update marks it: it has Status dropdowns)' : '')),
     'TDoc tables not in the Registration of Documents table (another call, reallocated away, pasted by hand; nothing is removed): ' + list(plan.notRegistered),
     'Revision relationships in TDoc rows: ' + plan.revisions,
     'Disposition Summary headings: ' + plan.summaryHeadings + (plan.summaryHeadings > 1 ? ' -- more than one: remove the extra one(s) by hand.' : ''),

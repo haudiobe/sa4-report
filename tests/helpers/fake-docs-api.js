@@ -32,6 +32,8 @@
  *     newline Google Docs puts before it is not modelled) and styled by
  *     updateSectionStyle (flipPageOrientation only; the first section of
  *     the document is never written). Paragraphs carry namedStyleType.
+ *   - Round 5 (additions only): api.model -- the API's elements and DocumentApp's children may differ
+ *     as they do in Google Docs around section breaks (see `model` below).
  *   - Round 3 (additions only): text runs carry textStyle { bold, link }
  *     (cut where a link begins or ends), table cells their startIndex and
  *     endIndex, tables tableStyle.tableColumnProperties, the tab its
@@ -65,7 +67,11 @@ function makeFakeDocsApi(options) {
   const definitions = {};                    // of the report: id -> { dropdownDefinitionId, dropdownDefinitionProperties }
   const counters = { definition: 0, dropdown: 0, revision: 1 };
   const revisionOf = (n) => 'rev.' + n;
-  const api = { calls: [], fail: { get: null, batchUpdate: null }, definitions: definitions, tabId: REPORT_TAB_ID };
+  const api = { calls: [], fail: { get: null, batchUpdate: null }, definitions: definitions, tabId: REPORT_TAB_ID,
+    // Round 5: where the API's list of body elements and DocumentApp's children differ in Google Docs (both off by default):
+    // paragraphBeforeBreak -- the API shows the empty paragraph Google Docs puts before a section break it inserts,
+    // DocumentApp does not; docOnly(child) -- a child DocumentApp shows and the API does not.
+    model: { paragraphBeforeBreak: false, docOnly: null } };
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const refuse = (message) => { const e = new Error(message); e.fakeDocsApi = true; return e; };
 
@@ -105,8 +111,13 @@ function makeFakeDocsApi(options) {
     const cells = [];
     let i = 1;
     body._children.forEach((child) => {
+      if (api.model.docOnly && api.model.docOnly(child)) return;
       // After T-2026.10.29: a section break before the element.
       if (child._sectionBreakBefore) {
+        if (api.model.paragraphBeforeBreak) {
+          content.push({ startIndex: i, endIndex: i + 1, paragraph: { paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, elements: [{ startIndex: i, endIndex: i + 1, textRun: { content: '\n', textStyle: {} } }] } });
+          i += 1;
+        }
         content.push({ startIndex: i, endIndex: i + 1, sectionBreak: { sectionStyle: { sectionType: 'NEXT_PAGE', flipPageOrientation: !!child._sectionBreakBefore.flip } }, _child: child });
         i += 1;
       }
