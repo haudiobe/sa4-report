@@ -18,7 +18,103 @@ report:
 - a faster update (§ 0);
 - the read-only check *Advanced and Repair › Check Report Integrity*.
 
-## 0. Performance: the six-minute limit (third candidate)
+## 0. Performance: the six-minute limit (fourth candidate)
+
+### What failed
+
+The third candidate passed its first update in the disposable MBS copy. The **second** update,
+with almost nothing changed, still ran past ten minutes:
+
+- 77 s passed between "existing TDoc tables found" and "Added 0 new";
+- the revision step was still running minutes later;
+- the log counted 75 TDocs in the list and 76 TDoc tables in the report.
+
+### Root cause
+
+The third candidate fixed the summary, the plenary data and the status sync. It did not touch the
+code that runs **before and after** them on every update, and that code still read and wrote the
+report one cell at a time through DocumentApp. In a report this size each DocumentApp call costs
+about 0.1 s (77 s for about 10 calls per TDoc across 75 TDocs).
+
+| Step (pre-existing code) | What it did on every update | DocumentApp calls, 75 TDocs, ~150 revision links (fake document) |
+|---|---|---:|
+| **Revisions** (`updateRevisions_`) | For every revision file in the folder, `insertRevisedDocTablesAfter_` scanned the whole document for its table; every Revisions cell was rewritten and its store saved, even when equal | about 85,000 |
+| **E-mail discussions** (`checkRSSFeed_`) | Every TDoc's discussion cell was rewritten, and the deadline row re-set, on every run | thousands |
+| **Existing TDoc detection, structure check, registration links** | Each walked every table and every row | the 77 s before "Added 0 new" |
+| **Deadline extensions, reallocations** | Each walked the whole document for its table | hundreds |
+
+The total for an unchanged second update with the real collectors was **95,154 DocumentApp calls**
+(third candidate, `b5893c8`), which at about 0.1 s per call is well over the six minutes.
+
+### What the fourth candidate does
+
+1. **One Docs API read per update** (`reportRunSnapshot_()`). It reads the whole report once: all
+   tables, cells, links and dropdowns. Every step below decides from it, and uses DocumentApp only
+   for a cell that must change. The read is taken only in an update of a report with Status
+   dropdowns or Goes to Plenary; otherwise the update runs as before.
+2. **Revisions** (`updateRevisionsFast_()`).
+   - The revisions folder is fetched **once** per update.
+   - For each TDoc, the planned cell (text, every link, the local-revision markers) is compared
+     with the cell in the read. An equal cell is never written, and its store is not saved.
+   - A cell whose text is right but whose link is lost is written again.
+   - A stale or failed local listing clears **no** local revision that was imported before.
+3. **E-mail discussions** (`checkRSSFeedFast_()`): the same comparison. The deadline row is left
+   alone when it already reads "No deadline set".
+4. **Existing TDocs, structure check, registration links, deadline extensions, reallocations**
+   are all taken from the same read.
+5. **75 against 76.** The update now logs every TDoc table that is not in the TDoc list
+   (`logTdocTablesNotInList_()`), and *Check Report Integrity* lists them as "not in the TDoc
+   list". **Nothing is deleted.** Typical causes: a TDoc withdrawn from the list, or a table
+   added by hand. The rapporteur decides.
+6. **Time budgets, reported honestly.**
+
+   | Elapsed time | Effect |
+   |---|---|
+   | 150 s | Collectors not started are left to the next update |
+   | 215 s | The revision step stops between two TDocs |
+   | 240 s | Formatting is left to the next update |
+   | 285 s | The summary is left to the next update |
+
+   - A stage left over is logged as `[PERF] left to the next update: …`.
+   - It is returned in `result.incomplete`.
+   - *Update Report Now* then says "The report was updated only in part: …", never plain success.
+   - The dropdowns (Status, Plenary) are always completed.
+7. **Resumable and idempotent.** Every step compares before it writes. The next update completes
+   what an earlier one left, and writes nothing twice (§ Q of the tests: a stopped revision step
+   is completed by the next update, with no duplicate line).
+8. **Logging.** Each update logs:
+   - the time of the read;
+   - the folder fetch and the parsing;
+   - for revisions and for e-mail discussions, how many cells were compared, written and stored;
+   - the stages left over;
+   - a `[PERF] timings summary`.
+
+### Evidence, and what it does not show
+
+**Measured on the fake document, in the tests.** These are counts of DocumentApp calls, not times
+(`tests/goes-to-plenary.test.js` § Q: real collectors, 75 TDocs, about 150 revision links,
+mail on 5 TDocs):
+
+| Unchanged update with the collectors | DocumentApp calls | API writes | Stores written |
+|---|---:|---:|---:|
+| third candidate (`b5893c8`) | 95,154 | — | — |
+| fourth candidate | **620** | **0** | **0** |
+
+The same tests also show:
+
+- one new revision file changes exactly one TDoc table;
+- one new message changes exactly one table;
+- a lost link is restored;
+- a stale agent clears nothing;
+- at 160 s the collectors are deferred and reported as incomplete;
+- a stopped revision step is completed by the next update.
+
+**Not shown by the tests:** real durations. How long one Docs API read of this report takes, and
+how slow each DocumentApp call really is, can only be measured in Google Docs. The timeout is
+**not** claimed to be fixed until two real updates in the disposable copy finish well within the
+six minutes (rollout step 0).
+
+### Earlier: the third candidate (the first-update timeout)
 
 On 2026-11-18, *Update Report Now* in the disposable MBS copy (75 TDocs) ran out of Apps Script's
 six minutes after about 361 s.

@@ -1410,7 +1410,8 @@ function continuousUpdateCore_(context) {
     const agendaTitleOf = makeAgendaTitleResolver_(allTdocs, context);
     let structure = { sectionsMoved: 0, emptyParagraphsRemoved: 0 };
     try {
-      structure = repairReportStructure_(body, agendaTitleOf);
+      // After T-2026.10.29: from the report snapshot; the repair runs only when it shows something to repair (GOES TO PLENARY section).
+      structure = repairReportStructureIfNeeded_(body, agendaTitleOf);
     } catch (e) {
       Logger.log('Structure: the structure of the report could not be checked: ' + e.message);
     }
@@ -1422,6 +1423,13 @@ function continuousUpdateCore_(context) {
     const existingTdocs = new Set();
     let tdocTableIndex;
     perfTimed_('existing-report/document scan (existing TDoc detection)', () => {
+      // After T-2026.10.29: from the report snapshot and one getTables(), when it can be had (GOES TO PLENARY section).
+      const fast = existingTdocScanFromSnapshot_(body);
+      if (fast) {
+        fast.existing.forEach(n => existingTdocs.add(n));
+        tdocTableIndex = fast.index;
+        return;
+      }
       const tables = getTablesCounted_(body, 'continuousUpdate:existingTdocScan');
       tables.forEach(t => {
         if (!isTDocTable_(t)) return;
@@ -1432,6 +1440,8 @@ function continuousUpdateCore_(context) {
     });
 
     Logger.log(`Found ${existingTdocs.size} existing TDOCs`);
+    // After T-2026.10.29: the TDoc tables the list of this run does not have, named (nothing is removed).
+    logTdocTablesNotInList_(existingTdocs, allTdocs);
 
     // Add new TDOCs and update status
     let newTdocsAdded = 0;
@@ -1482,7 +1492,8 @@ function continuousUpdateCore_(context) {
     });
 
     Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);
-    const registrationLinksAdded = refreshRegistrationTableLinks_(body, allTdocs);
+    // After T-2026.10.29: only when the report snapshot shows a row without its link (GOES TO PLENARY section).
+    const registrationLinksAdded = refreshRegistrationTableLinksIfNeeded_(body, allTdocs);
     Logger.log(`Upload completion: ${linksAdded} TDoc link(s) added, ${uploadAbstractAttempts} abstract attempt(s), ${registrationLinksAdded} registration-table link(s) added`);
 
     // Update summary table
@@ -1568,7 +1579,7 @@ function continuousUpdateCore_(context) {
     // Format
     if (structuralChangeThisRun) {
       // After T-2026.10.29: only the tables that changed, and not when the update has run long (GOES TO PLENARY section).
-      if (reportUpdateElapsedMs_() > REPORT_UPDATE_FORMAT_BUDGET_MS_) Logger.log('[PERF] formatting left to the next update: the update has run ' + Math.round(reportUpdateElapsedMs_() / 1000) + ' s.');
+      if (reportUpdateElapsedMs_() > REPORT_UPDATE_FORMAT_BUDGET_MS_) deferReportUpdateStage_('formatting');
       else perfTimed_('formatting (removeRowHeightAndSpacing)', () => formatTablesForUpdate_(context));
     } else {
       Logger.log('[PERF] formatting skipped: no structural change this run (no new/moved/inserted tables)');
@@ -1582,6 +1593,11 @@ function continuousUpdateCore_(context) {
       // After T-2026.10.29: the summary of a report with Goes to Plenary is written there (GOES TO PLENARY section).
       if (finalized && finalized.plenary && finalized.plenary.summary) result.dispositionSummary = finalized.plenary.summary;
       if (unmapped.length) result.statusNotes = unmapped;
+    }
+    // After T-2026.10.29: the stages this update left to the next one: it is not complete (GOES TO PLENARY section).
+    if (reportUpdateDeferred_().length) {
+      result.incomplete = reportUpdateDeferred_();
+      Logger.log('Update NOT complete; left to the next update: ' + result.incomplete.join(', '));
     }
 
     Logger.log('=== COMPLETE ===');
@@ -1603,6 +1619,8 @@ function continuousUpdateCore_(context) {
     // this end-of-run summary -- for a genuine timeout, those per-stage
     // lines (as far as they got) are the only available evidence.
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
+    // After T-2026.10.29: what follows in this execution is no update (GOES TO PLENARY section).
+    endReportUpdate_();
     perfLogSummary_();
   }
 
@@ -4098,6 +4116,8 @@ function isReallocationTable_(table) {
  * Returns: { 'S4-260123': { original: '5.3', new: '8.3', reason: '...' }, ... }
  */
 function getReallocationMap_(context) {
+  // After T-2026.10.29: in an update, from the report snapshot (GOES TO PLENARY section).
+  if (!context && reportRunSnapshot_()) return reallocationMapFromSnapshot_(reportRunSnapshot_());
   const body = getActiveDocumentBodyCounted_('getReallocationMap_', context);
   const map = {};
 
@@ -5688,6 +5708,8 @@ function collectorUpdate_(context) {
 
 // --- Email discussion ---
 function checkRSSFeed_(cfg, context) {
+  // After T-2026.10.29: in an update, from the report snapshot -- compared, written only where it changes (GOES TO PLENARY section).
+  if (!context && reportRunSnapshot_()) return checkRSSFeedFast_(cfg, context, reportRunSnapshot_());
   // Guard against missing config (prevents your toLowerCase crash)
   const listName = String(cfg.LIST_NAME || LIST_NAME_LOCK);
   const listLower = listName.toLowerCase();
@@ -6873,6 +6895,8 @@ function saveLocalRevisionsListing(payload) {
 }
 
 function updateRevisions_(cfg, context) {
+  // After T-2026.10.29: in an update, from the report snapshot -- compared, written only where it changes (GOES TO PLENARY section).
+  if (!context && reportRunSnapshot_()) return updateRevisionsFast_(cfg, context, reportRunSnapshot_());
   // After T-2026.10.27: the listing the local listing agent wrote to Drive, first (LOCAL LISTING AGENT section).
   // Never throws, and without a configured folder it does nothing at all.
   const agent = importAgentListingSafely_(context);
@@ -8281,6 +8305,8 @@ function isDeadlineExtensionTable_(table) {
  * dropping every extension.
  */
 function getDeadlineExtensionMap_(context) {
+  // After T-2026.10.29: in an update, from the report snapshot (GOES TO PLENARY section).
+  if (!context && reportRunSnapshot_()) return deadlineExtensionMapFromSnapshot_(reportRunSnapshot_(), getReportStateStore_(context));
   const body = getReportBody_(context);
   const props = getReportStateStore_(context);
   const map = {};
@@ -16513,6 +16539,8 @@ function refreshUploadedTdocMetadata_(body, tdocNumber, tdocData, index, context
   try {
     const url = tdocListLinkUrl_(tdocData);
     if (!url || !tdocNumber) return done;
+    // After T-2026.10.29: the report snapshot shows its number linked: nothing to complete (GOES TO PLENARY section).
+    if (tdocNumberLinkedInSnapshot_(tdocNumber)) return done;
 
     const table = findTdocTable_(body, tdocNumber, index);
     if (!table || safeCellText_(table, 0, 1).trim() !== tdocNumber) return done;
@@ -24706,9 +24734,15 @@ const REPORT_UPDATE_FORMAT_BUDGET_MS_ = 240000;
 const REPORT_UPDATE_SUMMARY_BUDGET_MS_ = 285000;
 let REPORT_UPDATE_STARTED_AT_ = 0;
 
-/** The start of an update (continuousUpdateCore_()). */
+/** The start of an update (continuousUpdateCore_()): its clock, no stage left over, the report not read yet. */
 function markReportUpdateStart_() {
   REPORT_UPDATE_STARTED_AT_ = Date.now();
+  REPORT_UPDATE_DEFERRED_ = [];
+}
+
+/** The end of an update (the finally of continuousUpdateCore_()): what follows in the execution is no update. */
+function endReportUpdate_() {
+  REPORT_UPDATE_STARTED_AT_ = 0;
 }
 
 /** How long the update of this execution has run, in ms (0 outside an update). */
@@ -24727,7 +24761,7 @@ function syncPlenarySelectionOnUpdate_(body, allTdocs, index) {
   try {
     if (!plenarySelectionEnabled_()) return out;
     resetPlenaryRun_();
-    const snapshot = plenarySnapshot_(currentReportDocument_().getId());
+    const snapshot = reportRunSnapshot_() || plenarySnapshot_(currentReportDocument_().getId());
     if (!snapshot) out.unreadable.push('(the document could not be read through the Docs API)');
     applyPlenarySelectionFromSnapshot_(snapshot, index || buildTdocTableIndex_(body.getTables()), plenaryListFactsOf_(allTdocs), plenaryAgendaItems_(getReportConfig_()), out);
     out.state = 'done';
@@ -25008,6 +25042,7 @@ function finalizePlenarySelection_(mode, saved) {
     if (mode === 'update' || mode === 'setup') {
       if (reportUpdateElapsedMs_() > REPORT_UPDATE_SUMMARY_BUDGET_MS_) {
         result.summary = 'deferred';
+        deferReportUpdateStage_('Disposition Summary');
         Logger.log('Goes to Plenary: the update has run ' + Math.round(reportUpdateElapsedMs_() / 1000) + ' s; the Disposition Summary is left to the next update.');
       } else {
         const reopened = reopenReportDocument_(documentId);
@@ -25570,9 +25605,10 @@ function syncTdocRevisionRelationships_(facts, index) {
   try {
     if (!index || typeof index.forEach !== 'function') return out;
     const predecessors = plenaryPredecessorsOf_(facts || {});
+    const snap = reportRunSnapshot_();
     index.forEach(function (table, number) {
-      const cell = table.getRow(0).getCell(1);
-      const current = cell.getText();
+      const read = snap && snap.byNumber[number] && !snap.duplicates[number] ? snap.byNumber[number] : null;
+      const current = read ? read.header[1] : table.getRow(0).getCell(1).getText();
       const predecessor = predecessors[number] || '';
       if (current === number + (predecessor ? PLENARY_REVISION_OF_ + predecessor + ')' : '')) return;
       if (tdocNumberOfCellText_(current).trim() !== number) return;       // something typed by hand: not this code's
@@ -25610,6 +25646,602 @@ function prepareTdocRevisionsForBuild_() {
   } catch (e) {
     Logger.log('Revision relationships (build): ' + e.message);
   }
+}
+
+// --- ONE read of the report per update, for every stage that would otherwise read it through DocumentApp
+//
+// The second test of the disposable MBS copy (2026-11-18 09:23 Calgary, 75 TDocs, nothing new) did not finish in ten
+// minutes: some 77 s between the existing-TDoc detection and "Added 0 new, updated 0 statuses" (about ten DocumentApp
+// calls per TDoc -- a call costs some 0.1 s in that document), and minutes in the revision collector, which looked up
+// the whole document again for every revision file. Every DocumentApp call is a round trip; in a large document it is
+// slow. So an update reads the report ONCE through the Docs API at its start (reportRunSnapshot_(), the saved document:
+// it has no unsaved change yet) and decides from that read what to do; DocumentApp is used where something is written,
+// and for what this execution added (it is not in the read). Only in an update (markReportUpdateStart_()) of a
+// template report with the Docs API, never in a build (the read would show the document before it was cleared).
+
+const REPORT_UPDATE_COLLECTOR_BUDGET_MS_ = 150000;
+const REPORT_UPDATE_REVISIONS_STOP_MS_ = 215000;
+let REPORT_UPDATE_DEFERRED_ = [];
+
+/** A stage left to the next update (the update reports it as incomplete, never as a full success). */
+function deferReportUpdateStage_(stage) {
+  if (REPORT_UPDATE_DEFERRED_.indexOf(stage) === -1) REPORT_UPDATE_DEFERRED_.push(stage);
+  Logger.log('[PERF] left to the next update: ' + stage + ' (the update has run ' + Math.round(reportUpdateElapsedMs_() / 1000) + ' s).');
+}
+
+/** The stages this update left to the next one. */
+function reportUpdateDeferred_() {
+  return REPORT_UPDATE_DEFERRED_.slice();
+}
+
+/**
+ * The read of the report for this update (the snapshot of plenarySnapshot_(),
+ * with `tables` = plenaryDocsTables_() and `byNumber`: the first table of each
+ * TDoc), read once, at its first use; null outside an update, without the
+ * Docs API, or when it cannot be read -- every stage then works as before.
+ * Kept with the status-dropdown run of this execution.
+ */
+function reportRunSnapshot_() {
+  if (!REPORT_UPDATE_STARTED_AT_) return null;
+  const run = statusDropdownRun_();
+  if (run.reportSnapshot !== undefined) return run.reportSnapshot;
+  run.reportSnapshot = null;
+  try {
+    if (!statusDropdownsAvailable_()) return null;
+    // A report with text statuses is never read through the Docs API (the status dropdowns' rule): only one that has them, or Goes to Plenary.
+    if (PropertiesService.getDocumentProperties().getProperty(STATUS_DROPDOWN_ENABLED_KEY_) !== '1' && !plenarySelectionEnabled_()) return null;
+    const snap = perfTimed_('report snapshot (one Docs API read of the report)', function () { return plenarySnapshot_(currentReportDocument_().getId()); });
+    if (!snap) return null;
+    snap.tables = plenaryDocsTables_(snap.content);
+    snap.byNumber = {};
+    snap.duplicates = {};
+    snap.tables.forEach(function (t) { if (!t.number) return; if (snap.byNumber[t.number]) snap.duplicates[t.number] = true; else snap.byNumber[t.number] = t; });
+    run.reportSnapshot = snap;
+    // The status dropdowns of this execution read the same document: no second read.
+    if (run.index === undefined) run.index = buildStatusDocsIndex_(snap.raw);
+  } catch (e) {
+    Logger.log('Report snapshot: not read (' + e.message + '); the update reads the report through DocumentApp as before.');
+  }
+  return run.reportSnapshot;
+}
+
+/**
+ * The TDoc tables of the report by number (a Map, as buildTdocTableIndex_()),
+ * the update's own index when it has one (it follows the tables the update
+ * inserts and moves); else from the snapshot and ONE getTables() -- the n-th
+ * table of the read is the n-th table of the body (checked at both ends) --
+ * else a scan as before.
+ */
+function runTdocIndex_(body) {
+  const run = statusDropdownRun_();
+  if (run.tdocIndex) return run.tdocIndex;
+  const fast = existingTdocScanFromSnapshot_(body);
+  run.tdocIndex = fast ? fast.index : buildTdocTableIndex_(body.getTables());
+  return run.tdocIndex;
+}
+
+/**
+ * The existing-TDoc detection of an update from the snapshot: { existing:
+ * Set of the texts of the TDoc cells (as the update collects them), index:
+ * Map number -> table }, with one getTables() and a check of the first and
+ * the last TDoc table; null (detect as before) when the body has another
+ * number of tables than the read, or a check fails.
+ */
+function existingTdocScanFromSnapshot_(body) {
+  const snap = reportRunSnapshot_();
+  if (!snap) return null;
+  const tables = body.getTables();
+  if (tables.length !== snap.tables.length) {
+    Logger.log('Report snapshot: ' + tables.length + ' tables in the body, ' + snap.tables.length + ' in the read; the TDoc tables are found as before.');
+    return null;
+  }
+  const existing = new Set();
+  const index = new Map();
+  const positions = [];
+  snap.tables.forEach(function (t, i) {
+    if (t.header[0] !== 'TDoc') return;
+    if (t.header.length > 1) existing.add(t.key);
+    if (t.number) { index.set(t.number, tables[i]); positions.push(i); }
+  });
+  const check = function (i) { return tdocNumberOfCellText_(safeCellText_(tables[i], 0, 1)).trim() === snap.tables[i].key; };
+  if (positions.length && !(check(positions[0]) && check(positions[positions.length - 1]))) {
+    Logger.log('Report snapshot: the tables of the body are not those of the read; the TDoc tables are found as before.');
+    return null;
+  }
+  statusDropdownRun_().tdocIndex = index;
+  return { existing: existing, index: index };
+}
+
+/** The update: the TDoc tables that are not in the TDoc list of this run, and the other way round -- logged, nothing is removed. */
+function logTdocTablesNotInList_(existing, allTdocs) {
+  try {
+    const listed = {};
+    (allTdocs || []).forEach(function (td) { listed[String(td.row[td.tdocCol] || '').trim()] = true; });
+    const extra = [];
+    existing.forEach(function (n) { if (parseExactSA4DocumentId_(n).isValid && !listed[n]) extra.push(n); });
+    if (extra.length) Logger.log('TDoc tables not in this run\'s TDoc list (' + extra.length + '): ' + extra.slice(0, 20).join(', ') + ' -- a TDoc of another call, reallocated away, withdrawn from the list, or a second table; nothing is removed.');
+    return extra;
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Pure: scanReportStructure_() on a Docs API read of the body: { misplaced,
+ * redundant } -- `redundant` the number of empty paragraphs below TDoc tables
+ * that are one too many (of a run of two or more, all but the last).
+ */
+function scanReportStructureOfContent_(content) {
+  const headings = [];
+  let redundant = 0;
+  let run = null;
+  const flush = function () { if (run !== null && run > 1) redundant += run - 1; };
+  let i = 0;
+  (content || []).forEach(function (e) {
+    if (e.sectionBreak) return;
+    if (e.paragraph) {
+      const text = plenaryDocsParagraphText_(e);
+      if (plenaryDocsIsHeading_(e)) headings.push({ index: i, text: text.trim() });
+      else if (run !== null && text === '') { run++; i++; return; }
+    }
+    flush();
+    run = e.table && plenaryDocsTables_([e])[0].header[0] === 'TDoc' ? 0 : null;
+    i++;
+  });
+  flush();
+  let close = null;
+  let attendance = null;
+  headings.forEach(function (h) {
+    if (isClosingHeadingText_(h.text)) close = h;
+    else if (!attendance && h.text === ADHOC_ATTENDANCE_HEADING_) attendance = h;
+  });
+  const boundary = close || attendance;
+  const closeNumber = close ? agendaNumberOfHeadingText_(close.text) : '';
+  const misplaced = !!boundary && headings.some(function (h) {
+    if (h.index <= boundary.index) return false;
+    const number = agendaNumberOfHeadingText_(h.text);
+    return !!number && !(closeNumber && compareAgendaNumbers_(number, closeNumber) >= 0);
+  });
+  return { misplaced: misplaced, redundant: redundant };
+}
+
+/** The update's structure check: from the snapshot; repairReportStructure_() only when it shows something to repair. */
+function repairReportStructureIfNeeded_(body, titleOf) {
+  const snap = reportRunSnapshot_();
+  if (snap) {
+    const scan = scanReportStructureOfContent_(snap.content);
+    if (!scan.misplaced && !scan.redundant) {
+      Logger.log('[PERF] structure check: nothing to repair (from the report snapshot).');
+      return { sectionsMoved: 0, emptyParagraphsRemoved: 0 };
+    }
+  }
+  return repairReportStructure_(body, titleOf);
+}
+
+/** The update's links of the registration table: refreshRegistrationTableLinks_() only when the snapshot shows a row without its link. */
+function refreshRegistrationTableLinksIfNeeded_(body, allTdocs) {
+  const snap = reportRunSnapshot_();
+  if (snap) {
+    const urls = {};
+    (allTdocs || []).forEach(function (td) { const url = tdocListLinkUrl_(td); if (url) urls[String(td.row[td.tdocCol] || '').trim()] = url; });
+    const registration = snap.tables.filter(function (t) { return (t.header.length === 4 || t.header.length === 5) && REGISTRATION_TABLE_HEADER_.every(function (x, k) { return t.header[k] === x; }); })[0];
+    const missing = registration ? registration.rows.slice(1).some(function (row) {
+      const cell = (row.tableCells || [])[0];
+      const number = statusDocsCellText_(cell || {}).trim();
+      return !!number && !!urls[number] && !plenaryDocsLinkOf_(cell);
+    }) : true;
+    if (!missing) return 0;
+  }
+  return refreshRegistrationTableLinks_(body, allTdocs);
+}
+
+/** Whether the snapshot shows the TDoc number of `tdocNumber` linked (then the upload completion has nothing to do). */
+function tdocNumberLinkedInSnapshot_(tdocNumber) {
+  const snap = reportRunSnapshot_();
+  const t = snap ? snap.byNumber[String(tdocNumber || '').trim()] : null;
+  return !!(t && !snap.duplicates[t.number] && t.link);
+}
+
+/**
+ * Pure: the lines of a Docs API cell -- [{ text, links: [{ start, end, url }] }]
+ * (offsets inside the line, end exclusive) -- as DocumentApp's getText() splits
+ * them: the text of all its paragraphs, in order, without the last line end,
+ * cut at every line end (a paragraph per line, or line ends inside one run).
+ */
+function docsCellParagraphs_(cell) {
+  let text = '';
+  const links = [];
+  ((cell && cell.content) || []).filter(function (b) { return b.paragraph; }).forEach(function (b) {
+    (b.paragraph.elements || []).forEach(function (el) {
+      if (!el.textRun) return;
+      const content = String(el.textRun.content || '');
+      const url = el.textRun.textStyle && el.textRun.textStyle.link ? el.textRun.textStyle.link.url : '';
+      if (url && content) links.push({ start: text.length, end: text.length + content.replace(/\n$/, '').length, url: url });
+      text += content;
+    });
+  });
+  if (/\n$/.test(text)) text = text.slice(0, -1);
+  const out = [];
+  let at = 0;
+  text.split('\n').forEach(function (line) {
+    out.push({ text: line, links: links.filter(function (l) { return l.start < at + line.length && l.end > at; }).map(function (l) { return { start: Math.max(0, l.start - at), end: Math.min(line.length, l.end - at), url: l.url }; }) });
+    at += line.length + 1;
+  });
+  return out;
+}
+
+/** Pure: the text of a Docs API cell as DocumentApp's getText() gives it (paragraphs joined by line ends). */
+function docsCellFullText_(cell) {
+  return docsCellParagraphs_(cell).map(function (p) { return p.text; }).join('\n');
+}
+
+/**
+ * The deadline extensions (getDeadlineExtensionMap_()) from the update's read:
+ * the same table, the same parsing; DEADLINE_EXTENSIONS written only when it
+ * changes; without the table, what was kept before.
+ */
+function deadlineExtensionMapFromSnapshot_(snap, props) {
+  const map = {};
+  let found = false;
+  snap.tables.forEach(function (t) {
+    const h = t.header;
+    if (h.length < 2) return;
+    const c0 = h[0].toLowerCase();
+    if (!((c0 === 'tdoc' || c0 === 'tdoc number' || c0 === 'document') && h[1].toLowerCase().indexOf('deadline') !== -1)) return;
+    found = true;
+    t.rows.slice(1).forEach(function (row) {
+      const cells = row.tableCells || [];
+      if (cells.length < 2) return;
+      const parsed = parseSA4DocumentId_(statusDocsCellText_(cells[0]));
+      const tdoc = parsed.isValid ? parsed.raw : '';
+      const raw = statusDocsCellText_(cells[1]).trim();
+      if (!tdoc || !raw) return;
+      const deadline = parseExtendedDeadline_(raw);
+      if (!deadline) { Logger.log('Could not parse extended deadline for ' + tdoc + ': "' + raw + '"'); return; }
+      deadline.extended = true;
+      deadline.raw = raw;
+      map[tdoc] = deadline;
+    });
+  });
+  if (!found) return loadJsonObject_(props.getProperty('DEADLINE_EXTENSIONS'));
+  const json = JSON.stringify(map);
+  if (props.getProperty('DEADLINE_EXTENSIONS') !== json) props.setProperty('DEADLINE_EXTENSIONS', json);
+  return map;
+}
+
+/** The reallocations (getReallocationMap_()) from the update's read: the same table, the same rows. */
+function reallocationMapFromSnapshot_(snap) {
+  const map = {};
+  snap.tables.forEach(function (t) {
+    const h = t.header;
+    if (!(h.length >= 3 && h[0] === 'TDoc' && h[1] === 'Original Agenda' && h[2] === 'New Agenda')) return;
+    t.rows.slice(1).forEach(function (row) {
+      const cells = row.tableCells || [];
+      if (cells.length < 3) return;
+      const tdoc = statusDocsCellText_(cells[0]).trim();
+      const original = statusDocsCellText_(cells[1]).trim();
+      const newAgenda = statusDocsCellText_(cells[2]).trim();
+      const reason = cells.length >= 4 ? statusDocsCellText_(cells[3]).trim() : '';
+      if (tdoc && newAgenda) map[tdoc] = { original: original, new: newAgenda, reason: reason };
+    });
+  });
+  return map;
+}
+
+/** Pure: the value cell of the first row of a snapshot table whose label is one of `labels` (lower case), or null. */
+function snapshotCellOf_(t, labels) {
+  for (let r = 0; r < (t.rows || []).length; r++) {
+    const cells = t.rows[r].tableCells || [];
+    if (cells.length < 2) continue;
+    if (labels.indexOf(statusDocsCellText_(cells[0]).replace(/\s+/g, ' ').trim().toLowerCase()) !== -1) return cells[1];
+  }
+  return null;
+}
+
+// --- The revision collector of an update, from the snapshot
+
+/**
+ * Pure: what renderRevisionsCellContent_() would leave in a Revisions cell
+ * whose text is `current` -- { text, entries } or null when it would not
+ * write (the same rules, without a document): entries of the stored and
+ * local revisions, the lines typed by hand kept; without entries
+ * "No revisions available." / '' by `none`, a cell with text typed by hand
+ * keeping it.
+ */
+function plannedRevisionsCell_(current, orderedRevisions, none) {
+  const entries = orderedRevisions.map(function (item) { return revisionCellEntry_(item); }).filter(function (e) { return e.line; });
+  const text = String(current === null || current === undefined ? '' : current);
+  if (!entries.length) {
+    const lines = text.split('\n');
+    const generated = function (line) { return isLocalRevisionCellLine_(line) || line.indexOf(REVISION_FOLDERS_PREFIX_) === 0 || line.trim() === REVISIONS_NONE_TEXT_; };
+    const typed = lines.filter(function (line) { return line.trim() && !generated(line); }).join('\n').trim();
+    if (typed) {
+      const kept = lines.filter(function (line) { return !isLocalRevisionCellLine_(line) && line.indexOf(REVISION_FOLDERS_PREFIX_) !== 0; }).join('\n').trim();
+      return kept !== text.trim() ? { text: kept, entries: [] } : null;
+    }
+    const hadNone = lines.some(function (line) { return line.trim() === REVISIONS_NONE_TEXT_; });
+    const mode = none || 'write';
+    const wanted = mode === 'write' ? REVISIONS_NONE_TEXT_ : mode === 'remove' ? '' : (hadNone ? REVISIONS_NONE_TEXT_ : '');
+    if (text === wanted || (!text.trim() && !wanted)) return null;
+    return { text: wanted, entries: [] };
+  }
+  const manual = manualRevisionCellLines_(text, entries);
+  const full = entries.map(function (e) { return e.line; }).join('\n') + (manual.length ? '\n' + manual.join('\n') : '');
+  return { text: full, entries: entries, same: text === full };
+}
+
+/** Pure: whether the links of a Revisions cell (its paragraphs, docsCellParagraphs_()) are those of `entries`, line by line. */
+function revisionsCellLinksMatch_(paragraphs, entries) {
+  return entries.every(function (e, i) {
+    const p = paragraphs[i];
+    if (!p) return false;
+    const at = function (offset) { const l = p.links.filter(function (x) { return offset >= x.start && offset < x.end; })[0]; return l ? l.url : ''; };
+    if (e.link && at(0) !== e.link) return false;
+    if (e.marker && e.localLink && at(e.line.length - 1) !== e.localLink) return false;
+    return true;
+  });
+}
+
+/**
+ * updateRevisions_() of an update, from the snapshot: the same sources, the
+ * same store, the same cells -- the revisions folder fetched once and
+ * indexed, the stored revisions read with ONE getProperties() and written
+ * only when they change, every Revisions cell compared with the read (text
+ * and links) and written only when it should say something else, a revision
+ * table inserted only when the report has none (the TDoc numbers are known
+ * from the read and the update's index, no search of the document).
+ * Imported local revisions are never cleared: a listing that is stale or
+ * missing removes nothing (importAgentListing_(), revisionNoneMode_()).
+ * Stops between two TDocs when the update has run too long, and says so
+ * (deferReportUpdateStage_()). Returns what it did.
+ */
+function updateRevisionsFast_(cfg, context, snap) {
+  const out = { compared: 0, written: 0, stored: 0, inserted: 0, deferred: false };
+  if (reportUpdateElapsedMs_() > REPORT_UPDATE_COLLECTOR_BUDGET_MS_) { deferReportUpdateStage_('TDoc revisions'); out.deferred = true; return out; }
+  const body = currentReportDocument_().getBody();
+  const index = runTdocIndex_(body);
+  const byTdoc = {};
+  index.forEach(function (t, n) { byTdoc[n] = t; });
+  let agent = null;
+  try {
+    agent = importAgentListing_(context, { byTdoc: byTdoc });
+    if (agent) Logger.log('Local listing agent: ' + agent.result + ' -- ' + agent.state.message);
+  } catch (e) {
+    Logger.log('Local listing agent: not imported (' + e.message + ')');
+  }
+  const localRead = !agent || agent.result === 'imported' || agent.result === 'unchanged';
+  const baseUrl = String(getMeetingContext_(context).sources.revisionsUrl || '').trim();
+  if (!baseUrl) return out;
+  const url = baseUrl.replace(/\/$/, '') + '/';
+  const resp = safeFetch_(cfg, url, {}, 'Revisions fetch');
+  if (!resp.ok) return out;
+  const anchors = perfTimed_('    revisions: parseAnchors_ (listing parse)', function () { return parseAnchors_(resp.text || ''); });
+  perfCount_('revision-folder anchors found (this run)', anchors.length);
+  const anchorIndex = buildRevisionAnchorIndex_(anchors, url);
+  const props = getReportStateStore_(context);
+  // After the agent's import: what it stored is read with the rest, once.
+  const all = props.getProperties() || {};
+  const revisionMap = loadJsonObject_(all.REVISION_MAP);
+  const revisedInto = revisedIntoSet_(revisionMap);
+  const folders = { local: localRevisionsUrlFor_(context), remote: url };
+  const known = {};
+  snap.tables.forEach(function (t) { if (t.number) known[t.number] = true; });
+  index.forEach(function (t, n) { known[n] = true; });
+  // The TDocs in the order of the report as the update read it, then those this execution added.
+  const order = [];
+  snap.tables.forEach(function (t) { if (t.number && order.indexOf(t.number) === -1) order.push(t.number); });
+  index.forEach(function (t, n) { if (order.indexOf(n) === -1) order.push(n); });
+  const writes = {};
+  const start = Date.now();
+  for (let k = 0; k < order.length; k++) {
+    if (reportUpdateElapsedMs_() > REPORT_UPDATE_REVISIONS_STOP_MS_) {
+      deferReportUpdateStage_('TDoc revisions (' + (order.length - k) + ' of ' + order.length + ' TDocs)');
+      out.deferred = true;
+      break;
+    }
+    const tdoc = order[k];
+    const storeKey = 'REVIS_' + tdoc;
+    const before = all[storeKey] === undefined || all[storeKey] === null ? '' : String(all[storeKey]);
+    const store = loadJsonObject_(before);
+    (anchorIndex.get(tdoc) || []).forEach(function (draft) {
+      const id = normalizeRevisionKey_({ link: draft.url, text: draft.fileName });
+      if (id && !store[id]) store[id] = { text: draft.fileName, link: draft.url };
+    });
+    const deduped = {};
+    Object.keys(store).forEach(function (key) { const item = store[key]; const k2 = normalizeRevisionKey_(item); if (k2 && !deduped[k2]) deduped[k2] = item; });
+    const after = JSON.stringify(store);
+    if (after !== (before || '{}') && !(before === '' && after === '{}')) { writes[storeKey] = after; out.stored++; }
+    const ordered = Object.keys(deduped).map(function (key) { return deduped[key]; }).sort(function (x, y) {
+      const byText = String(x.text || '').localeCompare(String(y.text || ''));
+      return byText !== 0 ? byText : String(x.link || '').localeCompare(String(y.link || ''));
+    });
+    const merged = mergeLocalRevisions_(ordered, loadJsonObject_(all[LOCAL_REVISIONS_KEY_PREFIX_ + tdoc]));
+    const none = revisionNoneMode_(tdoc, revisionMap, revisedInto, localRead);
+    const read = snap.byNumber[tdoc] && !snap.duplicates[tdoc] ? snap.byNumber[tdoc] : null;
+    const readCell = read ? snapshotCellOf_(read, ['revisions', 'revisions:', 'revision']) : null;
+    let needed = true;
+    if (readCell) {
+      out.compared++;
+      const plan = plannedRevisionsCell_(docsCellFullText_(readCell), merged, none);
+      needed = !!plan && !(plan.same && revisionsCellLinksMatch_(docsCellParagraphs_(readCell), plan.entries));
+    }
+    const table = index.get(tdoc);
+    if (needed && table) {
+      const cell = findOrFallbackCell_(table, ['Revisions', 'Revisions:', 'Revision'], 6, 1);
+      renderRevisionsCellContent_(cell, merged, folders, { force: true, none: none });
+      out.written++;
+    }
+    // A revision table only for a revision the report has no table for.
+    const missing = ordered.filter(function (item) { const p = parseSA4DocumentId_(String(item.text || '')); return p.isValid && !known[p.raw]; });
+    if (missing.length && table) {
+      insertRevisedDocTablesAfter_(body, table, missing, cfg);
+      missing.forEach(function (item) { known[parseSA4DocumentId_(String(item.text || '')).raw] = true; });
+      out.inserted += missing.length;
+    }
+    log_(cfg, 'Revisions updated', { tdoc: tdoc, total: ordered.length });
+  }
+  if (Object.keys(writes).length) props.setProperties(writes);
+  perfAddTime_('    revisions: per-TDoc comparison and writes (from the report snapshot)', Date.now() - start);
+  Logger.log('Revisions: ' + out.compared + ' cell(s) compared with the report snapshot, ' + out.written + ' written, ' + out.stored + ' store(s) changed, ' + out.inserted + ' revision table(s) inserted' +
+    (out.deferred ? ', NOT COMPLETED (left to the next update)' : '') + '.');
+  return out;
+}
+
+// --- The e-mail collector of an update, from the snapshot
+
+/**
+ * Pure: the text checkRSSFeed_() writes into an E-mail Discussion cell for
+ * `ordered` messages (one "<author> on <date>" line each, de-duplicated,
+ * with the preview line when it is shown).
+ */
+function plannedDiscussionText_(ordered, tz, showPreview) {
+  const seen = {};
+  let text = '';
+  ordered.forEach(function (m) {
+    const author = m.author || 'Unknown';
+    const dateLocal = formatLocalDate_(m.date, tz);
+    const key = author + '|' + dateLocal;
+    if (seen[key]) return;
+    seen[key] = true;
+    text += author + ' on ' + dateLocal + '\n';
+    if (showPreview && m.preview) text += '  ↳ ' + snippet_(m.preview, 160) + '\n';
+  });
+  return text;
+}
+
+/**
+ * checkRSSFeed_() of an update, from the snapshot: the same messages, store
+ * and cells -- the stores read with ONE getProperties() and written only
+ * when they change; a TDoc whose store did not change and whose cell already
+ * says what it would write is not touched (its commenting deadline is still
+ * brought up to date: it is coloured by the time left); "No e-mail
+ * discussion." only into a cell the read shows empty. Every cell that is
+ * written is written exactly as checkRSSFeed_() writes it. Returns what it did.
+ */
+function checkRSSFeedFast_(cfg, context, snap) {
+  const out = { compared: 0, written: 0, stored: 0, deferred: false };
+  if (reportUpdateElapsedMs_() > REPORT_UPDATE_COLLECTOR_BUDGET_MS_) { deferReportUpdateStage_('e-mail discussions'); out.deferred = true; return out; }
+  const msgs = perfTimed_('    RSS/mail: collectHybridListservMessages_ (fetch, all sources)', function () { return collectHybridListservMessages_(cfg, context); });
+  perfCount_('RSS/mail messages collected (this run)', msgs.length);
+  const tz = String(cfg.TIMEZONE || Session.getScriptTimeZone());
+  const showPreview = String(cfg.SHOW_PREVIEW_SNIPPET || 'false').toLowerCase() === 'true';
+  const props = getReportStateStore_(context);
+  const all = props.getProperties() || {};
+  const body = currentReportDocument_().getBody();
+  const index = runTdocIndex_(body);
+  const extensions = getDeadlineExtensionMap_(context);
+  const msgKeys = msgs.map(function (m) {
+    if (!m || !m.title) return null;
+    const ids = findSA4DocumentIdsInText_(stripReplyPrefixes_(m.title));
+    return { ids: ids, legacy: ids.length ? null : parseEmailSubject_(m.title) };
+  });
+  const order = [];
+  snap.tables.forEach(function (t) { if (t.number && order.indexOf(t.number) === -1) order.push(t.number); });
+  index.forEach(function (t, n) { if (order.indexOf(n) === -1) order.push(n); });
+  const writes = {};
+  const start = Date.now();
+  const startDateMillis = new Date(cfg.EMAIL_START_DATE || '2026-08-21').getTime();
+  order.forEach(function (tdoc) {
+    const parsed = parseExactSA4DocumentId_(tdoc);
+    if (!parsed.isValid) return;
+    const short = computeShortNumber_(tdoc);
+    const shortNumberMatchAllowed = parsed.familyKey === 'main';
+    const storeKey = 'DISCUSS_' + tdoc;
+    const before = all[storeKey] === undefined || all[storeKey] === null ? '' : String(all[storeKey]);
+    const store = loadJsonObject_(before);
+    let added = 0;
+    msgs.forEach(function (m, msgIndex) {
+      const keys = msgKeys[msgIndex];
+      if (!keys) return;
+      if (keys.ids.length > 0) {
+        if (keys.ids.indexOf(tdoc) === -1) return;
+      } else {
+        const p = keys.legacy;
+        if (!shortNumberMatchAllowed || !p || !p.tdocShort) return;
+        if (p.tdocShort !== short && p.tdocFull !== tdoc) return;
+      }
+      const author = (m.author || 'Unknown').trim();
+      const dedupeKey = author + '|' + formatLocalDate_(m.date, tz);
+      let existingId = null;
+      Object.keys(store).some(function (storeId) {
+        const s = store[storeId];
+        if (((s.author || 'Unknown').trim()) + '|' + formatLocalDate_(s.date, tz) === dedupeKey) { existingId = storeId; return true; }
+        return false;
+      });
+      if (!existingId) {
+        const id = (m.messageId || m.link || dedupeKey).trim();
+        if (id) { store[id] = m; added++; }
+      } else if (!store[existingId].preview && m.preview) {
+        store[existingId] = m;
+      }
+    });
+    const after = JSON.stringify(store);
+    const changed = after !== (before || '{}') && !(before === '' && after === '{}');
+    if (changed) { writes[storeKey] = after; out.stored++; }
+    const ordered = Object.keys(store).map(function (k) { return store[k]; })
+      .filter(function (m) { return parseDateToMillis_(m.date) >= startDateMillis; })
+      .sort(function (a, b) { return parseDateToMillis_(a.date) - parseDateToMillis_(b.date); });
+    const read = snap.byNumber[tdoc] && !snap.duplicates[tdoc] ? snap.byNumber[tdoc] : null;
+    const readCell = read ? snapshotCellOf_(read, ['e-mail discussion', 'e-mail discussion:', 'email discussion']) : null;
+    const t = index.get(tdoc);
+    if (!t) return;
+    if (!ordered.length) {
+      if (readCell) { out.compared++; if (docsCellFullText_(readCell).trim()) return; }
+      const cell = findOrFallbackCell_(t, ['E-mail discussion', 'E-Mail discussion', 'Email discussion'], 5, 1);
+      if (!cell.getText().trim()) { cell.setText('No e-mail discussion.'); out.written++; }
+      return;
+    }
+    let threadDeadline = null;
+    for (let i = 0; i < ordered.length; i++) if (ordered[i].deadline) { threadDeadline = ordered[i].deadline; break; }
+    if (extensions[tdoc]) {
+      threadDeadline = extensions[tdoc];
+      log_(cfg, 'Deadline extension applied', { tdoc: tdoc, deadline: threadDeadline.dateStr });
+    }
+    // The commenting deadline: its text tells the time left, so it is written again -- unless there is no deadline and the row already says so.
+    const deadlineCell = read ? snapshotCellOf_(read, ['e-mail deadline', 'e-mail deadline:']) : null;
+    const oldLabel = read ? !!snapshotCellOf_(read, ['commenting deadline', 'commenting deadline:']) : false;
+    const deadlineRowNeeded = !read || !!threadDeadline || oldLabel || !deadlineCell || docsCellFullText_(deadlineCell) !== 'No deadline set';
+    if (readCell && !changed) {
+      out.compared++;
+      if (docsCellFullText_(readCell) === plannedDiscussionText_(ordered, tz, showPreview)) {
+        if (deadlineRowNeeded) updateCommentingDeadlineRow_(t, threadDeadline, tz);
+        return;
+      }
+    }
+    // Written exactly as checkRSSFeed_() writes it.
+    const cell = findOrFallbackCell_(t, ['E-mail discussion', 'E-Mail discussion', 'Email discussion'], 5, 1);
+    cell.setText('');
+    const te = cell.editAsText();
+    updateCommentingDeadlineRow_(t, threadDeadline, tz);
+    const firstAuthor = String((ordered[0] && ordered[0].author) || '').trim();
+    const deadlineMillis = (threadDeadline && threadDeadline.dateStr) ? new Date(threadDeadline.dateStr).getTime() : NaN;
+    const seen = new Set();
+    const segments = [];
+    ordered.forEach(function (m) {
+      const author = m.author || 'Unknown';
+      const dateLocal = formatLocalDate_(m.date, tz);
+      const dedupeKey = author + '|' + dateLocal;
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      const line = author + ' on ' + dateLocal + '\n';
+      const s = te.getText().length;
+      te.appendText(line);
+      if (m.link) { try { te.setLinkUrl(s, s + author.length - 1, m.link); } catch (e) { } }
+      if (showPreview && m.preview) te.appendText('  ↳ ' + snippet_(m.preview, 160) + '\n');
+      segments.push({ start: s, end: te.getText().length - 1, late: isLateResponse_(m, deadlineMillis, author, firstAuthor) });
+    });
+    if (te.getText().length > 0) te.setFontSize(0, te.getText().length - 1, 8);
+    segments.forEach(function (seg) {
+      if (seg.end < seg.start) return;
+      try { te.setForegroundColor(seg.start, seg.end, seg.late ? '#808080' : '#000000'); } catch (e) { }
+    });
+    out.written++;
+    log_(cfg, 'Email discussion updated', { tdoc: tdoc, added: added, total: ordered.length });
+  });
+  if (Object.keys(writes).length) props.setProperties(writes);
+  perfAddTime_('    RSS/mail: per-TDoc comparison and writes (from the report snapshot)', Date.now() - start);
+  Logger.log('E-mail discussions: ' + out.compared + ' cell(s) compared with the report snapshot, ' + out.written + ' written, ' + out.stored + ' store(s) changed.');
+  return out;
 }
 
 // --- The status sync of an update: a dropdown it leaves as it is costs no DocumentApp call
@@ -25668,9 +26300,23 @@ function formatTablesForUpdate_(context) {
   const props = PropertiesService.getDocumentProperties();
   let known = null;
   try { known = JSON.parse(props.getProperty(FORMATTED_TABLES_KEY_) || 'null'); } catch (e) { known = null; }
-  const tables = currentReportDocument_().getBody().getTables();
+  const body = currentReportDocument_().getBody();
+  const snap = reportRunSnapshot_();
   const signature = {};
   const changed = [];
+  if (snap) {
+    // The TDoc tables from the update's index (one getNumRows() each), the registration table at its place in the read.
+    runTdocIndex_(body).forEach(function (t, n) { const rows = t.getNumRows(); signature['T:' + n] = rows; if (!known || known['T:' + n] !== rows) changed.push(t); });
+    const all = body.getTables();
+    snap.tables.forEach(function (t, i) {
+      const h = t.header;
+      if (!((h.length === 4 || h.length === 5) && REGISTRATION_TABLE_HEADER_.every(function (x, k) { return h[k] === x; })) || !all[i] || !registrationTableColumns_(all[i])) return;
+      const rows = all[i].getNumRows();
+      signature['R:' + i] = rows;
+      if (!known || known['R:' + i] !== rows) changed.push(all[i]);
+    });
+  }
+  const tables = snap ? [] : body.getTables();
   tables.forEach(function (t, i) {
     const rows = t.getNumRows();
     if (!rows) return;
@@ -25726,7 +26372,8 @@ function planReportIntegrity_(snapshot, stored, enabled) {
     revisions: tables.filter(function (t) { return /\(revision of /.test(t.header[1] || ''); }).length,
     summaryHeadings: headings,
     sectionBreaks: breaks,
-    summaryForeign: section ? section.foreign : []
+    summaryForeign: section ? section.foreign : [],
+    notRegistered: (function () { const scope = plenaryScopeOfTables_(plenaryDocsTables_(snapshot.content)); return scope.ok ? Object.keys(numbers).filter(function (n) { return !scope.numbers[n]; }) : []; })()
   };
 }
 
@@ -25736,6 +26383,7 @@ function formatReportIntegrity_(plan, enabled) {
   const lines = [
     'TDoc tables: ' + plan.tdocTables + (plan.duplicates.length ? ' -- TDocs with two tables: ' + list(plan.duplicates) : ''),
     'Status dropdowns missing (text status that has an option): ' + list(plan.textStatusesWithOption) + (plan.textStatusesWithOption.length ? ' -- the next Update Report Now makes them dropdowns.' : ''),
+    'TDoc tables not in the Registration of Documents table (another call, reallocated away, pasted by hand; nothing is removed): ' + list(plan.notRegistered),
     'Revision relationships in TDoc rows: ' + plan.revisions,
     'Disposition Summary headings: ' + plan.summaryHeadings + (plan.summaryHeadings > 1 ? ' -- more than one: remove the extra one(s) by hand.' : ''),
     'Section breaks: ' + plan.sectionBreaks.length + (plan.sectionBreaks.length ? ' (' + plan.sectionBreaks.map(function (f) { return f ? 'landscape' : 'portrait'; }).join(', ') + ')' : ''),
