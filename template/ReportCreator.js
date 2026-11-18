@@ -1235,6 +1235,13 @@ function describeUpdateReportNowFailure_(result) {
       failures.map(function (f) { return '• ' + f.step + ': ' + f.error; }).join('\n') +
       '\nNew TDocs and statuses were updated. Run Update Report Now again later.';
   }
+  // After T-2026.10.29: an update that left stages to the next one is not complete, and says which.
+  const incomplete = result.incomplete || [];
+  if (incomplete.length) {
+    return 'The report was updated only in part: the update ran out of time, and left these to the next update:\n' +
+      incomplete.map(function (stage) { return '• ' + stage; }).join('\n') +
+      '\nNothing is lost and nothing was written twice. Run Update Report Now again to complete it.';
+  }
   return '';
 }
 

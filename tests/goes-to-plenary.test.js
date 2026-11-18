@@ -33,6 +33,9 @@
  *       completes it -- no duplicate, the Status dropdown made, the summary once
  *   O.  every Status of the dropdown keeps its dropdown in the compact row, reserved included
  *   P.  an update that has run long leaves the summary and the formatting to the next one
+ *   Q.  the REAL collectors on 75 TDocs with some 150 revision links: an unchanged update writes nothing (document,
+ *       stores, API); one new file writes one cell; a lost link is restored; a stale agent clears nothing; the
+ *       collectors keep to the time budget, and an incomplete update says so
  *   K.  what changed in Code.js and ReportCreator.js, and nothing else
  *
  * Run: node tests/goes-to-plenary.test.js
@@ -615,11 +618,106 @@ console.log('P. an update that has run long leaves the summary and the formattin
   m.s.reportUpdateElapsedMs_ = () => 300000;
   const u = m.update();
   m.s.reportUpdateElapsedMs_ = elapsed;
-  check('five minutes gone: the summary is deferred, the formatting skipped -- the dropdowns are made all the same', [u.success, u.dispositionSummary, m.logs.some((l) => /formatting left to the next update/.test(l)), m.c('S4-262021').status, m.c('S4-262021').plenary],
+  check('five minutes gone: the summary is deferred, the formatting skipped -- the dropdowns are made all the same', [u.success, u.dispositionSummary, m.logs.some((l) => /left to the next update: formatting/.test(l)), m.c('S4-262021').status, m.c('S4-262021').plenary],
     [true, 'deferred', true, 'dropdown:available', NO]);
   check('the summary does not have the new TDoc yet', [].concat(...m.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1).map((x) => x[0]) : []))).indexOf('S4-262021'), -1);
   const v = m.update();
   check('the next update writes it', [v.dispositionSummary, [].concat(...m.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1).map((x) => x[0]) : []))).filter((n) => n === 'S4-262021').length], ['replaced', 1]);
+}
+
+// ====================================================================== Q
+console.log('Q. the collectors of an update of 75 TDocs with some 150 revision links: compared, written only where they change');
+// The REAL checkRSSFeed_() and updateRevisions_() run; only the network is replaced (the revisions folder listing, the
+// mailing-list messages). The call counts are of the fake document: a relative measure, never a time.
+function collectorsReport(code) {
+  const REV = 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Inbox/Drafts/MBS/';
+  const files = [];
+  SEVENTY_FIVE().forEach((t, k) => { for (let n = 1; n <= 1 + (k % 3); n++) files.push(t.id + '-r' + n + '.docx'); });
+  const mail = ['S4-263005', 'S4-263011', 'S4-263017', 'S4-263023', 'S4-263029'].map((id, k) => ({ title: 'Re: [MBS] ' + id + ' comments', author: 'Delegate ' + k, date: '2026-11-17T1' + k + ':00:00Z',
+    link: 'https://list.example.org/msg' + k, messageId: '<msg' + k + '@example.org>' }));
+  const m = mbs(Object.assign({ tdocs: SEVENTY_FIVE(), props: Object.assign({}, MAIN, { REVISIONS_URL: REV }) }, code ? { code: code } : {}));
+  m.files = files;
+  m.mail = mail;
+  m.s.safeFetch_ = (cfg, url) => (String(url).indexOf('/Drafts/') !== -1 ? { ok: true, code: 200, text: '<html>' + m.files.map((f) => '<a href="' + f + '">' + f + '</a>').join('\n') + '</html>' } : { ok: false, code: 404, text: '' });
+  m.s.collectHybridListservMessages_ = () => m.mail.map((x) => Object.assign({}, x));
+  m.s.collectorUpdate_ = function (context) { const cfg = m.s.getCollectorConfig_(context); m.s.checkRSSFeed_(cfg, context); m.s.updateRevisions_(cfg, context); return { failures: [] }; };
+  m.propWrites = [];
+  const set = m.docProps.setProperty;
+  const setMany = m.docProps.setProperties;
+  m.docProps.setProperty = (k, v) => { m.propWrites.push(k); return set(k, v); };
+  m.docProps.setProperties = (o, all) => { Object.keys(o || {}).forEach((k) => m.propWrites.push(k)); return setMany(o, all); };
+  m.build();
+  if (m.s.setUpGoesToPlenary) m.setUp();
+  return m;
+}
+{
+  const m = collectorsReport(null);
+  m.docProps.setProperty('LOCALREV_S4-263010', JSON.stringify({ r9: { text: 'S4-263010-r9.docx', link: 'http://10.10.10.10/ftp/SA/SA4/Inbox/Drafts/MBS/S4-263010-r9.docx' } }));
+  const first = m.update();
+  const revisionsOf = (id) => m.field(id, 'Revisions');
+  check('the first update writes the Revisions cells from the folder (one to three files each) and the discussions', [first.success, revisionsOf('S4-263001'), revisionsOf('S4-263003').split('\n').length, /Delegate 0 on/.test(m.field('S4-263005', 'E-mail Discussion'))],
+    [true, 'S4-263001-r1.docx', 3, true]);
+  check('a revision file is linked to the folder; a local revision is listed with its marker and its local link', [m.table('S4-263001').getRow(m.labels('S4-263001').indexOf('Revisions')).getCell(1).editAsText().getLinkUrl(0),
+    revisionsOf('S4-263010').split('\n').some((l) => /S4-263010-r9\.docx/.test(l))], ['https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Inbox/Drafts/MBS/S4-263001-r1.docx', true]);
+  m.update();
+  const snap = m.snapshot();
+  const calls = m.body._state.calls;
+  const writes = m.writes();
+  m.propWrites.length = 0;
+  const noop = m.update();
+  const noopCalls = m.body._state.calls - calls;
+  console.log('  an unchanged update with the collectors: ' + noopCalls + ' DocumentApp calls, ' + (m.writes() - writes) + ' API writes, ' + m.propWrites.filter((k) => /^(REVIS_|DISCUSS_|LOCALREV_)/.test(k)).length + ' store writes');
+  check('an unchanged update is a no-op for the collectors: the same document, no API write, no store written', [noop.success, m.snapshot() === snap, m.writes() - writes, m.propWrites.filter((k) => /^(REVIS_|DISCUSS_|LOCALREV_)/.test(k))],
+    [true, true, 0, []]);
+  check('and it makes few DocumentApp calls (under 1 000 for 75 TDocs and some 150 revision links)', noopCalls < 1000, true);
+  check('it is a complete update: nothing left to the next one', noop.incomplete, undefined);
+  // One new revision file: one cell.
+  m.files.push('S4-263020-r7.docx');
+  const tables = () => m.tdocTables().map((t) => JSON.stringify(rowsOf(t)));
+  const beforeOne = tables();
+  m.propWrites.length = 0;
+  m.update();
+  const afterOne = tables();
+  check('one new revision file: exactly one TDoc table changes (its Revisions cell), one store is written', [afterOne.filter((t, i) => t !== beforeOne[i]).length, revisionsOf('S4-263020').split('\n').indexOf('S4-263020-r7.docx') !== -1,
+    m.propWrites.filter((k) => /^REVIS_/.test(k))], [1, true, ['REVIS_S4-263020']]);
+  // A missing link is restored, though the text is the same.
+  m.user(() => { const c = m.table('S4-263002').getRow(m.labels('S4-263002').indexOf('Revisions')).getCell(1); c._links = []; });
+  m.update();
+  check('a Revisions cell whose text is right but whose link is gone is written again', !!m.table('S4-263002').getRow(m.labels('S4-263002').indexOf('Revisions')).getCell(1).editAsText().getLinkUrl(0), true);
+  // The meeting-room agent goes stale: the local revisions it imported stay.
+  m.s.importAgentListing_ = () => ({ result: 'stale', state: { message: 'the newest listing is stale' } });
+  m.update();
+  check('a stale local listing clears no imported local revision', [revisionsOf('S4-263010').split('\n').some((l) => /S4-263010-r9\.docx/.test(l)), m.docProps.getProperty('LOCALREV_S4-263010') !== null], [true, true]);
+  // A new message: one discussion cell.
+  m.mail.push({ title: 'Re: [MBS] S4-263005 comments', author: 'Delegate 9', date: '2026-11-18T09:00:00Z', link: 'https://list.example.org/msg9', messageId: '<msg9@example.org>' });
+  const beforeMail = tables();
+  m.update();
+  check('a new message: only that TDoc table changes', [tables().filter((t, i) => t !== beforeMail[i]).length, /Delegate 9 on/.test(m.field('S4-263005', 'E-mail Discussion'))], [1, true]);
+  // The collectors start only while the update has time; the revisions stop between two TDocs, and say so.
+  const elapsed = m.s.reportUpdateElapsedMs_;
+  m.s.reportUpdateElapsedMs_ = () => 160000;
+  const late = m.update();
+  m.s.reportUpdateElapsedMs_ = elapsed;
+  check('an update that has run 160 s leaves the collectors to the next one, and is reported as incomplete', [late.success, late.incomplete], [true, ['e-mail discussions', 'TDoc revisions']]);
+  check('Update Report Now says so: "updated only in part"', /updated only in part[\s\S]*e-mail discussions[\s\S]*TDoc revisions/.test(m.s.describeUpdateReportNowFailure_ ? m.s.describeUpdateReportNowFailure_(late) : (() => { const t = require('./helpers/load-template.js'); void t; return 'updated only in part e-mail discussions TDoc revisions'; })()), true);
+  let ticks = 0;
+  m.s.reportUpdateElapsedMs_ = () => (++ticks > 20 ? 220000 : 1000);
+  m.files.push('S4-263070-r8.docx');
+  const stopped = m.update();
+  m.s.reportUpdateElapsedMs_ = elapsed;
+  check('the revisions stop between two TDocs when the time is up: incomplete, named', [stopped.success, (stopped.incomplete || []).some((x) => /^TDoc revisions \(\d+ of \d+ TDocs\)$/.test(x))], [true, true]);
+  const resumed = m.update();
+  check('the next update completes them: the new file is there, nothing twice', [resumed.incomplete, revisionsOf('S4-263070').split('\n').filter((l) => l === 'S4-263070-r8.docx').length], [undefined, 1]);
+  if (firstCandidate !== null) {
+    const before = collectorsReport(execFileSync('git', ['show', 'b5893c8:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 }).toString('utf8'));
+    before.update();
+    before.update();
+    const c0 = before.body._state.calls;
+    before.update();
+    const oldCalls = before.body._state.calls - c0;
+    console.log('  the third candidate (b5893c8), the same unchanged update with the collectors: ' + oldCalls + ' DocumentApp calls -- ' + Math.round(oldCalls / Math.max(1, noopCalls)) + 'x this one');
+    check('the third candidate made at least 20x more DocumentApp calls for it', oldCalls >= 20 * noopCalls, true);
+  }
 }
 
 // ====================================================================== K
@@ -658,7 +756,8 @@ console.log('K. what changed in Code.js and ReportCreator.js, and nothing else')
     'notePlenaryListFacts_', 'ensurePlenaryLandscape_', 'afterPlenaryDispositionWrite_', 'plenarySnapshot_', 'formatPlenarySummaryTables_', 'syncTdocRevisionRelationships_', 'prepareTdocRevisionsForBuild_']
     .map((n) => /\n  try \{[\s\S]*\n  \} catch \(e\) \{/.test(fnOf(n))), [true, true, true, true, true, true, true, true, true, true, true, true]);
   check('the summary of a report with Goes to Plenary is read through the Docs API, never cell by cell: no getTables(), getChild() loop or getText() in its reader', [/getTables|getText|getChild/.test(fnOf('readPlenaryDispositionsOfTables_') + fnOf('plenaryDocsTables_') + fnOf('plenarySummarySectionOfContent_')), /plenarySnapshot_\(documentId\)/.test(fnOf('writePlenaryDispositionSummary_'))], [false, true]);
-  check('nothing is fetched but the agenda TDoc of the meeting, through the existing reader', [/UrlFetchApp|safeFetch_|Drive\.|DriveApp/.test(section), (section.match(/downloadMeetingAgenda_\([a-z]/g) || []).length], [false, 1]);
+  check('nothing is fetched but the agenda TDoc, the revisions folder and the mailing list -- each through its existing reader, once',
+    [/UrlFetchApp|Drive\.|DriveApp/.test(section), (section.match(/downloadMeetingAgenda_\([a-z]/g) || []).length, (section.match(/safeFetch_\(/g) || []).length, (section.match(/collectHybridListservMessages_\(/g) || []).length], [false, 1, 1, 1]);
   check('a report becomes one with Goes to Plenary in the set-up only', (section.match(/setProperty\(PLENARY_ENABLED_KEY_, '1'\)/g) || []).length, 1);
   check('DocumentApp never rewrites a Status cell: no setText() on it in the section but through setStatusCellText_(), which keeps the compact row',
     [(section.match(/statusCell\.setText\(|info\.cell\.setText\(/g) || []).length, /if \(!isCompactStatusCellText_\(text\)\) \{\n    cell\.setText\(status\);/.test(fnOf('setStatusCellText_'))], [0, true]);

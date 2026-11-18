@@ -225,7 +225,8 @@ console.log('7. the change itself');
   check('Code.js: the new functions', names(CODE).filter((n) => names(view.code).indexOf(n) === -1).sort(), SESSION_TIMES_NEW_FUNCTIONS.slice().sort());
   check('Code.js: the changed functions', names(view.code).filter((n) => source(CODE, n) !== source(view.code, n)).sort(), SESSION_TIMES_CHANGED_FUNCTIONS.slice().sort());
   check('ReportCreator.js: the new and the changed functions', [names(CREATOR).filter((n) => names(creatorView.code).indexOf(n) === -1), names(creatorView.code).filter((n) => source(CREATOR, n) !== source(creatorView.code, n))],
-    [SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS]);
+    // After T-2026.10.29: and Goes to Plenary's change of the Update Report Now message (tests/goes-to-plenary.test.js).
+    [SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS.concat(['describeUpdateReportNowFailure_'])]);
   check('untouched: the TDoc download and grouping, the update, the build (only its last step, finishAdhocOpeningRebuild_(), changed), the Session column, the agenda filter', ['downloadAndGroupTdocs_', 'continuousUpdateCore_', 'buildSkeletonWithTdocTables', 'insertNewTdoc_',
     'makeAdhocTdocSessionResolver_', 'adhocSessionsEnabled_', 'isAdhocMeetingForSessions_', 'agendaSelectorMatches_', 'getMeetingContext_', 'refreshAdhocOpeningSection_'].filter((n) => source(CODE, n) !== source(view.code, n)), []);
 }
