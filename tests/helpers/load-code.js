@@ -37,6 +37,12 @@ function makePropertyStore(initial) {
     setProperty: (key, value) => { store[key] = value; },
     deleteProperty: (key) => { delete store[key]; },
     getKeys: () => Object.keys(store),
+    // After T-2026.10.29 (additions only): all properties in one read, and several written at once, as Apps Script has them.
+    getProperties: () => Object.assign({}, store),
+    setProperties: (values, deleteAllOthers) => {
+      if (deleteAllOthers) Object.keys(store).forEach((key) => { delete store[key]; });
+      Object.keys(values || {}).forEach((key) => { store[key] = String(values[key]); });
+    },
     _store: store
   };
 }

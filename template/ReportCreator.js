@@ -761,7 +761,9 @@ function buildTemplateReportMenu_(ui) {
     .addSeparator()
     .addItem('Report Status Summary', 'analyzeReportStatus')
     // T-2026.10.8: an existing report gets its status dropdowns without a rebuild.
-    .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns'));
+    .addItem('Convert Status Fields to Dropdowns…', 'convertStatusFieldsToDropdowns')
+    // After T-2026.10.29: an existing report gets the Goes to Plenary rows and the four disposition tables.
+    .addItem('Set Up Goes to Plenary…', 'setUpGoesToPlenary'));
 
   menu.addItem('💬 Prepare Discussion E-mails…', 'prepareTdocDiscussionEmails');
 
@@ -796,7 +798,9 @@ function buildTemplateReportMenu_(ui) {
     .addItem('Format Report', 'removeRowHeightAndSpacing')
     .addItem('Remove Duplicate E-mail Entries…', 'removeDuplicateEmailEntries')
     .addItem('Remove Wrong E-mail Matches…', 'cleanUpWrongEmailDiscussions')
-    .addItem('Clear Collection Caches…', 'clearAllCaches'));
+    .addItem('Clear Collection Caches…', 'clearAllCaches')
+    // After T-2026.10.29: what the report holds, read once and nothing changed.
+    .addItem('Check Report Integrity', 'checkReportIntegrity'));
 
   addTemplateReportMenuTail_(menu);
   menu.addToUi();
@@ -1230,6 +1234,13 @@ function describeUpdateReportNowFailure_(result) {
     return 'The report update finished, but ' + (failures.length === 1 ? 'one part' : failures.length + ' parts') + ' failed:\n' +
       failures.map(function (f) { return '• ' + f.step + ': ' + f.error; }).join('\n') +
       '\nNew TDocs and statuses were updated. Run Update Report Now again later.';
+  }
+  // After T-2026.10.29: an update that left stages to the next one is not complete, and says which.
+  const incomplete = result.incomplete || [];
+  if (incomplete.length) {
+    return 'The report was updated only in part. These parts were not completed (out of time, or a step failed) and are left to the next update:\n' +
+      incomplete.map(function (stage) { return '• ' + stage; }).join('\n') +
+      '\nNothing is lost and nothing was written twice. Run Update Report Now again to complete it.';
   }
   return '';
 }

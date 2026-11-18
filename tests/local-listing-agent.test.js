@@ -251,7 +251,8 @@ console.log('8b. all five groups; new revisions during the meeting; the schedule
   const later = r.importNow();
   check('two scans later in the meeting: the new revisions appear, the earlier one stays, nothing doubled', [later.state.added, r.lines(0), r.lines(1), r.lines(2)],
     [2, [A + '_r1.docx [local only]'], [B + '_r1.docx [local only]'], [C + 'r02.docx [local only]']]);
-  const code = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // After T-2026.10.29: read without Goes to Plenary, whose update reads the report once first (tests/goes-to-plenary.test.js).
+  const code = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
   const bodyOf = (name) => { const at = code.indexOf('\nfunction ' + name + '('); return code.slice(at, code.indexOf('\n}\n', at)); };
   check('the scheduled update reaches it: collectorUpdate_() runs updateRevisions_(), whose first step is the agent import (source)',
     [/updateRevisions_\(/.test(bodyOf('collectorUpdate_')), /^\nfunction updateRevisions_\(cfg, context\) \{\n(?:  \/\/[^\n]*\n)*  (?:const agent = )?importAgentListingSafely_\(context\);/.test(bodyOf('updateRevisions_'))], [true, true]);
@@ -281,7 +282,8 @@ console.log('9. what changed in Code.js (source)');
   // (tests/local-listing-overnight-pause.test.js, tests/revisions-cell-cleanup.test.js).
   const full = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const later = require('./helpers/before-structure-fix.js');
-  const now = later.codeWithoutRevisionsCellCleanup(later.codeWithoutOvernightPause(full).code).code;
+  // After T-2026.10.29: and without Goes to Plenary (tests/goes-to-plenary.test.js).
+  const now = later.codeWithoutRevisionsCellCleanup(later.codeWithoutOvernightPause(later.codeWithoutGoesToPlenary(full).code).code).code;
   const view = codeWithoutLocalListingAgent(full);
   check('the take-out finds every change exactly once', view.problems, []);
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));

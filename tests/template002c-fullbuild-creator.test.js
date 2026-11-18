@@ -48,7 +48,8 @@ const PROPS_86172 = { MEETING_TYPE: 'adhoc', MEETING_NAME: 'SA4-e (AH) MBS SWG p
   FTP_BASE: FTP_MBS, TDOC_LIST_URL: 'https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId=86172',
   AGENDA_CSV_URL: FTP_MBS.replace('Docs/', 'Agenda/agenda.csv') };
 
-const CODE = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+// After T-2026.10.29: the source checks of this file read Code.js without Goes to Plenary (tests/goes-to-plenary.test.js pins that layer).
+const CODE = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
 const CODE_ONLY = CODE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const CREATOR = fs.readFileSync(REPORT_CREATOR_PATH, 'utf8').replace(/\r/g, '');
 

@@ -256,7 +256,8 @@ function setupReport(messages) {
 }
 
 const cellText = (t, r, k) => t.getRow(r).getCell(k).getText();
-const tablesFor = (env, id) => env.body.getTables().filter((t) => env.s.isTDocTable_(t) && cellText(t, 0, 1).trim() === id);
+// After T-2026.10.29: a TDoc row can read "S4aP260074 (revision of …)"; its number is the part before.
+const tablesFor = (env, id) => env.body.getTables().filter((t) => env.s.isTDocTable_(t) && cellText(t, 0, 1).replace(/\s*\(revision of [^)]*\)\s*$/, '').trim() === id);
 function rowValue(t, label) { for (let r = 0; r < t.getNumRows(); r++) if (cellText(t, r, 0) === label) return cellText(t, r, 1); return null; }
 const stored = (env, id) => { const v = env.docProps._store['DISCUSS_' + id]; return v === undefined ? null : Object.keys(JSON.parse(v)).length; };
 function sectionOf(env, el) {

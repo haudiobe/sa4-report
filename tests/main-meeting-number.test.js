@@ -253,6 +253,8 @@ console.log('G. a failed download, and a failure after it');
     /in part/.test(run.thrown || ''), run.changed, run.touched], [true, false, false, false]);
   const later = reportWith(MAIN, { drive: makeFakeDrive() });
   later.s.buildTdocTableIndex_ = () => { throw new Error('synthetic failure while inserting'); };  // after the download, before the TDocs are written
+  // After T-2026.10.29: a template report finds its TDoc tables from the report snapshot: there as well (tests/goes-to-plenary.test.js).
+  later.s.existingTdocScanFromSnapshot_ = () => { throw new Error('synthetic failure while inserting'); };
   const l = attempt(later, () => later.s.updateReportNow());
   check('a failure after the download still says "may have been updated in part"', [/^The report update failed: synthetic failure while inserting\nThe report may have been updated in part\./.test(l.thrown || '')], [true]);
 }

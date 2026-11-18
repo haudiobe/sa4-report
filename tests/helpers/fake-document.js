@@ -66,7 +66,9 @@ function makeFakeDocumentBody(sandbox, options) {
   const NORMAL = sandbox.DocumentApp.ParagraphHeading.NORMAL;
   const children = [];
   // Unsaved changes, and the state after saveAndClose(): see the header.
-  const state = { dirty: false, closed: false, nextDropdown: 0 };
+  const state = { dirty: false, closed: false, nextDropdown: 0, calls: 0 };
+  // Round 3 (additions only): every call of a DocumentApp method on an element of this document is counted (state.calls).
+  const counted = (o) => { Object.keys(o).forEach((k) => { const f = o[k]; if (typeof f === 'function' && k[0] !== '_') o[k] = function () { if (!state.paused) state.calls++; return f.apply(this, arguments); }; }); return o; };
   // onFirstTouch: called before the first unsaved change, so that the fake Docs API can keep what the saved document says.
   // Large-build checkpoints (after T-2026.10.22), addition only: `changes` counts the changes not saved yet (a test resets it when it saves).
   const touch = () => { if (state.closed) throw new Error('The document is closed: it was saved and closed earlier in this execution.'); if (!state.dirty && state.onFirstTouch) state.onFirstTouch(); state.dirty = true; state.changes = (state.changes || 0) + 1; };
@@ -95,19 +97,41 @@ function makeFakeDocumentBody(sandbox, options) {
         insertText: (at, text) => { touch(); if (at < 0 || at > p._text.length || !String(text)) throw new Error('Exception: Invalid insertion.'); p._text = p._text.slice(0, at) + String(text) + p._text.slice(at); },
         getLinkUrl: (i) => { const links = p._links || []; for (let k = links.length - 1; k >= 0; k--) if (i >= links[k][0] && i <= links[k][1]) return links[k][2] || null; return null; } })
     };
-    return p;
+    return counted(p);
   }
   function makeTable(rowsData, inheritedBold) {
     const rows = [];
     function makeCell(text) {
       const c = { _t: String(text), _links: [], _bold: !!inheritedBold, _background: null, _width: null, _spacing: [null, null], _dropdown: null,
-        getText: () => c._t, setText: (v) => { touch(); c._t = String(v); return c; },
+        // After T-2026.10.29 (additions only): a cell whose paragraph mixes text and SEVERAL dropdowns, or a dropdown before
+        // text, keeps them in order in _parts ([{ t: text } | { d: dropdown }]); _t is then the text of its text parts and
+        // _dropdown its first dropdown. A cell of one text and at most one dropdown after it keeps the form above.
+        _parts: null,
+        getText: () => c._t,
+        setText: (v) => {
+          // What Google Docs does to inline dropdowns on setText() is not modelled: the code must not do it.
+          if (c._parts) throw new Error('FAKE DOCUMENT: setText() on a cell that mixes text and dropdowns.');
+          touch(); c._t = String(v); return c;
+        },
         setBackgroundColor: (v) => { c._background = v; return c; }, setWidth: (v) => { c._width = v; return c; }, getWidth: () => c._width };
+      /** After T-2026.10.29: _t and _dropdown from _parts, and back to the simple form where the cell has it. */
+      c._sync = () => {
+        if (!c._parts) return;
+        const parts = [];
+        c._parts.forEach((p) => { if (p.d) parts.push(p); else if (p.t) { if (parts.length && !parts[parts.length - 1].d) parts[parts.length - 1] = { t: parts[parts.length - 1].t + p.t }; else parts.push({ t: p.t }); } });
+        c._t = parts.filter((p) => !p.d).map((p) => p.t).join('');
+        c._dropdown = (parts.filter((p) => p.d)[0] || {}).d || null;
+        const dropdowns = parts.filter((p) => p.d).length;
+        const simple = dropdowns === 0 || (dropdowns === 1 && parts[parts.length - 1].d && parts.length <= 2);
+        c._parts = simple ? null : parts;
+      };
+      /** After T-2026.10.29: the parts of any cell, in order (a copy). */
+      c._allParts = () => (c._parts ? c._parts.map((p) => Object.assign({}, p)) : [].concat(c._t ? [{ t: c._t }] : [], c._dropdown ? [{ d: c._dropdown }] : []));
       const para = { getType: () => PARAGRAPH, asParagraph: () => para, getText: () => c._t,
         setSpacingBefore: (v) => { c._spacing[0] = v; return para; }, setSpacingAfter: (v) => { c._spacing[1] = v; return para; },
         // The children of the paragraph: its text, then a dropdown -- which DocumentApp knows as UNSUPPORTED only.
-        getNumChildren: () => (c._t ? 1 : 0) + (c._dropdown ? 1 : 0),
-        getChild: (k) => ({ getType: () => (c._t && k === 0 ? 'TEXT' : 'UNSUPPORTED') }),
+        getNumChildren: () => (c._parts ? c._parts.length : (c._t ? 1 : 0) + (c._dropdown ? 1 : 0)),
+        getChild: (k) => ({ getType: () => (c._parts ? (c._parts[k] && c._parts[k].d ? 'UNSUPPORTED' : 'TEXT') : (c._t && k === 0 ? 'TEXT' : 'UNSUPPORTED')) }),
         // Addition only (T-2026.10.10): the text of the paragraph, for the e-mail export.
         editAsText: () => te };
       c.getNumChildren = () => 1;
@@ -120,10 +144,37 @@ function makeFakeDocumentBody(sandbox, options) {
         setLinkUrl: (...args) => { c._links.push(args); return te; },
         // Addition only (after T-2026.10.8): the link at one character, as recorded by setLinkUrl() -- the last one set wins.
         getLinkUrl: (i) => { for (let k = c._links.length - 1; k >= 0; k--) if (i >= c._links[k][0] && i <= c._links[k][1]) return c._links[k][2] || null; return null; },
-        setFontSize: () => te, setForegroundColor: () => te, setBold: (b) => { c._bold = !!b; return te; }
+        setFontSize: () => te, setForegroundColor: () => te, setBold: (b) => { c._bold = !!b; return te; },
+        // After T-2026.10.29 (additions only): text inserted and deleted at offsets of the cell's TEXT (a dropdown counts
+        // nothing there, as getText() does not show it); `end` is inclusive, as in Apps Script.
+        insertText: (at, v) => { touch(); editTextParts(at, at - 1, String(v)); return te; },
+        deleteText: (from, end) => { touch(); if (end < from) throw new Error('Exception: Invalid range.'); editTextParts(from, end, ''); return te; }
       };
+      /** Replaces the text offsets [from, end] (end inclusive; end = from - 1 to insert) by `insert`, across text parts. */
+      function editTextParts(from, end, insert) {
+        if (from < 0 || from > c._t.length || end >= c._t.length + (end < from ? 1 : 0)) throw new Error('Exception: Invalid range.');
+        if (!c._parts) { c._t = c._t.slice(0, from) + insert + c._t.slice(end + 1); return; }
+        let offset = 0;
+        let inserted = false;
+        c._parts.forEach((p) => {
+          if (p.d) return;
+          const a = offset;
+          const b = offset + p.t.length;
+          offset = b;
+          const cutFrom = Math.max(from, a) - a;
+          const cutTo = Math.min(end + 1, b) - a;
+          let text = p.t;
+          if (cutTo > cutFrom) text = text.slice(0, cutFrom) + text.slice(cutTo);
+          if (!inserted && from >= a && from <= b) { text = text.slice(0, from - a) + insert + text.slice(from - a); inserted = true; }
+          p.t = text;
+        });
+        if (!inserted && insert) c._parts.unshift({ t: insert });
+        c._sync();
+      }
+      counted(para);
+      counted(te);
       c.editAsText = () => te;
-      return c;
+      return counted(c);
     }
     function makeRow(cellTexts) {
       const cells = cellTexts.map(makeCell);
@@ -132,7 +183,7 @@ function makeFakeDocumentBody(sandbox, options) {
         getNumCells: () => cells.length, getCell: (i) => cells[i],
         appendTableCell: (t) => { touch(); const c = makeCell(t); cells.push(c); return c; }
       };
-      return row;
+      return counted(row);
     }
     (rowsData || []).forEach(r => rows.push(makeRow(r)));
     const t = {
@@ -141,17 +192,21 @@ function makeFakeDocumentBody(sandbox, options) {
       getCell: (r, c) => rows[r].getCell(c),
       appendTableRow: () => { touch(); const r = makeRow([]); rows.push(r); return r; },
       insertTableRow: (i) => { const r = makeRow([]); rows.splice(i, 0, r); return r; },
-      removeRow: (i) => { rows.splice(i, 1); },
+      // After T-2026.10.29: removing a row is a change of the document, like every other.
+      removeRow: (i) => { touch(); rows.splice(i, 1); },
       getParent: () => (children.indexOf(t) !== -1 ? body : null),
       removeFromParent: () => { touch(); const i = children.indexOf(t); if (i !== -1) children.splice(i, 1); return t; },
       copy: () => {
         const made = makeTable(rows.map(r => { const out = []; for (let i = 0; i < r.getNumCells(); i++) out.push(r.getCell(i).getText()); return out; }));
         // A copy within the document keeps a working dropdown; it is a new dropdown with its own id.
         rows.forEach((r, ri) => { for (let i = 0; i < r.getNumCells(); i++) { const d = r.getCell(i)._dropdown; if (d) made.getRow(ri).getCell(i)._dropdown = { dropdownId: 'kix.copy' + (++state.nextDropdown), definitionId: d.definitionId, optionId: d.optionId }; } });
+        // After T-2026.10.29: a cell that mixes text and dropdowns is copied part by part, each dropdown with a new id.
+        rows.forEach((r, ri) => { for (let i = 0; i < r.getNumCells(); i++) { const from = r.getCell(i); if (!from._parts) continue; const to = made.getRow(ri).getCell(i);
+          to._parts = from._parts.map((p) => (p.d ? { d: { dropdownId: 'kix.copy' + (++state.nextDropdown), definitionId: p.d.definitionId, optionId: p.d.optionId } } : { t: p.t })); to._sync(); } });
         return made;
       }
     };
-    return t;
+    return counted(t);
   }
 
   /** Google Docs: "Can't remove the last paragraph in a document section." (Only with tableSeparators.) */
@@ -208,6 +263,7 @@ function makeFakeDocumentBody(sandbox, options) {
       return t;
     }
   };
+  counted(body);
   body._state = state;
   body._headingTexts = () => children.filter(c => c.getType() === PARAGRAPH && c.getHeading() !== NORMAL).map(c => c.getText());
   return body;

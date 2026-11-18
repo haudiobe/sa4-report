@@ -275,7 +275,8 @@ console.log('J. what changed in Code.js: against T-2026.10.21, one section and o
         'readTdocListWorkbook_', 'isXlsxSignature_', 'downloadAndProcessFromWeb', 'testTdocListUrl', 'getReportConfig_', 'buildRevisionMapFromTdocList_', 'readPortalTdocListPageScope_']
         .map((n) => functionSource(CODE, n) === functionSource(released, n)), Array(15).fill(true));
     const body = (src) => { const f = functionSource(src, 'downloadAndGroupTdocs_'); return f.slice(f.indexOf("blob.setName('TDoc_List_Temp.xlsx');")); };
-    check('downloadAndGroupTdocs_: from the blob on (conversion, columns, identity, grouping), unchanged', body(FULL) === body(released), true);
+    // After T-2026.10.29: compared without Goes to Plenary, which adds two columns to each TDoc (tests/goes-to-plenary.test.js).
+    check('downloadAndGroupTdocs_: from the blob on (conversion, columns, identity, grouping), unchanged', body(require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(FULL).code) === body(released), true);
   }
 }
 

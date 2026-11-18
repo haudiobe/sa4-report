@@ -221,8 +221,9 @@ console.log('1. the "Uploaded" column of the TDoc list (stage B0)');
     ['S4aA269006', '2026-09-23T22:00:00'], ['S4aA269007', '2026-09-25T09:00:00'], ['S4aA269008', 'none'], ['S4aA269009', 'unreadable'], ['S4aA269010', '2026-09-23T08:00:00']]);
   check('it is carried as the list has it; nothing is converted while the list is read', all[1].uploaded.at, '2026-09-22T14:00:00');
   check('a reserved TDoc has none; a revision has its own, not the original\'s', [all[7].uploaded, all[9].uploaded.at, all[1].uploaded.at], [none, '2026-09-23T08:00:00', '2026-09-22T14:00:00']);
+  // After T-2026.10.29: and the columns of "Related WIs", "Release" and "Is revision of", for the SA4 plenary agenda item and the revision relationship (tests/goes-to-plenary.test.js).
   check('nothing else of a TDoc changed: the same fields as before, plus "uploaded" (and, after T-2026.10.12, the column of the title of its agenda item)', Object.keys(all[0]).sort(),
-    ['agendaCol', 'agendaDescriptionCol', 'agendaItem', 'agendaTopicCol', 'contactCol', 'forCol', 'revisedToCol', 'richTextRow', 'row', 'sourceCol', 'statusCol', 'tdocCol', 'titleCol', 'typeCol', 'uploaded']);
+    ['agendaCol', 'agendaDescriptionCol', 'agendaItem', 'agendaTopicCol', 'contactCol', 'forCol', 'isRevisionOfCol', 'relatedWisCol', 'releaseCol', 'revisedToCol', 'richTextRow', 'row', 'sourceCol', 'statusCol', 'tdocCol', 'titleCol', 'typeCol', 'uploaded']);
 
   // Where the upload time is not read.
   [['an ad-hoc report without sessions', ADHOC], ['a main-meeting report', Object.assign({}, WITH_SESSIONS, { MEETING_TYPE: 'main', MEETING_FOLDER: 'TSGS4_137_Synthetic', MEETING_NUMBER: '137', AGENDA_ITEM_PREFIX: '4.' })],
@@ -521,7 +522,9 @@ console.log('7. an existing report: updates, and the explicit action');
   const before = r.snapshot();
   const updated = r.update();
   check('an update of a four-column report with sessions configured: it completes', updated, { success: true, error: null });
-  check('and the report is untouched: no column was added', [r.snapshot() === before, r.registration()[0].length], [true, 4]);
+  // After T-2026.10.29: the update writes the revision relationships into the TDoc rows (every report; tests/goes-to-plenary.test.js); nothing else.
+  const noRevisions = (text) => text.replace(/ \(revision of S4aA\d+\)/g, '');
+  check('and the report is untouched: no column was added', [noRevisions(r.snapshot()) === noRevisions(before), r.registration()[0].length], [true, 4]);
   r.tdocs = TDOCS.concat([['S4aA269011', '4.4', 'available', '2026-09-23 12:00:00', '', '']]);
   r.update();
   check('a new TDoc is appended with four cells; the table stays four-column', [r.registration().length - 1, r.registration()[11], r.registration().every((row) => row.length === 4), r.events.filter((e) => /^new/.test(e))],
