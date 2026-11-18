@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.13 (2026-11-17)
+ * Version: 2.26.14 (2026-11-18)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,22 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.26.14 (2026-11-18)
+ *   (T-2026.10.30; on T-2026.10.29 / 2.26.13.)
+ *   - Added: Goes to Plenary. Report > Set Up Goes to Plenary... gives
+ *     every TDoc table, below its Status, a dropdown "Goes to Plenary"
+ *     (No / Yes, No to start with; independent of the disposition, never
+ *     cleared by code) and a row "Plenary Agenda Item". The Status option
+ *     "Plenary" is retired into it. A report that is not set up is as
+ *     before. (docs/GOES_TO_PLENARY.md.)
+ *   - Added: in a report that is set up, the Disposition Summary has four
+ *     tables (agreed/endorsed/approved and other dispositions, each Goes
+ *     to Plenary / Not Going to Plenary) with SWG and SA4 plenary agenda
+ *     items; every update writes it, only when it changes.
+ *   - Added: the SA4 plenary agenda item from the meeting's agenda TDoc and
+ *     the work items (Related WIs, title tag, SWG item); maintenance to the
+ *     "Release N and earlier matters" item; blank when not unambiguous; a
+ *     value typed by hand is never overwritten.
  * 2.26.13 (2026-11-17)
  *   (T-2026.10.29; on T-2026.10.28 / 2.26.12.)
  *   - Changed: the Revisions cell has no "Revisions folders: ..." line any
