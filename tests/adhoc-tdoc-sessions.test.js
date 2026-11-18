@@ -522,7 +522,9 @@ console.log('7. an existing report: updates, and the explicit action');
   const before = r.snapshot();
   const updated = r.update();
   check('an update of a four-column report with sessions configured: it completes', updated, { success: true, error: null });
-  check('and the report is untouched: no column was added', [r.snapshot() === before, r.registration()[0].length], [true, 4]);
+  // After T-2026.10.29: the update writes the revision relationships into the TDoc rows (every report; tests/goes-to-plenary.test.js); nothing else.
+  const noRevisions = (text) => text.replace(/ \(revision of S4aA\d+\)/g, '');
+  check('and the report is untouched: no column was added', [noRevisions(r.snapshot()) === noRevisions(before), r.registration()[0].length], [true, 4]);
   r.tdocs = TDOCS.concat([['S4aA269011', '4.4', 'available', '2026-09-23 12:00:00', '', '']]);
   r.update();
   check('a new TDoc is appended with four cells; the table stays four-column', [r.registration().length - 1, r.registration()[11], r.registration().every((row) => row.length === 4), r.events.filter((e) => /^new/.test(e))],

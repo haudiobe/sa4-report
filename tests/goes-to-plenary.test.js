@@ -27,6 +27,12 @@
  *       revision relationships and the landscape section
  *   J.  Close Report
  *   L.  migration of the first candidate's two-row layout without losing a selection
+ *   M.  how many DocumentApp calls and Docs API calls an update of 75 TDocs makes: the first
+ *       candidate against this one (a relative measure on the fake document -- never a time)
+ *   N.  an update interrupted after it inserted a TDoc (as by the six-minute limit): the next one
+ *       completes it -- no duplicate, the Status dropdown made, the summary once
+ *   O.  every Status of the dropdown keeps its dropdown in the compact row, reserved included
+ *   P.  an update that has run long leaves the summary and the formatting to the next one
  *   K.  what changed in Code.js and ReportCreator.js, and nothing else
  *
  * Run: node tests/goes-to-plenary.test.js
@@ -62,6 +68,7 @@ const SUMMARY = 'Disposition Summary';
 const TITLES = ['Agreed, Endorsed and Approved Documents – Goes to Plenary', 'Other Dispositions – Goes to Plenary',
   'Agreed, Endorsed and Approved Documents – Not Going to Plenary', 'Other Dispositions – Not Going to Plenary'];
 const HEADER = ['TDoc', 'Title', 'Source', 'Status', 'SWG Agenda Item', 'SA4 Plenary Agenda Item'];
+const HEADER5 = ['TDoc', 'Title', 'Source', 'Status', 'SWG Agenda Item'];
 const AGENDA_138 = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'agenda-S4-261857.google-items.json'), 'utf8')).items
   .map((i) => ({ number: i.number, title: i.title, level: i.level, heading: 'NORMAL', text: '' }));
 const MAIN = { SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main', MEETING_NAME: 'SA4#138', MEETING_ID: '60780', REPORT_SUFFIX: 'MBS', MEETING_DATE: 'November 16, 2026',
@@ -133,7 +140,7 @@ function mbs(extra) {
     const out = [];
     for (let i = at + 1; i < kids.length; i++) {
       const c = kids[i];
-      if (isTable(c)) { if (out.length && (c.getRow(0).getNumCells() === 6 || c.getRow(0).getNumCells() === 4)) out[out.length - 1].push(rowsOf(c)); continue; }
+      if (isTable(c)) { if (out.length && [4, 5, 6].indexOf(c.getRow(0).getNumCells()) !== -1) out[out.length - 1].push(rowsOf(c)); continue; }
       const text = c.getText();
       if (TITLES.some((t) => text.indexOf(t + ' (') === 0) || /^(Agreed, Endorsed and Approved Documents|Other Disposed Documents|Documents Not Yet Disposed) \(/.test(text)) out.push([text]);
       else if (text === 'None.' && out.length) out[out.length - 1].push('None.');
@@ -209,12 +216,14 @@ const r = mbs();
   const built = r.build();
   check('the MBS report of SA4#138 builds, with its TDocs under 8.x and Status dropdowns; an unmapped status stays text', [built.ok, r.tdocs.every((t) => !!r.table(t.id)), r.shown('S4-262003'), r.shown('S4-262018')],
     [true, true, 'dropdown:agreed', 'text:not pursued']);
-  check('no compact row, no definition, not marked, no revision text in the TDoc rows', [r.c('S4-262003').plenary, r.api.definitionTitled('Goes to Plenary'), r.docProps.getProperty('GOES_TO_PLENARY'), r.tdocRow('S4-262013').text],
-    [null, null, null, 'S4-262013']);
+  check('no compact row, no definition, not marked', [r.c('S4-262003').plenary, r.api.definitionTitled('Goes to Plenary'), r.docProps.getProperty('GOES_TO_PLENARY')], [null, null, null]);
+  check('the revision relationship is part of every report: written by the build already, both numbers linked', [r.tdocRow('S4-262012'), r.tdocRow('S4-262013').text, r.tdocRow('S4-262014').text],
+    [{ text: 'S4-262012 (revision of S4-262001)', own: ZIP('S4-262012'), predecessorLink: ZIP('S4-262001') }, 'S4-262013 (revision of S4-262012)', 'S4-262014']);
   const u = r.update();
   check('an update gives it no summary, no compact row and no landscape section, and reads no agenda for it', [u.success, u.goesToPlenary, u.dispositionSummary, r.summary(), r.c('S4-262004').plenary, r.api.sectionBreaks(), r.docProps.getProperty('PLENARY_AGENDA_ITEMS')],
     [true, undefined, undefined, null, null, [], null]);
   r.summaryMenu();
+  check('the update keeps the revision relationships; the statuses and the TDoc numbers read as before', [r.tdocRow('S4-262013').text, r.shown('S4-262013'), r.order().indexOf('S4-262013') !== -1], ['S4-262013 (revision of S4-262012)', 'dropdown:agreed', true]);
   check('Update Disposition Summary writes the three tables there, as before, in portrait', [r.summary().map((c) => c[0].replace(/ \(\d+\)$/, '')), r.api.sectionBreaks()],
     [['Agreed, Endorsed and Approved Documents', 'Other Disposed Documents', 'Documents Not Yet Disposed'], []]);
 }
@@ -227,8 +236,8 @@ console.log('B2. an ad-hoc report: the compact row and the four tables, no SA4 p
   a.s.downloadMeetingAgenda_ = () => { agendaReads++; return []; };
   a.exec(() => a.s.setUpGoesToPlenary());
   const u = a.update();
-  check('set up and updated: compact rows, the four tables', [u.goesToPlenary, u.dispositionSummary, a.api.compactOf('S4aA269001').plenary, a.api.compactOf('S4aA269001').status,
-    a.body._children.filter((c) => isTable(c) && c.getNumRows() > 0 && c.getRow(0).getNumCells() === 6).length], ['done', 'created', NO, 'dropdown:agreed', 2]);
+  check('set up (it writes the summary) and updated: compact rows, the four tables -- the two not going to plenary in five columns', [u.goesToPlenary, u.dispositionSummary, a.api.compactOf('S4aA269001').plenary, a.api.compactOf('S4aA269001').status,
+    a.body._children.filter((c) => isTable(c) && c.getNumRows() > 0 && c.getRow(0).getNumCells() === 5).length, a.body._children.filter((c) => isTable(c) && c.getNumRows() > 0 && c.getRow(0).getNumCells() === 6).length], ['done', 'unchanged', NO, 'dropdown:agreed', 2, 0]);
   check('the plenary agenda of a main meeting does not exist here: no A.I., and no agenda is read for it', [a.api.compactOf('S4aA269001').ai, agendaReads], [null, 0]);
 }
 
@@ -254,7 +263,9 @@ console.log('C. Set Up Goes to Plenary…');
   check('the result', [done.ok, done.migrated, done.plenaryStatuses, done.dropdowns.inserted, done.dropdowns.optionRemoved, r.docProps.getProperty('GOES_TO_PLENARY')], [true, 0, 1, r.tdocs.length, true, '1']);
   check('its writes: one batch by id (the Status, "Plenary" out of its dropdown, the definition), one batch of rows tied to its revision; the summary there gets its landscape section',
     r.api.calls.filter((c) => c.call === 'batchUpdate').slice(writesBefore).map((c) => [c.requests.map((q) => Object.keys(q)[0]).filter((k, i, a) => a.indexOf(k) === i).join('+'), !!c.requiredRevisionId]),
-    [['updateDropdownProperties+updateDropdownDefinitionProperties+createDropdownDefinition', false], ['insertText+insertDropdown', true], ['insertSectionBreak', true], ['updateSectionStyle', true]]);
+    [['updateDropdownProperties+updateDropdownDefinitionProperties+createDropdownDefinition', false], ['insertText+insertDropdown', true],
+     ['updateTableColumnProperties+updateTableRowStyle+updateTableCellStyle+updateTextStyle+updateParagraphStyle', true], ['insertSectionBreak', true], ['updateSectionStyle', true]]);
+  check('the set-up writes the summary as four tables at once (replacing the three of before)', r.summary().map((c) => c[0].replace(/ \(\d+\)$/, '')), TITLES);
   const writes = r.writes();
   const again = r.setUp();
   check('run again: nothing to do, nothing written', [again.nothingToDo, r.writes() - writes], [true, 0]);
@@ -272,8 +283,12 @@ let afterFirst;
   check('exactly: "[available]\\u2003Plenary [☑ Yes]\\u2003A.I.: 15.4"', r.c('S4-262009').parts, '[available]' + EM + 'Plenary [' + YES + ']' + EM + 'A.I.: 15.4');
   const s = r.summary();
   check('one summary, four tables, in the order asked for, with counts', [r.headings(), s.map((c) => c[0])], [1, [TITLES[0] + ' (0)', TITLES[1] + ' (1)', TITLES[2] + ' (6)', TITLES[3] + ' (10)']]);
-  check('the columns; the SA4 plenary agenda item also for documents not going to plenary', [s[2][1][0], s[3][1].slice(1).map((x) => [x[0], x[5]]).filter((x) => x[0] === 'S4-262004' || x[0] === 'S4-262008').sort()],
-    [HEADER, [['S4-262004', '16.3'], ['S4-262008', '']]]);
+  check('the columns: six for the tables going to plenary, five -- no SA4 plenary agenda item -- for the two not going to plenary', [s[1][1][0], s[2][1][0], s[3][1][0], s[2][1].every((x) => x.length === 5), s[3][1].every((x) => x.length === 5)],
+    [HEADER, HEADER5, HEADER5, true, true]);
+  check('the widths: the Title is the widest column of every table, on the landscape page (A4: 698 pt, rounding aside)', r.body._children.filter((c) => isTable(c) && (c.getRow(0).getNumCells() === 6 || c.getRow(0).getNumCells() === 5) && c.getRow(0).getCell(1).getText() === 'Title')
+    .map((t) => { const w = Array.from({ length: t.getRow(0).getNumCells() }, (x, k) => t.getRow(0).getCell(k)._width); return [w.indexOf(Math.max(...w)), Math.abs(w.reduce((a, b) => a + b, 0) - 698) <= 2]; }), [[1, true], [1, true], [1, true]]);
+  check('the header bold on its background, no bold below it, no spacing', (() => { const t = r.body._children.filter((c) => isTable(c) && c.getRow(0).getNumCells() === 5 && c.getRow(0).getCell(1).getText() === 'Title')[0];
+    return [t.getRow(0).getCell(0)._bold, t.getRow(0).getCell(0)._background, t.getRow(1).getCell(1)._bold, t.getRow(1).getCell(1)._spacing]; })(), [true, '#D9EAF7', false, [0, 0]]);
   check('Other – Goes to Plenary: the TDoc whose Status was "Plenary"', s[1][1].slice(1), [['S4-262009', '[AMD_ARCH_Ph2-MED] open issue', 'ExampleCorp', 'available', '8.5', '15.4']]);
   check('the status in the tables is the status, not the compact row; an unmapped one as written', [].concat(...s.map((c) => (Array.isArray(c[1]) ? c[1].slice(1) : []))).filter((x) => x[0] === 'S4-262018' || x[0] === 'S4-262003').map((x) => x[3]).sort(),
     ['agreed', 'not pursued (not a known status)']);
@@ -282,7 +297,6 @@ let afterFirst;
   check('the TDoc column holds the number alone, linked as in its table', [].concat(...r.body._children.filter((c) => isTable(c) && c.getRow(0).getNumCells() === 6).map((t) => Array.from({ length: t.getNumRows() - 1 }, (_, i) => [t.getRow(i + 1).getCell(0).getText(), t.getRow(i + 1).getCell(0).editAsText().getLinkUrl(0)])))
     .every(([n, l]) => /^S4-\d{6}$/.test(n) && l === ZIP(n)), true);
   check('the four tables are on landscape pages of their own: one section break, before the heading, flipped', r.api.sectionBreaks(), [{ before: SUMMARY, flip: true }]);
-  check('their widths use the landscape page: the Title column is the widest', (() => { const t = r.body._children.filter((c) => isTable(c) && c.getRow(0).getNumCells() === 6)[0]; return [0, 1, 2, 3, 4, 5].map((k) => t.getRow(0).getCell(k)._width); })().every((w, k, a) => k === 1 || w < a[1]), true);
   // The revision relationships.
   check('a chain: each revision names its own predecessor, both numbers linked', ['S4-262012', 'S4-262013'].map((id) => r.tdocRow(id)), [
     { text: 'S4-262012 (revision of S4-262001)', own: ZIP('S4-262012'), predecessorLink: ZIP('S4-262001') },
@@ -346,8 +360,8 @@ console.log('G. manual SA4 plenary agenda items');
     [].concat(...r.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1) : []))).filter((x) => x[0] === 'S4-262002').map((x) => x[5])], ['A.I.: 16.2', '16.2', ['16.2']]);
   r.user(() => r.api.pickPlenary('S4-262002', NO));
   r.update();
-  check('"☐ No": the A.I. is hidden, the manual value is kept and still in the summary', [r.c('S4-262002').ai, r.docProps.getProperty('PLENARY_AGENDA_MANUAL:S4-262002'),
-    [].concat(...r.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1) : []))).filter((x) => x[0] === 'S4-262002').map((x) => x[5])], [null, '16.2', ['16.2']]);
+  check('"☐ No": the A.I. is hidden and the TDoc is in a five-column table; the manual value is kept', [r.c('S4-262002').ai, r.docProps.getProperty('PLENARY_AGENDA_MANUAL:S4-262002'),
+    [].concat(...r.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1) : []))).filter((x) => x[0] === 'S4-262002').map((x) => x.length)], [null, '16.2', [5]]);
   r.user(() => r.api.pickPlenary('S4-262002', YES));
   r.tdoc('S4-262002')['Related WIs'] = 'FS_QStream_MED';  // its work items change: 15.5 and 16.3 -> no automatic item
   r.update();
@@ -482,6 +496,132 @@ console.log('L. migration of the first candidate\'s two-row layout');
   check('the next update makes the row with "☑ Yes" and forgets the pending choice', [n.c('S4-262002').plenary, n.docProps.getProperty('PLENARY_CHOICE_PENDING:S4-262002')], [YES, null]);
 }
 
+// ====================================================================== M
+console.log('M. an update of 75 TDocs: DocumentApp calls and Docs API calls, the first candidate against this one');
+// A relative measure on the fake document: every DocumentApp method called on the report is counted. It is not a time,
+// and the real cost of a call in Google Docs is not known here; the real update is timed in the disposable copy.
+const SEVENTY_FIVE = () => Array.from({ length: 75 }, (_, k) => {
+  const n = String(k + 1).padStart(2, '0');
+  const agenda = ['8.4', '8.5', '8.6', '8.7', '8.8'][k % 5];
+  const status = ['agreed', 'noted', 'available', 'revised', 'endorsed', 'reserved'][k % 6];
+  return { id: 'S4-2630' + n, agenda: agenda, status: status, title: (agenda === '8.5' ? '[AMD_ARCH_Ph2-MED] ' : '') + 'Contribution ' + n, uploaded: true };
+});
+function measure(code) {
+  const m = mbs(Object.assign({ tdocs: SEVENTY_FIVE() }, code ? { code: code } : {}));
+  m.build();
+  m.setUp();
+  m.update();
+  m.update();
+  const count = () => ({ calls: m.body._state.calls, gets: m.api.count('get', 'REPORTdoc000000000000000000000000000000000'), writes: m.writes() });
+  const delta = (a, b) => ({ calls: b.calls - a.calls, gets: b.gets - a.gets, writes: b.writes - a.writes });
+  const out = {};
+  let at = count();
+  const u1 = m.update();
+  out.unchanged = Object.assign(delta(at, count()), { summary: u1.dispositionSummary });
+  m.user(() => m.api.pick('S4-263001', 'noted'));
+  m.user(() => (m.api.compactOf('S4-263002').plenary ? m.api.pickPlenary('S4-263002', YES) : m.api.pickIn('S4-263002', 'Goes to Plenary', YES)));
+  at = count();
+  const u2 = m.update();
+  out.oneStatusOnePlenary = Object.assign(delta(at, count()), { summary: u2.dispositionSummary });
+  m.tdocs.push({ id: 'S4-263076', agenda: '8.6', status: 'reserved', title: 'A new contribution', uploaded: true });
+  m.tdoc('S4-263006').status = 'withdrawn';
+  at = count();
+  const u3 = m.update();
+  out.newTdocAndPortalStatus = Object.assign(delta(at, count()), { summary: u3.dispositionSummary });
+  return { out: out, m: m };
+}
+let firstCandidate = null;
+try {
+  firstCandidate = execFileSync('git', ['show', '4c55c3c:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8');
+} catch (e) {
+  firstCandidate = null;
+}
+{
+  const now = measure(null);
+  console.log('  this candidate:         ' + JSON.stringify(now.out));
+  check('this candidate: the unchanged update writes nothing -- no DocumentApp change, no API write', [now.out.unchanged.summary, now.out.unchanged.writes], ['unchanged', 0]);
+  check('this candidate: one Status and one Plenary changed: the summary rewritten once, the rows refreshed', now.out.oneStatusOnePlenary.summary, 'replaced');
+  check('this candidate: a new TDoc and a Portal status: completed in the same update (dropdowns, compact row, summary)', [now.out.newTdocAndPortalStatus.summary, now.m.api.compactOf('S4-263076').status, now.m.api.compactOf('S4-263076').plenary, now.m.c('S4-263006').status],
+    ['replaced', 'dropdown:reserved', NO, 'dropdown:withdrawn']);
+  if (firstCandidate === null) {
+    console.log('  note: commit 4c55c3c is not available; the comparison with the second candidate is skipped.');
+  } else {
+    const before = measure(firstCandidate);
+    console.log('  second candidate (4c55c3c): ' + JSON.stringify(before.out));
+    const ratio = (k) => Math.round(before.out[k].calls / Math.max(1, now.out[k].calls) * 10) / 10;
+    console.log('  DocumentApp calls, second candidate / this one: unchanged ' + ratio('unchanged') + 'x, one status and one plenary ' + ratio('oneStatusOnePlenary') + 'x, new TDoc ' + ratio('newTdocAndPortalStatus') + 'x');
+    check('far fewer DocumentApp calls than the second candidate: at least 5x fewer for an unchanged update, 3x for the others',
+      [ratio('unchanged') >= 5, ratio('oneStatusOnePlenary') >= 3, ratio('newTdocAndPortalStatus') >= 3], [true, true, true]);
+  }
+}
+
+// ====================================================================== N
+console.log('N. an update interrupted after it inserted a TDoc: the next one completes it');
+{
+  const m = mbs({ tdocs: TDOCS().slice(0, 6) });
+  m.build();
+  m.setUp();
+  m.update();
+  m.tdocs.push({ id: 'S4-262020', agenda: '8.6', status: 'reserved', title: '[Energy_PRO-MED] arrived during the meeting', uploaded: true });
+  const collector = m.s.collectorUpdate_;
+  m.s.collectorUpdate_ = () => { throw new Error('Exceeded maximum execution time'); };
+  const broken = m.update();
+  m.s.collectorUpdate_ = collector;
+  m.user(() => {});                                       // what the interrupted run had changed is in the document (the worst case)
+  check('the interrupted update inserted the TDoc and stopped before its end: the Status is still text, no compact row yet', [broken.success, m.r === undefined && !!m.table('S4-262020'), m.c('S4-262020').status, m.c('S4-262020').plenary],
+    [false, true, 'text:reserved', null]);
+  const u = m.update();
+  check('the next update completes it: the Status a dropdown (reserved), the compact row, no second table', [u.success, m.c('S4-262020').status, m.c('S4-262020').plenary, m.tdocTables().filter((t) => t.getRow(0).getCell(1).getText().indexOf('S4-262020') === 0).length],
+    [true, 'dropdown:reserved', NO, 1]);
+  check('the TDoc is in the summary once, and in the registration table once', [[].concat(...m.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1).map((x) => x[0]) : []))).filter((n) => n === 'S4-262020').length,
+    m.body._children.filter((c) => isTable(c) && c.getRow(0).getNumCells() >= 4 && c.getRow(0).getCell(3).getText() === 'Agenda Item').map((t) => rowsOf(t).filter((x) => x[0] === 'S4-262020').length)], [1, [1]]);
+  const snap = m.snapshot();
+  m.update();
+  check('and the update after it changes nothing', m.snapshot() === snap, true);
+}
+
+// ====================================================================== O
+console.log('O. every Status of the dropdown keeps its dropdown in the compact row, reserved included');
+{
+  const STATUSES = ['available', 'noted', 'agreed', 'revised', 'merged', 'approved', 'reserved', 'endorsed', 'withdrawn', 'replied', 'postponed'];
+  const m = mbs({ tdocs: STATUSES.map((status, k) => ({ id: 'S4-2640' + String(k + 1).padStart(2, '0'), agenda: '8.6', status: status, title: '[Energy_PRO-MED] ' + status, uploaded: true })) });
+  m.build();
+  m.setUp();
+  m.update();
+  check('each status is a dropdown in front of "Plenary [☐ No]"', m.tdocs.map((t) => [m.c(t.id).status, m.c(t.id).plenary]), STATUSES.map((status) => ['dropdown:' + status, NO]));
+  m.tdoc('S4-264007').status = 'withdrawn';               // reserved -> withdrawn (the Portal)
+  m.tdoc('S4-264001').status = 'agreed';                  // available -> agreed (the Portal)
+  m.update();
+  check('the Portal moves reserved and available on: the dropdowns follow, the compact row stays', [m.c('S4-264007').status, m.c('S4-264001').status, m.c('S4-264007').plenary, m.c('S4-264001').plenary],
+    ['dropdown:withdrawn', 'dropdown:agreed', NO, NO]);
+  // A Status dropdown lost (a text left in its place, as an interrupted run leaves it): the next update makes it again.
+  m.user(() => { const c = m.api.statusCell('S4-264003'); const rest = c._allParts().slice(1); c._parts = [{ t: 'agreed' + rest[0].t }].concat(rest.slice(1)); c._sync(); });
+  check('(a Status dropdown replaced by its text)', m.c('S4-264003').status, 'text:agreed');
+  m.update();
+  check('the next update makes it a dropdown again, with the same value; the Plenary dropdown is kept', [m.c('S4-264003').status, m.c('S4-264003').plenary], ['dropdown:agreed', NO]);
+  check('Check Report Integrity: nothing missing', (() => { const p = m.exec(() => m.s.checkReportIntegrity()); return [p.textStatusesWithOption, p.legacy, p.plenaryDropdownMissing, p.summaryHeadings, p.sectionBreaks]; })(),
+    [[], [], [], 1, [true]]);
+}
+
+// ====================================================================== P
+console.log('P. an update that has run long leaves the summary and the formatting to the next one');
+{
+  const m = mbs({ tdocs: TDOCS().slice(0, 6) });
+  m.build();
+  m.setUp();
+  m.update();
+  m.tdocs.push({ id: 'S4-262021', agenda: '8.6', status: 'available', title: '[Energy_PRO-MED] late', uploaded: true });
+  const elapsed = m.s.reportUpdateElapsedMs_;
+  m.s.reportUpdateElapsedMs_ = () => 300000;
+  const u = m.update();
+  m.s.reportUpdateElapsedMs_ = elapsed;
+  check('five minutes gone: the summary is deferred, the formatting skipped -- the dropdowns are made all the same', [u.success, u.dispositionSummary, m.logs.some((l) => /formatting left to the next update/.test(l)), m.c('S4-262021').status, m.c('S4-262021').plenary],
+    [true, 'deferred', true, 'dropdown:available', NO]);
+  check('the summary does not have the new TDoc yet', [].concat(...m.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1).map((x) => x[0]) : []))).indexOf('S4-262021'), -1);
+  const v = m.update();
+  check('the next update writes it', [v.dispositionSummary, [].concat(...m.summary().map((c) => (Array.isArray(c[1]) ? c[1].slice(1).map((x) => x[0]) : []))).filter((n) => n === 'S4-262021').length], ['replaced', 1]);
+}
+
 // ====================================================================== K
 console.log('K. what changed in Code.js and ReportCreator.js, and nothing else');
 {
@@ -515,7 +655,9 @@ console.log('K. what changed in Code.js and ReportCreator.js, and nothing else')
     (FULL.match(/= finalizePlenarySelection_\(/g) || []).length, /\} finally \{\n    resetStatusDropdownRun_\(\);\n    \/\/ After T-2026\.10\.29[^\n]*\n    const plenary = finalizePlenarySelection_\(mode, result\.ran && !result\.saveFailed\);/.test(fnOf('finalizeStatusDropdowns_')),
     /finalizePlenarySelection_\('setup', false\)/.test(fnOf('setUpGoesToPlenary'))], [2, true, true]);
   check('each step never throws: one try around all of it', ['finalizePlenarySelection_', 'syncPlenarySelectionOnUpdate_', 'preparePlenarySelectionForBuild_', 'capturePlenarySelectionForRebuild_', 'plenaryAgendaItems_',
-    'notePlenaryListFacts_', 'ensurePlenaryLandscape_', 'afterPlenaryDispositionWrite_'].map((n) => /\n  try \{[\s\S]*\n  \} catch \(e\) \{/.test(fnOf(n))), [true, true, true, true, true, true, true, true]);
+    'notePlenaryListFacts_', 'ensurePlenaryLandscape_', 'afterPlenaryDispositionWrite_', 'plenarySnapshot_', 'formatPlenarySummaryTables_', 'syncTdocRevisionRelationships_', 'prepareTdocRevisionsForBuild_']
+    .map((n) => /\n  try \{[\s\S]*\n  \} catch \(e\) \{/.test(fnOf(n))), [true, true, true, true, true, true, true, true, true, true, true, true]);
+  check('the summary of a report with Goes to Plenary is read through the Docs API, never cell by cell: no getTables(), getChild() loop or getText() in its reader', [/getTables|getText|getChild/.test(fnOf('readPlenaryDispositionsOfTables_') + fnOf('plenaryDocsTables_') + fnOf('plenarySummarySectionOfContent_')), /plenarySnapshot_\(documentId\)/.test(fnOf('writePlenaryDispositionSummary_'))], [false, true]);
   check('nothing is fetched but the agenda TDoc of the meeting, through the existing reader', [/UrlFetchApp|safeFetch_|Drive\.|DriveApp/.test(section), (section.match(/downloadMeetingAgenda_\([a-z]/g) || []).length], [false, 1]);
   check('a report becomes one with Goes to Plenary in the set-up only', (section.match(/setProperty\(PLENARY_ENABLED_KEY_, '1'\)/g) || []).length, 1);
   check('DocumentApp never rewrites a Status cell: no setText() on it in the section but through setStatusCellText_(), which keeps the compact row',

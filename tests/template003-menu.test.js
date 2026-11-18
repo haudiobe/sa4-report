@@ -165,6 +165,8 @@ const REPORT_TREE_AFTER_SETUP = [
   '    Remove Duplicate E-mail Entries… -> removeDuplicateEmailEntries',
   '    Remove Wrong E-mail Matches… -> cleanUpWrongEmailDiscussions',
   '    Clear Collection Caches… -> clearAllCaches',
+  // After T-2026.10.29: tests/goes-to-plenary.test.js.
+  '    Check Report Integrity -> checkReportIntegrity',
   '  ℹ️ About This Report -> showTemplateInfo'
 ];
 // Ad-hoc sessions (stage A): an ad-hoc report has one more submenu, after
@@ -215,13 +217,13 @@ console.log('1. report menu after setup');
   check('every item calls an existing public function (a menu cannot call a private one)',
     reportTargets.filter((f) => typeof r.s[f] !== 'function' || /_$/.test(f)), []);
   check('no label is used twice', t.filter((l, i) => / -> /.test(l) && t.indexOf(l) !== i), []);
-  check('ad-hoc report: 30 items after setup (two of the Disposition Summary, after T-2026.10.15; Import Local Inbox Listing…, issue #16; Set Up Goes to Plenary…, after T-2026.10.29), 4 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
-    [30, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
+  check('ad-hoc report: 30 items after setup (two of the Disposition Summary, after T-2026.10.15; Import Local Inbox Listing…, issue #16; Set Up Goes to Plenary… and Check Report Integrity, after T-2026.10.29), 4 submenus', [reportTargets.length, r.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [31, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions and Attendance', '🛠 Advanced and Repair']]);
   const main = runtime({ docId: REPORT_ID, props: SET_UP_MAIN });
   main.s.onOpen();
   check('main-meeting report: exact tree, without the Sessions and Attendance submenu, with Sessions > Configure Sessions… (issue #11)', tree(main.ui), REPORT_TREE_MAIN);
-  check('main-meeting report: 25 items after setup (two of the Disposition Summary, after T-2026.10.15; Configure Sessions…, issue #11; Import Local Inbox Listing…, issue #16; Set Up Goes to Plenary…, after T-2026.10.29), 4 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
-    [25, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions', '🛠 Advanced and Repair']]);
+  check('main-meeting report: 25 items after setup (two of the Disposition Summary, after T-2026.10.15; Configure Sessions…, issue #11; Import Local Inbox Listing…, issue #16; Set Up Goes to Plenary… and Check Report Integrity, after T-2026.10.29), 4 submenus', [targets(main.ui).length, main.ui.menus[0].entries.filter((e) => e.sub).map((e) => e.sub.name)],
+    [26, ['📄 Report', '🔀 Document Reallocation', '🗓 Sessions', '🛠 Advanced and Repair']]);
   check('a document configured by hand (state "manual") gets the same menu',
     (() => { const m = runtime({ docId: REPORT_ID, props: { SA4_BOOTSTRAP_STATE: 'manual' } }); m.s.onOpen(); return tree(m.ui); })(), REPORT_TREE_AFTER_SETUP);
 }

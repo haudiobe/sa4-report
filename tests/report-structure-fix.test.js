@@ -72,7 +72,8 @@ const isTdocTable = (c) => c.getType() === 'TABLE' && c.getNumRows() > 0 && c.ge
 const isHeading = (c) => c.getType() === 'PARAGRAPH' && c.getHeading() !== 'NORMAL';
 const isEmpty = (c) => c.getType() === 'PARAGRAPH' && c.getHeading() === 'NORMAL' && c.getText() === '';
 /** The document as headings and TDoc numbers, in order: ['# 2.5 ...', 'S4aA269001', ...]. */
-const outline = (body) => body._children.map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : isHeading(c) ? '# ' + c.getText() : null)).filter(Boolean);
+// After T-2026.10.29: a TDoc row can read "S4aA269002 (revision of S4aA269001)"; its number is the part before.
+const outline = (body) => body._children.map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText().replace(/\s*\(revision of [^)]*\)\s*$/, '') : isHeading(c) ? '# ' + c.getText() : null)).filter(Boolean);
 /** The agenda part and the end: the numbers of the numbered level-two headings and 'Attendance', in order. */
 const sections = (body) => body._children.filter(isHeading).map((c) => c.getText()).filter((x) => /^\d+\.\d+( |$)/.test(x) || x === ATTENDANCE).map((x) => (x === ATTENDANCE ? x : x.split(' ')[0]));
 /** The TDoc numbers of the tables below the heading of `agenda`, up to the next heading. */
@@ -90,7 +91,7 @@ const longestRun = (body) => body._children.reduce((acc, c) => { const run = isE
 const agendaMaterialAfter = (body, text) => {
   const at = body._children.findIndex((c) => isHeading(c) && (c.getText() === text || c.getText().indexOf(text) !== -1));
   if (at === -1) return ['(no such heading)'];
-  return body._children.slice(at + 1).map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : isHeading(c) && /^\d+(\.\d+)*( |$)/.test(c.getText()) ? '# ' + c.getText() : null)).filter(Boolean);
+  return body._children.slice(at + 1).map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText().replace(/\s*\(revision of [^)]*\)\s*$/, '') : isHeading(c) && /^\d+(\.\d+)*( |$)/.test(c.getText()) ? '# ' + c.getText() : null)).filter(Boolean);
 };
 /** The Attendance section as the import writes it, at the end of the closing section -- here: the end of the document. */
 function addAttendance(r) {
@@ -106,13 +107,13 @@ function addAttendance(r) {
 }
 const structureLogs = (r) => r.logs.filter((l) => /^Structure: /.test(l));
 const field = (body, tdoc, label) => {
-  const table = body._children.filter((c) => isTdocTable(c) && c.getRow(0).getCell(1).getText() === tdoc)[0];
+  const table = body._children.filter((c) => isTdocTable(c) && c.getRow(0).getCell(1).getText().replace(/\s*\(revision of [^)]*\)\s*$/, '') === tdoc)[0];
   if (!table) return undefined;
   for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === label) return table.getRow(i).getCell(1).getText();
   return undefined;
 };
 const setField = (body, tdoc, label, text) => {
-  const table = body._children.filter((c) => isTdocTable(c) && c.getRow(0).getCell(1).getText() === tdoc)[0];
+  const table = body._children.filter((c) => isTdocTable(c) && c.getRow(0).getCell(1).getText().replace(/\s*\(revision of [^)]*\)\s*$/, '') === tdoc)[0];
   for (let i = 0; i < table.getNumRows(); i++) if (table.getRow(i).getCell(0).getText() === label) table.getRow(i).getCell(1).setText(text);
 };
 

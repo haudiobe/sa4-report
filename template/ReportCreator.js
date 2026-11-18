@@ -798,7 +798,9 @@ function buildTemplateReportMenu_(ui) {
     .addItem('Format Report', 'removeRowHeightAndSpacing')
     .addItem('Remove Duplicate E-mail Entries…', 'removeDuplicateEmailEntries')
     .addItem('Remove Wrong E-mail Matches…', 'cleanUpWrongEmailDiscussions')
-    .addItem('Clear Collection Caches…', 'clearAllCaches'));
+    .addItem('Clear Collection Caches…', 'clearAllCaches')
+    // After T-2026.10.29: what the report holds, read once and nothing changed.
+    .addItem('Check Report Integrity', 'checkReportIntegrity'));
 
   addTemplateReportMenuTail_(menu);
   menu.addToUi();

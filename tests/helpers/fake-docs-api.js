@@ -32,6 +32,12 @@
  *     newline Google Docs puts before it is not modelled) and styled by
  *     updateSectionStyle (flipPageOrientation only; the first section of
  *     the document is never written). Paragraphs carry namedStyleType.
+ *   - Round 3 (additions only): text runs carry textStyle { bold, link }
+ *     (cut where a link begins or ends), table cells their startIndex and
+ *     endIndex, tables tableStyle.tableColumnProperties, the tab its
+ *     documentStyle (A4); the formatting requests updateTableColumnProperties,
+ *     updateTableRowStyle, updateTableCellStyle, updateTextStyle (bold, link)
+ *     and updateParagraphStyle (spacing) work inside one table or one cell.
  *   - A read sees the SAVED document: while the document has unsaved
  *     DocumentApp changes, Documents.get() describes it as it was before
  *     the first of them -- a table added in this execution is not there.
@@ -69,8 +75,32 @@ function makeFakeDocsApi(options) {
     return options.filter((o) => o.optionId === dropdown.optionId)[0] || null;
   };
 
+  /** Round 3: the runs of a cell's text from index `at` -- cut where a link begins or ends -- each with its bold and link. */
+  function styledRuns(cell, text, at, newline) {
+    const linkAt = (k) => { for (let n = cell._links.length - 1; n >= 0; n--) if (k >= cell._links[n][0] && k <= cell._links[n][1]) return cell._links[n][2] || null; return null; };
+    const runs = [];
+    let from = 0;
+    for (let k = 1; k <= text.length; k++) if (k === text.length || linkAt(k) !== linkAt(k - 1)) { runs.push([from, k]); from = k; }
+    if (!runs.length) runs.push([0, 0]);
+    return runs.map(([a, b], n) => {
+      const last = n === runs.length - 1 && newline;
+      const style = { bold: !!cell._bold };
+      const url = text.length ? linkAt(a) : null;
+      if (url) style.link = { url: url };
+      return { startIndex: at + a, endIndex: at + b + (last ? 1 : 0), textRun: { content: text.slice(a, b) + (last ? '\n' : ''), textStyle: style } };
+    });
+  }
+
   /** The report as the API describes it, and where each table cell is: [{ cell, start, textStart, textEnd }]. */
+  // Round 3: a render is kept while no request moves a position (style requests do not); `fresh` drops it.
+  let kept = null;
+  const fresh = () => { kept = null; };
   function render() {
+    if (kept) return kept;
+    kept = renderNow();
+    return kept;
+  }
+  function renderNow() {
     const content = [];
     const cells = [];
     let i = 1;
@@ -110,13 +140,13 @@ function makeFakeDocsApi(options) {
                 }
               });
               elements.push({ startIndex: i, endIndex: i + 1, textRun: { content: '\n' } });
-              cells.push({ cell: cell, start: start, textStart: null, textEnd: null, contentEnd: i });
+              cells.push({ cell: cell, start: start, textStart: null, textEnd: null, contentEnd: i, table: child, r: r, c: c });
               i += 1;
-              row.tableCells.push({ content: [{ startIndex: start, endIndex: i, paragraph: { elements: elements } }] });
+              row.tableCells.push({ startIndex: start - 1, endIndex: i, content: [{ startIndex: start, endIndex: i, paragraph: { elements: elements } }] });
               continue;
             }
             if (text && !dropdown) {
-              elements.push({ startIndex: i, endIndex: i + text.length + 1, textRun: { content: text + '\n' } });
+              styledRuns(cell, text, i, true).forEach((el) => elements.push(el));
               i += text.length + 1;
             } else {
               if (text) { elements.push({ startIndex: i, endIndex: i + text.length, textRun: { content: text } }); i += text.length; }
@@ -129,19 +159,24 @@ function makeFakeDocsApi(options) {
               elements.push({ startIndex: i, endIndex: i + 1, textRun: { content: '\n' } });
               i += 1;
             }
-            cells.push({ cell: cell, start: start, textStart: start, textEnd: start + text.length, contentEnd: i - 1 });
-            row.tableCells.push({ content: [{ startIndex: start, endIndex: i, paragraph: { elements: elements } }] });
+            cells.push({ cell: cell, start: start, textStart: start, textEnd: start + text.length, contentEnd: i - 1, table: child, r: r, c: c });
+            row.tableCells.push({ startIndex: start - 1, endIndex: i, content: [{ startIndex: start, endIndex: i, paragraph: { elements: elements } }] });
           }
           element.table.tableRows.push(row);
         }
         i += 1;
         element.endIndex = i;
         element._child = child;
+        // Round 3: the widths of the columns, as the first row has them.
+        element.table.tableStyle = { tableColumnProperties: Array.from({ length: child.getNumRows() ? child.getRow(0).getNumCells() : 0 }, (x, k) => {
+          const w = child.getRow(0).getCell(k)._width;
+          return typeof w === 'number' ? { width: { magnitude: w, unit: 'PT' }, widthType: 'FIXED_WIDTH' } : { widthType: 'EVENLY_DISTRIBUTED' };
+        }) };
         content.push(element);
       } else {
         const text = child.getText();
         content.push({ startIndex: i, endIndex: i + text.length + 1, _child: child, paragraph: { paragraphStyle: { namedStyleType: child.getHeading && child.getHeading() !== 'NORMAL' ? 'HEADING_1' : 'NORMAL_TEXT' },
-          elements: [{ startIndex: i, endIndex: i + text.length + 1, textRun: { content: text + '\n' } }] } });
+          elements: [{ startIndex: i, endIndex: i + text.length + 1, textRun: { content: text + '\n', textStyle: { bold: !!child._bold } } }] } });
         i += text.length + 1;
       }
     });
@@ -154,7 +189,7 @@ function makeFakeDocsApi(options) {
   // The unsaved changes of DocumentApp will be another revision once they are saved; until then the API is at the old one.
   let saved = null;
   const publicContent = () => render().content.map((e) => { const o = Object.assign({}, e); delete o._child; return o; });
-  body._state.onFirstTouch = () => { saved = clone({ definitions: definitions, content: publicContent(), revisionId: revisionOf(counters.revision) }); counters.revision++; };
+  body._state.onFirstTouch = () => { fresh(); const was = body._state.paused; body._state.paused = true; try { saved = clone({ definitions: definitions, content: publicContent(), revisionId: revisionOf(counters.revision) }); } finally { body._state.paused = was; fresh(); } counters.revision++; };
   const view = () => (body._state.dirty && saved ? saved : { definitions: definitions, content: publicContent(), revisionId: revisionOf(counters.revision) });
 
   /** After T-2026.10.29: the cell whose content (its line end aside) holds index `at` (inclusive at its end), with its parts and their positions. */
@@ -170,6 +205,7 @@ function makeFakeDocsApi(options) {
 
   function applyRequest(request, n) {
     const kind = Object.keys(request)[0];
+    if (['deleteContentRange', 'insertText', 'insertDropdown', 'insertSectionBreak', 'updateSectionStyle', 'updateDropdownProperties', 'updateDropdownDefinitionProperties', 'createDropdownDefinition'].indexOf(kind) !== -1) fresh();
     const r = request[kind];
     const bad = (message) => refuse('Invalid requests[' + n + '].' + kind + ': ' + message);
     const checkTab = (tabId) => { if (tabId !== undefined && tabId !== REPORT_TAB_ID) throw bad('The tab ' + tabId + ' does not exist.'); };
@@ -320,21 +356,75 @@ function makeFakeDocsApi(options) {
       return {};
     }
 
+    // Round 3: the formatting requests of the summary's tables.
+    const tableAt = (location) => { const e = render().content.filter((x) => x.table && x.startIndex === (location || {}).index)[0]; if (!e) throw bad('There is no table at index ' + (location || {}).index + '.'); return e._child; };
+    const cellOfRange = (range) => {
+      const hit = render().cells.filter((x) => range.startIndex >= x.start && range.endIndex <= x.contentEnd + 1 && range.startIndex < range.endIndex)[0];
+      if (!hit) throw bad('The range ' + range.startIndex + '..' + range.endIndex + ' is not inside one table cell (the fake formats inside one cell only).');
+      return hit;
+    };
+    if (kind === 'updateTableColumnProperties') {
+      checkTab((r.tableStartLocation || {}).tabId);
+      const t = tableAt(r.tableStartLocation);
+      const w = r.tableColumnProperties && r.tableColumnProperties.width && r.tableColumnProperties.width.magnitude;
+      if (typeof w !== 'number') throw bad('A width is required.');
+      (r.columnIndices || []).forEach((k) => { for (let row = 0; row < t.getNumRows(); row++) if (t.getRow(row).getCell(k)) t.getRow(row).getCell(k)._width = w; });
+      return {};
+    }
+    if (kind === 'updateTableRowStyle') {
+      checkTab((r.tableStartLocation || {}).tabId);
+      const t = tableAt(r.tableStartLocation);
+      (r.rowIndices || []).forEach((k) => { if (t.getRow(k)) t.getRow(k)._minHeight = r.tableRowStyle.minRowHeight.magnitude; });
+      return {};
+    }
+    if (kind === 'updateTableCellStyle') {
+      const location = r.tableRange && r.tableRange.tableCellLocation;
+      checkTab((location && location.tableStartLocation || {}).tabId);
+      const t = tableAt(location && location.tableStartLocation);
+      const rgb = r.tableCellStyle.backgroundColor.color.rgbColor;
+      const hex = '#' + [rgb.red, rgb.green, rgb.blue].map((v) => Math.round(v * 255).toString(16).padStart(2, '0')).join('').toUpperCase();
+      for (let row = location.rowIndex; row < location.rowIndex + r.tableRange.rowSpan; row++) for (let k = location.columnIndex; k < location.columnIndex + r.tableRange.columnSpan; k++) t.getRow(row).getCell(k)._background = hex;
+      return {};
+    }
+    if (kind === 'updateTextStyle') {
+      checkTab((r.range || {}).tabId);
+      const hit = cellOfRange(r.range || {});
+      const fields = String(r.fields || '');
+      if (/(^|,)\s*bold\s*(,|$)/.test(fields)) hit.cell._bold = !!r.textStyle.bold;
+      if (/(^|,)\s*link\s*(,|$)/.test(fields)) {
+        if (hit.textStart === null) throw bad('FAKE DOCS API: links are set in cells of text only.');
+        hit.cell._links.push([r.range.startIndex - hit.start, r.range.endIndex - hit.start - 1, r.textStyle.link ? r.textStyle.link.url : null]);
+      }
+      return {};
+    }
+    if (kind === 'updateParagraphStyle') {
+      checkTab((r.range || {}).tabId);
+      const hit = cellOfRange(r.range || {});
+      hit.cell._spacing = [r.paragraphStyle.spaceAbove.magnitude, r.paragraphStyle.spaceBelow.magnitude];
+      return {};
+    }
+
     throw bad('This request is not supported by the fake Docs API.');
   }
 
+  let getNow = null;
+  let batchNow = null;
   api.Docs = { Documents: {
-    get: (id, opts) => {
+    get: (id, opts) => { const was = body._state.paused; body._state.paused = true; fresh(); try { return getNow(id, opts); } finally { body._state.paused = was; fresh(); } },
+    _get: (id, opts) => {
       api.calls.push({ call: 'get', id: id, fields: (opts && opts.fields) || null, includeTabsContent: !!(opts && opts.includeTabsContent) });
       if (api.fail.get) { const message = api.fail.get(id, opts, api.calls.length); if (message) throw refuse(message); }
       if (id === reportId) {
         const v = view();
-        return clone({ revisionId: v.revisionId, tabs: [{ tabProperties: { tabId: REPORT_TAB_ID }, documentTab: { dropdownDefinitions: v.definitions, body: { content: v.content } } }] });
+        return clone({ revisionId: v.revisionId, tabs: [{ tabProperties: { tabId: REPORT_TAB_ID }, documentTab: { dropdownDefinitions: v.definitions,
+          documentStyle: { pageSize: { height: { magnitude: 841.89, unit: 'PT' }, width: { magnitude: 595.28, unit: 'PT' } }, marginLeft: { magnitude: 72, unit: 'PT' }, marginRight: { magnitude: 72, unit: 'PT' } },
+          body: { content: v.content } } }] });
       }
       if (sources[id]) return clone(sources[id]);
       throw refuse('Requested entity was not found.');
     },
-    batchUpdate: (resource, id) => {
+    batchUpdate: (resource, id) => { const was = body._state.paused; body._state.paused = true; fresh(); try { return batchNow(resource, id); } finally { body._state.paused = was; fresh(); } },
+    _batchUpdate: (resource, id) => {
       const requests = (resource && resource.requests) || [];
       api.calls.push({ call: 'batchUpdate', id: id, requests: clone(requests), dirty: body._state.dirty });
       if (id !== reportId) throw refuse('The fake Docs API writes to the report only: ' + id);
@@ -345,14 +435,14 @@ function makeFakeDocsApi(options) {
       api.calls[api.calls.length - 1].requiredRevisionId = required || null;
       if (required && required !== revisionOf(counters.revision)) throw refuse('Invalid requests: The required revision ID \'' + required + '\' does not match the latest revision.');
       // All or nothing.
-      const before = { cells: allCells().map((c) => ({ c: c, t: c._t, d: c._dropdown ? Object.assign({}, c._dropdown) : null, parts: c._parts ? clone(c._parts) : null })), definitions: clone(definitions), counters: Object.assign({}, counters),
+      const before = { cells: allCells().map((c) => ({ c: c, t: c._t, d: c._dropdown ? Object.assign({}, c._dropdown) : null, parts: c._parts ? clone(c._parts) : null, links: c._links.slice(), bold: c._bold, width: c._width, background: c._background, spacing: c._spacing.slice() })), definitions: clone(definitions), counters: Object.assign({}, counters),
         breaks: body._children.map((ch) => [ch, ch._sectionBreakBefore ? Object.assign({}, ch._sectionBreakBefore) : undefined]) };
       try {
         const replies = requests.map((request, n) => applyRequest(request, n));
         counters.revision++;
         return { replies: replies, writeControl: api.noRevisionInReply ? undefined : { requiredRevisionId: revisionOf(counters.revision) } };
       } catch (e) {
-        before.cells.forEach((x) => { x.c._t = x.t; x.c._dropdown = x.d; x.c._parts = x.parts; });
+        before.cells.forEach((x) => { x.c._t = x.t; x.c._dropdown = x.d; x.c._parts = x.parts; x.c._links = x.links; x.c._bold = x.bold; x.c._width = x.width; x.c._background = x.background; x.c._spacing = x.spacing; });
         before.breaks.forEach(([ch, b]) => { if (b) ch._sectionBreakBefore = b; else delete ch._sectionBreakBefore; });
         Object.keys(definitions).forEach((k) => delete definitions[k]);
         Object.assign(definitions, before.definitions);
@@ -361,6 +451,9 @@ function makeFakeDocsApi(options) {
       }
     }
   } };
+
+  getNow = api.Docs.Documents._get;
+  batchNow = api.Docs.Documents._batchUpdate;
 
   /** A read-only document with one dropdown definition per entry of `list` ({ title, options: [{ displayValue, textStyle }] }), in a tab or a child tab. */
   api.addSource = (id, list, inChildTab) => {

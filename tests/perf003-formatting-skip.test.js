@@ -59,7 +59,8 @@ console.log('shouldReformatAfterUpdate_() -- pure structural-change decision');
 console.log('source-structure: continuousUpdateCore_() feeds its REAL newTdocsAdded/rev.moved/counter into the decision');
 
 {
-  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  // After T-2026.10.29: read without Goes to Plenary, which formats only the changed tables (tests/goes-to-plenary.test.js).
+  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
   // PERF-003B (Part 2): continuousUpdate() is now a thin lock-acquiring
   // public wrapper (see tests/perf003b-lock.test.js) -- the actual logic
   // that computes/consumes these signals lives in continuousUpdateCore_().
@@ -89,7 +90,8 @@ console.log('source-structure: continuousUpdateCore_() feeds its REAL newTdocsAd
 console.log('source-structure: fetchAndAddAbstract_() counts the structural row it inserts into an EXISTING table');
 
 {
-  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  // After T-2026.10.29: read without Goes to Plenary, which formats only the changed tables (tests/goes-to-plenary.test.js).
+  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
   const fnStart = source.indexOf('function fetchAndAddAbstract_(');
   const nextFnMatch = source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m);
   const fnEnd = nextFnMatch ? fnStart + 1 + nextFnMatch.index : source.length;
@@ -104,7 +106,8 @@ console.log('source-structure: fetchAndAddAbstract_() counts the structural row 
 console.log('source-structure: full-build/"Update All"/manual formatting call sites remain UNCONDITIONAL (item 4)');
 
 {
-  const source = fs.readFileSync(CODE_JS_PATH, 'utf8');
+  // After T-2026.10.29: read without Goes to Plenary, which formats only the changed tables (tests/goes-to-plenary.test.js).
+  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
   // Every literal "removeRowHeightAndSpacing(...)" call site in the file,
   // with a few characters of context to classify it. ADDON-004:
   // removeRowHeightAndSpacing() now takes an optional `context` argument
