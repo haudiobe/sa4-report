@@ -718,7 +718,7 @@ console.log('H. backward safety: a report without a summary is never given one; 
   check('a rebuild of a report that had none says nothing about it', /Disposition Summary/.test(plain.phases[0].detail), false);
   // The update path keeps a summary only where there is no background context (pinned by the ledger in I as well).
   // After T-2026.10.29: read without Goes to Plenary, which adds its own step before it (tests/goes-to-plenary.test.js).
-  const src = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
+  const src = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(require('./helpers/before-structure-fix.js').codeWithoutUndisposedDocuments(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code).code;
   check('the update keeps a summary only in a run with the document open (not in a background run), for the TDocs the report has registered', /\n    if \(!context\) \{\n      const summary = syncDispositionSummaryOnUpdate_\(body\);/.test(src), true);
 }
 

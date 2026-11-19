@@ -50,7 +50,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadCode, CODE_JS_PATH } = require('./helpers/load-code.js');
 const { templateReport } = require('./helpers/template-report.js');
-const { codeWithoutRelease2_26_15Header, codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS,
+const { codeWithoutUndisposedDocuments, codeWithoutRelease2_26_15Header, codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS,
   PLENARY_CREATOR_CHANGED_FUNCTIONS } = require('./helpers/before-structure-fix.js');
 
 let failures = 0;
@@ -292,7 +292,7 @@ let afterFirst;
   check('one summary, four tables, in the order asked for, with counts', [r.headings(), s.map((c) => c[0])], [1, [TITLES[0] + ' (0)', TITLES[1] + ' (1)', TITLES[2] + ' (6)', TITLES[3] + ' (10)']]);
   check('the columns: six for the tables going to plenary, five -- no SA4 plenary agenda item -- for the two not going to plenary', [s[1][1][0], s[2][1][0], s[3][1][0], s[2][1].every((x) => x.length === 5), s[3][1].every((x) => x.length === 5)],
     [HEADER, HEADER5, HEADER5, true, true]);
-  check('the widths: the Title is the widest column of every table, on the landscape page (A4: 698 pt, rounding aside)', r.body._children.filter((c) => isTable(c) && (c.getRow(0).getNumCells() === 6 || c.getRow(0).getNumCells() === 5) && c.getRow(0).getCell(1).getText() === 'Title')
+  check('the widths: the Title is the widest column of every table, on the landscape page (A4: 698 pt, rounding aside)', r.body._children.filter((c) => isTable(c) && (c.getRow(0).getNumCells() === 6 || c.getRow(0).getNumCells() === 5) && c.getRow(0).getCell(1).getText() === 'Title' && c.getRow(0).getCell(0).getText() !== 'Document' /* T-2026.10.32: not the Undisposed Documents table of the portrait opening */)
     .map((t) => { const w = Array.from({ length: t.getRow(0).getNumCells() }, (x, k) => t.getRow(0).getCell(k)._width); return [w.indexOf(Math.max(...w)), Math.abs(w.reduce((a, b) => a + b, 0) - 698) <= 2]; }), [[1, true], [1, true], [1, true]]);
   check('the header bold on its background, no bold below it, no spacing', (() => { const t = r.body._children.filter((c) => isTable(c) && c.getRow(0).getNumCells() === 5 && c.getRow(0).getCell(1).getText() === 'Title')[0];
     return [t.getRow(0).getCell(0)._bold, t.getRow(0).getCell(0)._background, t.getRow(1).getCell(1)._bold, t.getRow(1).getCell(1)._spacing]; })(), [true, '#D9EAF7', false, [0, 0]]);
@@ -560,6 +560,32 @@ try {
     check('far fewer DocumentApp calls than the second candidate: at least 5x fewer for an unchanged update, 3x for the others',
       [ratio('unchanged') >= 5, ratio('oneStatusOnePlenary') >= 3, ratio('newTdocAndPortalStatus') >= 3], [true, true, true]);
   }
+}
+
+// T-2026.10.32: the Undisposed Documents section in a report WITHOUT Goes to Plenary (Status dropdowns, so the update has its
+// Docs API read): its statuses and the section come from that read; only a change is written, row by row. Each update ends
+// with the save of the execution, as in Google Docs.
+{
+  const ledger = require('./helpers/before-structure-fix.js');
+  const run = (code) => {
+    const m = mbs(Object.assign({ tdocs: SEVENTY_FIVE() }, code ? { code: code } : {}));
+    const up = m.update;
+    m.update = function () { const r = up.apply(this, arguments); m.body._state.dirty = false; m.body._state.closed = false; return r; };
+    m.build(); m.body._state.dirty = false; m.update(); m.update();
+    const c = () => m.body._state.calls;
+    const a = c(); m.update(); const b = c();
+    m.tdocs.push({ id: 'S4-263076', agenda: '8.6', status: 'reserved', title: 'A new contribution', uploaded: true });
+    m.update(); const d = c(); m.update(); const e = c();
+    return { m: m, unchanged: b - a, newTdoc: d - b, next: e - d };
+  };
+  const now = run(null);
+  const before = run(ledger.codeWithoutUndisposedDocuments(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code);
+  console.log('  without Goes to Plenary, DocumentApp calls of T-2026.10.31 / this one: unchanged ' + before.unchanged + ' / ' + now.unchanged + ', new TDoc ' + before.newTdoc + ' / ' + now.newTdoc + ', the next update ' + before.next + ' / ' + now.next);
+  const kids = now.m.body._children;
+  const table = kids.find((x) => x.getType() === 'TABLE' && x.getRow(0).getCell(0).getText() === 'Document');
+  const first = table ? Array.from({ length: table.getNumRows() }, (_, i) => table.getRow(i).getCell(0).getText()) : [];
+  check('without Goes to Plenary: the section 8.1.4 from the update\'s read; the new reserved TDoc in it by the next update', [now.m.docProps.getProperty('GOES_TO_PLENARY'), kids.some((x) => x.getType() !== 'TABLE' && x.getText() === '8.1.4 Undisposed Documents'), first.indexOf('S4-263076') !== -1], [null, true, true]);
+  check('and it costs little: an unchanged update at most 50 DocumentApp calls more than T-2026.10.31, a new TDoc at most 300 more', [now.unchanged - before.unchanged <= 50, now.newTdoc - before.newTdoc <= 300, now.next - before.next <= 300], [true, true, true]);
 }
 
 // ====================================================================== N
@@ -1023,7 +1049,7 @@ console.log('K. what changed in Code.js and ReportCreator.js, and nothing else')
   const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
   const CREATOR = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
   // The release header of T-2026.10.30 (2.26.14) is taken out first.
-  const view = codeWithoutGoesToPlenary(codeWithoutRelease2_26_14Header(codeWithoutRelease2_26_15Header(FULL).code).code);
+  const view = codeWithoutGoesToPlenary(codeWithoutRelease2_26_14Header(codeWithoutRelease2_26_15Header(codeWithoutUndisposedDocuments(FULL).code).code).code);
   const creatorView = creatorWithoutGoesToPlenary(CREATOR);
   check('every change is in Code.js and ReportCreator.js exactly once', view.problems.concat(creatorView.problems), []);
   const names = (src) => (src.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));
@@ -1031,8 +1057,10 @@ console.log('K. what changed in Code.js and ReportCreator.js, and nothing else')
   const section = FULL.slice(FULL.indexOf(PLENARY_SECTION_START), FULL.indexOf(PLENARY_SECTION_END) + PLENARY_SECTION_END.length);
   check('the section: these functions, in this order', names(section), PLENARY_SECTION_FUNCTIONS);
   check('it stands directly after the Disposition Summary and Close Report', FULL.indexOf('// END OF DISPOSITION SUMMARY AND CLOSE REPORT\n// =========================================================\n\n' + PLENARY_SECTION_START) !== -1, true);
-  check('the released functions it changed', names(view.code).filter((n) => bodyOf(FULL, n) !== bodyOf(view.code, n)).sort(), PLENARY_CHANGED_FUNCTIONS.slice().sort());
-  check('the new functions are those of the section; none removed', [names(FULL).filter((n) => names(view.code).indexOf(n) === -1).sort(), names(view.code).filter((n) => names(FULL).indexOf(n) === -1)],
+  // T-2026.10.32 came after: what this layer changed is compared without it.
+  const LAYER = codeWithoutUndisposedDocuments(FULL).code;
+  check('the released functions it changed', names(view.code).filter((n) => bodyOf(LAYER, n) !== bodyOf(view.code, n)).sort(), PLENARY_CHANGED_FUNCTIONS.slice().sort());
+  check('the new functions are those of the section; none removed', [names(LAYER).filter((n) => names(view.code).indexOf(n) === -1).sort(), names(view.code).filter((n) => names(LAYER).indexOf(n) === -1)],
     [PLENARY_SECTION_FUNCTIONS.slice().sort(), []]);
   check('the released functions of ReportCreator.js it changed: the menu', names(creatorView.code).filter((n) => bodyOf(CREATOR, n) !== bodyOf(creatorView.code, n)), PLENARY_CREATOR_CHANGED_FUNCTIONS);
   let released = null;
@@ -1060,8 +1088,9 @@ console.log('K. what changed in Code.js and ReportCreator.js, and nothing else')
   check('DocumentApp never rewrites a Status cell: no setText() on it in the section but through setStatusCellText_(), which keeps the compact row',
     [(section.match(/statusCell\.setText\(|info\.cell\.setText\(/g) || []).length, /if \(!isCompactStatusCellText_\(text\)\) \{\n    cell\.setText\(status\);/.test(fnOf('setStatusCellText_'))], [0, true]);
   check('the revision relationship comes from the TDoc list only: "Revised to" and "Is revision of", nothing else', [/revisedTo|isRevisionOf/.test(fnOf('plenaryPredecessorsOf_')), /folder|listing|title/i.test(fnOf('plenaryPredecessorsOf_'))], [true, false]);
-  const changed = execFileSync('git', ['diff', '--name-only', 'template-release/T-2026.10.29', '--', 'tools'], { cwd: ROOT }).toString().trim();
-  check('the local listing agent is not touched', changed, '');
+  // Up to T-2026.10.31 (af08ae1); T-2026.10.32 changes the agent on purpose (the Docs folder).
+  const changed = execFileSync('git', ['diff', '--name-only', 'template-release/T-2026.10.29', 'af08ae1', '--', 'tools'], { cwd: ROOT }).toString().trim();
+  check('the local listing agent is not touched (up to T-2026.10.31)', changed, '');
 }
 
 console.log(failures === 0 ? '\nAll Goes to Plenary checks passed.' : `\n${failures} check(s) FAILED.`);

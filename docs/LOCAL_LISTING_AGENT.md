@@ -144,6 +144,16 @@ desktop signed in to the account that runs the reports (or one they can read).
 5. **Each report.** *⚙️ Configure Meeting… › Local listing folder*: paste the folder ID or URL,
    Save. The next update (automatic or *Update TDoc Revisions*) imports; *Check Connections* shows it.
 
+## The Docs folder (after T-2026.10.31, T-2026.10.32)
+
+With `"docsUrl": "http://10.10.10.10/ftp/SA/SA4/Docs/"` in `agent.config.json`, every run also
+lists the Docs folder of the meeting-room server, with the same checks and the same atomic files,
+as the group `Docs`: `Docs.listing.json` and `Docs.status.json` beside the groups' files.
+`-Group Docs` lists it alone. Without `docsUrl` nothing changes. The reports use it to take a
+TDoc whose file is there, named exactly by its number, from Reserved to Available
+(docs/UNDISPOSED_AND_LOCAL_DOCS.md § B). A failure of the Docs folder is its own: the groups are
+still listed, and its last good listing is kept.
+
 ## Failure behaviour
 
 | Situation | Agent | Report |

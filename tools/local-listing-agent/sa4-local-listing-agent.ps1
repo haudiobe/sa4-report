@@ -11,12 +11,19 @@ Task Scheduler (install-scheduled-task.ps1). One run scans every working group o
                                  never a TDoc file; written atomically (temp file + rename)
   <outDir>\<group>.status.json   last attempt, last success, error (informative)
 
+After T-2026.10.31 (T-2026.10.32): with "docsUrl" in agent.config.json (the Docs folder of the
+meeting-room server, http://10.10.10.10/ftp/SA/SA4/Docs/), every run also lists that folder, with
+the same checks, as the group "Docs": <outDir>\Docs.listing.json and Docs.status.json. A report
+takes a TDoc whose file is there (exact TDoc number) from Reserved to Available
+(docs/UNDISPOSED_AND_LOCAL_DOCS.md). Without "docsUrl" nothing changes.
+
 <outDir> is a folder that Google Drive for desktop synchronizes; the reports read it. A failed
 scan never touches the last good listing. Nothing is sent anywhere else; the meeting-room server
 is only read.
 
   .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json         (one scan of all groups)
   .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json -Group MBS
+  .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json -Group Docs     (only the Docs folder; needs "docsUrl")
   .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json -IgnoreWindow     (scan now, even overnight)
   .\sa4-local-listing-agent.ps1 -ConfigPath .\agent.config.json -CheckWindow [-AtUtc <time>]
                                  (only say whether that moment is inside the window; no scan, no file written)
@@ -41,7 +48,18 @@ $cfg = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $baseUrl = ([string]$cfg.baseUrl).TrimEnd('/') + '/'
 $outDir = [string]$cfg.outDir
 $groups = @($cfg.groups)
-if ($Group) { $groups = @($Group) }
+# The Docs folder (after T-2026.10.31): listed as the group "Docs" when "docsUrl" is configured.
+$docsUrl = ''
+if ($cfg.docsUrl) { $docsUrl = ([string]$cfg.docsUrl).TrimEnd('/') + '/' }
+$scanDocs = [bool]$docsUrl
+if ($Group) {
+  $groups = @($Group)
+  $scanDocs = $false
+  if ($Group -eq 'Docs') {
+    if (-not $docsUrl) { Write-Host 'scan not run: -Group Docs needs "docsUrl" in the configuration'; exit 2 }
+    $groups = @(); $scanDocs = $true
+  }
+}
 $timeout = 15
 if ($cfg.timeoutSeconds) { $timeout = [int]$cfg.timeoutSeconds }
 $logDir = Join-Path $env:LOCALAPPDATA 'SA4LocalListingAgent'
@@ -82,8 +100,10 @@ function Get-ListingLinks([string]$Html) {
   return , $links
 }
 
-function Invoke-GroupScan([string]$G) {
+function Invoke-GroupScan([string]$G, [string]$FolderUrl) {
+  # (PowerShell names ignore case: the parameter is not called $Folder, which $folder would overwrite.)
   $folder = $baseUrl + $G + '/'
+  if ($FolderUrl) { $folder = $FolderUrl }
   $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   $statusPath = Join-Path $outDir "$G.status.json"
   $previous = $null
@@ -176,6 +196,7 @@ try {
   if (-not (Test-Path -LiteralPath $outDir)) { throw "output folder $outDir does not exist (is Google Drive for desktop running?)" }
   $failed = 0
   foreach ($g in $groups) { if (-not (Invoke-GroupScan $g)) { $failed++ } }
+  if ($scanDocs) { if (-not (Invoke-GroupScan 'Docs' $docsUrl)) { $failed++ } }
   if ($failed -gt 0) { exit 1 } else { exit 0 }
 } catch {
   Write-Log ('scan not run: ' + $_.Exception.Message)

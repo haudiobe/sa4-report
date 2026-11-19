@@ -99,6 +99,10 @@ function report(props) {
   r.save = (rows) => s.saveAdhocSessionsConfiguration(JSON.parse(JSON.stringify(rows)));
   r.texts = () => body._children.map((c) => (c.getType() === 'TABLE' ? '[' + rowsOf(c)[0].join('|') + (rowsOf(c)[0][0] === 'TDoc' && rowsOf(c)[0].length === 2 ? '' : ' x' + (c.getNumRows() - 1)) + ']' : c.getText()));
   r.snapshot = () => JSON.stringify(body._children.map((c) => (c.getType() === 'TABLE' ? ['T', rowsOf(c)] : ['P', c.getText(), c.getHeading()])));
+  // T-2026.10.32: the report without its Undisposed Documents section (its heading, its two lines, its table or "None.").
+  r.withoutUndisposed = () => { const out = []; let inSection = false; body._children.forEach((c) => { const isTable = c.getType() === 'TABLE'; const heading = !isTable && c.getHeading() !== 'NORMAL';
+    if (heading) inSection = / Undisposed Documents$/.test(c.getText()); if (inSection) return; out.push(isTable ? ['T', rowsOf(c)] : ['P', c.getText(), c.getHeading()]); }); return JSON.stringify(out); };
+  r.undisposedHeading = () => r.texts().find((x) => / Undisposed Documents$/.test(x)) || null;
   r.section = () => { const at = r.texts().indexOf(HEADING); if (at === -1) return null; const out = [HEADING]; for (let i = at + 1; i < body.getNumChildren() && body.getChild(i).getType() !== 'TABLE' && body.getChild(i).getHeading() === 'NORMAL'; i++) out.push(body.getChild(i).getText()); return out; };
   r.tdocTables = () => body._children.filter((c) => c.getType() === 'TABLE' && rowsOf(c)[0][0] === 'TDoc' && rowsOf(c)[0].length === 2).map((t) => rowsOf(t)[0][1]);
   r.registration = () => { const t = body._children.filter((c) => c.getType() === 'TABLE' && rowsOf(c)[0].join('|') === 'TDoc|Title|Source|Agenda Item')[0]; return t ? rowsOf(t).slice(1).map((x) => x[0]) : null; };
@@ -142,7 +146,8 @@ console.log('2. Update Report Now');
   r.body.insertParagraph(at + 1, OPENING_MINUTES);
   const before = r.snapshot();
   const first = r.update();
-  check('an update without new TDocs: the report is unchanged', [first.success !== false, r.snapshot() === before, r.inserted], [true, true, []]);
+  // T-2026.10.32: the first update writes the Undisposed Documents section, 7.1.4 here (the next free number of the opening, never below 4); nothing else changes.
+  check('an update without new TDocs: the report is unchanged but for the new Undisposed Documents section (7.1.4)', [first.success !== false, r.withoutUndisposed() === before, r.inserted, r.undisposedHeading()], [true, true, [], '7.1.4 Undisposed Documents']);
   r.tdocs.push(['S4-261804', '7.1', 'available', '2026-11-16 16:00:00'], ['S4-261805', '7.5', 'available', '2026-11-16 17:00:00'], ['S4-261806', '8.5', 'available', '2026-11-16 17:00:00']);
   const second = r.update();
   check('the new Audio TDocs are inserted, the Video one is not', [second.success !== false, r.inserted.slice().sort()], [true, ['S4-261804 @7.1', 'S4-261805 @7.5']]);

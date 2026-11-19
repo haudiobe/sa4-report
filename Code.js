@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.26.15 (2026-11-18)
+ * Version: 2.27.0 (2026-11-19)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,18 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.27.0 (2026-11-19)
+ *   (T-2026.10.32, on T-2026.10.31 / 2.26.15.)
+ *   - New: the Undisposed Documents section at the end of the opening
+ *     item (X.1.4 in a standard report, 11.0.5 in 6G Media; the next free
+ *     number, no heading renamed): every TDoc with Status Available,
+ *     Parked or Reserved whose Plenary is No or blank. Written by every
+ *     update, only when it changes; text typed below its table is kept.
+ *   - New: the local listing agent also lists the Docs folder of the
+ *     meeting-room server; a TDoc the list still has as reserved whose
+ *     file is there (exact TDoc number) moves from Reserved to Available.
+ *     Final dispositions and Minutes are never changed; a missing or
+ *     stale listing changes and reverts nothing.
  * 2.26.15 (2026-11-18)
  *   (T-2026.10.31, a hotfix on T-2026.10.30 / 2.26.14.)
  *   - Fixed: Set Up Goes to Plenary (and an update of a report that has
@@ -1408,6 +1420,8 @@ function continuousUpdateCore_(context) {
       result.notUpdated = true;
       throw e;
     }
+    // After T-2026.10.31: a TDoc the meeting-room server has is no longer taken as reserved (UNDISPOSED DOCUMENTS section).
+    applyLocalDocsAvailabilitySafely_(tdocGroups, context);
     const allTdocs = [];
     Object.keys(tdocGroups).forEach(key => {
       tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
@@ -1565,6 +1579,8 @@ function continuousUpdateCore_(context) {
       if (plenary.state !== 'off') result.goesToPlenary = plenary.state;
       const summary = syncDispositionSummaryOnUpdate_(body);
       if (summary.state !== 'absent') result.dispositionSummary = summary.state;
+      // After T-2026.10.31: the Undisposed Documents section of a main report (UNDISPOSED DOCUMENTS section).
+      syncUndisposedDocumentsOnUpdate_(body);
     }
 
     // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
@@ -10505,6 +10521,9 @@ function testAllConnections() {
   if (localRevisionsStatus) results.push('   ' + localRevisionsStatus);
   // After T-2026.10.27: the local listing agent (LOCAL LISTING AGENT section).
   if (localRevisions) results.push('   ' + describeLocalListingAgentStatus_(getReportStateStore_().getProperty(LOCAL_LISTING_STATE_KEY_), localListingFolderIdOf_(getReportStateStore_().getProperty(LOCAL_LISTING_FOLDER_KEY_)), new Date()).split('\n').join('\n   '));
+  // After T-2026.10.31: the Docs folder of the meeting-room server, through the agent (UNDISPOSED DOCUMENTS section).
+  const localDocsStatus = localRevisions ? describeLocalDocsStatus_(getReportStateStore_().getProperty(LOCAL_DOCS_STATE_KEY_)) : '';
+  if (localDocsStatus) results.push('   ' + localDocsStatus);
 
   results.push('\n\n✅ Connection test complete!');
   
@@ -12834,6 +12853,8 @@ function buildSkeletonWithTdocTables(options) {
 
   // After T-2026.10.16: refused here, before the document is cleared, when it is not the meeting's list.
   const tdocGroups = downloadAndGroupTdocs_(cfg, undefined, savedReallocations, 'build');
+  // After T-2026.10.31: a TDoc the meeting-room server has is no longer taken as reserved (UNDISPOSED DOCUMENTS section).
+  applyLocalDocsAvailabilitySafely_(tdocGroups);
 
   // Ad-hoc attendance (stage D): the Company cells typed into the attendee
   // tables are kept before the document is cleared. null, and nothing read
@@ -23617,6 +23638,8 @@ function writeDispositionSummary_(body, options) {
       model: buildDispositionSummaryModel_([]), foreign: [] };
   }
   const read = readReportDispositions_(body, options);
+  // After T-2026.10.31: the same read gives the Undisposed Documents section of this update (UNDISPOSED DOCUMENTS section).
+  rememberDispositionReadForUndisposed_(scope, read);
   // A scope that has none of the TDocs of the report's TDoc tables does not
   // describe this report (6G smoke copy, 2026-10-30: the Portal list of the
   // meeting ID gave 36 TDocs of another call, the report had 114 others):
@@ -25112,6 +25135,8 @@ function finalizePlenarySelection_(mode, saved) {
         const reopened = reopenReportDocument_(documentId);
         const written = writePlenaryDispositionSummary_(reopened.getBody(), { documentId: documentId });
         result.summary = written.state;
+        // After T-2026.10.31: the Undisposed Documents section, from the same read (UNDISPOSED DOCUMENTS section).
+        result.undisposed = syncUndisposedDocumentsAfterPlenarySummary_(reopened, written).state;
         if (written.error) result.summaryError = written.error;
         if (written.foreign && written.foreign.length) result.foreign = written.foreign;
         if (written.rewritten) {
@@ -25590,7 +25615,8 @@ function writePlenaryDispositionSummary_(body, options) {
       return { state: 'failed', error: 'the new summary is written, but the old one could not be taken out (' + e.message + ')', read: read, model: model, foreign: [], rewritten: true };
     }
   }
-  return { state: section ? 'replaced' : 'created', read: read, model: model, foreign: [], rewritten: true };
+  // After T-2026.10.31: its read of the document, for the Undisposed Documents section before it (UNDISPOSED DOCUMENTS section).
+  return { state: section ? 'replaced' : 'created', read: read, model: model, foreign: [], rewritten: true, readContent: snapshot.content };
 }
 
 /**
@@ -26707,6 +26733,754 @@ function setUpGoesToPlenary() {
 
 // =========================================================
 // END OF GOES TO PLENARY
+// =========================================================
+
+// =========================================================
+// UNDISPOSED DOCUMENTS AND LOCAL DOCUMENT AVAILABILITY (after T-2026.10.31)
+// =========================================================
+//
+// A. UNDISPOSED DOCUMENTS (docs/UNDISPOSED_AND_LOCAL_DOCS.md § A). A section
+//    of its own at the end of the opening item of the report: "X.1.4
+//    Undisposed Documents" in a standard report, "11.0.5 Undisposed
+//    Documents" in the 6G Media report -- the next free number below the
+//    item that holds "Registration of Documents", never lower than .4 (.3 is
+//    kept for Document Reallocations, created when it is needed). No heading
+//    of the report is renamed or moved for it; its own heading follows the
+//    numbers of the others (an "X.1.4 Documents" makes it X.1.5).
+//    It lists every TDoc of the report (the TDocs it has registered, as the
+//    Disposition Summary) whose Status is Available, Parked or Reserved and
+//    whose Plenary is No or blank, in the order of the report: Document,
+//    Title, Source, Status, Agenda Item. Every update writes it, from the
+//    read the Disposition Summary makes, and only when what it says changes.
+//    What it owns is its heading, its note, its count line and its table (or
+//    "None."). Text typed into it, above its table, stops it from being
+//    written; text typed below its table is kept. Nothing else of the report
+//    is touched: the four disposition tables, minutes, statuses.
+//    The table's first column is "Document", not "TDoc": a table whose first
+//    cell is "TDoc" is read as a TDoc, registration, reallocation or summary
+//    table by the rest of the report.
+//
+// B. LOCAL DOCUMENT AVAILABILITY (§ B). The local listing agent also reads
+//    the Docs folder of the meeting-room server (http://10.10.10.10/ftp/SA/SA4/Docs/)
+//    and writes Docs.listing.json into its Drive folder, beside the listings
+//    of the groups' drafts. Google cannot reach the server itself. An update
+//    (and Build from Scratch) reads that listing with the checks of the
+//    revisions' listings: complete, of that folder on the report's
+//    meeting-room server, at most 30 minutes old. A file whose name is exactly
+//    a TDoc number (S4-261234.zip; not S4-261234_r1.zip, not S4-2612345) is
+//    that TDoc, present. Such a TDoc is remembered (LOCAL_DOCS_CONFIRMED),
+//    and while the TDoc list still says "reserved" for it, the update takes
+//    it as "available" -- the Portal sync then moves the Status from Reserved
+//    to Available by its own rule, which moves only from Reserved or
+//    Available. A final disposition, the Minutes and every other status are
+//    never changed by it. A missing, stale or invalid listing, or a server that
+//    is down, changes nothing and reverts nothing: what was confirmed stays
+//    confirmed. The Portal's own statuses and uploads are read as before.
+
+const UNDISPOSED_TITLE_ = 'Undisposed Documents';
+const UNDISPOSED_NOTE_ = 'TDocs whose Status is Available, Parked or Reserved and whose Plenary is No or blank, in the order of the report. Written by every update; text typed below the table is kept.';
+const UNDISPOSED_COUNT_PREFIX_ = 'Not yet disposed, not going to plenary';
+const UNDISPOSED_NONE_ = 'None.';
+const UNDISPOSED_TABLE_HEADER_ = ['Document', 'Title', 'Source', 'Status', 'Agenda Item'];
+const UNDISPOSED_TABLE_WIDTHS_ = [0.16, 0.40, 0.22, 0.11, 0.11];
+const UNDISPOSED_STATUSES_ = ['available', 'parked', 'reserved'];
+// The lowest number it takes: .1 Opening, .2 Registration of Documents, .3 Document Reallocations come first.
+const UNDISPOSED_FIRST_NUMBER_ = 4;
+// The read of the Disposition Summary in this update, used again here (no second read of every TDoc table).
+let UNDISPOSED_SUMMARY_READ_ = null;
+
+/** Pure: whether an entry of the summary's read (readReportDispositions_() or its Goes to Plenary form) is undisposed. */
+function isUndisposedEntry_(entry) {
+  return !!entry && !entry.conflict && UNDISPOSED_STATUSES_.indexOf(entry.label) !== -1 && entry.plenary !== true;
+}
+
+/** Pure: what the section says below its heading: [['p', text]] and ['t', rows, links], the form undisposedReadOwned_() reads. */
+function undisposedContent_(entries) {
+  const list = (entries || []).filter(isUndisposedEntry_);
+  const line = function (text) { return String(text === null || text === undefined ? '' : text).replace(/\s+/g, ' ').trim(); };
+  const out = [['p', UNDISPOSED_NOTE_], ['p', UNDISPOSED_COUNT_PREFIX_ + ' (' + list.length + ')']];
+  if (!list.length) {
+    out.push(['p', UNDISPOSED_NONE_]);
+    return out;
+  }
+  const rows = [UNDISPOSED_TABLE_HEADER_.slice()].concat(list.map(function (e) { return [e.tdoc, line(e.title), line(e.source), line(e.status), line(e.agendaItem)]; }));
+  out.push(['t', rows, list.map(function (e) { return e.link || ''; })]);
+  return out;
+}
+
+/** Pure: the heading text of the section, or null: "7.1.4 Undisposed Documents" -> { number: '7.1.4' }. */
+function undisposedHeadingNumber_(text) {
+  const m = /^(\d+(?:\.\d+)+)\s+Undisposed Documents\s*$/.exec(String(text === null || text === undefined ? '' : text).trim());
+  return m ? m[1] : null;
+}
+
+/** Pure: the number of the item a "Registration of Documents" heading stands under: "7.1.2 Registration of Documents" -> '7.1'. */
+function undisposedParentOfRegistration_(text) {
+  const m = /^(\d+(?:\.\d+)*)\.\d+\s+Registration of Documents\s*$/i.exec(String(text === null || text === undefined ? '' : text).trim());
+  return m ? m[1] : null;
+}
+
+/** Pure: true for a paragraph the section writes. */
+function isUndisposedParagraphText_(text) {
+  return text === UNDISPOSED_NOTE_ || text === UNDISPOSED_NONE_ || new RegExp('^' + UNDISPOSED_COUNT_PREFIX_ + ' \\(\\d+\\)$').test(text);
+}
+
+/** Pure: true for the header row of the section's table. */
+function isUndisposedTableHeader_(header) {
+  return !!header && header.length === UNDISPOSED_TABLE_HEADER_.length && UNDISPOSED_TABLE_HEADER_.every(function (h, i) { return String(header[i]).trim() === h; });
+}
+
+/**
+ * Pure: where the section is, or goes, in `items` -- the body's children
+ * as { kind: 'p'|'t'|'o', heading (0 for normal text, 1-6), text, header }.
+ * Returns { error } or { parent, at, headingAt, number, wanted, ownedEnd,
+ * foreign }: `at` is where a new section goes (before the first heading
+ * after the opening item; items.length at the end); `headingAt` its heading
+ * (-1 when there is none); `number` the number it has, `wanted` the one it
+ * should have; `ownedEnd` the index after its last owned element; `foreign`
+ * the texts typed into it above its table.
+ */
+function locateUndisposedSection_(items) {
+  let reg = -1;
+  let parent = null;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'p' && it.heading) {
+      parent = undisposedParentOfRegistration_(it.text);
+      if (parent) { reg = i; break; }
+    }
+  }
+  if (reg === -1) return { error: 'the report has no "Registration of Documents" heading' };
+  const prefix = parent + '.';
+  let at = items.length;
+  let headingAt = -1;
+  let highest = UNDISPOSED_FIRST_NUMBER_ - 1;
+  for (let i = reg; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind !== 'p' || !it.heading) continue;
+    const number = agendaNumberOfHeadingText_(it.text);
+    // The opening item ends at a numbered heading of another item, or at an unnumbered heading of level 1 or 2
+    // (a numbered heading goes by its number: its level is how it was styled, not where it belongs).
+    if (i > reg && (number ? number.indexOf(prefix) !== 0 : it.heading <= 2)) { at = i; break; }
+    if (!number || number.indexOf(prefix) !== 0) continue;
+    if (undisposedHeadingNumber_(it.text)) {
+      if (headingAt === -1) headingAt = i;
+      continue;
+    }
+    const rest = number.slice(prefix.length);
+    if (/^\d+$/.test(rest)) highest = Math.max(highest, parseInt(rest, 10));
+    else if (/^\d+\./.test(rest)) highest = Math.max(highest, parseInt(rest, 10));
+  }
+  const wanted = prefix + (highest + 1);
+  if (headingAt === -1) return { parent: parent, at: at, headingAt: -1, number: null, wanted: wanted, ownedEnd: -1, foreign: [] };
+  // What it owns: from its heading on, its paragraphs and its table, with the empty paragraphs between them.
+  let ownedEnd = headingAt + 1;
+  const pending = [];
+  const foreign = [];
+  for (let i = headingAt + 1; i < at; i++) {
+    const it = items[i];
+    if (it.kind === 'p' && it.heading) break;
+    const own = (it.kind === 'p' && isUndisposedParagraphText_(it.text)) || (it.kind === 't' && isUndisposedTableHeader_(it.header));
+    if (own) {
+      pending.forEach(function (text) { foreign.push(text); });
+      pending.length = 0;
+      ownedEnd = i + 1;
+      continue;
+    }
+    if (it.kind === 'p' && !String(it.text || '').trim()) continue;
+    pending.push(it.kind === 't' ? '(a table)' : String(it.text).trim());
+  }
+  return { parent: parent, at: at, headingAt: headingAt, number: undisposedHeadingNumber_(items[headingAt].text), wanted: wanted, ownedEnd: ownedEnd, foreign: foreign };
+}
+
+/** The body's children as locateUndisposedSection_() reads them, up to the end of the opening item (DocumentApp). */
+function undisposedBodyItems_(body) {
+  const P = DocumentApp.ElementType.PARAGRAPH;
+  const T = DocumentApp.ElementType.TABLE;
+  const H = DocumentApp.ParagraphHeading;
+  const level = {};
+  level[H.HEADING1] = 1; level[H.HEADING2] = 2; level[H.HEADING3] = 3; level[H.HEADING4] = 4; level[H.HEADING5] = 5; level[H.HEADING6] = 6; level[H.TITLE] = 1; level[H.SUBTITLE] = 2;
+  const items = [];
+  const n = body.getNumChildren();
+  let registration = false;
+  let prefix = null;
+  for (let i = 0; i < n; i++) {
+    const child = body.getChild(i);
+    const type = child.getType();
+    if (type === P) {
+      const p = child.asParagraph();
+      const heading = level[p.getHeading()] || 0;
+      // Before the registration heading only headings matter; normal text is not read.
+      const text = heading || registration ? p.getText() : '';
+      items.push({ kind: 'p', heading: heading, text: text });
+      if (heading && !registration) {
+        const parent = undisposedParentOfRegistration_(text);
+        if (parent) { registration = true; prefix = parent + '.'; }
+      } else if (heading && registration) {
+        const number = agendaNumberOfHeadingText_(text);
+        if (number ? number.indexOf(prefix) !== 0 : heading <= 2) break;
+      }
+    } else if (type === T) {
+      const t = child.asTable();
+      let header = null;
+      if (registration && t.getNumRows() > 0) {
+        const row = t.getRow(0);
+        header = [];
+        for (let c = 0; c < row.getNumCells(); c++) header.push(row.getCell(c).getText().trim());
+      }
+      items.push({ kind: 't', header: header, element: t });
+    } else {
+      items.push({ kind: 'o' });
+    }
+  }
+  return items;
+}
+
+/** What the section says now (DocumentApp), in the form of undisposedContent_(). */
+function undisposedReadOwned_(body, from, to) {
+  const out = [];
+  for (let i = from; i < to; i++) {
+    const child = body.getChild(i);
+    if (child.getType() === DocumentApp.ElementType.PARAGRAPH) {
+      const text = child.asParagraph().getText();
+      if (text.trim()) out.push(['p', text]);
+    } else if (child.getType() === DocumentApp.ElementType.TABLE) {
+      const t = child.asTable();
+      const rows = [];
+      const links = [];
+      for (let r = 0; r < t.getNumRows(); r++) {
+        const row = t.getRow(r);
+        const cells = [];
+        for (let c = 0; c < row.getNumCells(); c++) cells.push(row.getCell(c).getText());
+        rows.push(cells);
+        if (r > 0) {
+          let link = '';
+          try { link = row.getCell(0).editAsText().getLinkUrl(0) || ''; } catch (e) { link = ''; }
+          links.push(link);
+        }
+      }
+      out.push(['t', rows, links]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Pure: the elements of a Docs API read of the report (`content`) as
+ * locateUndisposedSection_() reads them; each has `at`, its index in
+ * `content`. Section breaks are passed over (DocumentApp does not count them).
+ */
+function undisposedItemsOfContent_(content) {
+  const LEVEL = { TITLE: 1, SUBTITLE: 2, HEADING_1: 1, HEADING_2: 2, HEADING_3: 3, HEADING_4: 4, HEADING_5: 5, HEADING_6: 6 };
+  const items = [];
+  (content || []).forEach(function (e, at) {
+    if (e.sectionBreak) return;
+    if (e.paragraph) {
+      const style = e.paragraph.paragraphStyle ? e.paragraph.paragraphStyle.namedStyleType : '';
+      items.push({ kind: 'p', heading: LEVEL[style] || 0, text: plenaryDocsParagraphText_(e), at: at });
+    } else if (e.table) {
+      const first = (e.table.tableRows || [])[0];
+      items.push({ kind: 't', header: first ? (first.tableCells || []).map(function (c) { return docsCellFullText_(c).trim(); }) : null, at: at });
+    } else {
+      items.push({ kind: 'o', at: at });
+    }
+  });
+  return items;
+}
+
+/**
+ * Pure: the section as a Docs API read of the report (`content`) has it:
+ * { number, wanted, owned } -- its number, the number it should have, and
+ * what it says in the form of undisposedContent_() -- or null when the read
+ * has no section, or text typed into it (DocumentApp decides then).
+ */
+function undisposedOwnedOfContent_(content) {
+  if (!content || !content.length) return null;
+  const items = undisposedItemsOfContent_(content);
+  const place = locateUndisposedSection_(items);
+  if (place.error || place.headingAt === -1 || place.foreign.length) return null;
+  const owned = [];
+  for (let i = place.headingAt + 1; i < place.ownedEnd; i++) {
+    const e = content[items[i].at];
+    if (e.paragraph) {
+      const text = plenaryDocsParagraphText_(e);
+      if (text.trim()) owned.push(['p', text]);
+    } else if (e.table) {
+      const rows = (e.table.tableRows || []).map(function (row) { return (row.tableCells || []).map(function (cell) { return docsCellFullText_(cell); }); });
+      const links = (e.table.tableRows || []).slice(1).map(function (row) { return plenaryDocsLinkOf_((row.tableCells || [])[0]); });
+      owned.push(['t', rows, links]);
+    }
+  }
+  return { number: place.number, wanted: place.wanted, owned: owned };
+}
+
+/** The look of the section's table: header bold on the header colour, widths from the page, no spacing. */
+function formatUndisposedTable_(table) {
+  const widths = undisposedColumnWidths_();
+  for (let r = 0; r < table.getNumRows(); r++) formatUndisposedRow_(table.getRow(r), r === 0, widths);
+}
+
+/** The column widths of the section's table, in points, from the usable width of the page. */
+function undisposedColumnWidths_() {
+  let page = 468;
+  try { page = parseInt(getConfig_().TDOC_PAGE_USABLE_WIDTH || '468', 10) || 468; } catch (e) { page = 468; }
+  return UNDISPOSED_TABLE_WIDTHS_.map(function (share) { return Math.round(page * share); });
+}
+
+/** The look of one row of the section's table (the header: bold on the header colour). */
+function formatUndisposedRow_(row, header, widths) {
+  row.setMinimumHeight(0);
+  for (let c = 0; c < row.getNumCells(); c++) {
+    const cell = row.getCell(c);
+    cell.editAsText().setBold(header);
+    if (header) cell.setBackgroundColor(ADHOC_TABLE_HEADER_BACKGROUND_);
+    if (c < widths.length) cell.setWidth(widths[c]);
+    for (let k = 0; k < cell.getNumChildren(); k++) {
+      const child = cell.getChild(k);
+      if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+      child.asParagraph().setSpacingBefore(0);
+      child.asParagraph().setSpacingAfter(0);
+    }
+  }
+}
+
+/** Pure: the row edits that turn the table rows `have` into `want` ([cells, link] each, header left out), in order: { op: 'keep'|'set'|'insert'|'remove', at, row }. A row is matched by its TDoc (its first cell). */
+function planUndisposedRowEdits_(have, want) {
+  const same = function (a, b) { return JSON.stringify(a) === JSON.stringify(b); };
+  const edits = [];
+  const current = have.slice();
+  let i = 0;
+  want.forEach(function (w, k) {
+    const later = {};
+    for (let j = k; j < want.length; j++) later[want[j][0][0]] = true;
+    // A row whose TDoc is wanted nowhere from here on goes.
+    while (i < current.length && !later[current[i][0][0]]) { edits.push({ op: 'remove', at: i }); current.splice(i, 1); }
+    if (i < current.length && current[i][0][0] === w[0][0]) {
+      edits.push({ op: same(current[i], w) ? 'keep' : 'set', at: i, row: w });
+    } else {
+      edits.push({ op: 'insert', at: i, row: w });
+      current.splice(i, 0, w);
+    }
+    i++;
+  });
+  while (i < current.length) { edits.push({ op: 'remove', at: i }); current.splice(i, 1); }
+  return edits;
+}
+
+/** Writes the cells and the link of one row of the section's table (DocumentApp). */
+function setUndisposedRow_(row, cells, link) {
+  for (let c = 0; c < cells.length; c++) {
+    if (c < row.getNumCells()) row.getCell(c).setText(cells[c]);
+    else row.appendTableCell(cells[c]);
+  }
+  if (link && cells[0]) row.getCell(0).editAsText().setLinkUrl(0, cells[0].length - 1, link);
+}
+
+/**
+ * The section's table brought to `wanted` row by row, where only rows
+ * differ: a new TDoc is one row inserted, not the table written again.
+ * `owned` is undisposedReadOwned_() of the section, `start` the index of its
+ * first owned element. Returns true when done this way; false when the
+ * shape differs (a table instead of "None.", say): written whole then.
+ */
+function updateUndisposedInPlace_(body, start, owned, wanted) {
+  if (owned.length !== wanted.length) return false;
+  for (let k = 0; k < owned.length; k++) if (owned[k][0] !== wanted[k][0]) return false;
+  const tableAt = wanted.findIndex(function (item) { return item[0] === 't'; });
+  if (tableAt === -1 || JSON.stringify(owned[tableAt][1][0]) !== JSON.stringify(wanted[tableAt][1][0])) return false;
+  // Which body child each owned item is: the empty paragraphs between them are not in `owned`.
+  const children = [];
+  for (let i = start; children.length < owned.length && i < body.getNumChildren(); i++) {
+    const child = body.getChild(i);
+    if (child.getType() === DocumentApp.ElementType.TABLE) children.push(child);
+    else if (child.getType() === DocumentApp.ElementType.PARAGRAPH && child.asParagraph().getText().trim()) children.push(child);
+  }
+  if (children.length !== owned.length) return false;
+  const rowsOf = function (item) { return item[1].slice(1).map(function (cells, r) { return [cells, item[2][r] || '']; }); };
+  const edits = planUndisposedRowEdits_(rowsOf(owned[tableAt]), rowsOf(wanted[tableAt]));
+  const table = children[tableAt].asTable();
+  // The table must have the rows that were read (a read of the Docs API, say): else it is written whole.
+  if (table.getNumRows() !== owned[tableAt][1].length) return false;
+  // The widths of a new or rewritten row: those of the header (getConfig_() reads every table of the report).
+  let widths = null;
+  const widthsOfHeader = function () {
+    if (widths) return widths;
+    const header = table.getRow(0);
+    widths = [];
+    for (let c = 0; c < header.getNumCells(); c++) widths.push(header.getCell(c).getWidth());
+    if (widths.some(function (w) { return !w; })) widths = undisposedColumnWidths_();
+    return widths;
+  };
+  edits.forEach(function (e) {
+    if (e.op === 'keep') return;
+    if (e.op === 'remove') { table.removeRow(e.at + 1); return; }
+    const row = e.op === 'insert' ? table.insertTableRow(e.at + 1) : table.getRow(e.at + 1);
+    setUndisposedRow_(row, e.row[0], e.row[1]);
+    formatUndisposedRow_(row, false, widthsOfHeader());
+  });
+  wanted.forEach(function (item, k) {
+    if (item[0] !== 'p' || owned[k][1] === item[1]) return;
+    const p = children[k].asParagraph();
+    p.setText(item[1]);
+    p.editAsText().setBold(k === 1);
+  });
+  return true;
+}
+
+/**
+ * Writes the section for `entries` (the summary's read), creating it where
+ * there is none, and only when what it says differs. Returns { state,
+ * count, number, foreign, written, error }: 'created', 'replaced',
+ * 'renumbered', 'unchanged', 'refused' (text typed into it), 'no-place' (no
+ * "Registration of Documents" heading) or 'failed' (the section as it was
+ * is kept). `content`, when given, is a Docs API read of the report made in
+ * this update: when it shows the section as it should be, nothing is read
+ * through DocumentApp (an unchanged update stays as cheap as before).
+ */
+function writeUndisposedDocuments_(body, entries, content) {
+  const wanted = undisposedContent_(entries);
+  const count = (entries || []).filter(isUndisposedEntry_).length;
+  const fromRead = content ? undisposedOwnedOfContent_(content) : null;
+  if (fromRead && fromRead.number === fromRead.wanted && JSON.stringify(fromRead.owned) === JSON.stringify(wanted)) return { state: 'unchanged', count: count, number: fromRead.wanted, foreign: [], written: false };
+  const items = undisposedBodyItems_(body);
+  const place = locateUndisposedSection_(items);
+  if (place.error) return { state: 'no-place', count: count, error: place.error, written: false };
+  if (place.foreign.length) return { state: 'refused', count: count, number: place.number, foreign: place.foreign, written: false };
+  const NORMAL = DocumentApp.ParagraphHeading.NORMAL;
+  let headingAt = place.headingAt;
+  let renumbered = false;
+  if (headingAt !== -1 && place.number !== place.wanted) {
+    body.getChild(headingAt).asParagraph().setText(place.wanted + ' ' + UNDISPOSED_TITLE_);
+    renumbered = true;
+  }
+  let oldFrom = -1;
+  let oldTo = -1;
+  let at;
+  if (headingAt === -1) {
+    const heading = place.at >= body.getNumChildren() ? body.appendParagraph(place.wanted + ' ' + UNDISPOSED_TITLE_) : body.insertParagraph(place.at, place.wanted + ' ' + UNDISPOSED_TITLE_);
+    heading.setHeading(DocumentApp.ParagraphHeading.HEADING3);
+    headingAt = body.getChildIndex(heading);
+    at = headingAt + 1;
+  } else {
+    // What it says: from the read when it shows the section where DocumentApp has it (same number), else read here.
+    const owned = fromRead && fromRead.number === place.number ? fromRead.owned : undisposedReadOwned_(body, headingAt + 1, place.ownedEnd);
+    if (JSON.stringify(owned) === JSON.stringify(wanted)) {
+      return { state: renumbered ? 'renumbered' : 'unchanged', count: count, number: place.wanted, foreign: [], written: renumbered };
+    }
+    // Only the rows that differ, where the section has the same shape (the common case: a status, a new TDoc).
+    try {
+      if (updateUndisposedInPlace_(body, headingAt + 1, owned, wanted)) return { state: 'replaced', count: count, number: place.wanted, foreign: [], written: true };
+    } catch (e) {
+      return { state: 'failed', count: count, number: place.wanted, error: 'the section could not be brought up to date (' + e.message + '); the next update writes it again', written: true };
+    }
+    // The new content first, after the old; the old is taken out only when the new is complete.
+    oldFrom = headingAt + 1;
+    oldTo = place.ownedEnd;
+    at = place.ownedEnd;
+  }
+  const added = [];
+  try {
+    wanted.forEach(function (item, k) {
+      if (item[0] === 'p') {
+        const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
+        added.push(p);
+        p.setHeading(NORMAL);
+        // The count line is bold; the note and "None." are not.
+        p.editAsText().setBold(k === 1);
+        at = body.getChildIndex(p) + 1;
+        return;
+      }
+      const table = at >= body.getNumChildren() ? body.appendTable(item[1]) : body.insertTable(at, item[1]);
+      added.push(table);
+      at = body.getChildIndex(table) + 1;
+      try {
+        formatUndisposedTable_(table);
+      } catch (e) {
+        Logger.log('Undisposed Documents: the table could not be formatted: ' + e.message);
+      }
+      item[2].forEach(function (link, i) {
+        const tdoc = item[1][i + 1][0];
+        if (link && tdoc) table.getRow(i + 1).getCell(0).editAsText().setLinkUrl(0, tdoc.length - 1, link);
+      });
+    });
+  } catch (e) {
+    for (let k = added.length - 1; k >= 0; k--) { try { removeAdhocBodyChild_(body, added[k]); } catch (ignored) { /* the next update finds it */ } }
+    return { state: 'failed', count: count, number: place.wanted, error: 'the section could not be written (' + e.message + '); the section as it was is kept', written: renumbered };
+  }
+  if (oldFrom !== -1) {
+    try {
+      for (let i = oldTo - 1; i >= oldFrom; i--) removeAdhocBodyChild_(body, body.getChild(i));
+    } catch (e) {
+      return { state: 'failed', count: count, number: place.wanted, error: 'the new section is written, but the old one could not be taken out (' + e.message + ')', written: true };
+    }
+  }
+  return { state: oldFrom === -1 ? 'created' : 'replaced', count: count, number: place.wanted, foreign: [], written: true };
+}
+
+/** The Disposition Summary's read of this update, kept for the section (writeDispositionSummary_()). */
+function rememberDispositionReadForUndisposed_(scope, read) {
+  UNDISPOSED_SUMMARY_READ_ = { scope: scope, read: read };
+}
+
+/**
+ * Whether the report has the section: a report of a main meeting (the
+ * standard reports and 6G Media). An ad-hoc report is left as it is.
+ */
+function undisposedDocumentsApply_() {
+  try {
+    return getMeetingContext_().meeting.type === 'main';
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The log line. In an update, the section that could not be written makes
+ * it incomplete: text typed into it, or a failure. A report the section
+ * cannot be placed in (no "Registration of Documents") or whose statuses
+ * cannot be read now is only logged, as the Disposition Summary is.
+ */
+function reportUndisposedResult_(done) {
+  if (done.state === 'refused') {
+    reportUpdateStageFailed_('Undisposed Documents', 'text typed into it ("' + done.foreign.join('", "') + '") -- move it below its table');
+  } else if (done.state === 'failed') {
+    reportUpdateStageFailed_('Undisposed Documents', done.state + (done.error ? ': ' + done.error : ''));
+  } else if (done.error) {
+    Logger.log('Undisposed Documents: not written -- ' + done.state + ': ' + done.error + '.');
+  } else {
+    Logger.log('Undisposed Documents: ' + done.state + ' (' + done.number + ', ' + done.count + ' TDoc(s)).');
+  }
+}
+
+/**
+ * The statuses of the report from the update's own Docs API read
+ * (reportRunSnapshot_(): a report with Status dropdowns), as the Disposition
+ * Summary would read them: { scope, read, content }, or null (no read, or no
+ * Registration of Documents in it -- the TDoc tables are read through
+ * DocumentApp then). The read was made when the update started: a TDoc table
+ * the update inserts, or a status it writes as text, is in the section from
+ * the next update on -- as the revisions and the e-mail discussions of an
+ * update are compared with that read.
+ */
+function undisposedReadOfRunSnapshot_() {
+  const snap = reportRunSnapshot_();
+  if (!snap || !snap.tables || !snap.content) return null;
+  const scope = plenaryScopeOfTables_(snap.tables);
+  if (!scope.ok) return null;
+  const stored = PropertiesService.getDocumentProperties().getProperties() || {};
+  return { scope: scope, read: readPlenaryDispositionsOfTables_(snap.tables, scope, null, stored), content: snap.content };
+}
+
+/**
+ * The update of a report without Goes to Plenary (with it, the section is
+ * written after the summary, finalizePlenarySelection_()). The read of the
+ * Disposition Summary is used when it made one; else the update's own Docs
+ * API read; else the TDoc tables are read here. Never throws. Returns { state }.
+ */
+function syncUndisposedDocumentsOnUpdate_(body) {
+  const kept = UNDISPOSED_SUMMARY_READ_;
+  UNDISPOSED_SUMMARY_READ_ = null;
+  try {
+    if (plenarySelectionEnabled_()) return { state: 'deferred' };
+    if (!undisposedDocumentsApply_()) return { state: 'off' };
+    const fromRun = kept ? null : undisposedReadOfRunSnapshot_();
+    const scope = kept ? kept.scope : fromRun ? fromRun.scope : reportTdocScope_(body);
+    let done;
+    if (!scope || !scope.ok) {
+      done = { state: 'no-scope', count: 0, error: (scope && scope.error) || 'the TDocs of this meeting are not known' };
+    } else {
+      const read = kept ? kept.read : fromRun ? fromRun.read : readReportDispositions_(body, { scope: scope });
+      // The section as the update's read has it (checked against the document before it is used).
+      const snap = fromRun ? null : reportRunSnapshot_();
+      const content = fromRun ? fromRun.content : snap ? snap.content : null;
+      if (read.unreadable.length) done = { state: 'unreadable', count: 0, error: 'the Status of ' + read.unreadable.join(', ') + ' could not be read' };
+      else if (!read.entries.length && read.otherMeetings.length) done = { state: 'no-scope', count: 0, error: 'none of the TDoc tables is registered in this report' };
+      else done = writeUndisposedDocuments_(body, read.entries, content);
+    }
+    reportUndisposedResult_(done);
+    return done;
+  } catch (e) {
+    reportUpdateStageFailed_('Undisposed Documents', 'failed: ' + e.message);
+    return { state: 'failed', error: e.message };
+  }
+}
+
+/**
+ * A report with Goes to Plenary: the section from the summary's read of the
+ * saved document (`written`, writePlenaryDispositionSummary_()), in the body
+ * the summary was written in (`reopened`). When only the section was
+ * written, the document is saved and the read is not used again (the
+ * landscape step reads the document again). Never throws. Returns { state }.
+ */
+function syncUndisposedDocumentsAfterPlenarySummary_(reopened, written) {
+  try {
+    if (!undisposedDocumentsApply_()) return { state: 'off' };
+    if (!written || !written.read || written.state === 'no-scope' || written.state === 'unreadable') {
+      const done = { state: written && written.state === 'unreadable' ? 'unreadable' : 'no-scope', count: 0, error: 'the summary\'s read of the report gave no TDocs' };
+      reportUndisposedResult_(done);
+      return done;
+    }
+    // The summary's read of the saved document (made before it wrote; the summary stands after the section): the section is not read again through DocumentApp.
+    const done = writeUndisposedDocuments_(reopened.getBody(), written.read.entries, written.content || written.readContent);
+    if (done.written && !written.rewritten) {
+      reopened.saveAndClose();
+      written.content = null;
+    }
+    reportUndisposedResult_(done);
+    return done;
+  } catch (e) {
+    reportUpdateStageFailed_('Undisposed Documents', 'failed: ' + e.message);
+    return { state: 'failed', error: e.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B. Local document availability
+// ---------------------------------------------------------------------------
+const LOCAL_DOCS_GROUP_ = 'Docs';
+const LOCAL_DOCS_STATE_KEY_ = 'LOCAL_DOCS_AGENT_STATE';
+const LOCAL_DOCS_CONFIRMED_KEY_ = 'LOCAL_DOCS_CONFIRMED';
+
+/** Pure: the Docs folder of the meeting-room server of a Local Revisions URL ("http://10.10.10.10/ftp/SA/SA4/Inbox" -> ".../SA4/Docs/"), or ''. */
+function localDocsFolderOf_(localBase) {
+  const m = /^(https?:\/\/[^\/?#]+)(\/[^?#]*)?$/i.exec(String(localBase || '').trim());
+  if (!m) return '';
+  const path = m[2] || '/';
+  const at = path.search(/\/Inbox(?:\/|$)/i);
+  if (at === -1) return '';
+  return m[1] + path.slice(0, at) + '/Docs/';
+}
+
+/**
+ * Pure: the TDocs a listing of the Docs folder has: { files, present: {
+ * tdoc: file name } }. A file is a TDoc only when its name, up to its first
+ * ".", is exactly a TDoc number (case ignored): S4-261234.zip is S4-261234;
+ * S4-261234_r1.zip, S4-261234r1.docx and S4-2612345.zip are not. Only links
+ * to files directly in that folder count.
+ */
+function localDocsPresentIn_(payload, docsFolder) {
+  const folder = String(docsFolder || '').toLowerCase();
+  const present = {};
+  let files = 0;
+  const re = /<a\s[^>]*?href\s*=\s*"([^"]*)"[^>]*>/gi;
+  let m;
+  while ((m = re.exec(String(payload || ''))) !== null) {
+    const url = resolveLocalListingHref_(docsFolder, m[1]);
+    if (!url || url.toLowerCase().indexOf(folder) !== 0) continue;
+    const rest = url.slice(folder.length).replace(/[?#].*$/, '');
+    if (!rest || rest.indexOf('/') !== -1) continue;
+    const name = localListingFileName_(url);
+    if (!name) continue;
+    files++;
+    const parsed = parseExactSA4DocumentId_(name.split('.')[0]);
+    if (parsed.isValid && !present[parsed.raw]) present[parsed.raw] = name;
+  }
+  return { files: files, present: present };
+}
+
+/** Pure: the confirmed TDocs of the stored text ("S4-261234,S4-261240") as an object. */
+function localDocsConfirmedOf_(text) {
+  const out = {};
+  String(text || '').split(',').forEach(function (n) { const t = n.trim(); if (t) out[t] = true; });
+  return out;
+}
+
+/**
+ * Reads the agent's listing of the Docs folder, if it may be, and adds the
+ * TDocs of `numbers` (this report's TDoc list) it has to the confirmed ones.
+ * Returns null when no agent folder is configured; otherwise { result,
+ * message, confirmed: { tdoc: true }, added: [tdoc] }. Nothing confirmed is
+ * ever taken back: a stale, missing or invalid listing confirms nothing new.
+ */
+function importLocalDocsListing_(context, numbers, deps) {
+  const props = getReportStateStore_(context);
+  const folderId = localListingFolderIdOf_(props.getProperty(LOCAL_LISTING_FOLDER_KEY_));
+  if (!folderId) return null;
+  const now = (deps && deps.now) || new Date();
+  const confirmed = localDocsConfirmedOf_(props.getProperty(LOCAL_DOCS_CONFIRMED_KEY_));
+  const previous = loadJsonObject_(props.getProperty(LOCAL_DOCS_STATE_KEY_));
+  const state = Object.assign({}, previous, { lastCheckAt: now.toISOString() });
+  const finish = function (result, message, added) {
+    Object.assign(state, { lastResult: result, message: message, confirmed: Object.keys(confirmed).length });
+    props.setProperty(LOCAL_DOCS_STATE_KEY_, JSON.stringify(state));
+    return { result: result, message: message, confirmed: confirmed, added: added || [] };
+  };
+  const localBase = (deps && deps.localBase !== undefined) ? deps.localBase : localRevisionsUrlFor_(context);
+  const docsFolder = localDocsFolderOf_(localBase);
+  if (!docsFolder) return finish('off', 'This report has no Local Revisions URL on a meeting-room server with an Inbox folder; its Docs folder is not checked.');
+  state.folder = docsFolder;
+  let read;
+  try { read = ((deps && deps.read) || readAgentListingFiles_)(folderId, LOCAL_DOCS_GROUP_); } catch (e) { return finish('unavailable', 'The Drive folder of the local listing agent cannot be read (' + e.message + '). Nothing is changed.'); }
+  if (!read.files.length) return finish('missing', 'Not checked: no listing of the Docs folder in the agent\'s Drive folder yet. Nothing is changed.');
+  let chosen = null;
+  let firstReason = '';
+  read.files.forEach(function (file) {
+    if (chosen) return;
+    const v = validateAgentListing_(file.raw, { group: LOCAL_DOCS_GROUP_, localBase: localBase }, now, (deps && deps.sha256) || localListingSha256Hex_);
+    if (v.ok && v.listing.folder.toLowerCase().replace(/\/?$/, '/') !== docsFolder.toLowerCase()) { if (!firstReason) firstReason = 'a listing of ' + v.listing.folder + ', not of ' + docsFolder; return; }
+    if (v.ok) chosen = v.listing; else if (!firstReason) firstReason = v.reason;
+  });
+  if (!chosen) return finish(/^stale/.test(firstReason) ? 'stale' : 'invalid', 'Not used: the newest listing of the Docs folder is ' + firstReason + '. Nothing is changed; TDocs confirmed before stay Available.');
+  state.lastScanFetchedAt = chosen.fetchedAt;
+  const found = localDocsPresentIn_(chosen.payload, docsFolder);
+  const added = [];
+  (numbers || []).forEach(function (n) {
+    if (found.present[n] && !confirmed[n]) { confirmed[n] = true; added.push(n); }
+  });
+  if (added.length) props.setProperty(LOCAL_DOCS_CONFIRMED_KEY_, Object.keys(confirmed).join(','));
+  state.files = found.files;
+  return finish('imported', 'Scan of ' + chosen.fetchedAt + ': ' + found.files + ' file(s) in the Docs folder, ' + Object.keys(found.present).length + ' TDoc(s); ' +
+    added.length + ' of this report newly confirmed.', added);
+}
+
+/**
+ * Before the TDoc list is applied (update, Build from Scratch): a TDoc the
+ * list still has as "reserved" that the meeting-room server has is taken
+ * as "available". Only the list's row of this run is changed; the Status
+ * sync does the rest by its own rule. Returns { state, changed: [tdoc] }.
+ */
+function applyLocalDocsAvailability_(tdocGroups, context, deps) {
+  const all = [];
+  Object.keys(tdocGroups || {}).forEach(function (key) { (tdocGroups[key].tdocs || []).forEach(function (td) { all.push(td); }); });
+  const numberOf = function (td) {
+    const raw = String(td.row[td.tdocCol] === null || td.row[td.tdocCol] === undefined ? '' : td.row[td.tdocCol]).trim();
+    const parsed = parseExactSA4DocumentId_(raw);
+    return parsed.isValid ? parsed.raw : raw;
+  };
+  const r = importLocalDocsListing_(context, all.map(numberOf), deps);
+  if (!r) return { state: 'off', changed: [] };
+  const changed = [];
+  all.forEach(function (td) {
+    if (!(td.statusCol >= 0)) return;
+    const number = numberOf(td);
+    if (!r.confirmed[number] || statusDropdownLabel_(td.row[td.statusCol]) !== 'reserved') return;
+    td.row = td.row.slice();
+    td.row[td.statusCol] = 'available';
+    td.localDocAvailable = true;
+    if (changed.indexOf(number) === -1) changed.push(number);
+  });
+  Logger.log('Local Docs folder: ' + r.result + ' -- ' + r.message + (changed.length ? ' Reserved in the TDoc list, present on the meeting-room server, taken as available: ' + changed.join(', ') + '.' : ''));
+  return { state: r.result, changed: changed, added: r.added };
+}
+
+/** applyLocalDocsAvailability_() for an update or a build: never throws (a failure changes nothing). */
+function applyLocalDocsAvailabilitySafely_(tdocGroups, context) {
+  try {
+    return applyLocalDocsAvailability_(tdocGroups, context);
+  } catch (e) {
+    Logger.log('Local Docs folder: not checked (' + e.message + '); nothing is changed.');
+    return null;
+  }
+}
+
+/** Check Connections: what the last check of the Docs folder found, or '' when none is configured. */
+function describeLocalDocsStatus_(stateJson) {
+  const s = loadJsonObject_(stateJson);
+  if (!s.lastResult || s.lastResult === 'off') return '';
+  return 'Local Docs folder (' + (s.folder || 'meeting-room server') + '): ' + s.lastResult + ' at ' + s.lastCheckAt + ' -- ' + s.message + ' Confirmed present so far: ' + (s.confirmed || 0) + ' TDoc(s).';
+}
+// =========================================================
+// END OF UNDISPOSED DOCUMENTS AND LOCAL DOCUMENT AVAILABILITY
 // =========================================================
 
 // =========================================================

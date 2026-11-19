@@ -60,7 +60,7 @@ console.log('source-structure: continuousUpdateCore_() feeds its REAL newTdocsAd
 
 {
   // After T-2026.10.29: read without Goes to Plenary, which formats only the changed tables (tests/goes-to-plenary.test.js).
-  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
+  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(require('./helpers/before-structure-fix.js').codeWithoutUndisposedDocuments(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code).code;
   // PERF-003B (Part 2): continuousUpdate() is now a thin lock-acquiring
   // public wrapper (see tests/perf003b-lock.test.js) -- the actual logic
   // that computes/consumes these signals lives in continuousUpdateCore_().
@@ -91,7 +91,7 @@ console.log('source-structure: fetchAndAddAbstract_() counts the structural row 
 
 {
   // After T-2026.10.29: read without Goes to Plenary, which formats only the changed tables (tests/goes-to-plenary.test.js).
-  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
+  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(require('./helpers/before-structure-fix.js').codeWithoutUndisposedDocuments(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code).code;
   const fnStart = source.indexOf('function fetchAndAddAbstract_(');
   const nextFnMatch = source.slice(fnStart + 1).match(/^function\s+[A-Za-z0-9_$]+\s*\(/m);
   const fnEnd = nextFnMatch ? fnStart + 1 + nextFnMatch.index : source.length;
@@ -107,7 +107,7 @@ console.log('source-structure: full-build/"Update All"/manual formatting call si
 
 {
   // After T-2026.10.29: read without Goes to Plenary, which formats only the changed tables (tests/goes-to-plenary.test.js).
-  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
+  const source = require('./helpers/before-structure-fix.js').codeWithoutGoesToPlenary(require('./helpers/before-structure-fix.js').codeWithoutUndisposedDocuments(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code).code;
   // Every literal "removeRowHeightAndSpacing(...)" call site in the file,
   // with a few characters of context to classify it. ADDON-004:
   // removeRowHeightAndSpacing() now takes an optional `context` argument
