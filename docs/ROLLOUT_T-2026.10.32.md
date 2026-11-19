@@ -12,6 +12,36 @@ Undisposed Documents section and the local document availability (docs/UNDISPOSE
 - **The Plenary configuration of the reports is not changed.** Nothing is switched on or off, no
   dropdown definition is touched.
 
+## The pilot script
+
+`dist/backups/sa4-138-deploy-T-2026.10.32/pilot-T-2026.10.32.mjs` in the main checkout (not in Git,
+like the deploy scripts before it). Every run writes `evidence.json` beside it.
+
+| Command | What it does |
+|---|---|
+| `--build` | the candidate bundle from the clean worktree at the release commit (no Google access) |
+| `--target copy --script <id> --doc <id> [--write]` | a disposable Video copy (guard.js: name, binding, never a production report or the template) |
+| `--target video` | dry run: binding, a fresh backup that must equal the T-2026.10.30 read-back, the plan |
+| `--target video --write --nobody-editing --named-version "before T-2026.10.32"` | the push, read-back and checks; refused without both confirmations |
+| `--target video --rollback [--write --nobody-editing]` | pushes the T-2026.10.30 read-back back, byte for byte |
+
+State on 2026-11-19 (read-only runs): Video runs exactly its T-2026.10.30 read-back. The dry run
+and the rollback dry run both pass, and the unsafe invocations are refused before any access.
+
+## Read-only checks only you can make (before § 0 or § 1)
+
+Claude's Google access reads the script and the document's metadata, but not the document's
+content, its properties or its executions. In the production Video report:
+
+1. *About This Report*: T-2026.10.30 / 2.26.14.
+2. *Check Report Integrity* (read-only): note the lines on Status dropdowns, the Disposition
+   Summary and Goes to Plenary.
+3. Look at the headings of 9.1: is there a "9.1.3 Document Reallocations", a "9.1.4 Documents"?
+4. *Extensions › Apps Script › Executions*: the usual duration of an update.
+
+The answers say which path the section takes in Video (summary, Status dropdowns, or its own Docs
+API read) and set the duration to compare with.
+
 ## 0. Before the pilot: a disposable Video copy (recommended)
 
 Neither T-2026.10.31 nor T-2026.10.32 has run in a real Google document yet; the tests run on a
@@ -22,8 +52,9 @@ fake document.
 1. Make a copy of the Video report (*File › Make a copy*) named "DISPOSABLE TEST COPY - Video SA4#138".
 2. Send Claude the copy's document ID and script ID.
 
-**By Claude:** push the T-2026.10.32 candidate into the copy's script only. The push is guarded:
-the name says "DISPOSABLE TEST COPY", the IDs match, the script runs T-2026.10.30. Then read it back.
+**By Claude:** `--target copy --script <id> --doc <id>`, first as a dry run, then with `--write`. It
+pushes into the copy's script only, and only when the name says "DISPOSABLE TEST COPY", the IDs
+match and the script runs T-2026.10.30. Then it reads the script back.
 
 **By you, in the copy:**
 
@@ -62,8 +93,10 @@ The Docs folder needs the agent change in the room (§ 3). Until then the copy's
 
 **Steps:**
 
-1. Claude pushes T-2026.10.32 into the Video script (guarded as for T-2026.10.30: target, baseline,
-   file set), reads it back, and records the evidence in `dist/backups/sa4-138-deploy-T-2026.10.32/`.
+1. Claude runs `--target video` (dry run) and then, with your two confirmations,
+   `--target video --write --nobody-editing --named-version "before T-2026.10.32"`. That is the
+   push, the read-back and the checks: the plan, Release.js T-2026.10.32 / 2.27.0, and the section's
+   code present.
 2. You run *Update Report Now* once and check steps 3–5 and 8 of § 0. Do not run 6–7 in production.
 3. **It passes when:**
    - the section is in the right place with the right count;
@@ -74,7 +107,8 @@ The Docs folder needs the agent change in the room (§ 3). Until then the copy's
 
 **Rollback:**
 
-1. Push the T-2026.10.30 read-back above back into the Video script, then read it back.
+1. `--target video --rollback --write --nobody-editing`: the T-2026.10.30 read-back above, back into
+   the Video script, byte for byte; then read back and checked (Release.js T-2026.10.30 / 2.26.14).
 2. Remove the section: delete its heading, its two lines and its table (or "None."). T-2026.10.30
    does not know it and would leave it as it is. It holds nothing typed, unless someone typed
    below its table: move that text first.
