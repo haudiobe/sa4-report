@@ -215,6 +215,57 @@ console.log('4. the read of the Docs API');
   check('text typed into the section in the read: no decision from the read', s.undisposedOwnedOfContent_(api(body).slice(0, 8).concat([{ paragraph: { paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, elements: [run('typed\n')] } }], api(body).slice(8))), null);
 }
 
+// ================================================================ 4b
+console.log('4b. an update without a read to share (text statuses, no Disposition Summary): one Docs API read, or the 15-minute guard');
+{
+  const STYLE = { H1: 'HEADING_1', H2: 'HEADING_2', H3: 'HEADING_3', NORMAL: 'NORMAL_TEXT' };
+  const run = (text) => ({ textRun: { content: text } });
+  const cell = (text) => ({ content: [{ paragraph: { elements: [run(text), run('\n')] } }] });
+  const api = (b) => b._children.map((c) => (c.getType() === 'TABLE'
+    ? { table: { tableRows: rowsOf(c).map((r) => ({ tableCells: r.map((x) => cell(x)) })) } }
+    : { paragraph: { paragraphStyle: { namedStyleType: STYLE[c.getHeading()] }, elements: [run(c.getText() + '\n')] } }));
+  const setup = (withApi) => {
+    const { s } = sandbox();
+    const body = reportBody(s, STANDARD);
+    let reads = 0;
+    let gets = 0;
+    const realRead = s.readReportDispositions_;
+    s.readReportDispositions_ = function () { reads++; return realRead.apply(this, arguments); };
+    s.getMeetingContext_ = () => ({ meeting: { type: 'main' } });
+    s.plenarySelectionEnabled_ = () => false;
+    s.reportRunSnapshot_ = () => null;
+    s.reportUpdateStageFailed_ = () => {};
+    s.currentReportDocument_ = () => ({ getId: () => 'REPORTdoc000000000000000000000000000000000' });
+    s.statusDropdownsAvailable_ = () => withApi;
+    let fixed = null;
+    s.plenarySnapshot_ = () => { gets++; const content = fixed || api(body); fixed = null; return { content: content }; };
+    return { s: s, body: body, reads: () => reads, gets: () => gets, readNow: () => { fixed = api(body); } };
+  };
+  {
+    const x = setup(true);
+    const first = x.s.syncUndisposedDocumentsOnUpdate_(x.body);
+    check('with the Docs API: created from one read of its own; the TDoc tables are not read through DocumentApp', [first.state, first.number, first.count, x.gets(), x.reads()], ['created', '7.1.4', 1, 1, 0]);
+    x.readNow();
+    const calls = x.body._state.calls;
+    const second = x.s.syncUndisposedDocumentsOnUpdate_(x.body);
+    check('the next update: unchanged from its read, no DocumentApp call', [second.state, x.gets(), x.reads(), x.body._state.calls - calls], ['unchanged', 2, 0, 0]);
+    x.body._children.find((c) => c.getType() === 'TABLE' && rowsOf(c)[0][1] === 'S4-261801').getRow(2).getCell(1).setText('agreed');
+    const third = x.s.syncUndisposedDocumentsOnUpdate_(x.body);
+    check('a status typed by hand (Agreed): the row goes, from the read', [third.state, x.body._children.some((c) => c.getText && c.getText() === 'None.')], ['replaced', true]);
+  }
+  {
+    const x = setup(false);
+    const realNow = Date.now();
+    const due = (mins) => x.s.undisposedDocumentAppReadDue_(x.body, new Date(realNow + mins * 60000));
+    check('without the Docs API: the first update reads (no section yet)', [x.s.syncUndisposedDocumentsOnUpdate_(x.body).state, x.reads()], ['created', 1]);
+    const calls = x.body._state.calls;
+    const later = x.s.syncUndisposedDocumentsOnUpdate_(x.body);
+    check('an update right after: left as it is, the TDoc tables not read', [later.state, x.reads(), x.body._state.calls - calls < 100], ['not-due', 1, true]);
+    check('the guard: not due within 15 minutes, due after them', [due(14), due(16)], [false, true]);
+    check('due when the clock went back, and while the report has no section', (() => { const back = due(-60); x.body._children.filter((c) => c.getType() !== 'TABLE' && / Undisposed Documents$/.test(c.getText())).forEach((h) => h.setText('removed by hand')); return [back, due(-59)]; })(), [true, true]);
+  }
+}
+
 // ================================================================ 5
 console.log('5. the row plan');
 {

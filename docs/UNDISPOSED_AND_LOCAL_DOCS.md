@@ -32,7 +32,9 @@ the next update renumbers the section.
 are. Every update writes it, and only when what it says changes:
 - In a report without Goes to Plenary, it is written right after the Disposition Summary, from the
   same read. With no summary it uses the update's own Docs API read, which a report with Status
-  dropdowns has. Without either, it reads the TDoc tables itself.
+  dropdowns has. Without either (text statuses) it makes one Docs API read of its own. Only in a
+  runtime without the Docs API does it read the TDoc tables through DocumentApp, and then at most
+  every 15 minutes (always while the report has no section yet).
 - In a report with Goes to Plenary, it is written after the four-table summary, from that summary's
   read of the saved document.
 
@@ -50,8 +52,8 @@ Its table's first column is "Document", not "TDoc". The rest of the code reads e
 first cell is "TDoc" as a TDoc, registration, reallocation or summary table, so the section's table
 is never one of them.
 
-**Timing.** A report with Status dropdowns and without Goes to Plenary takes its statuses from the
-update's Docs API read, made when the update started. A TDoc table inserted by that same update,
+**Timing.** A report without Goes to Plenary and without a summary takes its statuses from a Docs
+API read of the saved document (the update's own, or the section's), not from this update's writes. A TDoc table inserted by that same update,
 or a status the update writes as text, appears in the section at the next update. The revisions and
 the e-mail discussions of an update are compared with that same read.
 
@@ -64,11 +66,11 @@ the e-mail discussions of an update are compared with that same read.
 | Goes to Plenary, a new TDoc and a Portal status | 1811 | 2031 |
 | Status dropdowns, no Goes to Plenary, unchanged | 770 | 790 |
 | Status dropdowns, no Goes to Plenary, a new TDoc | 2113 | 2158 (+ about 210 at the next update) |
-| **Text statuses, no summary, unchanged** | 3552 | **14938** |
+| Text statuses, no summary, unchanged (+ one Docs API read) | 10803 | 10863 |
+| No Docs API, no summary, unchanged (the 15-minute guard; smaller test report) | 3552 | 3702 |
 
-The last row is the case without any read to share: the TDoc tables are read through DocumentApp at
-every update. It is the cost of the Disposition Summary's read. A report with a Disposition Summary
-pays it already, and shares it.
+A first version read every TDoc table through DocumentApp at every update in the text-status case
+(3552 -> 14938 calls in the smaller report); the read of its own and the guard replace that.
 
 ## B. Local document availability
 

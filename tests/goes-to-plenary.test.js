@@ -586,6 +586,24 @@ try {
   const first = table ? Array.from({ length: table.getNumRows() }, (_, i) => table.getRow(i).getCell(0).getText()) : [];
   check('without Goes to Plenary: the section 8.1.4 from the update\'s read; the new reserved TDoc in it by the next update', [now.m.docProps.getProperty('GOES_TO_PLENARY'), kids.some((x) => x.getType() !== 'TABLE' && x.getText() === '8.1.4 Undisposed Documents'), first.indexOf('S4-263076') !== -1], [null, true, true]);
   check('and it costs little: an unchanged update at most 50 DocumentApp calls more than T-2026.10.31, a new TDoc at most 300 more', [now.unchanged - before.unchanged <= 50, now.newTdoc - before.newTdoc <= 300, now.next - before.next <= 300], [true, true, true]);
+  // Text statuses and no Disposition Summary: nothing to share. The section makes ONE Docs API read of its own, not a DocumentApp read of every TDoc table.
+  const text = (code) => {
+    const m = mbs(Object.assign({ tdocs: SEVENTY_FIVE() }, code ? { code: code } : {}));
+    const up = m.update;
+    m.update = function () { const r = up.apply(this, arguments); m.body._state.dirty = false; m.body._state.closed = false; return r; };
+    m.build();
+    m.docProps.deleteProperty('STATUS_DROPDOWNS');
+    SEVENTY_FIVE().forEach((x) => m.user(() => { const cell = m.api.statusCell(x.id); if (cell) { cell._dropdown = null; cell._t = x.status; } }));
+    m.body._state.dirty = false; m.update(); m.update();
+    const gets = () => m.api.count('get', 'REPORTdoc000000000000000000000000000000000');
+    const a = m.body._state.calls; const g = gets(); m.update();
+    return { m: m, unchanged: m.body._state.calls - a, gets: gets() - g };
+  };
+  const tNow = text(null);
+  const tBefore = text(ledger.codeWithoutUndisposedDocuments(fs.readFileSync(CODE_JS_PATH, 'utf8').split(String.fromCharCode(13)).join('')).code);
+  console.log('  text statuses, no summary, an unchanged update: ' + tBefore.unchanged + ' / ' + tNow.unchanged + ' DocumentApp calls, ' + tBefore.gets + ' / ' + tNow.gets + ' Docs API reads');
+  check('text statuses, no summary: still a text-status report; the section written; an unchanged update at most 100 DocumentApp calls more, one Docs API read',
+    [tNow.m.docProps.getProperty('STATUS_DROPDOWNS'), tNow.m.body._children.some((x) => x.getType() !== 'TABLE' && x.getText() === '8.1.4 Undisposed Documents'), tNow.unchanged - tBefore.unchanged <= 100, tNow.gets - tBefore.gets], [null, true, true, 1]);
 }
 
 // ====================================================================== N

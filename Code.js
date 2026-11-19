@@ -27265,17 +27265,60 @@ function reportUndisposedResult_(done) {
 function undisposedReadOfRunSnapshot_() {
   const snap = reportRunSnapshot_();
   if (!snap || !snap.tables || !snap.content) return null;
-  const scope = plenaryScopeOfTables_(snap.tables);
+  return undisposedReadOfContent_(snap.tables, snap.content);
+}
+
+/** Pure but for the stored properties: { scope, read, content } from the TDoc tables of a Docs API read, or null without a Registration of Documents. */
+function undisposedReadOfContent_(tables, content) {
+  const scope = plenaryScopeOfTables_(tables);
   if (!scope.ok) return null;
   const stored = PropertiesService.getDocumentProperties().getProperties() || {};
-  return { scope: scope, read: readPlenaryDispositionsOfTables_(snap.tables, scope, null, stored), content: snap.content };
+  return { scope: scope, read: readPlenaryDispositionsOfTables_(tables, scope, null, stored), content: content };
+}
+
+/**
+ * A report with nothing to share -- no Disposition Summary, no read of the
+ * update (text statuses): ONE Docs API read of its own, instead of reading
+ * every TDoc table through DocumentApp (some 130 calls a table). It sees the
+ * saved document: what this update wrote is in the section from the next
+ * update on, as with the update's own read. Null when the runtime has no
+ * Docs API or the read fails (undisposedDocumentAppReadDue_() decides then).
+ */
+function undisposedOwnRead_() {
+  if (!statusDropdownsAvailable_()) return null;
+  const snap = plenarySnapshot_(currentReportDocument_().getId());
+  if (!snap || !snap.content) return null;
+  return undisposedReadOfContent_(plenaryDocsTables_(snap.content), snap.content);
+}
+
+const UNDISPOSED_DOCUMENTAPP_READ_KEY_ = 'UNDISPOSED_DOCUMENTAPP_READ_AT';
+const UNDISPOSED_DOCUMENTAPP_READ_MINUTES_ = 15;
+
+/**
+ * The guard of the last way, without any Docs API read: the TDoc tables are
+ * read through DocumentApp (the cost of the Disposition Summary's read) at
+ * most every UNDISPOSED_DOCUMENTAPP_READ_MINUTES_ minutes, and always while
+ * the report has no section yet. The other updates leave the section as it
+ * is (a status typed meanwhile is in it at the next such read). Returns
+ * true when this update may read; it then notes the time.
+ */
+function undisposedDocumentAppReadDue_(body, now) {
+  const props = getReportStateStore_();
+  const last = Date.parse(props.getProperty(UNDISPOSED_DOCUMENTAPP_READ_KEY_) || '');
+  const at = now || new Date();
+  const due = isNaN(last) || at.getTime() - last >= UNDISPOSED_DOCUMENTAPP_READ_MINUTES_ * 60000 || at.getTime() < last ||
+    locateUndisposedSection_(undisposedBodyItems_(body)).headingAt === -1;
+  if (due) props.setProperty(UNDISPOSED_DOCUMENTAPP_READ_KEY_, at.toISOString());
+  return due;
 }
 
 /**
  * The update of a report without Goes to Plenary (with it, the section is
  * written after the summary, finalizePlenarySelection_()). The read of the
  * Disposition Summary is used when it made one; else the update's own Docs
- * API read; else the TDoc tables are read here. Never throws. Returns { state }.
+ * API read; else one Docs API read of the section's own; else (no Docs API)
+ * the TDoc tables are read here, at most every 15 minutes. Never throws.
+ * Returns { state }.
  */
 function syncUndisposedDocumentsOnUpdate_(body) {
   const kept = UNDISPOSED_SUMMARY_READ_;
@@ -27283,7 +27326,11 @@ function syncUndisposedDocumentsOnUpdate_(body) {
   try {
     if (plenarySelectionEnabled_()) return { state: 'deferred' };
     if (!undisposedDocumentsApply_()) return { state: 'off' };
-    const fromRun = kept ? null : undisposedReadOfRunSnapshot_();
+    const fromRun = kept ? null : (undisposedReadOfRunSnapshot_() || undisposedOwnRead_());
+    if (!kept && !fromRun && !undisposedDocumentAppReadDue_(body)) {
+      Logger.log('Undisposed Documents: left as it is in this update (no read to share and no Docs API; the TDoc tables are read at most every ' + UNDISPOSED_DOCUMENTAPP_READ_MINUTES_ + ' minutes).');
+      return { state: 'not-due' };
+    }
     const scope = kept ? kept.scope : fromRun ? fromRun.scope : reportTdocScope_(body);
     let done;
     if (!scope || !scope.ok) {
