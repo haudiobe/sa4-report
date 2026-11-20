@@ -36,6 +36,13 @@ Report does not read the Plenary agenda, and never says a revision was verified 
 **The dialog.**
 - **Counts:** the same counts as before, plus a line "Blocking issues: N. Warnings: N.
   Information: N." when there is a finding.
+- **Not yet disposed against blocking:** the count of TDocs not yet disposed is the Disposition
+  Summary's. When some of them only have the Status "Plenary", the line says how many of them
+  block, for example "4 not yet disposed in the Disposition Summary: 3 blocking, 1 with Status
+  "Plenary" (routed to the plenary: information, not blocking)." Otherwise it reads as before
+  ("4 not yet disposed."), since every one of them blocks. A TDoc with Plenary "☑ Yes" and no final
+  disposition counts as blocking: its routing is not subtracted. The result carries
+  `undisposedTotal`, `undisposedPlenaryStatus` and, in `unresolved`, the blocking ones.
 - **The three parts:** each list under its kind, in full, with the same tables as before: the
   TDoc IDs, the revision relationship, the 3GU state and the recommended action.
 - **Title:** "Report NOT ready to close" only when a blocking issue remains.

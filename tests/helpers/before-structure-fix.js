@@ -793,11 +793,11 @@ function creatorWithoutGoesToPlenary(code) {
 // out before everything else: the release header of 2.27.1, the section whole, its changes to released functions [now, before].
 const RELEASE_2_27_1_CHANGES = [
   [" * Version: 2.27.1 (2026-11-20)\n", " * Version: 2.27.0 (2026-11-19)\n"],
-  [" * CHANGELOG\n * 2.27.1 (2026-11-20)\n *   (T-2026.10.33, on T-2026.10.32 / 2.27.0.)\n *   - Close Report: findings in blocking issues, warnings and information.\n *     Only a blocking issue keeps the report from closing: a TDoc not yet\n *     disposed, a revision not reserved in 3GU, a check that could not be\n *     made. A reserved revision not uploaded and a revision not verified in\n *     3GU are warnings; a TDoc routed to the plenary (Status \"Plenary\" or\n *     Plenary \"Yes\") is information. Nothing else changes.\n", " * CHANGELOG\n"]
+  [" * CHANGELOG\n * 2.27.1 (2026-11-20)\n *   (T-2026.10.33, on T-2026.10.32 / 2.27.0.)\n *   - Close Report: findings in blocking issues, warnings and information.\n *     Only a blocking issue keeps the report from closing: a TDoc not yet\n *     disposed, a revision not reserved in 3GU, a check that could not be\n *     made. A reserved revision not uploaded and a revision not verified in\n *     3GU are warnings; a TDoc routed to the plenary (Status \"Plenary\" or\n *     Plenary \"Yes\") is information. The count of TDocs not yet\n *     disposed says how many of them block. Nothing else changes.\n", " * CHANGELOG\n"]
 ];
 const CLOSE_VALIDATION_SECTION_START = BAR + '// CLOSE REPORT VALIDATION (after T-2026.10.32)\n' + BAR;
 const CLOSE_VALIDATION_SECTION_END = BAR + '// END OF CLOSE REPORT VALIDATION\n' + BAR + '\n';
-const CLOSE_VALIDATION_SECTION_FUNCTIONS = ["isPlenaryRoutingStatus_","closeReportPlenaryChoices_","classifyCloseReportFindings_","closeReportView_","closeReportRevisionAction_","closeReportClosingNote_","formatCloseReportFindings_","closeReportFindingsHtml_"];
+const CLOSE_VALIDATION_SECTION_FUNCTIONS = ["isPlenaryRoutingStatus_","closeReportPlenaryChoices_","classifyCloseReportFindings_","closeReportView_","closeReportRevisionAction_","closeReportClassCountLine_","closeReportClosingNote_","formatCloseReportFindings_","closeReportFindingsHtml_"];
 const CLOSE_VALIDATION_CHANGED_FUNCTIONS = ['closeReportCore_', 'formatCloseReportResult_', 'closeReportResultHtml_'];
 const CLOSE_VALIDATION_CHANGES = [
   ["  // After T-2026.10.32: blocking issues, warnings and information; only a blocking issue keeps the report from closing (CLOSE REPORT VALIDATION section).\n  classifyCloseReportFindings_(result, summary, closeReportPlenaryChoices_());\n",

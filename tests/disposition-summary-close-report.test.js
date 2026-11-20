@@ -327,7 +327,8 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
     [false, [id(1), id(4), id(5)], [id(1), id(4), id(5), id(2)], [[id(2), 'Status "Plenary"', false]]]);
   check('the dialog says NOT READY TO CLOSE, the counts, and what to do', [text.split('\n')[0], text.split('\n').slice(2, 9), /NOT YET DISPOSED \(3\) -- TDoc \| Title \| Source \| Current Status:/.test(text),
     text.split('\n').slice(-1)[0]],
-    ['Report NOT READY TO CLOSE.', ['5 TDocs checked.', '1 agreed/endorsed/approved.', '0 other disposed.', '4 not yet disposed.', 'Revision not reserved in 3GU: 0.', 'Revision reserved but not uploaded in 3GU: 0.',
+    ['Report NOT READY TO CLOSE.', ['5 TDocs checked.', '1 agreed/endorsed/approved.', '0 other disposed.',
+      '4 not yet disposed in the Disposition Summary: 3 blocking, 1 with Status "Plenary" (routed to the plenary: information, not blocking).', 'Revision not reserved in 3GU: 0.', 'Revision reserved but not uploaded in 3GU: 0.',
       'Revision state could not be verified in 3GU: 0.'], true,
       'Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.']);
 
@@ -1272,6 +1273,24 @@ console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CL
     .every((at, i, all) => at !== -1 && (i === 0 || at > all[i - 1])), true);
   check('"NOT ready to close" only with a blocking issue: title and first line', [dialog(m)[0], mt.split('\n')[0], dialog(nv)[0], nvt.split('\n')[0]],
     ['Report NOT ready to close', 'Report NOT READY TO CLOSE.', 'Report ready to close', 'Report ready to close.']);
+
+  // 5b. The counts: the Disposition Summary's "not yet disposed" against what blocks.
+  const countLine = (text) => text.split('\n').find((l) => / not yet disposed/.test(l) && !/^NOT YET/.test(l));
+  check('counts, mixed: the summary\'s 2 not yet disposed, of which 1 blocks and 1 has Status "Plenary"; the result says both',
+    [countLine(mt), mr.counts.UNRESOLVED, mr.undisposedTotal, mr.unresolved.length, mr.undisposedPlenaryStatus, summaryOf(m.body)[2][0]],
+    ['2 not yet disposed in the Disposition Summary: 1 blocking, 1 with Status "Plenary" (routed to the plenary: information, not blocking).', 2, 2, 1, 1, TITLES[2] + ' (2)']);
+  check('counts, the same line on the page', mh.indexOf('<li>2 not yet disposed in the Disposition Summary: 1 blocking, 1 with Status &quot;Plenary&quot; (routed to the plenary: information, not blocking).</li>') !== -1, true);
+  check('counts, Status "Plenary" only: the summary\'s 1 not yet disposed, 0 blocking -- and ready', [countLine(pt), pr.ready, summaryOf(p.body)[2][0]],
+    ['1 not yet disposed in the Disposition Summary: 0 blocking, 1 with Status "Plenary" (routed to the plenary: information, not blocking).', true, TITLES[2] + ' (1)']);
+  check('counts, no Status "Plenary": the line reads as before (every one of them blocks)', [countLine(ut), ur.undisposedTotal, ur.unresolved.length, ur.undisposedPlenaryStatus], ['1 not yet disposed.', 1, 1, 0]);
+  {
+    const { sandbox: s } = loadCode();
+    const e = (n, status) => ({ tdoc: id(n), title: 'T' + n, source: 'ExampleCorp', status: status, label: status.toLowerCase(), conflict: false, known: true });
+    const yesUndisposed = s.classifyCloseReportFindings_({ ready: false, checked: 1, counts: { UNRESOLVED: 1 }, unresolved: [e(1, 'available')], revisions: [], problems: [], summaryState: 'unchanged', externalVerified: true },
+      { read: { entries: [e(1, 'available')] } }, { enabled: true, ok: true, yes: { [id(1)]: true } });
+    check('counts, Plenary "☑ Yes" and not disposed: it blocks and is counted as blocking (routing is not subtracted)',
+      [s.formatCloseReportResult_(yesUndisposed).split('\n').find((l) => / not yet disposed/.test(l)), yesUndisposed.undisposedPlenaryStatus, yesUndisposed.ready], ['1 not yet disposed.', 0, false]);
+  }
 
   // 6. Closing with warnings: they stay, and nothing in the report needs correcting.
   const w = notVerified();

@@ -15,7 +15,8 @@
  *     disposed, a revision not reserved in 3GU, a check that could not be
  *     made. A reserved revision not uploaded and a revision not verified in
  *     3GU are warnings; a TDoc routed to the plenary (Status "Plenary" or
- *     Plenary "Yes") is information. Nothing else changes.
+ *     Plenary "Yes") is information. The count of TDocs not yet
+ *     disposed says how many of them block. Nothing else changes.
  * 2.27.0 (2026-11-19)
  *   (T-2026.10.32, on T-2026.10.31 / 2.26.15.)
  *   - New: the Undisposed Documents section at the end of the opening
@@ -27541,14 +27542,19 @@ function closeReportPlenaryChoices_() {
  * Pure: sorts the findings of closeReportCore_() into blocking issues,
  * warnings and information, and sets `ready` (no blocking issue). `summary`
  * is writeDispositionSummary_()'s result; `choices` closeReportPlenaryChoices_().
- * Sets: unresolved (the blocking ones only), blockingRevisions,
+ * Sets: unresolved (the blocking ones only), undisposedTotal (the summary's
+ * "not yet disposed"), undisposedPlenaryStatus (of these, Status "Plenary"), blockingRevisions,
  * warningRevisions, plenaryRouted [{ tdoc, title, source, status, routing,
  * undisposed }], informationNotes, blocking, warnings, information, ready.
  */
 function classifyCloseReportFindings_(result, summary, choices) {
   const yes = (choices && choices.yes) || {};
   const entries = (summary && summary.read && summary.read.entries) || [];
-  result.unresolved = (result.unresolved || []).filter(function (e) { return !isPlenaryRoutingStatus_(e); });
+  const allUnresolved = result.unresolved || [];
+  result.unresolved = allUnresolved.filter(function (e) { return !isPlenaryRoutingStatus_(e); });
+  // The Disposition Summary's "not yet disposed" (all of them) and the part of it that blocks.
+  result.undisposedTotal = allUnresolved.length;
+  result.undisposedPlenaryStatus = allUnresolved.length - result.unresolved.length;
   result.blockingRevisions = (result.revisions || []).filter(function (r) { return CLOSE_REPORT_BLOCKING_REVISION_KINDS_.indexOf(r.kind) !== -1; });
   result.warningRevisions = (result.revisions || []).filter(function (r) { return CLOSE_REPORT_BLOCKING_REVISION_KINDS_.indexOf(r.kind) === -1; });
   const blockingTdocs = {};
@@ -27579,6 +27585,20 @@ function closeReportRevisionAction_(r) {
   return r.action + (r.reason ? ' (' + r.reason.charAt(0).toUpperCase() + r.reason.slice(1) + '.)' : '') + (r.kind === 'revision-not-verified' ? ' ' + CLOSE_REPORT_NOT_VERIFIED_NOTE_ : '');
 }
 
+/**
+ * Pure: the count line of a class of the Disposition Summary. "Not yet
+ * disposed" is the summary's count; when some of them only have the Status
+ * "Plenary" (routed to the plenary: information), the line says how many of
+ * them block: "4 not yet disposed in the Disposition Summary: 3 blocking, 1
+ * with Status "Plenary" ...". Otherwise it reads as before.
+ */
+function closeReportClassCountLine_(result, c) {
+  const n = result.counts[c.key] || 0;
+  if (c.key !== 'UNRESOLVED' || !result.undisposedPlenaryStatus) return n + ' ' + c.short + '.';
+  return n + ' ' + c.short + ' in the Disposition Summary: ' + result.unresolved.length + ' blocking, ' + result.undisposedPlenaryStatus +
+    ' with Status "Plenary" (routed to the plenary: information, not blocking).';
+}
+
 /** Pure: the closing note of the dialog. */
 function closeReportClosingNote_(result) {
   if (!result.ready) return 'Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.';
@@ -27591,7 +27611,7 @@ function formatCloseReportFindings_(result) {
   result = closeReportView_(result);
   const lines = [result.ready ? 'Report ready to close.' : 'Report NOT READY TO CLOSE.', ''];
   lines.push(result.checked + ' TDocs checked.');
-  DISPOSITION_CLASSES_.forEach(function (c) { lines.push((result.counts[c.key] || 0) + ' ' + c.short + '.'); });
+  DISPOSITION_CLASSES_.forEach(function (c) { lines.push(closeReportClassCountLine_(result, c)); });
   REVISION_CHECK_STATES_.forEach(function (s) { lines.push(s.label.replace(/\.$/, '') + ': ' + (result.counts[s.kind] || 0) + '.'); });
   if (result.blocking || result.warnings || result.information) lines.push('Blocking issues: ' + result.blocking + '. Warnings: ' + result.warnings + '. Information: ' + result.information + '.');
   lines.push('');
@@ -27664,7 +27684,7 @@ function closeReportFindingsHtml_(result) {
     '.note{margin-top:14px;}button{margin-top:14px;}</style></head><body>'];
   out.push('<h2 class="' + (result.ready ? 'ready' : 'notready') + '">' + (result.ready ? 'Report ready to close.' : 'Report NOT READY TO CLOSE.') + '</h2>');
   const counts = [result.checked + ' TDocs checked.'];
-  DISPOSITION_CLASSES_.forEach(function (c) { counts.push((result.counts[c.key] || 0) + ' ' + c.short + '.'); });
+  DISPOSITION_CLASSES_.forEach(function (c) { counts.push(closeReportClassCountLine_(result, c)); });
   REVISION_CHECK_STATES_.forEach(function (s) { counts.push(s.label.replace(/\.$/, '') + ': ' + (result.counts[s.kind] || 0) + '.'); });
   if (result.blocking || result.warnings || result.information) counts.push('Blocking issues: ' + result.blocking + '. Warnings: ' + result.warnings + '. Information: ' + result.information + '.');
   out.push('<ul>' + counts.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul>');
