@@ -87,3 +87,45 @@ or its links unreadable.
 
 Four earlier checks of the same file changed with the rule: the TDoc with Status "Plenary" is now
 under Information, and a revision not verified has the Plenary agenda note.
+
+## T-2026.10.34 (Code.js 2.27.2): handed to the plenary
+
+**The workflow rule.** A SWG report may close when every TDoc is either finally disposed or
+explicitly handed to the plenary.
+
+In a report with Goes to Plenary, a TDoc with "☑ Yes" in its Plenary dropdown whose Status is
+still **Available, Parked or Reserved** is handed to the plenary:
+- **It no longer blocks:** it moves from Blocking issues to Information, under **Handed to Plenary**.
+- **The count line says how many block**, and how the others were handed, for example: "5 not yet
+  disposed in the Disposition Summary: 2 blocking, 3 handed to the plenary (1 with Status
+  "Plenary", 2 with Goes to Plenary "☑ Yes"): information, not blocking."
+
+| TDoc | Close Report |
+|---|---|
+| "☑ Yes" and Available, Parked or Reserved | Information: Handed to Plenary |
+| Status "Plenary" (any report) | Information: Handed to Plenary (as in T-2026.10.33) |
+| "☑ Yes" and Postponed, Other, a status that is not known, or tables that disagree | still blocking, for that status; also listed under Handed to Plenary, marked "also not yet disposed" |
+| "☐ No" (or no Plenary choice, in a report without Goes to Plenary) and not disposed | blocking |
+| disposed, with "☑ Yes" | Information: Handed to Plenary |
+
+**Unchanged:**
+- the other blocking conditions: revision not reserved, the TDoc list not read or without
+  "Revised to", a Status unreadable, no registration, text typed into the summary;
+- the warnings;
+- the Disposition Summary;
+- the Undisposed Documents section, which lists Plenary No or blank only;
+- every Status, every Plenary choice and the content of the report: nothing is changed.
+
+**Where "☑ Yes" comes from.** The choice is read from the Disposition Summary's own read of the
+report (`entry.plenary`). A report without Goes to Plenary has no Plenary choice; there,
+Available, Parked and Reserved all block, as before.
+
+**Ledger.** `tests/helpers/before-structure-fix.js`, `codeWithoutHandedToPlenary`: the release
+header of 2.27.2, and the section as T-2026.10.33 had it. Without the layer, Code.js is that of
+T-2026.10.33 (`b7299c1`) byte for byte.
+
+**Tests:**
+- `tests/disposition-summary-close-report.test.js`, part W: "☑ Yes" with Available, Parked and
+  Reserved; "☑ Yes" with other open statuses; "☐ No"; a mixed report and its count line; a report
+  without Goes to Plenary (also built for real); the Undisposed Documents rule; the ledger.
+- `tests/goes-to-plenary.test.js` J: end to end in a report with Goes to Plenary.

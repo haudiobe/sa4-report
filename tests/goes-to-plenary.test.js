@@ -460,6 +460,19 @@ console.log('J. Close Report');
     [yesNow.length > 0, c.plenaryRouted.map((p) => p.tdoc).sort(), c.plenaryRouted.every((p) => p.routing === 'Goes to Plenary: ☑ Yes'), c.blocking >= c.unresolved.length,
       c.plenaryRouted.filter((p) => p.undisposed).map((p) => p.tdoc).sort(), c.ready],
     [true, yesNow, true, true, yesNow.filter((id) => c.unresolved.some((e) => e.tdoc === id)).sort(), false]);
+  // T-2026.10.34, end to end in this report with Goes to Plenary: "☑ Yes" on an Available, a Parked and a Reserved TDoc
+  // hands them to the plenary -- not blocking; the Available one without it still blocks. Statuses and choices are put back.
+  const statusOf = (id) => r.c(id).status.replace(/^dropdown:/, '');
+  const kept = ['S4-262009', 'S4-262015', 'S4-262016', 'S4-262019'].map((id) => [id, statusOf(id), r.c(id).plenary]);
+  r.user(() => { r.api.pick('S4-262015', 'parked'); r.api.pick('S4-262016', 'reserved'); ['S4-262009', 'S4-262015', 'S4-262016'].forEach((id) => r.api.pickPlenary(id, YES)); r.api.pickPlenary('S4-262019', NO); });
+  const statusesBefore = ['S4-262009', 'S4-262015', 'S4-262016', 'S4-262019'].map((id) => [id, statusOf(id), r.c(id).plenary]);
+  const h = r.close();
+  const statusesAfter = ['S4-262009', 'S4-262015', 'S4-262016', 'S4-262019'].map((id) => [id, statusOf(id), r.c(id).plenary]);
+  check('T-2026.10.34: "☑ Yes" with Available, Parked, Reserved -- handed to the plenary, not blocking; "☐ No" with Available blocks; nothing changed by Close Report',
+    [h.unresolved.map((e) => e.tdoc), ['S4-262009', 'S4-262015', 'S4-262016'].every((id) => h.plenaryRouted.some((p) => p.tdoc === id && !p.undisposed)), h.undisposedPlenaryYes,
+      JSON.stringify(statusesAfter) === JSON.stringify(statusesBefore)],
+    [['S4-262019'], true, 3, true]);
+  r.user(() => kept.forEach(([id, status, plenary]) => { r.api.pick(id, status); r.api.pickPlenary(id, plenary); }));
 }
 
 // ====================================================================== L

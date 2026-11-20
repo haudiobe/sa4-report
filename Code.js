@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.27.1 (2026-11-20)
+ * Version: 2.27.2 (2026-11-20)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,14 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.27.2 (2026-11-20)
+ *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
+ *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
+ *     dropdown of a report with Goes to Plenary no longer blocks because its
+ *     Status is still Available, Parked or Reserved: Information, Handed to
+ *     Plenary. A report may close when every TDoc is disposed or handed to
+ *     the plenary. Nothing else changes; no Status, Plenary choice or content
+ *     is changed.
  * 2.27.1 (2026-11-20)
  *   (T-2026.10.33, on T-2026.10.32 / 2.27.0.)
  *   - Close Report: findings in blocking issues, warnings and information.
@@ -27484,8 +27492,10 @@ function describeLocalDocsStatus_(stateJson) {
 //
 // BLOCKING ISSUES
 //   - a TDoc without a final disposition (the Disposition Summary's "Documents
-//     Not Yet Disposed"), except one whose Status is "Plenary": that is its
-//     routing to the plenary, listed under Information;
+//     Not Yet Disposed"), except one handed to the plenary: its Status is
+//     "Plenary", or (T-2026.10.34) it has "☑ Yes" in the Plenary dropdown of a
+//     report with Goes to Plenary and its Status is still Available, Parked or
+//     Reserved. Those are listed under Information: Handed to Plenary;
 //   - a TDoc the report has as revised whose revision is not reserved in 3GU;
 //   - a check that could not be made: the TDoc list of the meeting not read,
 //     or read without a "Revised to" column (no revision could be checked), a
@@ -27497,10 +27507,12 @@ function describeLocalDocsStatus_(stateJson) {
 //     be on the Plenary agenda instead; Close Report does not read the Plenary
 //     agenda and never says that it did.
 // INFORMATION
-//   - every TDoc routed to the plenary: Status "Plenary", or "☑ Yes" in the
-//     Plenary dropdown of a report with Goes to Plenary (from the summary's own
-//     read; no other read is made). Its routing never blocks; a TDoc that is
-//     also not disposed blocks for that alone.
+//   - Handed to Plenary: every TDoc routed to the plenary, Status "Plenary" or
+//     "☑ Yes" in the Plenary dropdown of a report with Goes to Plenary (from
+//     the summary's own read; no other read is made). A SWG report may close
+//     when every TDoc is disposed or handed to the plenary. A TDoc with "☑ Yes"
+//     whose Status is another open one (Postponed, Other, a status that is not
+//     known, tables that disagree) still blocks, for that status.
 //
 // Nothing else changes: the Disposition Summary is written as before (its
 // "Documents Not Yet Disposed" still lists a TDoc whose Status is "Plenary"),
@@ -27512,6 +27524,8 @@ function describeLocalDocsStatus_(stateJson) {
 const CLOSE_REPORT_BLOCKING_REVISION_KINDS_ = ['revision-not-reserved'];
 // The Status that routes a TDoc to the plenary (the retired dropdown option, still typed or selected in reports without Goes to Plenary).
 const CLOSE_REPORT_PLENARY_STATUS_ = 'plenary';
+// T-2026.10.34: the open Statuses a TDoc may keep when it is handed to the plenary by "☑ Yes".
+const CLOSE_REPORT_HANDED_STATUSES_ = ['available', 'parked', 'reserved'];
 const CLOSE_REPORT_NOT_VERIFIED_NOTE_ = 'It may be on the Plenary agenda instead -- Close Report did not check the Plenary agenda.';
 // The reasons of checkRevisionsIn3gu_() that are about the TDoc list as a whole, not about one revision.
 const CLOSE_REPORT_NO_REVISED_TO_REASON_ = 'the TDoc list has no "Revised to" column';
@@ -27529,6 +27543,16 @@ function isPlenaryYes_(entry) {
   return !!entry && entry.plenary === true;
 }
 
+/** Pure: true for a TDoc handed to the plenary by "☑ Yes" while its Status is Available, Parked or Reserved (one Status, no conflict). */
+function isHandedToPlenaryByYes_(entry) {
+  return isPlenaryYes_(entry) && !entry.conflict && CLOSE_REPORT_HANDED_STATUSES_.indexOf(entry.label) !== -1;
+}
+
+/** Pure: true for a TDoc not yet disposed that is handed to the plenary -- it does not block (Status "Plenary", or "☑ Yes" with an open Status). */
+function isHandedToPlenary_(entry) {
+  return isPlenaryRoutingStatus_(entry) || isHandedToPlenaryByYes_(entry);
+}
+
 /**
  * Pure: sorts the findings of closeReportCore_() into blocking issues,
  * warnings and information, and sets `ready` (no blocking issue). `summary`
@@ -27537,7 +27561,8 @@ function isPlenaryYes_(entry) {
  * it (a result classified only for its dialog), the TDocs not yet disposed
  * are what is known.
  * Sets: unresolved (the blocking ones only), undisposedTotal (the summary's
- * "not yet disposed"), undisposedPlenaryStatus (of these, Status "Plenary"),
+ * "not yet disposed"), undisposedHanded (of these, handed to the plenary),
+ * undisposedPlenaryStatus and undisposedPlenaryYes (how they were handed),
  * problems (plus a TDoc list without "Revised to"), blockingRevisions,
  * warningRevisions, plenaryRouted [{ tdoc, title, source, status, routing,
  * undisposed }], informationNotes, blocking, warnings, information, ready.
@@ -27545,10 +27570,12 @@ function isPlenaryYes_(entry) {
 function classifyCloseReportFindings_(result, summary) {
   const allUnresolved = result.unresolved || [];
   const entries = summary && summary.read && summary.read.entries ? summary.read.entries : allUnresolved;
-  result.unresolved = allUnresolved.filter(function (e) { return !isPlenaryRoutingStatus_(e); });
-  // The Disposition Summary's "not yet disposed" (all of them) and the part of it that blocks.
+  result.unresolved = allUnresolved.filter(function (e) { return !isHandedToPlenary_(e); });
+  // The Disposition Summary's "not yet disposed" (all of them), the part of it that blocks, and the part handed to the plenary.
   result.undisposedTotal = allUnresolved.length;
-  result.undisposedPlenaryStatus = allUnresolved.length - result.unresolved.length;
+  result.undisposedHanded = allUnresolved.length - result.unresolved.length;
+  result.undisposedPlenaryStatus = allUnresolved.filter(isPlenaryRoutingStatus_).length;
+  result.undisposedPlenaryYes = result.undisposedHanded - result.undisposedPlenaryStatus;
   result.problems = (result.problems || []).slice();
   if (result.externalVerified && (result.revisions || []).some(function (r) { return r.reason === CLOSE_REPORT_NO_REVISED_TO_REASON_; }) &&
     result.problems.indexOf(CLOSE_REPORT_NO_REVISED_TO_PROBLEM_) === -1) result.problems.push(CLOSE_REPORT_NO_REVISED_TO_PROBLEM_);
@@ -27609,16 +27636,17 @@ function closeReportUncheckedNote_(result) {
 
 /**
  * Pure: the count line of a class of the Disposition Summary. "Not yet
- * disposed" is the summary's count; when some of them only have the Status
- * "Plenary" (routed to the plenary: information), the line says how many of
- * them block: "4 not yet disposed in the Disposition Summary: 3 blocking, 1
- * with Status "Plenary" ...". Otherwise it reads as before.
+ * disposed" is the summary's count; when some of them are handed to the
+ * plenary (information), the line says how many of them block: "4 not yet
+ * disposed in the Disposition Summary: 1 blocking, 3 handed to the plenary (1
+ * with Status "Plenary", 2 with Goes to Plenary "☑ Yes"): information, not
+ * blocking." Otherwise it reads as before.
  */
 function closeReportClassCountLine_(result, c) {
   const n = result.counts[c.key] || 0;
-  if (c.key !== 'UNRESOLVED' || !result.undisposedPlenaryStatus) return n + ' ' + c.short + '.';
-  return n + ' ' + c.short + ' in the Disposition Summary: ' + result.unresolved.length + ' blocking, ' + result.undisposedPlenaryStatus +
-    ' with Status "Plenary" (routed to the plenary: information, not blocking).';
+  if (c.key !== 'UNRESOLVED' || !result.undisposedHanded) return n + ' ' + c.short + '.';
+  const how = [result.undisposedPlenaryStatus ? result.undisposedPlenaryStatus + ' with Status "Plenary"' : '', result.undisposedPlenaryYes ? result.undisposedPlenaryYes + ' with Goes to Plenary "☑ Yes"' : ''].filter(Boolean).join(', ');
+  return n + ' ' + c.short + ' in the Disposition Summary: ' + result.unresolved.length + ' blocking, ' + result.undisposedHanded + ' handed to the plenary (' + how + '): information, not blocking.';
 }
 
 /** Pure: the closing note of the dialog. */
@@ -27677,7 +27705,7 @@ function formatCloseReportFindings_(result) {
     lines.push('INFORMATION (' + result.information + '):');
     if (result.plenaryRouted.length) {
       lines.push('');
-      lines.push('GOES TO PLENARY (' + result.plenaryRouted.length + ') -- TDoc | Title | Source | Status | Routing:');
+      lines.push('HANDED TO PLENARY (' + result.plenaryRouted.length + ') -- TDoc | Title | Source | Status | Routing:');
       result.plenaryRouted.forEach(function (p) {
         lines.push('• ' + p.tdoc + ' | ' + dispositionDialogTitle_(p.title) + ' | ' + p.source + ' | ' + p.status + ' | ' + p.routing + (p.undisposed ? ' (also not yet disposed: blocking for that)' : ''));
       });
@@ -27741,7 +27769,7 @@ function closeReportFindingsHtml_(result) {
   if (result.information) {
     out.push('<h3 class="info">Information (' + result.information + ')</h3>');
     if (result.plenaryRouted.length) {
-      out.push('<h4>Goes to Plenary (' + result.plenaryRouted.length + ')</h4>');
+      out.push('<h4>Handed to Plenary (' + result.plenaryRouted.length + ')</h4>');
       out.push(table(['TDoc', 'Title', 'Source', 'Status', 'Routing'], result.plenaryRouted.map(function (p) {
         return [p.tdoc, p.title, p.source, p.status, p.routing + (p.undisposed ? ' (also not yet disposed: blocking for that)' : '')];
       })));
