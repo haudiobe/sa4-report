@@ -1312,7 +1312,10 @@ console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CL
     [JSON.stringify(summaryOf(now.body)) === JSON.stringify(summaryOf(before.body)), snapshot(now.body) === snapshot(before.body), shownAll(now).join() === shownAll(before).join(),
       JSON.stringify(rn.counts) === JSON.stringify(rb.counts), JSON.stringify(rn.revisions) === JSON.stringify(rb.revisions), rn.summaryState === rb.summaryState, rn.externalVerified === rb.externalVerified],
     [true, true, true, true, true, true, true]);
-  check('the log line of Close Report is still written', now.logs.some((l) => /^Close Report: NOT ready to close -- 6 TDocs, 1 not yet disposed, /.test(l)), true);
+  // The log line keeps its text: its count of TDocs not yet disposed is the summary's (2 here), as with T-2026.10.32.
+  const logLine = (r) => r.logs.filter((l) => /^Close Report: /.test(l)).slice(-1)[0] || '';
+  check('the log line of Close Report: the same text as with T-2026.10.32 (the summary\'s 2 not yet disposed)',
+    [/^Close Report: NOT ready to close -- 6 TDocs, 2 not yet disposed, /.test(logLine(now)), logLine(now) === logLine(before)], [true, true]);
   const noList = undisposed();
   noList.tdocs = [];
   const nl = closeReport(noList);
@@ -1324,22 +1327,52 @@ console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CL
     const { sandbox: s } = loadCode();
     const e = (n, status, label) => ({ tdoc: id(n), title: 'T' + n, source: 'ExampleCorp', status: status, label: label || status.toLowerCase(), conflict: false, known: true });
     const base = () => ({ ready: false, checked: 3, counts: {}, unresolved: [e(2, 'available')], revisions: [], problems: [], summaryState: 'unchanged', otherMeetings: 0, externalVerified: true });
-    const summary = { read: { entries: [e(1, 'agreed'), e(2, 'available'), e(3, 'noted')] } };
-    const c1 = s.classifyCloseReportFindings_(base(), summary, { enabled: true, ok: true, yes: { [id(1)]: true, [id(2)]: true } });
+    // The summary's read of a report with Goes to Plenary has each TDoc's choice (plenary: true for "☑ Yes").
+    const yes = (x) => Object.assign(x, { plenary: true });
+    const summary = { read: { entries: [yes(e(1, 'agreed')), yes(e(2, 'available')), e(3, 'noted')] } };
+    const c1 = s.classifyCloseReportFindings_(base(), summary);
     check('Goes to Plenary "☑ Yes": information for both; the one not yet disposed blocks for its status alone',
       [c1.ready, c1.unresolved.map((x) => x.tdoc), c1.plenaryRouted.map((x) => [x.tdoc, x.routing, x.undisposed])],
       [false, [id(2)], [[id(1), 'Goes to Plenary: ☑ Yes', false], [id(2), 'Goes to Plenary: ☑ Yes', true]]]);
-    const c2 = s.classifyCloseReportFindings_(Object.assign(base(), { unresolved: [] }), summary, { enabled: true, ok: true, yes: { [id(1)]: true } });
+    const c2 = s.classifyCloseReportFindings_(Object.assign(base(), { unresolved: [] }), { read: { entries: [yes(e(1, 'agreed')), e(3, 'noted')] } });
     check('routed by "☑ Yes" and disposed: ready', [c2.ready, c2.blocking, c2.information], [true, 0, 1]);
-    const c3 = s.classifyCloseReportFindings_(Object.assign(base(), { unresolved: [] }), summary, { enabled: true, ok: false, yes: {}, error: 'the report could not be read through the Docs API' });
-    check('the choices cannot be read: an information note, still ready', [c3.ready, c3.informationNotes.length, /could not be read.*does not keep the report from closing/.test(c3.informationNotes[0])], [true, 1, true]);
+    const both = Object.assign(e(4, 'Plenary'), { plenary: true });
+    const c3 = s.classifyCloseReportFindings_(Object.assign(base(), { unresolved: [both] }), { read: { entries: [both] } });
+    check('Status "Plenary" and "☑ Yes" on one TDoc: listed once, with both routings, not blocking', [c3.ready, c3.plenaryRouted.map((x) => [x.tdoc, x.routing, x.undisposed])],
+      [true, [[id(4), 'Status "Plenary"; Goes to Plenary: ☑ Yes', false]]]);
     let reads = 0;
-    s.plenarySelectionEnabled_ = () => false;
     s.plenarySnapshot_ = () => { reads++; return null; };
-    check('a report without Goes to Plenary is not read for its choices', [s.closeReportPlenaryChoices_().enabled, reads], [false, 0]);
-    s.plenarySelectionEnabled_ = () => true;
-    s.currentReportDocument_ = () => ({ getId: () => 'REPORTdoc000000000000000000000000000000000' });
-    check('with Goes to Plenary, a failed read never throws', [s.closeReportPlenaryChoices_().ok, reads], [false, 1]);
+    s.statusDocsGet_ = () => { reads++; return null; };
+    s.classifyCloseReportFindings_(base(), summary);
+    check('no read of its own: the choices come from the summary\'s read only', reads, 0);
+    // A result classified only for its dialog (no summary): a TDoc with Status "Plenary" is still shown, under Information.
+    const view = s.formatCloseReportResult_({ ready: true, checked: 1, counts: { UNRESOLVED: 1 }, unresolved: [e(5, 'Plenary')], revisions: [], problems: [], summaryState: 'unchanged', externalVerified: true });
+    check('a result without its summary: the TDoc with Status "Plenary" is under Information, not lost', [/^GOES TO PLENARY \(1\)/m.test(view), view.indexOf('• ' + id(5) + ' |') !== -1], [true, true]);
+  }
+
+  // 8b. Revision findings at the level of the TDoc list; escaping in the new parts.
+  {
+    const { sandbox: s } = loadCode();
+    const rev = (n, kind, reason, extra) => Object.assign({ tdoc: id(n), title: 'T' + n, source: 'ExampleCorp', revision: id(n + 50), reportStatus: 'revised', kind: kind,
+      label: kind, action: 'Check the TDoc and its revision in 3GU.', state3gu: 'x', reason: reason }, extra || {});
+    const base = (revisions, extra) => Object.assign({ ready: false, checked: 2, counts: {}, unresolved: [], revisions: revisions, problems: [], summaryState: 'unchanged', externalVerified: true }, extra || {});
+    const noColumn = s.classifyCloseReportFindings_(base([rev(1, 'revision-not-verified', 'the TDoc list has no "Revised to" column')]), null);
+    const noColumnText = s.formatCloseReportResult_(noColumn);
+    check('a TDoc list without "Revised to": a blocking issue (no revision could be checked), the revision listed under Warnings, without the Plenary agenda note',
+      [noColumn.ready, noColumn.blocking, /^⚠️ External verification incomplete: the TDoc list of this meeting has no "Revised to" column/m.test(noColumnText),
+        /1 of these revision was not checked at all, because of the TDoc list itself \(see Blocking issues\)\./.test(noColumnText), /Plenary agenda/.test(noColumnText)], [false, 1, true, true, false]);
+    const notRead = s.classifyCloseReportFindings_(base([rev(1, 'revision-not-verified', 'the TDoc list could not be read')], { externalVerified: false, problems: ['External verification could not be completed: x.'] }), null);
+    check('the TDoc list not read: blocking; its revisions "not checked at all", no Plenary agenda note', [notRead.ready, /not checked at all/.test(s.formatCloseReportResult_(notRead)), /Plenary agenda/.test(s.formatCloseReportResult_(notRead))], [false, true, false]);
+    const one = s.classifyCloseReportFindings_(base([rev(1, 'revision-not-verified', 'the revision ' + id(51) + ' is not in the TDoc list')]), null);
+    check('one revision not in the list (the list itself fine): a warning with the Plenary agenda note, ready', [one.ready, /It may be on the Plenary agenda instead/.test(s.formatCloseReportResult_(one)), /not checked at all/.test(s.formatCloseReportResult_(one))], [true, true, false]);
+    const reserved = s.classifyCloseReportFindings_(base([rev(2, 'revision-not-reserved', '')]), null);
+    const reservedText = s.formatCloseReportResult_(reserved);
+    check('a revision not reserved: under Blocking issues, NOT ready', [reserved.ready, reserved.blocking, reservedText.indexOf('BLOCKING ISSUES (1)') !== -1 && reservedText.indexOf('BLOCKING ISSUES (1)') < reservedText.indexOf('• ' + id(2) + ' |'), /^WARNINGS/m.test(reservedText)],
+      [false, 1, true, false]);
+    const hostile = '<script>alert(1)</script>';
+    const page = s.closeReportResultHtml_(s.classifyCloseReportFindings_(base([rev(3, 'revision-not-uploaded', hostile, { source: hostile })], { unresolved: [] }),
+      { read: { entries: [{ tdoc: id(4), title: hostile, source: hostile, status: 'Plenary', label: 'plenary', conflict: false, known: true }] } }));
+    check('text of the report is escaped in the Warnings and Information tables', [page.indexOf(hostile) === -1, page.indexOf('&lt;script&gt;alert(1)&lt;/script&gt;') !== -1], [true, true]);
   }
 
   // 9. What changed in Code.js, and nothing else.

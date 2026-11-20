@@ -23825,8 +23825,8 @@ function closeReportCore_() {
   REVISION_CHECK_STATES_.forEach(function (s) { result.counts[s.kind] = result.revisions.filter(function (r) { return r.kind === s.kind; }).length; });
 
   // After T-2026.10.32: blocking issues, warnings and information; only a blocking issue keeps the report from closing (CLOSE REPORT VALIDATION section).
-  classifyCloseReportFindings_(result, summary, closeReportPlenaryChoices_());
-  Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.unresolved.length + ' not yet disposed, ' +
+  classifyCloseReportFindings_(result, summary);
+  Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.undisposedTotal + ' not yet disposed, ' +
     REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState +
     '; external verification ' + (result.externalVerified ? 'completed (' + result.externalSource + ')' : 'NOT completed'));
   return result;
@@ -27487,9 +27487,10 @@ function describeLocalDocsStatus_(stateJson) {
 //     Not Yet Disposed"), except one whose Status is "Plenary": that is its
 //     routing to the plenary, listed under Information;
 //   - a TDoc the report has as revised whose revision is not reserved in 3GU;
-//   - a check that could not be made: the TDoc list of the meeting not read
-//     (no revision could be checked), a Status not readable, no Registration of
-//     Documents, text typed into the Disposition Summary.
+//   - a check that could not be made: the TDoc list of the meeting not read,
+//     or read without a "Revised to" column (no revision could be checked), a
+//     Status not readable, no Registration of Documents, text typed into the
+//     Disposition Summary.
 // WARNINGS (the report can be closed; nothing in it needs correcting)
 //   - a reserved revision not yet uploaded to 3GU;
 //   - a revision whose state could not be verified in the 3GU TDoc list. It may
@@ -27497,77 +27498,73 @@ function describeLocalDocsStatus_(stateJson) {
 //     agenda and never says that it did.
 // INFORMATION
 //   - every TDoc routed to the plenary: Status "Plenary", or "☑ Yes" in the
-//     Plenary dropdown of a report with Goes to Plenary. Its routing never
-//     blocks; a TDoc that is also not disposed blocks for that alone.
+//     Plenary dropdown of a report with Goes to Plenary (from the summary's own
+//     read; no other read is made). Its routing never blocks; a TDoc that is
+//     also not disposed blocks for that alone.
 //
 // Nothing else changes: the Disposition Summary is written as before (its
 // "Documents Not Yet Disposed" still lists a TDoc whose Status is "Plenary"),
 // no status, disposition, Plenary choice or other content is changed, and the
-// lock, the summary write, the landscape step and the log are as they were.
+// lock, the summary write, the landscape step and the text of the log line are
+// as they were (its count of TDocs not yet disposed is the summary's).
 
 // The revision findings that block; the others are warnings.
 const CLOSE_REPORT_BLOCKING_REVISION_KINDS_ = ['revision-not-reserved'];
 // The Status that routes a TDoc to the plenary (the retired dropdown option, still typed or selected in reports without Goes to Plenary).
 const CLOSE_REPORT_PLENARY_STATUS_ = 'plenary';
 const CLOSE_REPORT_NOT_VERIFIED_NOTE_ = 'It may be on the Plenary agenda instead -- Close Report did not check the Plenary agenda.';
+// The reasons of checkRevisionsIn3gu_() that are about the TDoc list as a whole, not about one revision.
+const CLOSE_REPORT_NO_REVISED_TO_REASON_ = 'the TDoc list has no "Revised to" column';
+const CLOSE_REPORT_LIST_LEVEL_REASONS_ = [CLOSE_REPORT_NO_REVISED_TO_REASON_, 'the links of the TDoc list could not be read'];
+// A list read without "Revised to": whether any revision is reserved cannot be known -- a check that could not be made.
+const CLOSE_REPORT_NO_REVISED_TO_PROBLEM_ = 'External verification incomplete: the TDoc list of this meeting has no "Revised to" column, so it could not be checked whether the revisions of the TDocs revised in the report are reserved in 3GU. Run Close Report again once the TDoc list can be read with that column.';
 
 /** Pure: true for a TDoc whose Status routes it to the plenary (one Status, "Plenary"). */
 function isPlenaryRoutingStatus_(entry) {
   return !!entry && !entry.conflict && entry.label === CLOSE_REPORT_PLENARY_STATUS_;
 }
 
-/**
- * The Plenary choices of a report with Goes to Plenary: { enabled, ok, yes:
- * { tdoc: true }, error }. One Docs API read of the saved report; a report
- * without Goes to Plenary is not read. Never throws.
- */
-function closeReportPlenaryChoices_() {
-  try {
-    if (!plenarySelectionEnabled_()) return { enabled: false, ok: true, yes: {} };
-    const snap = plenarySnapshot_(currentReportDocument_().getId());
-    if (!snap) return { enabled: true, ok: false, yes: {}, error: 'the report could not be read through the Docs API' };
-    const tables = plenaryDocsTables_(snap.content);
-    const scope = plenaryScopeOfTables_(tables);
-    if (!scope.ok) return { enabled: true, ok: false, yes: {}, error: scope.error };
-    const read = readPlenaryDispositionsOfTables_(tables, scope, null, PropertiesService.getDocumentProperties().getProperties() || {});
-    const yes = {};
-    read.entries.forEach(function (e) { if (e.plenary) yes[e.tdoc] = true; });
-    return { enabled: true, ok: true, yes: yes };
-  } catch (e) {
-    return { enabled: true, ok: false, yes: {}, error: e.message };
-  }
+/** Pure: true for a TDoc with "☑ Yes" in its Plenary dropdown (the summary's read of a report with Goes to Plenary has it). */
+function isPlenaryYes_(entry) {
+  return !!entry && entry.plenary === true;
 }
 
 /**
  * Pure: sorts the findings of closeReportCore_() into blocking issues,
  * warnings and information, and sets `ready` (no blocking issue). `summary`
- * is writeDispositionSummary_()'s result; `choices` closeReportPlenaryChoices_().
+ * is writeDispositionSummary_()'s result: in a report with Goes to Plenary
+ * its read has each TDoc's Plenary choice -- no other read is made. Without
+ * it (a result classified only for its dialog), the TDocs not yet disposed
+ * are what is known.
  * Sets: unresolved (the blocking ones only), undisposedTotal (the summary's
- * "not yet disposed"), undisposedPlenaryStatus (of these, Status "Plenary"), blockingRevisions,
+ * "not yet disposed"), undisposedPlenaryStatus (of these, Status "Plenary"),
+ * problems (plus a TDoc list without "Revised to"), blockingRevisions,
  * warningRevisions, plenaryRouted [{ tdoc, title, source, status, routing,
  * undisposed }], informationNotes, blocking, warnings, information, ready.
  */
-function classifyCloseReportFindings_(result, summary, choices) {
-  const yes = (choices && choices.yes) || {};
-  const entries = (summary && summary.read && summary.read.entries) || [];
+function classifyCloseReportFindings_(result, summary) {
   const allUnresolved = result.unresolved || [];
+  const entries = summary && summary.read && summary.read.entries ? summary.read.entries : allUnresolved;
   result.unresolved = allUnresolved.filter(function (e) { return !isPlenaryRoutingStatus_(e); });
   // The Disposition Summary's "not yet disposed" (all of them) and the part of it that blocks.
   result.undisposedTotal = allUnresolved.length;
   result.undisposedPlenaryStatus = allUnresolved.length - result.unresolved.length;
+  result.problems = (result.problems || []).slice();
+  if (result.externalVerified && (result.revisions || []).some(function (r) { return r.reason === CLOSE_REPORT_NO_REVISED_TO_REASON_; }) &&
+    result.problems.indexOf(CLOSE_REPORT_NO_REVISED_TO_PROBLEM_) === -1) result.problems.push(CLOSE_REPORT_NO_REVISED_TO_PROBLEM_);
   result.blockingRevisions = (result.revisions || []).filter(function (r) { return CLOSE_REPORT_BLOCKING_REVISION_KINDS_.indexOf(r.kind) !== -1; });
   result.warningRevisions = (result.revisions || []).filter(function (r) { return CLOSE_REPORT_BLOCKING_REVISION_KINDS_.indexOf(r.kind) === -1; });
   const blockingTdocs = {};
   result.unresolved.forEach(function (e) { blockingTdocs[e.tdoc] = true; });
-  result.plenaryRouted = entries.filter(function (e) { return isPlenaryRoutingStatus_(e) || yes[e.tdoc]; }).map(function (e) {
-    const routing = [isPlenaryRoutingStatus_(e) ? 'Status "Plenary"' : '', yes[e.tdoc] ? 'Goes to Plenary: ☑ Yes' : ''].filter(Boolean).join('; ');
+  result.plenaryRouted = entries.filter(function (e) { return isPlenaryRoutingStatus_(e) || isPlenaryYes_(e); }).map(function (e) {
+    const routing = [isPlenaryRoutingStatus_(e) ? 'Status "Plenary"' : '', isPlenaryYes_(e) ? 'Goes to Plenary: ☑ Yes' : ''].filter(Boolean).join('; ');
     return { tdoc: e.tdoc, title: e.title || '', source: e.source || '', status: dispositionSummaryStatusText_(e), routing: routing, undisposed: !!blockingTdocs[e.tdoc] };
   });
-  result.informationNotes = choices && choices.enabled && !choices.ok ? ['The Goes to Plenary choices could not be read (' + choices.error + '); TDocs routed by "☑ Yes" are not listed. This does not keep the report from closing.'] : [];
-  result.blocking = result.unresolved.length + result.blockingRevisions.length + (result.problems || []).length;
+  result.informationNotes = [];
+  result.blocking = result.unresolved.length + result.blockingRevisions.length + result.problems.length;
   result.warnings = result.warningRevisions.length;
   result.information = result.plenaryRouted.length + result.informationNotes.length;
-  result.ready = !!result.externalVerified && result.summaryState !== 'unreadable' && result.summaryState !== 'no-scope' && (result.problems || []).length === 0 &&
+  result.ready = !!result.externalVerified && result.summaryState !== 'unreadable' && result.summaryState !== 'no-scope' && result.problems.length === 0 &&
     result.unresolved.length === 0 && result.blockingRevisions.length === 0;
   return result;
 }
@@ -27575,14 +27572,30 @@ function classifyCloseReportFindings_(result, summary, choices) {
 /** Pure: a result as the dialog shows it: itself once classified; else a classified copy that keeps its own `ready` (a dialog never decides it). */
 function closeReportView_(result) {
   if (result.blocking !== undefined) return result;
-  const copy = classifyCloseReportFindings_(Object.assign({}, result, { unresolved: (result.unresolved || []).slice(), problems: (result.problems || []).slice(), revisions: (result.revisions || []).slice() }), null, null);
+  const copy = classifyCloseReportFindings_(Object.assign({}, result, { unresolved: (result.unresolved || []).slice(), problems: (result.problems || []).slice(), revisions: (result.revisions || []).slice() }), null);
   copy.ready = result.ready;
   return copy;
 }
 
-/** Pure: the action of a revision finding, its reason and -- for one not verified -- that the Plenary agenda was not checked. */
-function closeReportRevisionAction_(r) {
-  return r.action + (r.reason ? ' (' + r.reason.charAt(0).toUpperCase() + r.reason.slice(1) + '.)' : '') + (r.kind === 'revision-not-verified' ? ' ' + CLOSE_REPORT_NOT_VERIFIED_NOTE_ : '');
+/** Pure: true for a finding not verified because of the TDoc list itself (not read, no "Revised to", links unreadable), not because of its revision. */
+function isListLevelRevisionFinding_(r, result) {
+  return r.kind === 'revision-not-verified' && (!result.externalVerified || CLOSE_REPORT_LIST_LEVEL_REASONS_.indexOf(r.reason) !== -1);
+}
+
+/**
+ * Pure: the action of a revision finding and its reason; for a revision not
+ * verified because of that revision (not of the list), that it may be on the
+ * Plenary agenda and that the Plenary agenda was not checked.
+ */
+function closeReportRevisionAction_(r, result) {
+  return r.action + (r.reason ? ' (' + r.reason.charAt(0).toUpperCase() + r.reason.slice(1) + '.)' : '') +
+    (r.kind === 'revision-not-verified' && !isListLevelRevisionFinding_(r, result) ? ' ' + CLOSE_REPORT_NOT_VERIFIED_NOTE_ : '');
+}
+
+/** Pure: the line of the Warnings part when some of its revisions were not checked at all because of the TDoc list ('' for none). */
+function closeReportUncheckedNote_(result) {
+  const n = (result.warningRevisions || []).filter(function (r) { return isListLevelRevisionFinding_(r, result); }).length;
+  return n ? n + ' of these revision' + (n === 1 ? ' was' : 's were') + ' not checked at all, because of the TDoc list itself (see Blocking issues).' : '';
 }
 
 /**
@@ -27623,7 +27636,7 @@ function formatCloseReportFindings_(result) {
     lines.push(s.label.replace(/\.$/, '').toUpperCase() + ' (' + listed.length + ') -- Original TDoc | Revision | Source | Report state | 3GU state:');
     listed.forEach(function (r) {
       lines.push('• ' + r.tdoc + ' | ' + (r.revision || '–') + ' | ' + (r.source || '') + ' | ' + r.reportStatus + ' | ' + r.state3gu);
-      lines.push('   → ' + closeReportRevisionAction_(r));
+      lines.push('   → ' + closeReportRevisionAction_(r, result));
     });
   };
   const byKind = function (list, s) { return list.filter(function (r) { return r.kind === s.kind; }); };
@@ -27647,6 +27660,7 @@ function formatCloseReportFindings_(result) {
   if (result.warnings) {
     lines.push('');
     lines.push('WARNINGS (' + result.warnings + ') -- they do not keep the report from closing:');
+    if (closeReportUncheckedNote_(result)) lines.push(closeReportUncheckedNote_(result));
     REVISION_CHECK_STATES_.forEach(function (s) { const listed = byKind(result.warningRevisions, s); if (listed.length) revisionList(s, listed); });
   }
   if (result.information) {
@@ -27697,7 +27711,7 @@ function closeReportFindingsHtml_(result) {
       if (!listed.length) return;
       out.push('<h4>' + esc(s.label.replace(/\.$/, '')) + ' (' + listed.length + ')</h4>');
       out.push(table(['Original TDoc', 'Revision', 'Source', 'Report state', '3GU state', 'Action'], listed.map(function (r) {
-        return [r.tdoc, r.revision || '–', r.source || '', r.reportStatus, r.state3gu, closeReportRevisionAction_(r)];
+        return [r.tdoc, r.revision || '–', r.source || '', r.reportStatus, r.state3gu, closeReportRevisionAction_(r, result)];
       })));
     });
   };
@@ -27712,6 +27726,7 @@ function closeReportFindingsHtml_(result) {
   }
   if (result.warnings) {
     out.push('<h3 class="warn">Warnings (' + result.warnings + ') -- they do not keep the report from closing</h3>');
+    if (closeReportUncheckedNote_(result)) out.push('<div>' + esc(closeReportUncheckedNote_(result)) + '</div>');
     revisionTables(result.warningRevisions);
   }
   if (result.information) {

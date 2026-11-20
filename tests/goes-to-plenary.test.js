@@ -454,6 +454,12 @@ console.log('J. Close Report');
   check('Close Report writes the same four tables on landscape pages; its counts are the classes of the Disposition Summary', [c.summaryState, r.headings(), Object.keys(c.counts).slice(0, 3), r.api.sectionBreaks().length],
     ['unchanged', 1, ['AGREED_ENDORSED_APPROVED', 'DISPOSED_OTHER', 'UNRESOLVED'], 1]);
   check('the TDocs not yet disposed are listed as before, by their status', c.unresolved.map((e) => e.tdoc + ' ' + e.status), ['S4-262009 available', 'S4-262015 available', 'S4-262016 available', 'S4-262019 available']);
+  // T-2026.10.33: every "☑ Yes" of the report is Information, from the summary's own read; it blocks nothing by itself.
+  const yesNow = r.tdocs.filter((t) => r.c(t.id) && r.c(t.id).plenary === YES).map((t) => t.id).sort();
+  check('T-2026.10.33: the TDocs with "☑ Yes" are under Information, each "Goes to Plenary: ☑ Yes"; the blocking list is the TDocs not yet disposed',
+    [yesNow.length > 0, c.plenaryRouted.map((p) => p.tdoc).sort(), c.plenaryRouted.every((p) => p.routing === 'Goes to Plenary: ☑ Yes'), c.blocking >= c.unresolved.length,
+      c.plenaryRouted.filter((p) => p.undisposed).map((p) => p.tdoc).sort(), c.ready],
+    [true, yesNow, true, true, yesNow.filter((id) => c.unresolved.some((e) => e.tdoc === id)).sort(), false]);
 }
 
 // ====================================================================== L

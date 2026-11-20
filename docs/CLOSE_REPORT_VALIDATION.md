@@ -2,11 +2,12 @@
 
 Built on T-2026.10.32 (`144b6f8`, Code.js 2.27.0).
 
-**Release files:** Code.js and Release.js change. HyperLink.js, ReportCreator.js and each
-report's appsscript.json stay as they are.
+**Release files:** Code.js changes, and so does Release.js, which the build generates (it is not
+kept in Git). HyperLink.js, ReportCreator.js and each report's appsscript.json stay as they are.
 
 The code is in the section "CLOSE REPORT VALIDATION" of `Code.js`, after the Undisposed Documents
-section. Three released functions change: `closeReportCore_` (one line), and
+section. Three released functions change: `closeReportCore_` (the classification line, and its log line
+reads the summary's count), and
 `formatCloseReportResult_` and `closeReportResultHtml_`, which now hand over to the section. The
 ledger is in `tests/helpers/before-structure-fix.js` (`CLOSE_VALIDATION_CHANGES`). Without this
 layer, Code.js is that of T-2026.10.32 byte for byte.
@@ -22,7 +23,7 @@ Close Report now sorts what it finds into three kinds, and only the first decide
 
 | Kind | What | Closing |
 |---|---|---|
-| **Blocking issues** | a TDoc not yet disposed (Available, Reserved, Parked, Postponed, Other, a status the classification does not know, tables that disagree), except Status "Plenary"; a TDoc the report has as revised whose revision is not reserved in 3GU; a check that could not be made: the meeting's TDoc list not read, a Status not readable, no Registration of Documents, text typed into the Disposition Summary | "Report NOT ready to close" |
+| **Blocking issues** | a TDoc not yet disposed (Available, Reserved, Parked, Postponed, Other, a status the classification does not know, tables that disagree), except Status "Plenary"; a TDoc the report has as revised whose revision is not reserved in 3GU; a check that could not be made: the meeting's TDoc list not read, or read without a "Revised to" column, a Status not readable, no Registration of Documents, text typed into the Disposition Summary | "Report NOT ready to close" |
 | **Warnings** | a reserved revision not yet uploaded to 3GU; a revision whose state 3GU cannot confirm | the report can be closed |
 | **Information** | every TDoc routed to the plenary: Status "Plenary", or "☑ Yes" in the Plenary dropdown of a report with Goes to Plenary | never blocks |
 
@@ -32,6 +33,10 @@ also listed under Information, marked "also not yet disposed".
 **What a revision warning says.** A revision 3GU cannot confirm may be on the Plenary agenda
 instead. The dialog says so, and says that Close Report did not check the Plenary agenda. Close
 Report does not read the Plenary agenda, and never says a revision was verified there.
+
+The note is left out where the cause is the TDoc list itself (not read, no "Revised to" column,
+its links unreadable). The Warnings part then says how many of its revisions were not checked
+at all, and the list problem is under Blocking issues.
 
 **The dialog.**
 - **Counts:** the same counts as before, plus a line "Blocking issues: N. Warnings: N.
@@ -55,12 +60,13 @@ Report does not read the Plenary agenda, and never says a revision was verified 
   lists a TDoc whose Status is "Plenary". The dialog's counts of the three classes are the summary's.
 - **Nothing in the report is changed** but the summary: no Status, disposition, Plenary choice or
   other content.
-- **The rest of Close Report is as before:** the lock, the landscape step of Goes to Plenary, the
-  log line and the modal dialog are unchanged. `closeReport()` itself is unchanged.
+- **The rest of Close Report is as before:** the lock, the landscape step of Goes to Plenary and
+  the modal dialog are unchanged, and `closeReport()` itself is unchanged. The log line keeps its
+  text: its count of TDocs not yet disposed is the summary's.
 - **The findings are the same**, and so is the external check: the classification and the 3GU
   check are untouched. Only the decision on top of them is new.
-- **One new read:** in a report with Goes to Plenary, Close Report reads the Plenary choices once
-  through the Docs API. A failed read is an information note and blocks nothing.
+- **No new read:** in a report with Goes to Plenary, the Plenary choices come from the read the
+  Disposition Summary is written from.
 
 ## Tests
 
