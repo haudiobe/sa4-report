@@ -1,0 +1,43 @@
+# Rollout of T-2026.10.33 (Code.js 2.27.1): Close Report validation
+
+T-2026.10.33 is T-2026.10.32 (`144b6f8`, running in all five SA4#138 reports since 2026-11-19) plus
+the Close Report validation (docs/CLOSE_REPORT_VALIDATION.md).
+
+- **Release files:** Code.js and Release.js change. HyperLink.js, ReportCreator.js and each
+  report's appsscript.json stay byte for byte.
+- **Templates:** the master template is not part of this rollout.
+- **No tag, no GitHub push.**
+
+## Script
+
+`dist/backups/sa4-138-deploy-T-2026.10.33/deploy-T-2026.10.33.mjs` in the main checkout (not in
+Git). Every run writes `<target>-<stamp>/{backup,push,readback,evidence.json,ROLLBACK.txt}`.
+
+| Command | What it does |
+|---|---|
+| `--build` | the candidate bundle from the clean worktree at the release commit (no Google access) |
+| `--target <video\|mbs\|rtc\|audio\|6g>` | dry run: binding, a fresh backup that must equal the report's T-2026.10.32 read-back, the plan (only Code.js and Release.js change) |
+| `... --write --nobody-editing --named-version "before T-2026.10.33"` | the push, read-back and checks; refused without both confirmations |
+| `... --rollback [--write --nobody-editing]` | pushes the report's T-2026.10.32 read-back back, byte for byte |
+
+## Order and conditions
+
+Video, MBS, RTC, Audio, 6G Media, one at a time; stop at the first failure. For each report, before
+`--write`:
+1. You name the version "before T-2026.10.33" (*File › Version history › Name current version*).
+2. You confirm that nobody is editing it.
+
+## Acceptance, in each report
+
+1. *About This Report*: T-2026.10.33 / 2.27.1.
+2. *Report › Close Report*:
+   - the counts are those of the summary;
+   - each finding is under Blocking issues, Warnings or Information;
+   - "Report NOT ready to close" appears only if a blocking issue is listed.
+3. The Disposition Summary is unchanged by it, if it was up to date. No Status and no Plenary
+   choice changed.
+
+## Rollback
+
+Run `--target <t> --rollback --write --nobody-editing`. Nothing in the document needs undoing: the
+release writes nothing that T-2026.10.32 does not.

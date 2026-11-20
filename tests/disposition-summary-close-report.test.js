@@ -321,9 +321,11 @@ console.log('D. Close Report: what blocks it, what it lists, and that it changes
   const several = built([t(1, '4.3'), t(2, '4.3'), t(3, '4.4'), t(4, '4.4'), t(5, '4.5')], { 1: 'available', 2: 'Plenary', 3: 'agreed', 4: 'other', 5: 'reserved' });
   const res = closeReport(several);
   const text = lastAlert(several)[1];
-  check('several not yet disposed: every one is listed, in the order of the report', [res.ready, res.unresolved.map((e) => e.tdoc), text.split('\n').filter((l) => /^• /.test(l)).map((l) => l.split(' | ')[0].slice(2))],
-    [false, [id(1), id(2), id(4), id(5)], [id(1), id(2), id(4), id(5)]]);
-  check('the dialog says NOT READY TO CLOSE, the counts, and what to do', [text.split('\n')[0], text.split('\n').slice(2, 9), /NOT YET DISPOSED \(4\) -- TDoc \| Title \| Source \| Current Status:/.test(text),
+  // T-2026.10.33: the Status "Plenary" is the TDoc's routing to the plenary -- information, not a blocking issue; the others block.
+  check('several not yet disposed: every blocking one is listed, in the order of the report; the one with Status "Plenary" under Information', [res.ready, res.unresolved.map((e) => e.tdoc), text.split('\n').filter((l) => /^• /.test(l)).map((l) => l.split(' | ')[0].slice(2)),
+    res.plenaryRouted.map((p) => [p.tdoc, p.routing, p.undisposed])],
+    [false, [id(1), id(4), id(5)], [id(1), id(4), id(5), id(2)], [[id(2), 'Status "Plenary"', false]]]);
+  check('the dialog says NOT READY TO CLOSE, the counts, and what to do', [text.split('\n')[0], text.split('\n').slice(2, 9), /NOT YET DISPOSED \(3\) -- TDoc \| Title \| Source \| Current Status:/.test(text),
     text.split('\n').slice(-1)[0]],
     ['Report NOT READY TO CLOSE.', ['5 TDocs checked.', '1 agreed/endorsed/approved.', '0 other disposed.', '4 not yet disposed.', 'Revision not reserved in 3GU: 0.', 'Revision reserved but not uploaded in 3GU: 0.',
       'Revision state could not be verified in 3GU: 0.'], true,
@@ -435,7 +437,8 @@ console.log('E. revised in the report: not reserved, reserved but not uploaded, 
   check('D. its "Revised to" is not in the TDoc list (another meeting, or removed): not verified', closeReport(lost).revisions.map((x) => [x.revision, x.kind, x.reason]),
     [[id(2), 'revision-not-verified', 'the revision ' + id(2) + ' is not in the TDoc list']]);
   check('D. the dialog: its own list, with the reason', lastAlert(lost)[1].split('\n').filter((l) => /^(REVISION |   → )/.test(l)),
-    ['REVISION STATE COULD NOT BE VERIFIED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '   → ' + VERIFY + ' (The revision ' + id(2) + ' is not in the TDoc list.)']);
+    ['REVISION STATE COULD NOT BE VERIFIED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:', '   → ' + VERIFY + ' (The revision ' + id(2) + ' is not in the TDoc list.)' +
+      ' It may be on the Plenary agenda instead -- Close Report did not check the Plenary agenda.']);
 
   // Several, of every state, and one the TDoc list does not have at all: each in its own list, in the order of the report.
   const multi = built([t(1, '4.3'), t(2, '4.3'), t(3, '4.4', 'revised', { revisedTo: id(5) }), t(4, '4.4'), t(5, '4.4', 'reserved', { uploaded: false }), t(6, '4.5')],
@@ -853,10 +856,12 @@ console.log('K. Close Report shows its result at once, in full, and the executio
   check('Close Report waits on no alert: its result is one modal HTML dialog, shown after the lock is released', [r.ui.alerts.filter((a) => a[2] !== 'dialog').length - alertsBefore, r.ui.dialogs.length, title],
     [0, 1, 'Report NOT ready to close']);
   check('the counts of the real shape: not yet disposed, and each revision state', [res.unresolved.length, res.counts['revision-not-reserved'], res.counts['revision-not-uploaded'], res.counts['revision-not-verified']],
-    [17, 1, 2, 1]);
-  const rowsOf = (heading) => { const at = html.indexOf('<h3>' + heading); if (at === -1) return null; const tableEnd = html.indexOf('</table>', at); return (html.slice(at, tableEnd).match(/<tr>/g) || []).length - 1; };
-  check('the dialog lists every TDoc of every list in full -- no cap', [rowsOf('Not yet disposed (17)'), rowsOf('Revision not reserved in 3GU (1)'), rowsOf('Revision reserved but not uploaded in 3GU (2)'),
-    rowsOf('Revision state could not be verified in 3GU (1)')], [17, 1, 2, 1]);
+    [16, 1, 2, 1]);
+  // T-2026.10.33: 15 (Status "Plenary") is under Information; each list under its kind (blocking issues, warnings, information).
+  const rowsOf = (heading) => { const at = html.indexOf('<h4>' + heading); if (at === -1) return null; const tableEnd = html.indexOf('</table>', at); return (html.slice(at, tableEnd).match(/<tr>/g) || []).length - 1; };
+  check('the dialog lists every TDoc of every list in full -- no cap', [rowsOf('Not yet disposed (16)'), rowsOf('Revision not reserved in 3GU (1)'), rowsOf('Revision reserved but not uploaded in 3GU (2)'),
+    rowsOf('Revision state could not be verified in 3GU (1)'), rowsOf('Goes to Plenary (1)')], [16, 1, 2, 1, 1]);
+  check('the three kinds, in this order, each with its count', [html.indexOf('Blocking issues (17)'), html.indexOf('Warnings (3)'), html.indexOf('Information (1)')].every((at, i, all) => at !== -1 && (i === 0 || at > all[i - 1])), true);
   check('every finding is in it, with its action and reason', [res.unresolved.every((e) => html.indexOf('<td>' + e.tdoc + '</td>') !== -1), res.revisions.every((x) => html.indexOf(x.action) !== -1),
     html.indexOf('(The revision ' + id(29) + ' is not in the TDoc list.)') !== -1], [true, true, true]);
   // 29 is not in the meeting's TDoc list any more, but the report registered it (after T-2026.10.17 it is the report's): 30 TDocs
@@ -1184,6 +1189,153 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
     check('against T-2026.10.16: outside the section and continuousUpdateCore_, Code.js is byte for byte the release',
       CODE.replace(section, '').replace(functionSource(CODE, 'continuousUpdateCore_'), '') === released16.replace(section16, '').replace(functionSource(released16, 'continuousUpdateCore_'), ''), true);
   }
+}
+
+// ====================================================================== V
+console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CLOSE_REPORT_VALIDATION.md)');
+{
+  const ledger = require('./helpers/before-structure-fix.js');
+  const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  const PREVIOUS = ledger.codeWithoutCloseReportValidation(FULL).code;
+  const dialog = (r) => r.ui.dialogs[r.ui.dialogs.length - 1] || ['', ''];
+  // The lines of one part of the dialog's text: from its heading to the next part (or the closing note).
+  const part = (text, name) => { const lines = text.split('\n'); const at = lines.findIndex((l) => l.indexOf(name + ' (') === 0); if (at === -1) return null;
+    const end = lines.findIndex((l, i) => i > at && /^(BLOCKING ISSUES|WARNINGS|INFORMATION) \(|^Nothing was changed/.test(l)); return lines.slice(at, end === -1 ? lines.length : end); };
+  const tdocsIn = (lines) => (lines || []).filter((l) => /^• /.test(l)).map((l) => l.split(' | ')[0].slice(2));
+  const NOTE_READY = 'Nothing was changed but the Disposition Summary. The report can be closed: the warnings above need no correction in the report; follow them up in 3GU.';
+  const NOTE_NOT_READY = 'Nothing was changed but the Disposition Summary. Correct the TDocs above and run Close Report again.';
+  // The scenarios, each on its own report (code: another Code.js, to compare with T-2026.10.32).
+  const undisposed = (code) => built([t(1, '4.3'), t(2, '4.3')], { 1: 'agreed', 2: 'available' }, code ? { code: code } : {});
+  const notUploaded = (code) => built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3', 'reserved', { uploaded: false })], { 1: 'revised', 2: 'noted' }, code ? { code: code } : {});
+  const notVerified = (code) => { const r = built([t(1, '4.3', 'revised', { revisedTo: id(2) }), t(2, '4.3')], { 1: 'revised', 2: 'agreed' }, code ? { code: code } : {}); r.tdocs = r.tdocs.filter((x) => x.id !== id(2)); return r; };
+  const plenary = (code) => built([t(1, '4.3'), t(2, '4.3')], { 1: 'agreed', 2: 'Plenary' }, code ? { code: code } : {});
+  const mixed = (code) => {
+    const r = built([t(1, '4.3'), t(2, '4.3', 'revised', { revisedTo: id(3) }), t(3, '4.3', 'reserved', { uploaded: false }), t(4, '4.4'), t(5, '4.4', 'revised', { revisedTo: id(6) }), t(6, '4.4')],
+      { 1: 'available', 2: 'revised', 3: 'noted', 4: 'Plenary', 5: 'revised', 6: 'agreed' }, code ? { code: code } : {});
+    r.tdocs = r.tdocs.filter((x) => x.id !== id(6));
+    return r;
+  };
+
+  // 1. A TDoc not yet disposed blocks.
+  const u = undisposed();
+  const ur = closeReport(u);
+  const ut = lastAlert(u)[1];
+  check('a TDoc not yet disposed blocks: NOT ready, one blocking issue, listed under Blocking issues, no warnings',
+    [ur.ready, dialog(u)[0], ur.blocking, ur.warnings, ur.information, tdocsIn(part(ut, 'BLOCKING ISSUES')), part(ut, 'WARNINGS'), ut.split('\n').slice(-1)[0]],
+    [false, 'Report NOT ready to close', 1, 0, 0, [id(2)], null, NOTE_NOT_READY]);
+
+  // 2. A reserved revision not uploaded alone does not block.
+  const nu = notUploaded();
+  const nur = closeReport(nu);
+  const nut = lastAlert(nu)[1];
+  check('a reserved revision not yet uploaded alone: ready, a warning, nothing blocking', [nur.ready, dialog(nu)[0], nur.blocking, nur.warnings, nur.warningRevisions.map((x) => [x.tdoc, x.revision, x.kind])],
+    [true, 'Report ready to close', 0, 1, [[id(1), id(2), 'revision-not-uploaded']]]);
+  check('the warning keeps its table: the TDoc, its revision, the 3GU state and the action', [part(nut, 'WARNINGS')[0], part(nut, 'WARNINGS').filter((l) => /^(REVISION|• |   → )/.test(l)),
+    nut.split('\n').slice(-1)[0]],
+    ['WARNINGS (1) -- they do not keep the report from closing:', ['REVISION RESERVED BUT NOT UPLOADED IN 3GU (1) -- Original TDoc | Revision | Source | Report state | 3GU state:',
+      '• ' + id(1) + ' | ' + id(2) + ' | ExampleCorp | revised | revised, revised to ' + id(2) + ' (reserved, not uploaded)', '   → Author needs to upload the reserved revision in 3GU.'], NOTE_READY]);
+  check('(before T-2026.10.33 the same report was NOT ready)', closeReport(notUploaded(PREVIOUS)).ready, false);
+
+  // 3. A revision not verified alone does not block; the Plenary agenda is named, never claimed as checked.
+  const nv = notVerified();
+  const nvr = closeReport(nv);
+  const nvt = lastAlert(nv)[1];
+  const nvh = dialog(nv)[1];
+  check('a revision that cannot be verified alone: ready, a warning, nothing blocking', [nvr.ready, nvr.blocking, nvr.warnings, nvr.warningRevisions.map((x) => [x.tdoc, x.revision, x.kind])],
+    [true, 0, 1, [[id(1), id(2), 'revision-not-verified']]]);
+  check('it says the revision may be on the Plenary agenda and that the agenda was not checked -- never that it was verified there',
+    [/It may be on the Plenary agenda instead -- Close Report did not check the Plenary agenda\./.test(nvt), /It may be on the Plenary agenda instead -- Close Report did not check the Plenary agenda\./.test(nvh),
+      /(verified|found|confirmed) (on|in) the Plenary agenda/i.test(nvt + nvh)], [true, true, false]);
+  check('(before T-2026.10.33 the same report was NOT ready)', closeReport(notVerified(PREVIOUS)).ready, false);
+
+  // 4. Routing to the plenary alone does not block.
+  const p = plenary();
+  const pr = closeReport(p);
+  const pt = lastAlert(p)[1];
+  check('a TDoc routed to the plenary (Status "Plenary") alone: ready, information, nothing blocking', [pr.ready, dialog(p)[0], pr.blocking, pr.information, pr.plenaryRouted.map((x) => [x.tdoc, x.status, x.routing, x.undisposed])],
+    [true, 'Report ready to close', 0, 1, [[id(2), 'Plenary', 'Status "Plenary"', false]]]);
+  check('listed under Information, with title, source and status', part(pt, 'INFORMATION').filter((l) => /^(GOES|• )/.test(l)),
+    ['GOES TO PLENARY (1) -- TDoc | Title | Source | Status | Routing:', '• ' + id(2) + ' | Synthetic title of ' + id(2) + ' | ExampleCorp | Plenary | Status "Plenary"']);
+  check('the Disposition Summary is as before: it still lists it under "Documents Not Yet Disposed"; its status is not changed', [summaryOf(p.body)[2][0], p.shown(id(2))], [TITLES[2] + ' (1)', 'dropdown:Plenary']);
+  check('(before T-2026.10.33 the same report was NOT ready)', closeReport(plenary(PREVIOUS)).ready, false);
+
+  // 5. Mixed: each finding in its own part, and only the blocking one decides.
+  const m = mixed();
+  const mr = closeReport(m);
+  const mt = lastAlert(m)[1];
+  const mh = dialog(m)[1];
+  check('mixed: NOT ready; 1 blocking, 2 warnings, 1 information', [mr.ready, mr.blocking, mr.warnings, mr.information, mt.split('\n').filter((l) => /^Blocking issues: /.test(l))],
+    [false, 1, 2, 1, ['Blocking issues: 1. Warnings: 2. Information: 1.']]);
+  check('each TDoc in its own part only: blocking ' + id(1) + ', warnings ' + id(2) + ' and ' + id(5) + ', information ' + id(4),
+    [tdocsIn(part(mt, 'BLOCKING ISSUES')), tdocsIn(part(mt, 'WARNINGS')), tdocsIn(part(mt, 'INFORMATION'))], [[id(1)], [id(2), id(5)], [id(4)]]);
+  check('the page: Blocking issues, Warnings, Information, in this order, each with its count', ['Blocking issues (1)', 'Warnings (2)', 'Information (1)'].map((x) => mh.indexOf(x))
+    .every((at, i, all) => at !== -1 && (i === 0 || at > all[i - 1])), true);
+  check('"NOT ready to close" only with a blocking issue: title and first line', [dialog(m)[0], mt.split('\n')[0], dialog(nv)[0], nvt.split('\n')[0]],
+    ['Report NOT ready to close', 'Report NOT READY TO CLOSE.', 'Report ready to close', 'Report ready to close.']);
+
+  // 6. Closing with warnings: they stay, and nothing in the report needs correcting.
+  const w = notVerified();
+  const w1 = closeReport(w);
+  const docAfter1 = snapshot(w.body);
+  const shown1 = shownAll(w);
+  const w2 = closeReport(w);
+  check('closing with warnings: the second run gives the same result, the warnings kept in it and in the dialog, the document unchanged',
+    [w2.ready, JSON.stringify(w2.warningRevisions) === JSON.stringify(w1.warningRevisions), dialog(w)[1].indexOf('<td>' + id(1) + '</td>') !== -1, snapshot(w.body) === docAfter1, shownAll(w).join() === shown1.join()],
+    [true, true, true, true, true]);
+  check('the closing note says the warnings need no correction in the report', lastAlert(w)[1].split('\n').slice(-1)[0], NOTE_READY);
+
+  // 7. Everything else as before: the summary, the statuses, the document, the counts, the findings themselves, the log.
+  const now = mixed();
+  const before = mixed(PREVIOUS);
+  const rn = closeReport(now);
+  const rb = closeReport(before);
+  check('the same report, with T-2026.10.32: the same Disposition Summary, document, statuses, counts and findings -- only blocking/warning/information is new',
+    [JSON.stringify(summaryOf(now.body)) === JSON.stringify(summaryOf(before.body)), snapshot(now.body) === snapshot(before.body), shownAll(now).join() === shownAll(before).join(),
+      JSON.stringify(rn.counts) === JSON.stringify(rb.counts), JSON.stringify(rn.revisions) === JSON.stringify(rb.revisions), rn.summaryState === rb.summaryState, rn.externalVerified === rb.externalVerified],
+    [true, true, true, true, true, true, true]);
+  check('the log line of Close Report is still written', now.logs.some((l) => /^Close Report: NOT ready to close -- 6 TDocs, 1 not yet disposed, /.test(l)), true);
+  const noList = undisposed();
+  noList.tdocs = [];
+  const nl = closeReport(noList);
+  check('a check that could not be made still blocks: the TDoc list not read -- NOT ready, under Blocking issues', [nl.ready, nl.externalVerified, /^⚠️ External verification could not be completed/m.test(part(lastAlert(noList)[1], 'BLOCKING ISSUES').join('\n'))],
+    [false, false, true]);
+
+  // 8. Goes to Plenary: "☑ Yes" is information; a TDoc with it and no disposition blocks for that alone.
+  {
+    const { sandbox: s } = loadCode();
+    const e = (n, status, label) => ({ tdoc: id(n), title: 'T' + n, source: 'ExampleCorp', status: status, label: label || status.toLowerCase(), conflict: false, known: true });
+    const base = () => ({ ready: false, checked: 3, counts: {}, unresolved: [e(2, 'available')], revisions: [], problems: [], summaryState: 'unchanged', otherMeetings: 0, externalVerified: true });
+    const summary = { read: { entries: [e(1, 'agreed'), e(2, 'available'), e(3, 'noted')] } };
+    const c1 = s.classifyCloseReportFindings_(base(), summary, { enabled: true, ok: true, yes: { [id(1)]: true, [id(2)]: true } });
+    check('Goes to Plenary "☑ Yes": information for both; the one not yet disposed blocks for its status alone',
+      [c1.ready, c1.unresolved.map((x) => x.tdoc), c1.plenaryRouted.map((x) => [x.tdoc, x.routing, x.undisposed])],
+      [false, [id(2)], [[id(1), 'Goes to Plenary: ☑ Yes', false], [id(2), 'Goes to Plenary: ☑ Yes', true]]]);
+    const c2 = s.classifyCloseReportFindings_(Object.assign(base(), { unresolved: [] }), summary, { enabled: true, ok: true, yes: { [id(1)]: true } });
+    check('routed by "☑ Yes" and disposed: ready', [c2.ready, c2.blocking, c2.information], [true, 0, 1]);
+    const c3 = s.classifyCloseReportFindings_(Object.assign(base(), { unresolved: [] }), summary, { enabled: true, ok: false, yes: {}, error: 'the report could not be read through the Docs API' });
+    check('the choices cannot be read: an information note, still ready', [c3.ready, c3.informationNotes.length, /could not be read.*does not keep the report from closing/.test(c3.informationNotes[0])], [true, 1, true]);
+    let reads = 0;
+    s.plenarySelectionEnabled_ = () => false;
+    s.plenarySnapshot_ = () => { reads++; return null; };
+    check('a report without Goes to Plenary is not read for its choices', [s.closeReportPlenaryChoices_().enabled, reads], [false, 0]);
+    s.plenarySelectionEnabled_ = () => true;
+    s.currentReportDocument_ = () => ({ getId: () => 'REPORTdoc000000000000000000000000000000000' });
+    check('with Goes to Plenary, a failed read never throws', [s.closeReportPlenaryChoices_().ok, reads], [false, 1]);
+  }
+
+  // 9. What changed in Code.js, and nothing else.
+  const view = ledger.codeWithoutCloseReportValidation(FULL);
+  check('every change is in Code.js exactly once', view.problems, []);
+  const names = (src) => (src.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));
+  const bodyOf = (src, name) => { const at = src.indexOf('\nfunction ' + name + '('); return at === -1 ? null : src.slice(at, src.indexOf('\n}\n', at)); };
+  const sectionText = FULL.slice(FULL.indexOf(ledger.CLOSE_VALIDATION_SECTION_START), FULL.indexOf(ledger.CLOSE_VALIDATION_SECTION_END) + ledger.CLOSE_VALIDATION_SECTION_END.length);
+  check('the section: these functions, in this order', names(sectionText), ledger.CLOSE_VALIDATION_SECTION_FUNCTIONS);
+  check('the released functions it changed: closeReportCore_ (one line) and the two formatters (delegating)', names(view.code).filter((n) => bodyOf(FULL, n) !== bodyOf(view.code, n)).sort(), ledger.CLOSE_VALIDATION_CHANGED_FUNCTIONS.slice().sort());
+  check('closeReport() itself -- the lock, the summary, the landscape step, the log, the dialog -- is unchanged', bodyOf(FULL, 'closeReport'), bodyOf(view.code, 'closeReport'));
+  let released = null;
+  try { released = execFileSync('git', ['show', '144b6f8:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); } catch (err) { released = null; }
+  if (released === null) console.log('  note: commit 144b6f8 (T-2026.10.32) is not available; the byte-for-byte comparison is skipped.');
+  else check('without it, Code.js is that of T-2026.10.32 (144b6f8), byte for byte', view.code === released, true);
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll disposition-summary and close-report checks passed.');

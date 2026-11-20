@@ -366,10 +366,12 @@ console.log('8. what changed in Code.js, and nothing else (T-2026.10.31 kept, wi
   const section = FULL.slice(FULL.indexOf(ledger.UNDISPOSED_SECTION_START), FULL.indexOf(ledger.UNDISPOSED_SECTION_END) + ledger.UNDISPOSED_SECTION_END.length);
   check('the section: these functions, in this order', names(section), ledger.UNDISPOSED_SECTION_FUNCTIONS);
   check('it stands directly after Goes to Plenary', FULL.indexOf('// END OF GOES TO PLENARY\n// =========================================================\n\n' + ledger.UNDISPOSED_SECTION_START) !== -1, true);
-  check('the released functions it changed', names(view.code).filter((n) => bodyOf(FULL, n) !== bodyOf(view.code, n)).sort(), ledger.UNDISPOSED_CHANGED_FUNCTIONS.slice().sort());
-  check('the new functions are those of the section; none removed', [names(FULL).filter((n) => names(view.code).indexOf(n) === -1).sort(), names(view.code).filter((n) => names(FULL).indexOf(n) === -1)],
+  // T-2026.10.33 (the Close Report validation) came after: what this layer changed is compared without it.
+  const LAYER = ledger.codeWithoutCloseReportValidation(FULL).code;
+  check('the released functions it changed', names(view.code).filter((n) => bodyOf(LAYER, n) !== bodyOf(view.code, n)).sort(), ledger.UNDISPOSED_CHANGED_FUNCTIONS.slice().sort());
+  check('the new functions are those of the section; none removed', [names(LAYER).filter((n) => names(view.code).indexOf(n) === -1).sort(), names(view.code).filter((n) => names(LAYER).indexOf(n) === -1)],
     [ledger.UNDISPOSED_SECTION_FUNCTIONS.slice().sort(), []]);
-  check('Code.js is version 2.27.0 (T-2026.10.32)', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.27.0');
+  check('T-2026.10.32 was version 2.27.0', (LAYER.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.27.0');
   let released = null;
   try {
     released = execFileSync('git', ['show', 'af08ae1:Code.js'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, '');
