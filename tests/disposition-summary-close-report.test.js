@@ -1360,7 +1360,18 @@ console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CL
     const noColumnText = s.formatCloseReportResult_(noColumn);
     check('a TDoc list without "Revised to": a blocking issue (no revision could be checked), the revision listed under Warnings, without the Plenary agenda note',
       [noColumn.ready, noColumn.blocking, /^⚠️ External verification incomplete: the TDoc list of this meeting has no "Revised to" column/m.test(noColumnText),
-        /1 of these revision was not checked at all, because of the TDoc list itself \(see Blocking issues\)\./.test(noColumnText), /Plenary agenda/.test(noColumnText)], [false, 1, true, true, false]);
+        /1 of these revisions was not checked at all, because of the TDoc list itself \(see Blocking issues\)\./.test(noColumnText), /Plenary agenda/.test(noColumnText)], [false, 1, true, true, false]);
+    // End to end: the real 3GU check on a list without "Revised to" (its reason text and the classification stay in step).
+    const listRow = (n, status) => ({ row: [id(n), status, ''], tdocCol: 0, statusCol: 1, revisedToCol: -1 });
+    const realFindings = s.checkRevisionsIn3gu_([{ tdoc: id(1), title: 'T1', source: 'ExampleCorp', status: 'revised', label: 'revised', conflict: false, revisionIds: [] }], [listRow(1, 'available')], '');
+    const real = s.classifyCloseReportFindings_(base(realFindings), null);
+    check('end to end: checkRevisionsIn3gu_ on a list without "Revised to", then the classification: NOT ready, the list problem blocking',
+      [realFindings.map((x) => [x.kind, x.reason]), real.ready, real.blocking, real.problems.length], [[['revision-not-verified', 'the TDoc list has no "Revised to" column']], false, 1, 1]);
+    const links = s.classifyCloseReportFindings_(base([rev(1, 'revision-not-verified', 'the links of the TDoc list could not be read')]), null);
+    const linksText = s.formatCloseReportResult_(links);
+    check('links of the list not readable (reserved, upload unknown): a warning, ready; no "not checked at all", no Blocking issues, no Plenary agenda note',
+      [links.ready, links.blocking, /not checked at all|see Blocking issues/.test(linksText), /^BLOCKING ISSUES/m.test(linksText), /Plenary agenda/.test(linksText), /The links of the TDoc list could not be read\./.test(linksText)],
+      [true, 0, false, false, false, true]);
     const notRead = s.classifyCloseReportFindings_(base([rev(1, 'revision-not-verified', 'the TDoc list could not be read')], { externalVerified: false, problems: ['External verification could not be completed: x.'] }), null);
     check('the TDoc list not read: blocking; its revisions "not checked at all", no Plenary agenda note', [notRead.ready, /not checked at all/.test(s.formatCloseReportResult_(notRead)), /Plenary agenda/.test(s.formatCloseReportResult_(notRead))], [false, true, false]);
     const one = s.classifyCloseReportFindings_(base([rev(1, 'revision-not-verified', 'the revision ' + id(51) + ' is not in the TDoc list')]), null);

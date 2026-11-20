@@ -34,9 +34,12 @@ also listed under Information, marked "also not yet disposed".
 instead. The dialog says so, and says that Close Report did not check the Plenary agenda. Close
 Report does not read the Plenary agenda, and never says a revision was verified there.
 
-The note is left out where the cause is the TDoc list itself (not read, no "Revised to" column,
-its links unreadable). The Warnings part then says how many of its revisions were not checked
-at all, and the list problem is under Blocking issues.
+The note is left out where the cause is the TDoc list itself: not read, no "Revised to" column,
+or its links unreadable.
+- **List not read, or no "Revised to" column:** the revisions were not checked at all. The
+  Warnings part says how many, and the list problem is under Blocking issues.
+- **Links unreadable:** the revision is reserved and only its upload is unknown. It stays a
+  warning, with that reason.
 
 **The dialog.**
 - **Counts:** the same counts as before, plus a line "Blocking issues: N. Warnings: N.

@@ -27592,10 +27592,19 @@ function closeReportRevisionAction_(r, result) {
     (r.kind === 'revision-not-verified' && !isListLevelRevisionFinding_(r, result) ? ' ' + CLOSE_REPORT_NOT_VERIFIED_NOTE_ : '');
 }
 
+/**
+ * Pure: true for a revision finding not checked at all: the TDoc list not
+ * read, or read without "Revised to" -- each of which is a blocking problem.
+ * (Links that could not be read leave only the upload unknown: not this.)
+ */
+function isUncheckedRevisionFinding_(r, result) {
+  return r.kind === 'revision-not-verified' && (!result.externalVerified || r.reason === CLOSE_REPORT_NO_REVISED_TO_REASON_);
+}
+
 /** Pure: the line of the Warnings part when some of its revisions were not checked at all because of the TDoc list ('' for none). */
 function closeReportUncheckedNote_(result) {
-  const n = (result.warningRevisions || []).filter(function (r) { return isListLevelRevisionFinding_(r, result); }).length;
-  return n ? n + ' of these revision' + (n === 1 ? ' was' : 's were') + ' not checked at all, because of the TDoc list itself (see Blocking issues).' : '';
+  const n = (result.warningRevisions || []).filter(function (r) { return isUncheckedRevisionFinding_(r, result); }).length;
+  return n ? n + ' of these revisions ' + (n === 1 ? 'was' : 'were') + ' not checked at all, because of the TDoc list itself (see Blocking issues).' : '';
 }
 
 /**
