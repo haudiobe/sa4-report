@@ -31404,7 +31404,8 @@ function appendProvisionalRevisionInformation_(result) {
 //    read unambiguously (05/10/2026 without AM/PM): no session, and the reason
 //    is shown -- never a guess. Manual overrides (ADHOC_TDOC_SESSIONS) stay
 //    authoritative. Without the setting the upload rule of stage B is unchanged.
-// 2. CARRY-FORWARD. A TDoc that is not disposed when a later session starts is
+// 2. CARRY-FORWARD (with the reservation rule: the one switch of this AHG
+//    workflow, so an existing ad-hoc report does not change by itself). A TDoc that is not disposed when a later session starts is
 //    carried into it ("A01 → A02"): recorded by the update with the time
 //    (ADHOC_CARRY_FORWARD, provenance kept), never a second registration row.
 //    A disposed TDoc is carried no further; its carried sessions stay as they
@@ -31607,12 +31608,17 @@ function issue28SessionResolver_(resolver, context) {
   };
   const automatic = rule === 'reservation-6h' ? reservationAutomatic : resolver.automatic;
   const registered = function (td) { return effectiveAdhocTdocSessions_(automatic(td).sessionId, resolver.overrides[tdocNumberOf_(td)], sessions); };
+  // Carried sessions only with the reservation rule, and only those after the last session it is registered in.
   const carriedOf = function (td) {
+    if (rule !== 'reservation-6h') return [];
     const n = tdocNumberOf_(td);
     const override = resolver.overrides[n];
     if (override && override.mode === 'set') return [];
-    const ids = sessions.map(function (s) { return s.id; });
-    return (carry[n] || []).map(function (c) { return c.s; }).filter(function (id) { return ids.indexOf(id) !== -1; });
+    const order = sortAdhocSessions_(sessions).map(function (s) { return s.id; });
+    const reg = registered(td);
+    const last = order.reduce(function (k, id, i) { return reg.indexOf(id) !== -1 ? i : k; }, -1);
+    if (last === -1) return [];
+    return (carry[n] || []).map(function (c) { return c.s; }).filter(function (id) { return order.indexOf(id) > last; });
   };
   const out = Object.assign({}, resolver, {
     rule: rule, carry: carry, toInstant: toInstant,
@@ -31637,7 +31643,7 @@ function issue28SessionResolver_(resolver, context) {
  */
 function syncAdhocCarryForwardOnUpdate_(resolver, allTdocs, index, context) {
   try {
-    if (!resolver || !resolver.registered) return 0;
+    if (!resolver || !resolver.registered || resolver.rule !== 'reservation-6h') return 0;
     const store = getReportStateStore_(context);
     const carry = readAdhocCarry_(store);
     const snap = reportRunSnapshot_();
@@ -32044,7 +32050,7 @@ function createSessionsFromCandidates(candidates) {
       rows.push({ id: '', label: String(c.group || 'AHG').slice(0, 16), date: c.date, endDate: '', start: /^\d{2}:\d{2}$/.test(c.start || '') ? c.start : '', end: /^\d{2}:\d{2}$/.test(c.end || '') ? c.end : '' });
     });
     const saved = saveAdhocSessionsConfiguration(rows);
-    return saved && saved.ok === false ? 'Not created: ' + (saved.errors || []).join(' ') : 'Sessions saved. Check their times in Configure Sessions…: the times of the agenda are in its own zone (CET/CEST), the sessions use the meeting zone.';
+    return saved && saved.ok === false ? 'Not created: ' + (saved.errors || []).join(' ') : 'Sessions saved. Check their times in Configure Sessions…: the times of the agenda are in the agenda's own zone, the sessions use the meeting zone.';
   })();
 }
 

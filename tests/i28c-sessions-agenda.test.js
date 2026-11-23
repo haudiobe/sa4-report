@@ -144,12 +144,20 @@ console.log('D. carry-forward');
   status.S4aA269001 = 'agreed';
   U.syncAdhocCarryForwardOnUpdate_(U.makeAdhocTdocSessionResolver_(null), tds, index, null);
   check('disposed later: it keeps "A01 → A02" (provenance), nothing more', U.makeAdhocTdocSessionResolver_(null).cell(tds[0]), 'A01 → A02');
+  // Without the reservation rule nothing is carried or shown: an existing ad-hoc report does not change by itself.
+  const { S: V } = sandbox(Object.assign({}, ADHOC, { ADHOC_SESSIONS: SESSIONS(TWO), ADHOC_CARRY_FORWARD: docProps.getProperty('ADHOC_CARRY_FORWARD') }));
+  V.reportRunSnapshot_ = () => null; V.lookupTdocTableInIndex_ = U.lookupTdocTableInIndex_; V.provisionalStatusOfTable_ = U.provisionalStatusOfTable_;
+  check('without the reservation rule: no carry-forward written or shown (the upload rule of stage B as it was)', [V.syncAdhocCarryForwardOnUpdate_(V.makeAdhocTdocSessionResolver_(null), tds, index, null), V.makeAdhocTdocSessionResolver_(null).carried(tds[2])], [0, []]);
+  // A carried session before a session added by hand later is not shown ("A01, A03", never "A01, A03 → A02").
+  const { S: W } = sandbox(Object.assign({}, ADHOC, { ADHOC_SESSION_RULE: 'reservation-6h', ADHOC_SESSIONS: SESSIONS(TWO.concat([{ id: 's3', label: 'Call 3', date: '2026-10-01', start: '14:00', end: '16:00' }])),
+    ADHOC_CARRY_FORWARD: JSON.stringify({ v: 1, tdocs: { S4aA269001: [{ s: 's2', at: 'x' }] } }), ADHOC_TDOC_SESSIONS: JSON.stringify({ v: 1, clock: 'utc', add: { s3: ['S4aA269001'] }, set: {} }) }));
+  check('a carried session before a later manual one is not shown', W.makeAdhocTdocSessionResolver_(null).cell(tds[0]), 'A01, A03');
 }
 
 // ====================================================================== E
 console.log('E. the plenary Agenda and Schedule folders of SA4#138');
-const agendaHtml = fs.readFileSync(path.join(FIX, 'agenda-folder-2026-11-23.html'), 'utf8');
-const scheduleHtml = fs.readFileSync(path.join(FIX, 'schedule-folder-2026-11-23.html'), 'utf8');
+const agendaHtml = fs.readFileSync(path.join(FIX, 'agenda-folder-2026-11-23.html.txt'), 'utf8');
+const scheduleHtml = fs.readFileSync(path.join(FIX, 'schedule-folder-2026-11-23.html.txt'), 'utf8');
 const rev9 = fs.readFileSync(path.join(FIX, 'SA4#138 Tdoc allocation rev9.docx'));
 const doc9 = (S) => S.wordDocumentText_(unzip(makeBlob(rev9)).filter((b) => b.getName() === 'word/document.xml')[0].getDataAsString('UTF-8'));
 {
