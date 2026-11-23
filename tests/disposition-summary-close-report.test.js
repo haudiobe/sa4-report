@@ -67,6 +67,8 @@ const OPTIONS = ['available', 'noted', 'agreed', 'revised', 'parked', 'merged', 
 const id = (n) => 'S4aA2691' + String(n).padStart(2, '0');
 const t = (n, agenda, status, extra) => Object.assign({ id: id(n), agenda: agenda, status: status || 'available', uploaded: true }, extra || {});
 const isHeading = (c) => c.getType() === 'PARAGRAPH' && c.getHeading() !== 'NORMAL';
+// Issue #28 A: the class lines of the summary are Heading 2; the summary ends at a heading that is not one.
+const endsSummary = (c) => isHeading(c) && !/ \(\d+\)$/.test(c.getText());
 const isEmpty = (c) => c.getType() === 'PARAGRAPH' && c.getHeading() === 'NORMAL' && c.getText() === '';
 const isTdocTable = (c) => c.getType() === 'TABLE' && c.getNumRows() > 0 && c.getRow(0).getNumCells() === 2 && c.getRow(0).getCell(0).getText() === 'TDoc';
 const isSummaryTable = (c) => c.getType() === 'TABLE' && c.getNumRows() > 0 && c.getRow(0).getNumCells() === 4 && c.getRow(0).getCell(1).getText() === 'Title' && c.getRow(0).getCell(3).getText() === 'Status';
@@ -89,13 +91,13 @@ const outsideSummary = (r) => {
   return JSON.stringify(all);
 };
 /** Headings and TDoc numbers, in order; a summary table as '[summary n]'. */
-const outline = (body) => body._children.map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : isSummaryTable(c) ? '[summary ' + (c.getNumRows() - 1) + ']' : isHeading(c) ? '# ' + c.getText() : null)).filter(Boolean);
+const outline = (body) => body._children.map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : isSummaryTable(c) ? '[summary ' + (c.getNumRows() - 1) + ']' : endsSummary(c) ? '# ' + c.getText() : null)).filter(Boolean);
 /** The summary as it reads: [title line, [[tdoc, title, source, status, link]] | 'None.'] per class. */
 function summaryOf(body) {
   const at = body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY);
   if (at === -1) return null;
   const out = [];
-  for (let i = at + 1; i < body._children.length && !isHeading(body._children[i]); i++) {
+  for (let i = at + 1; i < body._children.length && !endsSummary(body._children[i]); i++) {
     const c = body._children[i];
     if (c.getType() === 'PARAGRAPH' && /\(\d+\)$/.test(c.getText())) out.push([c.getText()]);
     else if (c.getType() === 'PARAGRAPH' && c.getText() === 'None.') out[out.length - 1].push('None.');
@@ -108,7 +110,7 @@ const empties = (body) => body._children.filter(isEmpty).length;
 /** Everything after the summary heading that is not the summary: agenda headings, TDoc tables, the Attendance heading. */
 const afterSummary = (body) => {
   const at = body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY);
-  return at === -1 ? ['(no summary)'] : body._children.slice(at + 1).map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : isHeading(c) ? '# ' + c.getText() : null)).filter(Boolean);
+  return at === -1 ? ['(no summary)'] : body._children.slice(at + 1).map((c) => (isTdocTable(c) ? c.getRow(0).getCell(1).getText() : endsSummary(c) ? '# ' + c.getText() : null)).filter(Boolean);
 };
 
 /**
@@ -202,8 +204,9 @@ console.log('B. the summary: every TDoc once, counts, order, links, title, sourc
   const at = r.body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY);
   const heading = r.body._children[at];
   const lines = r.body._children.slice(at + 1).filter((c) => c.getType() === 'PARAGRAPH' && c.getText());
-  check('the heading is a level-one heading; the class lines are bold, the note is not', [heading.getHeading(), lines.map((p) => [p.getText().slice(0, 18), !!p._bold])],
-    ['H1', [['Written from the S', false], [TITLES[0].slice(0, 18), true], [TITLES[1].slice(0, 18), true], [TITLES[2].slice(0, 18), true]]]);
+  // Issue #28 A: the class lines are Heading 2 (in the outline), not bold Normal text; the note is Normal and not bold.
+  check('the heading is a level-one heading; the class lines are Heading 2, the note is Normal; none bold', [heading.getHeading(), lines.map((p) => [p.getText().slice(0, 18), p.getHeading(), !!p._bold])],
+    ['H1', [['Written from the S', 'NORMAL', false], [TITLES[0].slice(0, 18), 'H2', false], [TITLES[1].slice(0, 18), 'H2', false], [TITLES[2].slice(0, 18), 'H2', false]]]);
   const table = r.body._children.filter(isSummaryTable)[0];
   check('a summary table: header row bold and shaded, the rows not bold (although the line before it is bold)',
     [[0, 1, 2, 3].map((k) => table.getRow(0).getCell(k)._bold), [0, 1, 2, 3].map((k) => table.getRow(1).getCell(k)._bold), table.getRow(0).getCell(0)._background], [[true, true, true, true], [false, false, false, false], '#D9EAF7']);
@@ -1196,7 +1199,8 @@ console.log('I. what changed in Code.js and template/ReportCreator.js');
 console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CLOSE_REPORT_VALIDATION.md)');
 {
   const ledger = require('./helpers/before-structure-fix.js');
-  const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // Issue #28 A came after: this part is about T-2026.10.33 and .34, so it reads the Code.js of T-2026.10.34 (the newer layer taken out).
+  const FULL = ledger.codeWithoutIssue28A(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
   const PREVIOUS = ledger.codeWithoutCloseReportValidation(FULL).code;
   const dialog = (r) => r.ui.dialogs[r.ui.dialogs.length - 1] || ['', ''];
   // The lines of one part of the dialog's text: from its heading to the next part (or the closing note).
@@ -1304,7 +1308,7 @@ console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CL
   check('the closing note says the warnings need no correction in the report', lastAlert(w)[1].split('\n').slice(-1)[0], NOTE_READY);
 
   // 7. Everything else as before: the summary, the statuses, the document, the counts, the findings themselves, the log.
-  const now = mixed();
+  const now = mixed(FULL); // Issue #28 A: the T-2026.10.34 code (the summary of today has Heading 2 class lines)
   const before = mixed(PREVIOUS);
   const rn = closeReport(now);
   const rb = closeReport(before);
@@ -1465,7 +1469,8 @@ console.log('W. T-2026.10.34: a TDoc handed to the plenary by "☑ Yes" does not
 
   // The ledger: what T-2026.10.34 changed, and nothing else.
   const ledger = require('./helpers/before-structure-fix.js');
-  const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+  // Issue #28 A came after: this part is about T-2026.10.34, so it reads its Code.js (the newer layer taken out).
+  const FULL = ledger.codeWithoutIssue28A(fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '')).code;
   const view = ledger.codeWithoutHandedToPlenary(FULL);
   const names = (src) => (src.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((l) => l.slice(9, -1));
   const bodyOf = (src, name) => { const at = src.indexOf('\nfunction ' + name + '('); return at === -1 ? null : src.slice(at, src.indexOf('\n}\n', at)); };

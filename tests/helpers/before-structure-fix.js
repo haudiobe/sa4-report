@@ -786,7 +786,71 @@ function codeWithoutGoesToPlenary(code) {
 
 /** template/ReportCreator.js without its menu item: { code, problems }. */
 function creatorWithoutGoesToPlenary(code) {
-  return takeOut(code, null, null, PLENARY_CREATOR_CHANGES, 'GOES TO PLENARY (ReportCreator.js)');
+  // Issue #28 phase A came after: its menu item is taken out first when the code has it.
+  const newer = String(code).indexOf("'reviewTitleChanges'") !== -1 ? creatorWithoutIssue28A(code) : { code: code, problems: [] };
+  const view = takeOut(newer.code, null, null, PLENARY_CREATOR_CHANGES, 'GOES TO PLENARY (ReportCreator.js)');
+  return { code: view.code, problems: newer.problems.concat(view.problems) };
+}
+
+// Issue #28 phase A (after T-2026.10.34): titles from the TDoc list, Heading 2 class lines in the Disposition Summary, fewer
+// DocumentApp calls in an update (docs/ISSUE28_PHASE_A.md). The newest layer, taken out before everything else: the release
+// header of 2.28.0, the section whole, its changes to released functions [now, before].
+const RELEASE_2_28_0_CHANGES = [
+  [" * Version: 2.28.0 (2026-11-23)\n",
+   " * Version: 2.27.2 (2026-11-20)\n"],
+  [" * CHANGELOG\n * 2.28.0 (2026-11-23)\n *   (Issue #28 phase A, candidate on T-2026.10.34 / 2.27.2.)\n *   - Titles: a title changed in the TDoc list after the reservation is\n *     written into the TDoc table and the Registration of Documents table\n *     where the report still shows the title before; a title typed by hand,\n *     a list going back to an older title or an unknown difference is listed\n *     for Report > Review Title Changes… and never written. Audit log kept.\n *   - Disposition Summary: the class lines are Heading 2 (in the outline);\n *     a summary written before gets them at the next update, unrewritten.\n *   - Update costs: one read of each table in the existing-TDoc scan, the\n *     Status row found with fewer calls, no walk of the body for a summary\n *     the report does not have. Same results.\n * 2.27.2 (2026-11-20)\n",
+   " * CHANGELOG\n * 2.27.2 (2026-11-20)\n"]
+];
+const I28A_SECTION_START = BAR + '// ISSUE 28 A: TITLES, DISPOSITION HEADINGS AND UPDATE COSTS (after T-2026.10.34)\n' + BAR;
+const I28A_SECTION_END = BAR + '// END OF ISSUE 28 A\n' + BAR;
+const I28A_SECTION_FUNCTIONS = ["titleSyncNorm_", "titleSyncHash_", "titleSyncRecordOf_", "titleSyncRecordText_", "decideTitleSync_", "titleSyncMode_", "titleCellOfTdocTable_", "replaceTitleCellText_", "titleOfListRow_", "readTitleSyncRecords_", "writeTitleSyncState_", "titleSyncBoundedJson_", "titleSyncShort_", "applyTitlesToRegistrationTables_", "syncTdocTitlesOnUpdate_", "reviewTitleChanges", "titleReviewHtml_", "applyTitleReviewDecisions", "dispositionClassHeadingsWanted_", "isDispositionClassLineText_", "setDispositionSummaryParagraphLook_", "restyleDispositionClassLines_", "planDispositionClassHeadings_", "isDispositionClassHeadingOfContent_", "dispositionSummaryAbsentInBody_", "existingTdocScanOfTables_", "findStatusRowOfTable_"];
+const I28A_CHANGED_FUNCTIONS = ["continuousUpdateCore_", "findDispositionSummarySection_", "findStatusInDocTable_", "nextPlenaryLandscapeStep_", "planPlenarySummaryFormat_", "plenarySummarySectionOfContent_", "renderDispositionSummary_", "syncDispositionSummaryOnUpdate_", "writePlenaryDispositionSummary_"];
+const I28A_CHANGES = [
+  ["      const tables = getTablesCounted_(body, 'continuousUpdate:existingTdocScan');\n      // After T-2026.10.34: the numbers and the index from one read of each table (ISSUE 28 A section).\n      tdocTableIndex = existingTdocScanOfTables_(tables, existingTdocs);\n",
+   "      const tables = getTablesCounted_(body, 'continuousUpdate:existingTdocScan');\n      tables.forEach(t => {\n        if (!isTDocTable_(t)) return;\n        const tdoc = safeCellText_(t, 0, 1).trim();\n        if (tdoc) existingTdocs.add(tdoc);\n      });\n      tdocTableIndex = buildTdocTableIndex_(tables);\n"],
+  ["    const sessionColumnFailure = refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions);\n    // After T-2026.10.34: a title changed in the TDoc list after the reservation (ISSUE 28 A section).\n    const titles = syncTdocTitlesOnUpdate_(body, allTdocs, tdocTableIndex, context);\n    if (titles.applied) result.titles = titles.summary;\n",
+   "    const sessionColumnFailure = refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions);\n"],
+  ["function findStatusInDocTable_(table) {\n  // After T-2026.10.34: the same row, with fewer DocumentApp calls (ISSUE 28 A section).\n  return findStatusRowOfTable_(table);\n}\n",
+   "function findStatusInDocTable_(table) {\n  for (var r = 0; r < table.getNumRows(); r++) {\n    var row = table.getRow(r);\n    if (row.getNumCells() < 2) continue;\n    var k = row.getCell(0).getText().trim().toLowerCase();\n    if (k === 'tdoc status' || k === 'status') {\n      // After T-2026.10.29: the status part of a compact Status row (GOES TO PLENARY section).\n      return { cell: row.getCell(1), value: statusPartOfCellText_(row.getCell(1).getText()).trim() };\n    }\n  }\n  return null;\n}\n"],
+  ["    // After T-2026.10.34: a report without the text of the summary heading has none, without a walk of the body (ISSUE 28 A section).\n    if (dispositionSummaryAbsentInBody_(body) || !findDispositionSummarySection_(body)) return { state: 'absent' };\n",
+   "    if (!findDispositionSummarySection_(body)) return { state: 'absent' };\n"],
+  ["  // After T-2026.10.34: the same content; only the look of its class lines, where it is not that of now (ISSUE 28 A section).\n  if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged', restyled: restyleDispositionClassLines_(body, section) };\n",
+   "  if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged' };\n"],
+  ["      const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);\n      // After T-2026.10.34: the line of a class is Heading 2 (ISSUE 28 A section).\n      setDispositionSummaryParagraphLook_(p, item[1], k);\n      at++;\n",
+   "      const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);\n      p.setHeading(NORMAL);\n      // The line of a class is bold; the note and \"None.\" are not.\n      p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);\n      at++;\n"],
+  ["        added.push(p);\n        // After T-2026.10.34: the line of a class is Heading 2 (ISSUE 28 A section).\n        setDispositionSummaryParagraphLook_(p, item[1], k);\n",
+   "        added.push(p);\n        p.setHeading(NORMAL);\n        // The line of a class is bold; the note and \"None.\" are not.\n        p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);\n"],
+  ["    const text = p.getText();\n    // After T-2026.10.34: a class line is Heading 2 and part of the summary (ISSUE 28 A section).\n    if (p.getHeading() !== NORMAL && !isDispositionClassLineText_(text)) return 'heading';\n",
+   "    if (p.getHeading() !== NORMAL) return 'heading';\n    const text = p.getText();\n"],
+  ["    // After T-2026.10.34: a class line is Heading 2 and part of the summary (ISSUE 28 A section).\n    if (plenaryDocsIsHeading_(e) && !isDispositionClassHeadingOfContent_(e)) return 'heading';\n    const text = plenaryDocsParagraphText_(e);\n    if (text === '') return 'skip';\n",
+   "    if (plenaryDocsIsHeading_(e)) return 'heading';\n    const text = plenaryDocsParagraphText_(e);\n    if (text === '') return 'skip';\n"],
+  ["  // After T-2026.10.34: a class line of the summary is Heading 2 and does not end it (ISSUE 28 A section).\n  for (let i = h + 1; i < list.length && !(isHeading(list[i]) && !isDispositionClassHeadingOfContent_(list[i])); i++) if (owned(list[i])) last = i;\n",
+   "  for (let i = h + 1; i < list.length && !isHeading(list[i]); i++) if (owned(list[i])) last = i;\n"],
+  ["  // After T-2026.10.34: the class lines Heading 2, where they are not yet (ISSUE 28 A section).\n  Array.prototype.push.apply(requests, planDispositionClassHeadings_(content, section, withTab));\n  return requests.map(function (q) { const k = Object.keys(q)[0]; if (q[k].range && q[k].range.tabId === undefined) delete q[k].range.tabId; return q; });\n",
+   "  return requests.map(function (q) { const k = Object.keys(q)[0]; if (q[k].range && q[k].range.tabId === undefined) delete q[k].range.tabId; return q; });\n"]
+];
+const I28A_CREATOR_CHANGED_FUNCTIONS = ['buildTemplateReportMenu_'];
+const I28A_CREATOR_CHANGES = [
+  ["    .addItem('Update Abstracts', 'addAbstractsOnly')\n    // After T-2026.10.34: the titles of the TDoc list that differ and were not written (issue #28 A).\n    .addItem('Review Title Changes…', 'reviewTitleChanges')\n    .addSeparator()\n",
+   "    .addItem('Update Abstracts', 'addAbstractsOnly')\n    .addSeparator()\n"]
+];
+
+/** Code.js without issue #28 phase A, release header included: the Code.js of T-2026.10.34. { code, problems }. */
+function codeWithoutIssue28A(code) {
+  const header = takeOut(code, null, null, RELEASE_2_28_0_CHANGES, 'RELEASE 2.28.0 HEADER');
+  // The section is preceded by one empty line in Code.js.
+  const view = takeOut(header.code.replace('\n' + I28A_SECTION_START, I28A_SECTION_START), I28A_SECTION_START, I28A_SECTION_END, I28A_CHANGES, 'ISSUE 28 A');
+  return { code: view.code, problems: header.problems.concat(view.problems) };
+}
+
+/** template/ReportCreator.js without issue #28 phase A (its menu item). { code, problems }. */
+function creatorWithoutIssue28A(code) {
+  return takeOut(code, null, null, I28A_CREATOR_CHANGES, 'ISSUE 28 A (ReportCreator.js)');
+}
+
+/** True when `code` (Code.js) has issue #28 phase A. */
+function hasIssue28A(code) {
+  return String(code).split(String.fromCharCode(13)).join('').indexOf(I28A_SECTION_START) !== -1;
 }
 
 // T-2026.10.34 (after T-2026.10.33): a TDoc handed to the plenary by "Yes" does not block Close Report
@@ -805,9 +869,11 @@ const HANDED_TO_PLENARY_CHANGES = [
 
 /** Code.js without T-2026.10.34, release header included: the Code.js of T-2026.10.33. { code, problems }. */
 function codeWithoutHandedToPlenary(code) {
-  const header = takeOut(code, null, null, RELEASE_2_27_2_CHANGES, 'RELEASE 2.27.2 HEADER');
+  // Issue #28 phase A came after: its layer is taken out first when the code has it.
+  const newer = hasIssue28A(code) ? codeWithoutIssue28A(code) : { code: code, problems: [] };
+  const header = takeOut(newer.code, null, null, RELEASE_2_27_2_CHANGES, 'RELEASE 2.27.2 HEADER');
   const view = takeOut(header.code, null, null, HANDED_TO_PLENARY_CHANGES, 'HANDED TO PLENARY');
-  return { code: view.code, problems: header.problems.concat(view.problems) };
+  return { code: view.code, problems: newer.problems.concat(header.problems, view.problems) };
 }
 
 // T-2026.10.33 (after T-2026.10.32): the Close Report validation (docs/CLOSE_REPORT_VALIDATION.md). The newest layer, taken
@@ -1352,6 +1418,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutHandedToPlenary, HANDED_TO_PLENARY_NEW_FUNCTIONS, HANDED_TO_PLENARY_CHANGED_FUNCTIONS, codeWithoutCloseReportValidation, codeWithoutRelease2_27_1Header, CLOSE_VALIDATION_SECTION_START, CLOSE_VALIDATION_SECTION_END, CLOSE_VALIDATION_SECTION_FUNCTIONS, CLOSE_VALIDATION_CHANGED_FUNCTIONS, codeWithoutUndisposedDocuments, codeWithoutRelease2_27_0Header, UNDISPOSED_SECTION_START, UNDISPOSED_SECTION_END, UNDISPOSED_SECTION_FUNCTIONS, UNDISPOSED_CHANGED_FUNCTIONS, codeWithoutRelease2_26_15Header, codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS, PLENARY_CREATOR_CHANGED_FUNCTIONS, codeWithoutOvernightPause, OVERNIGHT_PAUSE_NEW_FUNCTIONS, OVERNIGHT_PAUSE_CHANGED_FUNCTIONS, codeWithoutRevisionsCellCleanup, CELL_CLEANUP_NEW_FUNCTIONS, CELL_CLEANUP_CHANGED_FUNCTIONS, codeWithoutLocalListingAgent, LOCAL_LISTING_AGENT_NEW_FUNCTIONS, LOCAL_LISTING_AGENT_CHANGED_FUNCTIONS, codeWithoutSessionSectionFix, SESSION_SECTION_NEW_FUNCTIONS, SESSION_SECTION_CHANGED_FUNCTIONS, codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutDualRevisions, creatorWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS, DUAL_REVISIONS_CREATOR_CHANGED_FUNCTIONS, codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutIssue28A, creatorWithoutIssue28A, hasIssue28A, RELEASE_2_28_0_CHANGES, I28A_SECTION_START, I28A_SECTION_END, I28A_SECTION_FUNCTIONS, I28A_CHANGED_FUNCTIONS, I28A_CHANGES, I28A_CREATOR_CHANGED_FUNCTIONS, codeWithoutHandedToPlenary, HANDED_TO_PLENARY_NEW_FUNCTIONS, HANDED_TO_PLENARY_CHANGED_FUNCTIONS, codeWithoutCloseReportValidation, codeWithoutRelease2_27_1Header, CLOSE_VALIDATION_SECTION_START, CLOSE_VALIDATION_SECTION_END, CLOSE_VALIDATION_SECTION_FUNCTIONS, CLOSE_VALIDATION_CHANGED_FUNCTIONS, codeWithoutUndisposedDocuments, codeWithoutRelease2_27_0Header, UNDISPOSED_SECTION_START, UNDISPOSED_SECTION_END, UNDISPOSED_SECTION_FUNCTIONS, UNDISPOSED_CHANGED_FUNCTIONS, codeWithoutRelease2_26_15Header, codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS, PLENARY_CREATOR_CHANGED_FUNCTIONS, codeWithoutOvernightPause, OVERNIGHT_PAUSE_NEW_FUNCTIONS, OVERNIGHT_PAUSE_CHANGED_FUNCTIONS, codeWithoutRevisionsCellCleanup, CELL_CLEANUP_NEW_FUNCTIONS, CELL_CLEANUP_CHANGED_FUNCTIONS, codeWithoutLocalListingAgent, LOCAL_LISTING_AGENT_NEW_FUNCTIONS, LOCAL_LISTING_AGENT_CHANGED_FUNCTIONS, codeWithoutSessionSectionFix, SESSION_SECTION_NEW_FUNCTIONS, SESSION_SECTION_CHANGED_FUNCTIONS, codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutDualRevisions, creatorWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS, DUAL_REVISIONS_CREATOR_CHANGED_FUNCTIONS, codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

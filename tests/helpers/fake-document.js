@@ -239,6 +239,9 @@ function makeFakeDocumentBody(sandbox, options) {
     getChildIndex: (c) => children.indexOf(c),
     getTables: () => children.filter(c => c.getType() === TABLE),
     getParagraphs: () => children.filter(c => c.getType() === PARAGRAPH),
+    // Issue #28 A (addition): Body.findText(pattern) -- the first paragraph or table cell whose text matches, else null (one call).
+    // It is ONE call, as in Google Docs: the search itself is not counted.
+    findText: (pattern) => { const was = state.paused; state.paused = true; try { const rx = new RegExp(pattern); const hit = children.filter((c) => (c.getType() === PARAGRAPH ? rx.test(c.getText()) : Array.from({ length: c.getNumRows() }, (x, r) => c.getRow(r)).some((row) => Array.from({ length: row.getNumCells() }, (y, k) => row.getCell(k).getText()).some((t) => rx.test(t)))))[0]; return hit ? { getElement: () => hit } : null; } finally { state.paused = was; } },
     appendParagraph: (text) => { touch(); const p = makeParagraph(text); children.push(p); return p; },
     appendListItem: (text) => { touch(); const p = makeParagraph(text); children.push(p); return p; },
     appendTable: (data) => { touch(); const t = makeTable(Array.isArray(data) ? data : [], boldBefore(children.length)); placeTable(children.length, t); return t; },

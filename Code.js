@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.27.2 (2026-11-20)
+ * Version: 2.28.0 (2026-11-23)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,18 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.28.0 (2026-11-23)
+ *   (Issue #28 phase A, candidate on T-2026.10.34 / 2.27.2.)
+ *   - Titles: a title changed in the TDoc list after the reservation is
+ *     written into the TDoc table and the Registration of Documents table
+ *     where the report still shows the title before; a title typed by hand,
+ *     a list going back to an older title or an unknown difference is listed
+ *     for Report > Review Title Changes… and never written. Audit log kept.
+ *   - Disposition Summary: the class lines are Heading 2 (in the outline);
+ *     a summary written before gets them at the next update, unrewritten.
+ *   - Update costs: one read of each table in the existing-TDoc scan, the
+ *     Status row found with fewer calls, no walk of the body for a summary
+ *     the report does not have. Same results.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -1476,12 +1488,8 @@ function continuousUpdateCore_(context) {
         return;
       }
       const tables = getTablesCounted_(body, 'continuousUpdate:existingTdocScan');
-      tables.forEach(t => {
-        if (!isTDocTable_(t)) return;
-        const tdoc = safeCellText_(t, 0, 1).trim();
-        if (tdoc) existingTdocs.add(tdoc);
-      });
-      tdocTableIndex = buildTdocTableIndex_(tables);
+      // After T-2026.10.34: the numbers and the index from one read of each table (ISSUE 28 A section).
+      tdocTableIndex = existingTdocScanOfTables_(tables, existingTdocs);
     });
 
     Logger.log(`Found ${existingTdocs.size} existing TDOCs`);
@@ -1550,6 +1558,9 @@ function continuousUpdateCore_(context) {
       perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, tdocSessions));
     }
     const sessionColumnFailure = refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions);
+    // After T-2026.10.34: a title changed in the TDoc list after the reservation (ISSUE 28 A section).
+    const titles = syncTdocTitlesOnUpdate_(body, allTdocs, tdocTableIndex, context);
+    if (titles.applied) result.titles = titles.summary;
 
     // Revision placement: new TDOCs are appended at the end of their agenda
     // section, so move every revision back under the document it revises and
@@ -5715,16 +5726,8 @@ function findStatusInSheet_(sheet) {
 }
 
 function findStatusInDocTable_(table) {
-  for (var r = 0; r < table.getNumRows(); r++) {
-    var row = table.getRow(r);
-    if (row.getNumCells() < 2) continue;
-    var k = row.getCell(0).getText().trim().toLowerCase();
-    if (k === 'tdoc status' || k === 'status') {
-      // After T-2026.10.29: the status part of a compact Status row (GOES TO PLENARY section).
-      return { cell: row.getCell(1), value: statusPartOfCellText_(row.getCell(1).getText()).trim() };
-    }
-  }
-  return null;
+  // After T-2026.10.34: the same row, with fewer DocumentApp calls (ISSUE 28 A section).
+  return findStatusRowOfTable_(table);
 }
 
 function normalizeStatus_(s) {
@@ -23506,8 +23509,9 @@ function findDispositionSummarySection_(body) {
     if (child.getType() === TABLE) return isDispositionSummaryTable_(child.asTable()) ? 'table' : '';
     if (child.getType() !== PARAGRAPH) return '';
     const p = child.asParagraph();
-    if (p.getHeading() !== NORMAL) return 'heading';
     const text = p.getText();
+    // After T-2026.10.34: a class line is Heading 2 and part of the summary (ISSUE 28 A section).
+    if (p.getHeading() !== NORMAL && !isDispositionClassLineText_(text)) return 'heading';
     if (text === DISPOSITION_SUMMARY_NONE_) return 'none';
     if (isLastDispositionClassLine_(text)) return 'last';
     return isDispositionSummaryParagraphText_(text) ? 'part' : '';
@@ -23604,7 +23608,8 @@ function renderDispositionSummary_(body, model) {
   const wanted = dispositionSummaryContent_(model);
   const section = findDispositionSummarySection_(body);
   if (section && section.foreign.length) return { state: 'refused', foreign: section.foreign };
-  if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged' };
+  // After T-2026.10.34: the same content; only the look of its class lines, where it is not that of now (ISSUE 28 A section).
+  if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged', restyled: restyleDispositionClassLines_(body, section) };
 
   let at;
   if (section) {
@@ -23617,9 +23622,8 @@ function renderDispositionSummary_(body, model) {
   wanted.forEach(function (item, k) {
     if (item[0] === 'p') {
       const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
-      p.setHeading(NORMAL);
-      // The line of a class is bold; the note and "None." are not.
-      p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);
+      // After T-2026.10.34: the line of a class is Heading 2 (ISSUE 28 A section).
+      setDispositionSummaryParagraphLook_(p, item[1], k);
       at++;
       return;
     }
@@ -23682,7 +23686,8 @@ function syncDispositionSummaryOnUpdate_(body) {
   try {
     // After T-2026.10.29: in a report with Goes to Plenary the summary is written at the very end, from the saved document (GOES TO PLENARY section).
     if (plenarySelectionEnabled_()) return { state: 'deferred' };
-    if (!findDispositionSummarySection_(body)) return { state: 'absent' };
+    // After T-2026.10.34: a report without the text of the summary heading has none, without a walk of the body (ISSUE 28 A section).
+    if (dispositionSummaryAbsentInBody_(body) || !findDispositionSummarySection_(body)) return { state: 'absent' };
     const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
     if (done.state === 'no-scope') Logger.log('Disposition Summary: not updated -- ' + done.error + '.');
     else if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
@@ -25165,7 +25170,8 @@ function nextPlenaryLandscapeStep_(content) {
     return text === DISPOSITION_SUMMARY_NONE_ || isDispositionSummaryParagraphText_(text);
   };
   let last = h;
-  for (let i = h + 1; i < list.length && !isHeading(list[i]); i++) if (owned(list[i])) last = i;
+  // After T-2026.10.34: a class line of the summary is Heading 2 and does not end it (ISSUE 28 A section).
+  for (let i = h + 1; i < list.length && !(isHeading(list[i]) && !isDispositionClassHeadingOfContent_(list[i])); i++) if (owned(list[i])) last = i;
   let after = -1;
   for (let i = last + 1; i < list.length; i++) {
     const e = list[i];
@@ -25429,7 +25435,8 @@ function plenarySummarySectionOfContent_(content) {
     if (e.sectionBreak) return 'skip';
     if (e.table) return plenaryDocsIsSummaryTable_(e) ? 'table' : '';
     if (!e.paragraph) return '';
-    if (plenaryDocsIsHeading_(e)) return 'heading';
+    // After T-2026.10.34: a class line is Heading 2 and part of the summary (ISSUE 28 A section).
+    if (plenaryDocsIsHeading_(e) && !isDispositionClassHeadingOfContent_(e)) return 'heading';
     const text = plenaryDocsParagraphText_(e);
     if (text === '') return 'skip';
     if (text === DISPOSITION_SUMMARY_NONE_) return 'none';
@@ -25546,9 +25553,8 @@ function writePlenaryDispositionSummary_(body, options) {
       if (item[0] === 'p') {
         const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
         added.push(p);
-        p.setHeading(NORMAL);
-        // The line of a class is bold; the note and "None." are not.
-        p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);
+        // After T-2026.10.34: the line of a class is Heading 2 (ISSUE 28 A section).
+        setDispositionSummaryParagraphLook_(p, item[1], k);
         at++;
         return;
       }
@@ -25698,6 +25704,8 @@ function planPlenarySummaryFormat_(snapshot) {
       if (range) requests.push({ updateTextStyle: { range: { startIndex: range.startIndex, endIndex: range.startIndex + number.length, tabId: range.tabId }, textStyle: { link: { url: url } }, fields: 'link' } });
     });
   }
+  // After T-2026.10.34: the class lines Heading 2, where they are not yet (ISSUE 28 A section).
+  Array.prototype.push.apply(requests, planDispositionClassHeadings_(content, section, withTab));
   return requests.map(function (q) { const k = Object.keys(q)[0]; if (q[k].range && q[k].range.tabId === undefined) delete q[k].range.tabId; return q; });
 }
 
@@ -30077,3 +30085,558 @@ function generateTdocDiscussionEmails(selections, globalText) {
     return { ok: false, files: [], error: e.message, zip: null, zipError: null };
   }
 }
+
+// =========================================================
+// ISSUE 28 A: TITLES, DISPOSITION HEADINGS AND UPDATE COSTS (after T-2026.10.34)
+// =========================================================
+//
+// Three changes of issue #28, phase A (docs/ISSUE28_PHASE_A.md):
+//
+// 1. TITLE SYNC. The TDoc number is the identity of a TDoc; its title can
+//    change in 3GU after the reservation. Every update compares the title of
+//    the TDoc list with the Title row of the TDoc table and, where the change
+//    is the list's, writes it there and in the Registration of Documents
+//    table. The Disposition Summary, the four plenary tables and the
+//    Undisposed Documents section copy the title of the TDoc table, so they
+//    follow when they are next written. A title is written only where the
+//    report still shows the title the list had before (a record per TDoc,
+//    TDOC_TITLE_SEEN_<tdoc>, holds short hashes of the titles seen): a title
+//    typed by hand, a list that goes back to an older title, or a title that
+//    differs without a record is never written -- it is listed for review
+//    (Report > Review Title Changes…). Minutes, Disposition, e-mail text and
+//    every other row are never touched; the link and the look of the title
+//    are kept. Setting TITLE_SYNC_MODE: 'auto' (default), 'review' (nothing
+//    written by an update, everything listed), 'off'.
+// 2. DISPOSITION HEADINGS. The lines of the classes in the Disposition
+//    Summary (three, or four with Goes to Plenary) are Heading 2, under the
+//    Heading 1 "Disposition Summary": they appear in the outline. The tables,
+//    their header cells and the note are unchanged. A summary written before
+//    gets its headings at the next update, without a rewrite. Setting
+//    DISPOSITION_CLASS_HEADINGS = 'normal' keeps the bold lines of before.
+// 3. UPDATE COSTS. The existing-TDoc scan reads each table once (it read it
+//    twice); the Status row is found without counting the rows and cells of
+//    every row again; a report without the text of the summary heading has
+//    no summary, known from one search instead of a walk of the body. The
+//    results are the same.
+
+/** Document property: how titles are synchronised ('auto', 'review', 'off'). */
+const TITLE_SYNC_MODE_KEY_ = 'TITLE_SYNC_MODE';
+/** Report state, per TDoc: what was seen of its title (titleSyncRecordOf_()). */
+const TITLE_SYNC_RECORD_PREFIX_ = 'TDOC_TITLE_SEEN_';
+/** Report state: the titles that differ and are not written ({ tdoc: { cell, list, kind, at } }). */
+const TITLE_SYNC_PENDING_KEY_ = 'TITLE_SYNC_PENDING';
+/** Report state: the audit log, newest first ([{ t, a, o, n, at, by }]). */
+const TITLE_SYNC_LOG_KEY_ = 'TITLE_SYNC_LOG';
+/** At most this many Title rows are read through DocumentApp in one update (a report without its snapshot); the rest the next update. */
+const TITLE_SYNC_READS_PER_UPDATE_ = 60;
+/** The kept JSON of the pending list and of the log stays below one property value. */
+const TITLE_SYNC_MAX_JSON_ = 8500;
+/** Previous titles kept per TDoc, to tell a stale list. */
+const TITLE_SYNC_PREVIOUS_KEPT_ = 3;
+/** Document property: 'normal' keeps the class lines of the Disposition Summary bold Normal text, not Heading 2. */
+const DISPOSITION_CLASS_HEADINGS_KEY_ = 'DISPOSITION_CLASS_HEADINGS';
+
+/** Pure: a title as it is compared -- white space collapsed, trimmed. */
+function titleSyncNorm_(text) {
+  return String(text === null || text === undefined ? '' : text).replace(/\s+/g, ' ').trim();
+}
+
+/** Pure: a short, stable hash of a normalised title (FNV-1a, 32 bits, 8 hex digits). */
+function titleSyncHash_(text) {
+  const s = titleSyncNorm_(text);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return ('0000000' + h.toString(16)).slice(-8);
+}
+
+/** Pure: a record as stored ('v1|<cur>|<prev,prev>|<ack>') as { cur, prev: [], ack }; an empty or unknown value is no record. */
+function titleSyncRecordOf_(value) {
+  const parts = String(value || '').split('|');
+  if (parts[0] !== 'v1' || parts.length !== 4) return { cur: '', prev: [], ack: '' };
+  return { cur: parts[1] || '', prev: parts[2] ? parts[2].split(',').filter(Boolean) : [], ack: parts[3] || '' };
+}
+
+/** Pure: a record as stored. */
+function titleSyncRecordText_(record) {
+  return ['v1', record.cur || '', (record.prev || []).slice(0, TITLE_SYNC_PREVIOUS_KEPT_).join(','), record.ack || ''].join('|');
+}
+
+/**
+ * Pure: what to do with the title of one TDoc. `cellText` the Title row of its
+ * TDoc table (as read), `listTitle` the title of the TDoc list, `record`
+ * (titleSyncRecordOf_()), `mode` ('auto' | 'review'). Returns { action, record }
+ * -- `record` the record to keep afterwards, or null to keep it as it is:
+ *   'skip'     the list has no title, or the cell holds more than one line
+ *   'in-sync'  the same title
+ *   'record'   the same title; the record is written (first seen, or changed)
+ *   'apply'    the list changed and the report shows the title before: write it
+ *   'review'   it differs and it is not known whose change it is (no record, both
+ *              changed, or mode 'review'): listed, not written
+ *   'manual'   the report's title was changed by hand; the list is unchanged: kept
+ *   'kept'     the rapporteur chose to keep the report's title against this list title
+ *   'stale'    the list shows a title it had before: an older list, never written
+ */
+function decideTitleSync_(cellText, listTitle, record, mode) {
+  const rec = record || { cur: '', prev: [], ack: '' };
+  const list = titleSyncNorm_(listTitle);
+  if (!list) return { action: 'skip', record: null };
+  if (/\n/.test(String(cellText || '').replace(/\s+$/, ''))) return { action: 'skip', record: null };
+  const cell = titleSyncNorm_(cellText);
+  const hList = titleSyncHash_(list);
+  const hCell = titleSyncHash_(cell);
+  if (cell === list) {
+    if (rec.cur === hList && !rec.ack) return { action: 'in-sync', record: null };
+    return { action: 'record', record: { cur: hList, prev: rec.cur && rec.cur !== hList ? [rec.cur].concat(rec.prev) : rec.prev.slice(), ack: '' } };
+  }
+  if (rec.ack && rec.ack === hList) return { action: 'kept', record: null };
+  if (rec.cur && rec.prev.indexOf(hList) !== -1) return { action: 'stale', record: null };
+  if (rec.cur && rec.cur === hCell) {
+    if (mode === 'review') return { action: 'review', record: null };
+    return { action: 'apply', record: { cur: hList, prev: [hCell].concat(rec.prev.filter(function (h) { return h !== hCell; })), ack: '' } };
+  }
+  if (rec.cur && rec.cur === hList) return { action: 'manual', record: null };
+  return { action: 'review', record: null };
+}
+
+/** The setting: 'auto' (default), 'review' or 'off'; from the report state of `store` (a background run never reads document properties). */
+function titleSyncMode_(store) {
+  let v = '';
+  try { v = String((store || getReportStateStore_(null)).getProperty(TITLE_SYNC_MODE_KEY_) || '').trim().toLowerCase(); } catch (e) { v = ''; }
+  return v === 'off' || v === 'review' ? v : 'auto';
+}
+
+/** The Title row of a TDoc table: its cell, or null. Reads the number of rows once. */
+function titleCellOfTdocTable_(table) {
+  const n = table.getNumRows();
+  for (let r = 0; r < n; r++) {
+    const row = table.getRow(r);
+    let label = '';
+    try { label = row.getCell(0).getText().trim().toLowerCase(); } catch (e) { continue; }
+    if (label !== 'title' && label !== 'title:') continue;
+    if (row.getNumCells() < 2) continue;
+    return row.getCell(1);
+  }
+  return null;
+}
+
+/**
+ * Replaces the text of a cell with `title`, keeping its look: the new text is
+ * inserted after the old one (it takes the look of its last character) and
+ * the old one deleted. A link over the whole old title is put on the new one;
+ * a link over a part of it is not carried to the whole. Returns true.
+ */
+function replaceTitleCellText_(cell, title) {
+  const text = cell.editAsText();
+  const old = text.getText();
+  const wanted = String(title);
+  if (!wanted) return false;
+  if (!old.length) {
+    text.insertText(0, wanted);
+    return true;
+  }
+  let link = null;
+  let whole = false;
+  try {
+    link = text.getLinkUrl(0) || null;
+    whole = !!link && text.getLinkUrl(old.length - 1) === link;
+  } catch (e) {
+    link = null;
+  }
+  let tailLinked = false;
+  try { tailLinked = !!text.getLinkUrl(old.length - 1); } catch (e) { tailLinked = false; }
+  text.insertText(old.length, wanted);
+  text.deleteText(0, old.length - 1);
+  if (whole) text.setLinkUrl(0, wanted.length - 1, link);
+  else if (tailLinked) text.setLinkUrl(0, wanted.length - 1, null);
+  return true;
+}
+
+/** Pure: the title of the TDoc list of one row of the update ('' without a Title column). */
+function titleOfListRow_(tdocData) {
+  if (!tdocData || !tdocData.row || typeof tdocData.titleCol !== 'number' || tdocData.titleCol < 0) return '';
+  return titleSyncNorm_(tdocData.row[tdocData.titleCol]);
+}
+
+/** The records of the report state, by TDoc: { tdoc: record }, from one read. */
+function readTitleSyncRecords_(store) {
+  const out = {};
+  let all = null;
+  try { all = typeof store.getProperties === 'function' ? store.getProperties() : null; } catch (e) { all = null; }
+  if (all) {
+    Object.keys(all).forEach(function (k) { if (k.indexOf(TITLE_SYNC_RECORD_PREFIX_) === 0) out[k.slice(TITLE_SYNC_RECORD_PREFIX_.length)] = titleSyncRecordOf_(all[k]); });
+    out.__all = all;
+  }
+  return out;
+}
+
+/** Writes several keys of the report state at once where it can (one call), else one by one. */
+function writeTitleSyncState_(store, writes) {
+  const keys = Object.keys(writes);
+  if (!keys.length) return 0;
+  if (typeof store.setProperties === 'function') store.setProperties(writes);
+  else keys.forEach(function (k) { store.setProperty(k, writes[k]); });
+  return keys.length;
+}
+
+/** Pure: JSON of `value`, the array or object cut from its end until it fits the size. */
+function titleSyncBoundedJson_(value) {
+  if (Array.isArray(value)) {
+    const list = value.slice();
+    let text = JSON.stringify(list);
+    while (text.length > TITLE_SYNC_MAX_JSON_ && list.length) { list.pop(); text = JSON.stringify(list); }
+    return text;
+  }
+  const keys = Object.keys(value || {}).sort(function (a, b) { return String(value[b].at || '').localeCompare(String(value[a].at || '')); });
+  const out = {};
+  keys.forEach(function (k) { out[k] = value[k]; });
+  let text = JSON.stringify(out);
+  while (text.length > TITLE_SYNC_MAX_JSON_ && keys.length) { delete out[keys.pop()]; text = JSON.stringify(out); }
+  return text;
+}
+
+/** Pure: a title shortened for the log. */
+function titleSyncShort_(text) {
+  const s = titleSyncNorm_(text);
+  return s.length > 160 ? s.slice(0, 157) + '…' : s;
+}
+
+/**
+ * The registration rows of `changes` ({ tdoc: { from, to } }): a row whose
+ * Title is the title before gets the new one; another is left as it is and
+ * returned. One scan of the tables, only when there is a change.
+ */
+function applyTitlesToRegistrationTables_(body, changes) {
+  const out = { written: 0, kept: [] };
+  if (!Object.keys(changes).length) return out;
+  const tables = body.getTables();
+  tables.forEach(function (table) {
+    if (!registrationTableColumns_(table)) return;
+    const n = table.getNumRows();
+    for (let r = 1; r < n; r++) {
+      const row = table.getRow(r);
+      if (row.getNumCells() < 2) continue;
+      const number = row.getCell(0).getText().trim();
+      const change = Object.prototype.hasOwnProperty.call(changes, number) ? changes[number] : null;
+      if (!change) continue;
+      const cell = row.getCell(1);
+      const now = titleSyncNorm_(cell.getText());
+      if (now === titleSyncNorm_(change.to)) continue;
+      if (now !== titleSyncNorm_(change.from)) { out.kept.push(number); continue; }
+      replaceTitleCellText_(cell, change.to);
+      out.written++;
+    }
+  });
+  return out;
+}
+
+/**
+ * The update: the titles of the TDoc tables against the TDoc list of this
+ * run (decideTitleSync_()). Returns { applied, recorded, review, manual,
+ * stale, kept, deferred, registration, summary }. Never throws; nothing is
+ * written in mode 'off', and in mode 'review' only records and the list.
+ */
+function syncTdocTitlesOnUpdate_(body, allTdocs, index, context) {
+  const out = { applied: 0, recorded: 0, review: 0, manual: 0, stale: 0, kept: 0, deferred: 0, registration: 0, summary: '' };
+  try {
+    const store = getReportStateStore_(context);
+    const mode = titleSyncMode_(store);
+    if (mode === 'off') { out.summary = 'off'; return out; }
+    const records = readTitleSyncRecords_(store);
+    const all = records.__all || null;
+    const recordOf = function (tdoc) {
+      if (Object.prototype.hasOwnProperty.call(records, tdoc)) return records[tdoc];
+      if (all) return { cur: '', prev: [], ack: '' };
+      return titleSyncRecordOf_(store.getProperty(TITLE_SYNC_RECORD_PREFIX_ + tdoc));
+    };
+    let pending = {};
+    try { pending = JSON.parse((all ? all[TITLE_SYNC_PENDING_KEY_] : store.getProperty(TITLE_SYNC_PENDING_KEY_)) || '{}') || {}; } catch (e) { pending = {}; }
+    const pendingBefore = JSON.stringify(pending);
+    let log = [];
+    const logged = [];
+    const snap = reportRunSnapshot_();
+    const writes = {};
+    const changes = {};
+    const now = new Date().toISOString();
+    let reads = 0;
+    const seen = {};
+    (allTdocs || []).forEach(function (td) {
+      const tdoc = String(td.row[td.tdocCol] || '').trim();
+      const parsed = parseExactSA4DocumentId_(tdoc);
+      if (!parsed.isValid || seen[parsed.raw]) return;
+      seen[parsed.raw] = true;
+      const listTitle = titleOfListRow_(td);
+      if (!listTitle) return;
+      const record = recordOf(parsed.raw);
+      // Without the snapshot, a TDoc whose list title is the one recorded is not read: it can only be written when the list changes.
+      const fromSnap = snap && snap.byNumber && snap.byNumber[parsed.raw] && !snap.duplicates[parsed.raw] ? snap.byNumber[parsed.raw] : null;
+      if (!fromSnap && record.cur === titleSyncHash_(listTitle) && !record.ack && !pending[parsed.raw]) return;
+      let cellText = null;
+      let table = null;
+      if (fromSnap && Object.prototype.hasOwnProperty.call(fromSnap.values, 'title')) {
+        cellText = fromSnap.values.title;
+      } else {
+        if (reads >= TITLE_SYNC_READS_PER_UPDATE_) { out.deferred++; return; }
+        reads++;
+        table = index ? lookupTdocTableInIndex_(index, parsed.raw) : null;
+        if (!table) return;
+        const cell = titleCellOfTdocTable_(table);
+        if (!cell) return;
+        cellText = cell.getText();
+      }
+      const decision = decideTitleSync_(cellText, listTitle, record, mode);
+      const key = TITLE_SYNC_RECORD_PREFIX_ + parsed.raw;
+      if (decision.action === 'in-sync' || decision.action === 'record' || decision.action === 'skip') {
+        if (pending[parsed.raw]) delete pending[parsed.raw];
+        if (decision.action === 'record') { writes[key] = titleSyncRecordText_(decision.record); out.recorded++; }
+        return;
+      }
+      if (decision.action === 'kept') { out.kept++; return; }
+      if (decision.action === 'apply') {
+        if (!table) table = index ? lookupTdocTableInIndex_(index, parsed.raw) : null;
+        const cell = table ? titleCellOfTdocTable_(table) : null;
+        // The read of the snapshot is from the start of this run: the cell is read again before it is written.
+        if (!cell || titleSyncNorm_(cell.getText()) !== titleSyncNorm_(cellText)) return;
+        replaceTitleCellText_(cell, listTitle);
+        writes[key] = titleSyncRecordText_(decision.record);
+        changes[parsed.raw] = { from: titleSyncNorm_(cellText), to: listTitle };
+        if (pending[parsed.raw]) delete pending[parsed.raw];
+        logged.push({ t: parsed.raw, a: 'applied', o: titleSyncShort_(cellText), n: titleSyncShort_(listTitle), at: now, by: 'update' });
+        Logger.log('Title of ' + parsed.raw + ' changed in the TDoc list: "' + titleSyncShort_(cellText) + '" -> "' + titleSyncShort_(listTitle) + '" (written).');
+        out.applied++;
+        return;
+      }
+      out[decision.action]++;
+      const was = pending[parsed.raw];
+      if (!was || was.list !== titleSyncShort_(listTitle) || was.cell !== titleSyncShort_(cellText) || was.kind !== decision.action) {
+        pending[parsed.raw] = { cell: titleSyncShort_(cellText), list: titleSyncShort_(listTitle), kind: decision.action, at: now };
+        if (decision.action !== 'manual') logged.push({ t: parsed.raw, a: decision.action, o: titleSyncShort_(cellText), n: titleSyncShort_(listTitle), at: now, by: 'update' });
+      }
+    });
+    if (Object.keys(changes).length) {
+      const reg = applyTitlesToRegistrationTables_(body, changes);
+      out.registration = reg.written;
+      if (reg.kept.length) Logger.log('Title sync: the Registration of Documents row of ' + reg.kept.join(', ') + ' has another title than the TDoc table had; left as it is.');
+    }
+    if (JSON.stringify(pending) !== pendingBefore) writes[TITLE_SYNC_PENDING_KEY_] = titleSyncBoundedJson_(pending);
+    if (logged.length) {
+      try { log = JSON.parse((all ? all[TITLE_SYNC_LOG_KEY_] : store.getProperty(TITLE_SYNC_LOG_KEY_)) || '[]') || []; } catch (e) { log = []; }
+      writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedJson_(logged.concat(log));
+    }
+    writeTitleSyncState_(store, writes);
+    out.summary = out.applied + ' written, ' + out.review + ' to review, ' + out.manual + ' changed in the report, ' + out.stale + ' from an older list' + (out.deferred ? ', ' + out.deferred + ' left to the next update' : '');
+    if (out.applied || out.review || out.stale || out.deferred) Logger.log('Titles: ' + out.summary + '.');
+  } catch (e) {
+    Logger.log('Titles: not compared (' + e.message + '); the next update tries again.');
+    out.summary = 'failed: ' + e.message;
+  }
+  return out;
+}
+
+/** Report > Review Title Changes…: the titles that differ, and the log. */
+function reviewTitleChanges() {
+  const ui = DocumentApp.getUi();
+  const store = getReportStateStore_(null);
+  let pending = {};
+  let log = [];
+  try { pending = JSON.parse(store.getProperty(TITLE_SYNC_PENDING_KEY_) || '{}') || {}; } catch (e) { pending = {}; }
+  try { log = JSON.parse(store.getProperty(TITLE_SYNC_LOG_KEY_) || '[]') || []; } catch (e) { log = []; }
+  const html = HtmlService.createHtmlOutput(titleReviewHtml_(pending, log, titleSyncMode_(store))).setWidth(760).setHeight(560);
+  ui.showModalDialog(html, 'Review Title Changes');
+}
+
+/** Pure: the dialog. */
+function titleReviewHtml_(pending, log, mode) {
+  const esc = function (s) { return String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  const why = { review: 'Not known whose change it is', manual: 'Typed by hand in the report', stale: 'An older list (the report has the newer title)' };
+  const numbers = Object.keys(pending || {}).sort();
+  const rows = numbers.map(function (n) {
+    const p = pending[n];
+    return '<tr><td><input type="checkbox" class="pick" value="' + esc(n) + '"></td><td>' + esc(n) + '</td><td>' + esc(p.cell) + '</td><td>' + esc(p.list) + '</td><td>' + esc(why[p.kind] || p.kind) + '</td></tr>';
+  }).join('');
+  const logRows = (log || []).slice(0, 40).map(function (e) {
+    return '<tr><td>' + esc(String(e.at || '').replace('T', ' ').slice(0, 16)) + '</td><td>' + esc(e.t) + '</td><td>' + esc(e.a) + '</td><td>' + esc(e.o) + '</td><td>' + esc(e.n) + '</td></tr>';
+  }).join('');
+  return '<style>body{font:13px Arial,sans-serif;margin:8px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:3px 5px;text-align:left;vertical-align:top}' +
+    'th{background:#f1f3f4}.note{color:#555;margin:4px 0 8px}button{margin:8px 6px 0 0}#msg{margin-top:8px;font-weight:bold}</style>' +
+    '<div class="note">Titles of the TDoc list that differ from the report and were not written by the update (setting: ' + esc(mode) + '). ' +
+    'Nothing is written until you choose. "Use the list title" writes it into the TDoc table and the Registration of Documents table; ' +
+    '"Keep the report title" stops this list title from being offered again.</div>' +
+    (numbers.length ? '<table><tr><th></th><th>TDoc</th><th>In the report</th><th>In the TDoc list</th><th>Why it is listed</th></tr>' + rows + '</table>' +
+      '<button onclick="go(\'apply\')">Use the list title</button><button onclick="go(\'keep\')">Keep the report title</button><button onclick="google.script.host.close()">Close</button>'
+      : '<p>No title differs.</p><button onclick="google.script.host.close()">Close</button>') +
+    '<div id="msg"></div><h4>Log</h4>' + (logRows ? '<table><tr><th>When (UTC)</th><th>TDoc</th><th>What</th><th>Before</th><th>After</th></tr>' + logRows + '</table>' : '<p>Empty.</p>') +
+    '<script>function go(action){var picked=[].slice.call(document.querySelectorAll(".pick:checked")).map(function(x){return x.value;});' +
+    'if(!picked.length){document.getElementById("msg").textContent="Choose at least one TDoc.";return;}document.getElementById("msg").textContent="Working…";' +
+    'google.script.run.withSuccessHandler(function(r){document.getElementById("msg").textContent=r;}).withFailureHandler(function(e){document.getElementById("msg").textContent="Failed: "+e.message;}).applyTitleReviewDecisions(action,picked);}</script>';
+}
+
+/**
+ * The dialog's choice for `numbers`: 'apply' writes the list title shown in
+ * the dialog, only where the report still shows the title the dialog showed;
+ * 'keep' records that the report keeps its title against that list title.
+ * Returns what was done, as text.
+ */
+function applyTitleReviewDecisions(action, numbers) {
+  assertNotTemplateMaster_();
+  return withDispositionLock_('Review Title Changes', function () {
+    const store = getReportStateStore_(null);
+    let pending = {};
+    try { pending = JSON.parse(store.getProperty(TITLE_SYNC_PENDING_KEY_) || '{}') || {}; } catch (e) { pending = {}; }
+    let log = [];
+    try { log = JSON.parse(store.getProperty(TITLE_SYNC_LOG_KEY_) || '[]') || []; } catch (e) { log = []; }
+    const body = currentReportDocument_().getBody();
+    const index = buildTdocTableIndex_(body.getTables());
+    const writes = {};
+    const changes = {};
+    const done = [];
+    const skipped = [];
+    const now = new Date().toISOString();
+    (numbers || []).forEach(function (n) {
+      const p = pending[n];
+      if (!p) { skipped.push(n + ' (no longer listed)'); return; }
+      const key = TITLE_SYNC_RECORD_PREFIX_ + n;
+      const record = titleSyncRecordOf_(store.getProperty(key));
+      if (action === 'keep') {
+        record.ack = titleSyncHash_(p.list);
+        writes[key] = titleSyncRecordText_(record);
+        delete pending[n];
+        log.unshift({ t: n, a: 'kept', o: p.cell, n: p.list, at: now, by: 'dialog' });
+        done.push(n);
+        return;
+      }
+      const table = lookupTdocTableInIndex_(index, n);
+      const cell = table ? titleCellOfTdocTable_(table) : null;
+      if (!cell) { skipped.push(n + ' (no TDoc table)'); return; }
+      const before = cell.getText();
+      if (titleSyncShort_(before) !== p.cell) { skipped.push(n + ' (its title changed since the update)'); return; }
+      if (/…$/.test(p.list)) { skipped.push(n + ' (the list title is too long to be taken from here; it is written by the next update)'); return; }
+      replaceTitleCellText_(cell, p.list);
+      changes[n] = { from: titleSyncNorm_(before), to: p.list };
+      writes[key] = titleSyncRecordText_({ cur: titleSyncHash_(p.list), prev: [titleSyncHash_(before)].concat(record.prev), ack: '' });
+      delete pending[n];
+      log.unshift({ t: n, a: 'applied', o: p.cell, n: p.list, at: now, by: 'dialog' });
+      done.push(n);
+    });
+    const reg = applyTitlesToRegistrationTables_(body, changes);
+    writes[TITLE_SYNC_PENDING_KEY_] = titleSyncBoundedJson_(pending);
+    writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedJson_(log);
+    writeTitleSyncState_(store, writes);
+    return (action === 'keep' ? 'Kept the report title of ' : 'Wrote the list title of ') + (done.length ? done.join(', ') : 'none') +
+      (action === 'apply' ? ' (' + reg.written + ' registration row(s))' : '') + (skipped.length ? '. Not done: ' + skipped.join('; ') : '') +
+      '. The summary tables follow at the next update.';
+  });
+}
+
+/** Whether the class lines of the summary are Heading 2 (the default) or bold Normal text ('normal'). */
+function dispositionClassHeadingsWanted_() {
+  try { return String(PropertiesService.getDocumentProperties().getProperty(DISPOSITION_CLASS_HEADINGS_KEY_) || '').trim().toLowerCase() !== 'normal'; } catch (e) { return true; }
+}
+
+/** Pure: the line of a class of either form, or one an earlier candidate wrote: "<title> (N)". */
+function isDispositionClassLineText_(text) {
+  const t = String(text === null || text === undefined ? '' : text);
+  const titles = DISPOSITION_CLASSES_.map(function (c) { return c.title; }).concat(DISPOSITION_SUMMARY_EARLIER_TITLES_, PLENARY_DISPOSITION_CLASSES_.map(function (c) { return c.title; }));
+  return titles.some(function (title) { return t.length > title.length && t.slice(0, title.length) === title && /^ \(\d+\)$/.test(t.slice(title.length)); });
+}
+
+/** The look of a paragraph the summary writes (`k` its place; 0 the note): a class line Heading 2, the rest Normal, not bold. */
+function setDispositionSummaryParagraphLook_(p, text, k) {
+  const classLine = k > 0 && text !== DISPOSITION_SUMMARY_NONE_;
+  if (classLine && dispositionClassHeadingsWanted_()) {
+    p.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    p.editAsText().setBold(false);
+    return;
+  }
+  p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
+  // The line of a class is bold; the note and "None." are not.
+  p.editAsText().setBold(classLine);
+}
+
+/** A summary written before (DocumentApp): its class lines get the look of now, nothing else. Returns how many were changed. */
+function restyleDispositionClassLines_(body, section) {
+  if (!section) return 0;
+  const want = dispositionClassHeadingsWanted_() ? DocumentApp.ParagraphHeading.HEADING2 : DocumentApp.ParagraphHeading.NORMAL;
+  let changed = 0;
+  for (let i = section.start + 1; i < section.contentEnd; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (!isDispositionClassLineText_(p.getText()) || p.getHeading() === want) continue;
+    p.setHeading(want);
+    p.editAsText().setBold(want === DocumentApp.ParagraphHeading.NORMAL);
+    changed++;
+  }
+  return changed;
+}
+
+/** Pure: the requests that give the class lines of the summary in a read the look of now (Docs API); none when they have it. */
+function planDispositionClassHeadings_(content, section, withTab) {
+  const want = dispositionClassHeadingsWanted_() ? 'HEADING_2' : 'NORMAL_TEXT';
+  const out = [];
+  for (let i = section.start + 1; i < section.contentEnd; i++) {
+    const e = content[i];
+    if (!e || !e.paragraph) continue;
+    if (!isDispositionClassLineText_(plenaryDocsParagraphText_(e))) continue;
+    const style = (e.paragraph.paragraphStyle || {}).namedStyleType || 'NORMAL_TEXT';
+    if (style === want) continue;
+    out.push({ updateParagraphStyle: { range: withTab({ startIndex: e.startIndex, endIndex: e.endIndex }), paragraphStyle: { namedStyleType: want }, fields: 'namedStyleType' } });
+    const elements = e.paragraph.elements || [];
+    const end = elements.length ? elements[elements.length - 1].endIndex - 1 : e.endIndex - 1;
+    if (end > e.startIndex) out.push({ updateTextStyle: { range: withTab({ startIndex: e.startIndex, endIndex: end }), textStyle: { bold: want === 'NORMAL_TEXT' }, fields: 'bold' } });
+  }
+  return out;
+}
+
+/** Pure: a heading of a read that is a class line of the summary (it does not end the summary). */
+function isDispositionClassHeadingOfContent_(e) {
+  return !!(e && e.paragraph) && isDispositionClassLineText_(plenaryDocsParagraphText_(e));
+}
+
+/**
+ * The update: true when the report has no paragraph or cell with the text of
+ * the summary heading -- then it has no summary, and no walk of the body is
+ * needed to know it (one DocumentApp call). False when it cannot be told.
+ */
+function dispositionSummaryAbsentInBody_(body) {
+  try {
+    return typeof body.findText === 'function' && body.findText(DISPOSITION_SUMMARY_HEADING_) === null;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** The existing-TDoc scan of an update without its snapshot: the numbers into `existing` and the index, from ONE read of each table. */
+function existingTdocScanOfTables_(tables, existing) {
+  const index = new Map();
+  tables.forEach(function (t) {
+    if (!isTDocTable_(t)) return;
+    const raw = String(safeCellText_(t, 0, 1) || '').trim();
+    if (raw) existing.add(raw);
+    const parsed = parseExactSA4DocumentId_(raw);
+    if (parsed.isValid) index.set(parsed.raw, t);
+  });
+  return index;
+}
+
+/** findStatusInDocTable_(): the number of rows read once; the cells of a row counted only for the label sought. The same result. */
+function findStatusRowOfTable_(table) {
+  const n = table.getNumRows();
+  for (let r = 0; r < n; r++) {
+    const row = table.getRow(r);
+    let k = '';
+    try { k = row.getCell(0).getText().trim().toLowerCase(); } catch (e) { continue; }
+    if (k !== 'tdoc status' && k !== 'status') continue;
+    if (row.getNumCells() < 2) continue;
+    const cell = row.getCell(1);
+    // After T-2026.10.29: the status part of a compact Status row (GOES TO PLENARY section).
+    return { cell: cell, value: statusPartOfCellText_(cell.getText()).trim() };
+  }
+  return null;
+}
+
+// =========================================================
+// END OF ISSUE 28 A
+// =========================================================
