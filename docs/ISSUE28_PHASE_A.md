@@ -129,3 +129,27 @@ is a separate decision.
 - Disposable copy: pending. Needs a copy of a SA4#138 report made by the user (clasp cannot copy Docs); checks: About
   shows 2.28.0, one update (time from the execution log), Review Title Changes lists the expected TDocs, outline shows
   the class lines, a second update changes nothing.
+
+## Independent review (2026-11-23) and what changed
+
+A separate reviewer read the diff without this document. Findings and outcome:
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | More differences than one property holds: the shown list churned each update, review entries were re-logged and pushed "applied" entries out of the log | **Fixed.** "Listed for this list title" is part of each TDoc's record (`…|review:<hash>`), so nothing is re-logged; the shown list is kept in TDoc order with a count of the rest (`__more`); the log cuts review entries before "applied"/"kept" ones (test R) |
+| 2 | Text statuses: TDocs in review/kept were re-read every update and used the 60-read budget, so a real change could starve | **Fixed.** A TDoc is read only when its list title differs from the one it was last decided for; recorded TDocs with a changed list title are read first (test R: 60, 9, then 0 reads; the real change written at once) |
+| 3 | Code rollback duplicates a summary with Heading 2 class lines | **Open decision** (below) |
+| 4 | Snapshot path joined a multi-line Title into one string and listed it | **Fixed.** The Title is read with its paragraphs (`titleTextOfDocsTable_`), so it is skipped as before |
+| 5 | A cell ending with an empty paragraph could lose its look/link on replacement | **Fixed** as far as testable: only the first paragraph is edited; a cell with text in two paragraphs is refused. To be confirmed once on the disposable copy (linked, bold title) |
+| 6 | Class headings were set to bold=false | **Fixed.** Bold is cleared so the Heading 2 style decides (DocumentApp `BOLD: null`; Docs API empty `textStyle` with field `bold`) |
+| 7 | Add-on background store: per-key Script Properties calls; adopted documents read/write different stores | Documented: adoption is not wired into any menu; title records are not in `reportStateKeysToAdopt_`. To be added when adoption is used |
+| 8 | Size of document properties | ~45–65 bytes per TDoc (250 TDocs ≈ 15 KB) on top of the existing per-TDoc caches; check the live stores before rollout |
+| 9 | The headings setting read document properties directly | **Fixed** (report state, like `TITLE_SYNC_MODE`) |
+
+### Decision needed: the rollback hazard of Heading 2 class lines
+Older code (≤ 2.27.x) duplicates a summary that has Heading 2 class lines on its next rewrite. An emergency rollback
+may not allow "set `DISPOSITION_CLASS_HEADINGS=normal` and run one update" first. Options:
+1. **First rollout with `DISPOSITION_CLASS_HEADINGS=normal`** set in each report by the deploy script; switch Heading 2
+   on per report one release later, when the rollback target (2.28.0) reads Heading 2 class lines. Safest.
+2. Ship a tolerant reader as a separate hotfix (2.27.3) first, then 2.28.0 with Heading 2 on.
+3. Accept the documented two-step rollback.

@@ -30152,16 +30152,20 @@ function titleSyncHash_(text) {
   return ('0000000' + h.toString(16)).slice(-8);
 }
 
-/** Pure: a record as stored ('v1|<cur>|<prev,prev>|<ack>') as { cur, prev: [], ack }; an empty or unknown value is no record. */
+/**
+ * Pure: a record as stored ('v1|<cur>|<prev,prev>|<ack>|<pend>') as { cur, prev: [], ack, pend }; an empty or
+ * unknown value is no record. `pend` ('review:<hash>', 'manual:<hash>', 'stale:<hash>') says that the TDoc is
+ * listed, and for which list title: it is not read again until the list title changes.
+ */
 function titleSyncRecordOf_(value) {
   const parts = String(value || '').split('|');
-  if (parts[0] !== 'v1' || parts.length !== 4) return { cur: '', prev: [], ack: '' };
-  return { cur: parts[1] || '', prev: parts[2] ? parts[2].split(',').filter(Boolean) : [], ack: parts[3] || '' };
+  if (parts[0] !== 'v1' || (parts.length !== 4 && parts.length !== 5)) return { cur: '', prev: [], ack: '', pend: '' };
+  return { cur: parts[1] || '', prev: parts[2] ? parts[2].split(',').filter(Boolean) : [], ack: parts[3] || '', pend: parts[4] || '' };
 }
 
 /** Pure: a record as stored. */
 function titleSyncRecordText_(record) {
-  return ['v1', record.cur || '', (record.prev || []).slice(0, TITLE_SYNC_PREVIOUS_KEPT_).join(','), record.ack || ''].join('|');
+  return ['v1', record.cur || '', (record.prev || []).slice(0, TITLE_SYNC_PREVIOUS_KEPT_).join(','), record.ack || '', record.pend || ''].join('|');
 }
 
 /**
@@ -30223,35 +30227,62 @@ function titleCellOfTdocTable_(table) {
 }
 
 /**
- * Replaces the text of a cell with `title`, keeping its look: the new text is
- * inserted after the old one (it takes the look of its last character) and
- * the old one deleted. A link over the whole old title is put on the new one;
- * a link over a part of it is not carried to the whole. Returns true.
+ * Replaces the title of a cell with `title`, keeping its look: only its first
+ * paragraph is edited (a cell with text in more than one paragraph is refused:
+ * false); the new text is inserted after the old one (it takes the look of its
+ * last character) and the old one deleted. A link over the whole old title is
+ * put on the new one; a link over a part of it is not carried to the whole.
  */
 function replaceTitleCellText_(cell, title) {
-  const text = cell.editAsText();
-  const old = text.getText();
   const wanted = String(title);
   if (!wanted) return false;
+  let text = null;
+  try {
+    const n = typeof cell.getNumChildren === 'function' ? cell.getNumChildren() : 1;
+    let first = null;
+    for (let i = 0; i < n; i++) {
+      const child = cell.getChild(i);
+      if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) return false;
+      const p = child.asParagraph();
+      if (first === null) { first = p; continue; }
+      if (String(p.getText()).trim()) return false;
+    }
+    text = first ? first.editAsText() : cell.editAsText();
+  } catch (e) {
+    text = cell.editAsText();
+  }
+  const old = String(text.getText());
   if (!old.length) {
     text.insertText(0, wanted);
     return true;
   }
   let link = null;
   let whole = false;
+  let tailLinked = false;
   try {
     link = text.getLinkUrl(0) || null;
     whole = !!link && text.getLinkUrl(old.length - 1) === link;
+    tailLinked = !!text.getLinkUrl(old.length - 1);
   } catch (e) {
     link = null;
   }
-  let tailLinked = false;
-  try { tailLinked = !!text.getLinkUrl(old.length - 1); } catch (e) { tailLinked = false; }
   text.insertText(old.length, wanted);
   text.deleteText(0, old.length - 1);
   if (whole) text.setLinkUrl(0, wanted.length - 1, link);
   else if (tailLinked) text.setLinkUrl(0, wanted.length - 1, null);
   return true;
+}
+
+/** Pure: the Title row of a TDoc table of a Docs API read, its paragraphs joined by line breaks; null without one. */
+function titleTextOfDocsTable_(table) {
+  const rows = (table && table.rows) || [];
+  for (let r = 0; r < rows.length; r++) {
+    const cells = rows[r].tableCells || [];
+    if (cells.length !== 2) continue;
+    const label = statusDocsCellText_(cells[0]).replace(/\s+/g, ' ').trim().toLowerCase();
+    if (label === 'title' || label === 'title:') return docsCellFullText_(cells[1]);
+  }
+  return null;
 }
 
 /** Pure: the title of the TDoc list of one row of the update ('' without a Title column). */
@@ -30281,7 +30312,12 @@ function writeTitleSyncState_(store, writes) {
   return keys.length;
 }
 
-/** Pure: JSON of `value`, the array or object cut from its end until it fits the size. */
+/**
+ * Pure: JSON of `value` within one property value: an array cut from its end
+ * (the oldest); an object -- the pending list, shown by the dialog -- kept in
+ * the order of its TDoc numbers, cut from the end, so the same TDocs stay from
+ * one update to the next (`__more` counts the ones left out).
+ */
 function titleSyncBoundedJson_(value) {
   if (Array.isArray(value)) {
     const list = value.slice();
@@ -30289,11 +30325,32 @@ function titleSyncBoundedJson_(value) {
     while (text.length > TITLE_SYNC_MAX_JSON_ && list.length) { list.pop(); text = JSON.stringify(list); }
     return text;
   }
-  const keys = Object.keys(value || {}).sort(function (a, b) { return String(value[b].at || '').localeCompare(String(value[a].at || '')); });
+  const keys = Object.keys(value || {}).filter(function (k) { return k !== '__more'; }).sort();
   const out = {};
   keys.forEach(function (k) { out[k] = value[k]; });
   let text = JSON.stringify(out);
-  while (text.length > TITLE_SYNC_MAX_JSON_ && keys.length) { delete out[keys.pop()]; text = JSON.stringify(out); }
+  let more = 0;
+  while (text.length > TITLE_SYNC_MAX_JSON_ - 40 && keys.length) { delete out[keys.pop()]; more++; text = JSON.stringify(out); }
+  if (more) { out.__more = more; text = JSON.stringify(out); }
+  return text;
+}
+
+/**
+ * Pure: the audit log (newest first) within one property value. When it must be
+ * cut, the oldest entries that only list a TDoc for review go first; an entry
+ * that records a write or a choice ("applied", "kept") goes only when nothing
+ * else is left to cut.
+ */
+function titleSyncBoundedLog_(entries) {
+  const list = (entries || []).slice();
+  let text = JSON.stringify(list);
+  const durable = function (e) { return e && (e.a === 'applied' || e.a === 'kept'); };
+  for (let i = list.length - 1; text.length > TITLE_SYNC_MAX_JSON_ && i >= 0; i--) {
+    if (durable(list[i])) continue;
+    list.splice(i, 1);
+    text = JSON.stringify(list);
+  }
+  while (text.length > TITLE_SYNC_MAX_JSON_ && list.length) { list.pop(); text = JSON.stringify(list); }
   return text;
 }
 
@@ -30337,6 +30394,11 @@ function applyTitlesToRegistrationTables_(body, changes) {
  * run (decideTitleSync_()). Returns { applied, recorded, review, manual,
  * stale, kept, deferred, registration, summary }. Never throws; nothing is
  * written in mode 'off', and in mode 'review' only records and the list.
+ * A TDoc is read only when its list title is not the one it was last decided
+ * for (recorded, kept against, or listed); without the report snapshot at
+ * most TITLE_SYNC_READS_PER_UPDATE_ such reads, list changes of recorded TDocs
+ * first. Being listed is part of the TDoc's record, so the shown list (one
+ * property, cut when long) never makes a TDoc "new" again.
  */
 function syncTdocTitlesOnUpdate_(body, allTdocs, index, context) {
   const out = { applied: 0, recorded: 0, review: 0, manual: 0, stale: 0, kept: 0, deferred: 0, registration: 0, summary: '' };
@@ -30348,20 +30410,20 @@ function syncTdocTitlesOnUpdate_(body, allTdocs, index, context) {
     const all = records.__all || null;
     const recordOf = function (tdoc) {
       if (Object.prototype.hasOwnProperty.call(records, tdoc)) return records[tdoc];
-      if (all) return { cur: '', prev: [], ack: '' };
+      if (all) return { cur: '', prev: [], ack: '', pend: '' };
       return titleSyncRecordOf_(store.getProperty(TITLE_SYNC_RECORD_PREFIX_ + tdoc));
     };
     let pending = {};
     try { pending = JSON.parse((all ? all[TITLE_SYNC_PENDING_KEY_] : store.getProperty(TITLE_SYNC_PENDING_KEY_)) || '{}') || {}; } catch (e) { pending = {}; }
-    const pendingBefore = JSON.stringify(pending);
-    let log = [];
+    delete pending.__more;
+    const pendingBefore = titleSyncBoundedJson_(pending);
     const logged = [];
     const snap = reportRunSnapshot_();
     const writes = {};
     const changes = {};
     const now = new Date().toISOString();
-    let reads = 0;
     const seen = {};
+    const candidates = [];
     (allTdocs || []).forEach(function (td) {
       const tdoc = String(td.row[td.tdocCol] || '').trim();
       const parsed = parseExactSA4DocumentId_(tdoc);
@@ -30370,49 +30432,66 @@ function syncTdocTitlesOnUpdate_(body, allTdocs, index, context) {
       const listTitle = titleOfListRow_(td);
       if (!listTitle) return;
       const record = recordOf(parsed.raw);
-      // Without the snapshot, a TDoc whose list title is the one recorded is not read: it can only be written when the list changes.
+      const hList = titleSyncHash_(listTitle);
       const fromSnap = snap && snap.byNumber && snap.byNumber[parsed.raw] && !snap.duplicates[parsed.raw] ? snap.byNumber[parsed.raw] : null;
-      if (!fromSnap && record.cur === titleSyncHash_(listTitle) && !record.ack && !pending[parsed.raw]) return;
+      // Decided for this list title already: in sync, kept against it, or listed for it.
+      const decided = (record.cur === hList && !record.ack) || record.ack === hList || (record.pend && record.pend.split(':')[1] === hList);
+      if (decided && !fromSnap) return;
+      candidates.push({ number: parsed.raw, listTitle: listTitle, record: record, hList: hList, fromSnap: fromSnap, decided: decided });
+    });
+    // Without the snapshot the reads are bounded: a recorded TDoc whose list title changed comes first.
+    candidates.sort(function (a, b) { return (a.fromSnap ? 0 : a.record.cur ? 1 : 2) - (b.fromSnap ? 0 : b.record.cur ? 1 : 2); });
+    let reads = 0;
+    candidates.forEach(function (c) {
       let cellText = null;
       let table = null;
-      if (fromSnap && Object.prototype.hasOwnProperty.call(fromSnap.values, 'title')) {
-        cellText = fromSnap.values.title;
+      if (c.fromSnap) {
+        cellText = titleTextOfDocsTable_(c.fromSnap);
+        if (cellText === null) return;
       } else {
         if (reads >= TITLE_SYNC_READS_PER_UPDATE_) { out.deferred++; return; }
         reads++;
-        table = index ? lookupTdocTableInIndex_(index, parsed.raw) : null;
+        table = index ? lookupTdocTableInIndex_(index, c.number) : null;
         if (!table) return;
         const cell = titleCellOfTdocTable_(table);
         if (!cell) return;
         cellText = cell.getText();
       }
-      const decision = decideTitleSync_(cellText, listTitle, record, mode);
-      const key = TITLE_SYNC_RECORD_PREFIX_ + parsed.raw;
+      const decision = decideTitleSync_(cellText, c.listTitle, c.record, mode);
+      const key = TITLE_SYNC_RECORD_PREFIX_ + c.number;
+      const record = c.record;
       if (decision.action === 'in-sync' || decision.action === 'record' || decision.action === 'skip') {
-        if (pending[parsed.raw]) delete pending[parsed.raw];
-        if (decision.action === 'record') { writes[key] = titleSyncRecordText_(decision.record); out.recorded++; }
+        if (pending[c.number]) delete pending[c.number];
+        if (decision.action === 'record' || record.pend) {
+          const next = decision.record || { cur: record.cur, prev: record.prev, ack: record.ack };
+          next.pend = '';
+          writes[key] = titleSyncRecordText_(next);
+          if (decision.action === 'record') out.recorded++;
+        }
         return;
       }
       if (decision.action === 'kept') { out.kept++; return; }
       if (decision.action === 'apply') {
-        if (!table) table = index ? lookupTdocTableInIndex_(index, parsed.raw) : null;
+        if (!table) table = index ? lookupTdocTableInIndex_(index, c.number) : null;
         const cell = table ? titleCellOfTdocTable_(table) : null;
         // The read of the snapshot is from the start of this run: the cell is read again before it is written.
         if (!cell || titleSyncNorm_(cell.getText()) !== titleSyncNorm_(cellText)) return;
-        replaceTitleCellText_(cell, listTitle);
+        if (!replaceTitleCellText_(cell, c.listTitle)) return;
+        decision.record.pend = '';
         writes[key] = titleSyncRecordText_(decision.record);
-        changes[parsed.raw] = { from: titleSyncNorm_(cellText), to: listTitle };
-        if (pending[parsed.raw]) delete pending[parsed.raw];
-        logged.push({ t: parsed.raw, a: 'applied', o: titleSyncShort_(cellText), n: titleSyncShort_(listTitle), at: now, by: 'update' });
-        Logger.log('Title of ' + parsed.raw + ' changed in the TDoc list: "' + titleSyncShort_(cellText) + '" -> "' + titleSyncShort_(listTitle) + '" (written).');
+        changes[c.number] = { from: titleSyncNorm_(cellText), to: c.listTitle };
+        if (pending[c.number]) delete pending[c.number];
+        logged.push({ t: c.number, a: 'applied', o: titleSyncShort_(cellText), n: titleSyncShort_(c.listTitle), at: now, by: 'update' });
+        Logger.log('Title of ' + c.number + ' changed in the TDoc list: "' + titleSyncShort_(cellText) + '" -> "' + titleSyncShort_(c.listTitle) + '" (written).');
         out.applied++;
         return;
       }
       out[decision.action]++;
-      const was = pending[parsed.raw];
-      if (!was || was.list !== titleSyncShort_(listTitle) || was.cell !== titleSyncShort_(cellText) || was.kind !== decision.action) {
-        pending[parsed.raw] = { cell: titleSyncShort_(cellText), list: titleSyncShort_(listTitle), kind: decision.action, at: now };
-        if (decision.action !== 'manual') logged.push({ t: parsed.raw, a: decision.action, o: titleSyncShort_(cellText), n: titleSyncShort_(listTitle), at: now, by: 'update' });
+      const pend = decision.action + ':' + c.hList;
+      pending[c.number] = { cell: titleSyncShort_(cellText), list: titleSyncShort_(c.listTitle), kind: decision.action, at: pending[c.number] && record.pend === pend ? pending[c.number].at : now };
+      if (record.pend !== pend) {
+        writes[key] = titleSyncRecordText_({ cur: record.cur, prev: record.prev, ack: record.ack, pend: pend });
+        if (decision.action !== 'manual') logged.push({ t: c.number, a: decision.action, o: titleSyncShort_(cellText), n: titleSyncShort_(c.listTitle), at: now, by: 'update' });
       }
     });
     if (Object.keys(changes).length) {
@@ -30420,14 +30499,16 @@ function syncTdocTitlesOnUpdate_(body, allTdocs, index, context) {
       out.registration = reg.written;
       if (reg.kept.length) Logger.log('Title sync: the Registration of Documents row of ' + reg.kept.join(', ') + ' has another title than the TDoc table had; left as it is.');
     }
-    if (JSON.stringify(pending) !== pendingBefore) writes[TITLE_SYNC_PENDING_KEY_] = titleSyncBoundedJson_(pending);
+    const pendingText = titleSyncBoundedJson_(pending);
+    if (pendingText !== pendingBefore) writes[TITLE_SYNC_PENDING_KEY_] = pendingText;
     if (logged.length) {
+      let log = [];
       try { log = JSON.parse((all ? all[TITLE_SYNC_LOG_KEY_] : store.getProperty(TITLE_SYNC_LOG_KEY_)) || '[]') || []; } catch (e) { log = []; }
-      writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedJson_(logged.concat(log));
+      writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedLog_(logged.concat(log));
     }
     writeTitleSyncState_(store, writes);
     out.summary = out.applied + ' written, ' + out.review + ' to review, ' + out.manual + ' changed in the report, ' + out.stale + ' from an older list' + (out.deferred ? ', ' + out.deferred + ' left to the next update' : '');
-    if (out.applied || out.review || out.stale || out.deferred) Logger.log('Titles: ' + out.summary + '.');
+    if (out.applied || logged.length || out.deferred) Logger.log('Titles: ' + out.summary + '.');
   } catch (e) {
     Logger.log('Titles: not compared (' + e.message + '); the next update tries again.');
     out.summary = 'failed: ' + e.message;
@@ -30451,7 +30532,8 @@ function reviewTitleChanges() {
 function titleReviewHtml_(pending, log, mode) {
   const esc = function (s) { return String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
   const why = { review: 'Not known whose change it is', manual: 'Typed by hand in the report', stale: 'An older list (the report has the newer title)' };
-  const numbers = Object.keys(pending || {}).sort();
+  const more = (pending && pending.__more) || 0;
+  const numbers = Object.keys(pending || {}).filter(function (k) { return k !== '__more'; }).sort();
   const rows = numbers.map(function (n) {
     const p = pending[n];
     return '<tr><td><input type="checkbox" class="pick" value="' + esc(n) + '"></td><td>' + esc(n) + '</td><td>' + esc(p.cell) + '</td><td>' + esc(p.list) + '</td><td>' + esc(why[p.kind] || p.kind) + '</td></tr>';
@@ -30467,6 +30549,7 @@ function titleReviewHtml_(pending, log, mode) {
     (numbers.length ? '<table><tr><th></th><th>TDoc</th><th>In the report</th><th>In the TDoc list</th><th>Why it is listed</th></tr>' + rows + '</table>' +
       '<button onclick="go(\'apply\')">Use the list title</button><button onclick="go(\'keep\')">Keep the report title</button><button onclick="google.script.host.close()">Close</button>'
       : '<p>No title differs.</p><button onclick="google.script.host.close()">Close</button>') +
+    (more ? '<p class="note">' + more + ' more TDoc(s) differ and are not shown here (the list is kept within one property); they appear once these are resolved.</p>' : '') +
     '<div id="msg"></div><h4>Log</h4>' + (logRows ? '<table><tr><th>When (UTC)</th><th>TDoc</th><th>What</th><th>Before</th><th>After</th></tr>' + logRows + '</table>' : '<p>Empty.</p>') +
     '<script>function go(action){var picked=[].slice.call(document.querySelectorAll(".pick:checked")).map(function(x){return x.value;});' +
     'if(!picked.length){document.getElementById("msg").textContent="Choose at least one TDoc.";return;}document.getElementById("msg").textContent="Working…";' +
@@ -30501,6 +30584,7 @@ function applyTitleReviewDecisions(action, numbers) {
       const record = titleSyncRecordOf_(store.getProperty(key));
       if (action === 'keep') {
         record.ack = titleSyncHash_(p.list);
+        record.pend = '';
         writes[key] = titleSyncRecordText_(record);
         delete pending[n];
         log.unshift({ t: n, a: 'kept', o: p.cell, n: p.list, at: now, by: 'dialog' });
@@ -30515,14 +30599,14 @@ function applyTitleReviewDecisions(action, numbers) {
       if (/…$/.test(p.list)) { skipped.push(n + ' (the list title is too long to be taken from here; it is written by the next update)'); return; }
       replaceTitleCellText_(cell, p.list);
       changes[n] = { from: titleSyncNorm_(before), to: p.list };
-      writes[key] = titleSyncRecordText_({ cur: titleSyncHash_(p.list), prev: [titleSyncHash_(before)].concat(record.prev), ack: '' });
+      writes[key] = titleSyncRecordText_({ cur: titleSyncHash_(p.list), prev: [titleSyncHash_(before)].concat(record.prev), ack: '', pend: '' });
       delete pending[n];
       log.unshift({ t: n, a: 'applied', o: p.cell, n: p.list, at: now, by: 'dialog' });
       done.push(n);
     });
     const reg = applyTitlesToRegistrationTables_(body, changes);
     writes[TITLE_SYNC_PENDING_KEY_] = titleSyncBoundedJson_(pending);
-    writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedJson_(log);
+    writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedLog_(log);
     writeTitleSyncState_(store, writes);
     return (action === 'keep' ? 'Kept the report title of ' : 'Wrote the list title of ') + (done.length ? done.join(', ') : 'none') +
       (action === 'apply' ? ' (' + reg.written + ' registration row(s))' : '') + (skipped.length ? '. Not done: ' + skipped.join('; ') : '') +
@@ -30530,9 +30614,20 @@ function applyTitleReviewDecisions(action, numbers) {
   });
 }
 
-/** Whether the class lines of the summary are Heading 2 (the default) or bold Normal text ('normal'). */
+/** Whether the class lines of the summary are Heading 2 (the default) or bold Normal text ('normal'); from the report state. */
 function dispositionClassHeadingsWanted_() {
-  try { return String(PropertiesService.getDocumentProperties().getProperty(DISPOSITION_CLASS_HEADINGS_KEY_) || '').trim().toLowerCase() !== 'normal'; } catch (e) { return true; }
+  try { return String(getReportStateStore_(null).getProperty(DISPOSITION_CLASS_HEADINGS_KEY_) || '').trim().toLowerCase() !== 'normal'; } catch (e) { return true; }
+}
+
+/** A heading's text takes the look of its named style: bold is cleared, not set to false (DocumentApp). */
+function clearDispositionHeadingBold_(p) {
+  try {
+    const attributes = {};
+    attributes[DocumentApp.Attribute.BOLD] = null;
+    p.setAttributes(attributes);
+  } catch (e) {
+    p.editAsText().setBold(false);
+  }
 }
 
 /** Pure: the line of a class of either form, or one an earlier candidate wrote: "<title> (N)". */
@@ -30547,7 +30642,7 @@ function setDispositionSummaryParagraphLook_(p, text, k) {
   const classLine = k > 0 && text !== DISPOSITION_SUMMARY_NONE_;
   if (classLine && dispositionClassHeadingsWanted_()) {
     p.setHeading(DocumentApp.ParagraphHeading.HEADING2);
-    p.editAsText().setBold(false);
+    clearDispositionHeadingBold_(p);
     return;
   }
   p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
@@ -30566,7 +30661,7 @@ function restyleDispositionClassLines_(body, section) {
     const p = child.asParagraph();
     if (!isDispositionClassLineText_(p.getText()) || p.getHeading() === want) continue;
     p.setHeading(want);
-    p.editAsText().setBold(want === DocumentApp.ParagraphHeading.NORMAL);
+    if (want === DocumentApp.ParagraphHeading.NORMAL) p.editAsText().setBold(true); else clearDispositionHeadingBold_(p);
     changed++;
   }
   return changed;
@@ -30585,7 +30680,8 @@ function planDispositionClassHeadings_(content, section, withTab) {
     out.push({ updateParagraphStyle: { range: withTab({ startIndex: e.startIndex, endIndex: e.endIndex }), paragraphStyle: { namedStyleType: want }, fields: 'namedStyleType' } });
     const elements = e.paragraph.elements || [];
     const end = elements.length ? elements[elements.length - 1].endIndex - 1 : e.endIndex - 1;
-    if (end > e.startIndex) out.push({ updateTextStyle: { range: withTab({ startIndex: e.startIndex, endIndex: end }), textStyle: { bold: want === 'NORMAL_TEXT' }, fields: 'bold' } });
+    // A heading takes bold from its named style (the field cleared); a Normal class line is bold, as before.
+    if (end > e.startIndex) out.push({ updateTextStyle: { range: withTab({ startIndex: e.startIndex, endIndex: end }), textStyle: want === 'NORMAL_TEXT' ? { bold: true } : {}, fields: 'bold' } });
   }
   return out;
 }

@@ -107,12 +107,16 @@ console.log('B. the record, the hash, the bounded JSON');
   const { sandbox: S } = loadCode({ documentProperties: {} });
   check('the hash is 8 hex digits, stable, the same for white space differences', [S.titleSyncHash_('A  title'), S.titleSyncHash_('A title '), /^[0-9a-f]{8}$/.test(S.titleSyncHash_('x'))], [S.titleSyncHash_('A title'), S.titleSyncHash_('A title'), true]);
   check('a record reads back as it was written; an unknown value is no record', [S.titleSyncRecordOf_(S.titleSyncRecordText_({ cur: 'aaaaaaaa', prev: ['bbbbbbbb'], ack: 'cccccccc' })), S.titleSyncRecordOf_('garbage'), S.titleSyncRecordOf_(null)],
-    [{ cur: 'aaaaaaaa', prev: ['bbbbbbbb'], ack: 'cccccccc' }, { cur: '', prev: [], ack: '' }, { cur: '', prev: [], ack: '' }]);
+    [{ cur: 'aaaaaaaa', prev: ['bbbbbbbb'], ack: 'cccccccc', pend: '' }, { cur: '', prev: [], ack: '', pend: '' }, { cur: '', prev: [], ack: '', pend: '' }]);
+  check('a record of the first candidate (four parts) still reads; a listed TDoc keeps for which list title', [S.titleSyncRecordOf_('v1|aaaaaaaa||').cur, S.titleSyncRecordOf_(S.titleSyncRecordText_({ cur: 'a', prev: [], ack: '', pend: 'review:12345678' })).pend], ['aaaaaaaa', 'review:12345678']);
   const big = Array.from({ length: 400 }, (_, k) => ({ t: 'S4-26' + k, a: 'applied', o: 'x'.repeat(60), n: 'y'.repeat(60), at: '2026-11-23T10:00:00Z' }));
   const text = S.titleSyncBoundedJson_(big);
   check('the log is cut to one property value (newest kept)', [text.length <= 8500, JSON.parse(text)[0].t], [true, 'S4-260']);
   const pend = {}; for (let k = 0; k < 400; k++) pend['S4-26' + k] = { cell: 'c'.repeat(40), list: 'l'.repeat(40), kind: 'review', at: '2026-11-' + String(10 + (k % 10)) + 'T00:00:00Z' };
   check('the pending list is cut to one property value, the newest kept', S.titleSyncBoundedJson_(pend).length <= 8500, true);
+  const mixed = [{ t: 'S4-1', a: 'applied', o: 'x', n: 'y', at: 'old' }].concat(Array.from({ length: 300 }, (_, k) => ({ t: 'S4-' + k, a: 'review', o: 'o'.repeat(40), n: 'n'.repeat(40), at: 'new' })));
+  const kept = JSON.parse(S.titleSyncBoundedLog_(mixed.slice(1).concat(mixed.slice(0, 1))));
+  check('the log cut to one value keeps an "applied" entry even when it is the oldest; review entries go first', [JSON.stringify(kept).length <= 8500, kept.some((e) => e.a === 'applied')], [true, true]);
   check('a long title is shortened for the log', [S.titleSyncShort_('z'.repeat(300)).length, S.titleSyncShort_('short')], [158, 'short']);
 }
 
@@ -319,6 +323,54 @@ console.log('G. the cost changes give the same results; the calls of an update a
   console.log('  unchanged update, 150 TDocs, DocumentApp calls -- Status dropdowns: T-2026.10.34 ' + dOld.calls + ', now ' + dNow.calls + '; text statuses: T-2026.10.34 ' + tOld.calls + ', now ' + tNow.calls);
   check('Status dropdowns: at least 3x fewer DocumentApp calls in an unchanged update; the same document', [dOld.calls / Math.max(1, dNow.calls) >= 3, dNow.doc === dOld.doc], [true, true]);
   check('text statuses: at least 20% fewer; the same document', [tNow.calls <= tOld.calls * 0.8, tNow.doc === tOld.doc], [true, true]);
+}
+
+// ====================================================================== R
+console.log('R. the findings of the independent review of PR #29');
+{
+  // 1. More differences than one property holds: the shown list is the same TDocs each update, nothing is logged again,
+  //    an "applied" entry of the log survives.
+  const long = (k) => 'A long title of the kind 3GPP contributions have, about the multi-access architecture, number ' + k;
+  const r = report({ tdocs: TDOCS(80).map((t, k) => Object.assign(t, { title: long(k) })) });
+  r.build(); r.save(); r.update();
+  r.tdoc('S4-264080').title = long(79) + ' (final)';
+  r.update();
+  Object.keys(r.docProps._store).filter((k) => /^TDOC_TITLE_SEEN_S4-2640[0-6]/.test(k)).forEach((k) => r.docProps.deleteProperty(k));
+  r.tdocs.slice(0, 65).forEach((t) => { t.title += ' (renamed in 3GU)'; });
+  r.update();
+  const shown1 = Object.keys(r.pending()).sort(); const log1 = JSON.stringify(r.log());
+  r.update(); r.update();
+  const shown2 = Object.keys(r.pending()).sort();
+  check('65 differences: the shown list is cut (the rest counted), the same TDocs every update', [shown1.indexOf('__more') !== -1, JSON.stringify(shown1) === JSON.stringify(shown2), r.pending().__more > 0], [true, true, true]);
+  check('... later updates log nothing again; the "applied" entry of S4-264080 is still in the log', [JSON.stringify(r.log()) === log1, r.log().some((e) => e.t === 'S4-264080' && e.a === 'applied')], [true, true]);
+  check('... every one of the 65 is listed in its own record (none forgotten when the shown list is cut)', Object.keys(r.docProps._store).filter((k) => /^TDOC_TITLE_SEEN_/.test(k) && /\|review:/.test(r.docProps._store[k])).length, 65);
+
+  // 2. Text statuses: TDocs listed or kept are not read again; a real list change of a recorded TDoc is written at once.
+  const x = report({ release: false, tdocs: TDOCS(80) });
+  x.build(); x.save(); x.update(); x.update();
+  Object.keys(x.docProps._store).filter((k) => /^TDOC_TITLE_SEEN_S4-2640[0-6]/.test(k)).forEach((k) => x.docProps.deleteProperty(k));
+  x.tdocs.slice(0, 65).forEach((t) => { t.title += ' (renamed in 3GU)'; });
+  const reads = () => { let n = 0; const real = x.s.titleCellOfTdocTable_; x.s.titleCellOfTdocTable_ = function () { n++; return real.apply(this, arguments); }; return () => { x.s.titleCellOfTdocTable_ = real; return n; }; };
+  let stop = reads(); x.update(); const a1 = stop();
+  stop = reads(); x.update(); const a2 = stop();
+  x.tdoc('S4-264080').title = 'Contribution 080, final';
+  stop = reads(); x.update(); const a3 = stop();
+  stop = reads(); x.update(); const a4 = stop();
+  // 69 without a record (S4-264001..069; 066..069 unchanged and recorded again), read 60 then 9; then none.
+  check('text statuses: the unrecorded TDocs read within the budget (60, then 9), then never again', [a1, a2, a4], [60, 9, 0]);
+  check('... a real change of a recorded TDoc is read and written in the next update (it comes first)', [a3, x.cell('S4-264080', 'Title').getText()], [2, 'Contribution 080, final']);
+
+  // 4. A title cell of two paragraphs, read from the report snapshot: not compared (not listed with a joined text).
+  const y = report();
+  y.build(); y.save(); y.update();
+  y.docProps.deleteProperty('TDOC_TITLE_SEEN_S4-264002');
+  const docsTable = { rows: [{ tableCells: [{ content: [{ paragraph: { elements: [{ textRun: { content: 'Title\n' } }] } }] }, { content: [{ paragraph: { elements: [{ textRun: { content: 'Line A\n' } }] } }, { paragraph: { elements: [{ textRun: { content: 'Line B\n' } }] } }] }] }] };
+  check('the Title of a read keeps its paragraphs apart ("Line A\\nLine B"), so a two-line title is skipped, never listed', [y.s.titleTextOfDocsTable_(docsTable), y.s.decideTitleSync_(y.s.titleTextOfDocsTable_(docsTable), 'Line A Line B', { cur: '', prev: [], ack: '', pend: '' }, 'auto').action], ['Line A\nLine B', 'skip']);
+
+  // 6. Heading 2 class lines take bold from their style: the Docs API request clears the field, it does not set false.
+  const plan = y.s.planDispositionClassHeadings_([{}, { startIndex: 10, endIndex: 30, paragraph: { paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, elements: [{ startIndex: 10, endIndex: 30, textRun: { content: 'Other Disposed Documents (2)\n' } }] } }], { start: 0, contentEnd: 2 }, (o) => o);
+  check('the restyle requests: Heading 2, and bold cleared (an empty text style with the field "bold")', plan.map((q) => Object.keys(q)[0] + ':' + JSON.stringify(q.updateParagraphStyle ? q.updateParagraphStyle.paragraphStyle : q.updateTextStyle.textStyle)),
+    ['updateParagraphStyle:{"namedStyleType":"HEADING_2"}', 'updateTextStyle:{}']);
 }
 
 // ====================================================================== H
