@@ -42,9 +42,13 @@ passed its identity check, as every update does) with the Title row of each TDoc
 title already changed in 3GU before deployment differs *without* a record, so it is listed for review, not written:
 the rapporteur applies it once in the dialog. Expected: a handful per report.
 
-## 2. Heading 2 class lines in the Disposition Summary
+## 2. Heading 2 class lines in the Disposition Summary (opt-in)
 
-- The three (or four) class lines are Heading 2 under the Heading 1 "Disposition Summary", not bold. They appear in the
+**Decision 2026-11-23:** Heading 2 is **off by default**. Without a setting, 2.28.0 writes the class lines as bold Normal
+text, exactly as T-2026.10.33/.34 (test F: the same summary as T-2026.10.34 writes). `DISPOSITION_CLASS_HEADINGS=heading2`
+switches it on per report — only once 2.28.0 (which reads Heading 2 class lines) is the rollback target in production.
+
+- With the setting, the three (or four) class lines are Heading 2 under the Heading 1 "Disposition Summary", not bold. They appear in the
   document outline. The note, "None.", the tables and their header cells are unchanged; nothing else becomes a heading.
 - The section readers know a class heading as part of the summary: `findDispositionSummarySection_` and
   `plenarySummarySectionOfContent_` (ownership, "text typed into it"), `nextPlenaryLandscapeStep_` (no portrait
@@ -89,7 +93,7 @@ on the disposable copy (§ Validation).
 | Document property | Values | Default |
 |---|---|---|
 | `TITLE_SYNC_MODE` | `auto` (write where safe), `review` (list only), `off` (nothing compared, nothing stored) | `auto` |
-| `DISPOSITION_CLASS_HEADINGS` | `normal` keeps bold Normal class lines | Heading 2 |
+| `DISPOSITION_CLASS_HEADINGS` | `heading2` (also `heading 2`, `h2`): Heading 2 class lines; anything else: bold Normal | bold Normal (as T-2026.10.34) |
 
 Both can be set without a code change (Apps Script › Project settings › Script/Document properties, or a one-line
 script), and take effect at the next update.
@@ -102,11 +106,15 @@ minutes or disposition is changed. Old AHG reports and other SWG reports behave 
 
 ## Rollback
 
-- **Behaviour only:** set `TITLE_SYNC_MODE=off` and/or `DISPOSITION_CLASS_HEADINGS=normal` (the next update restores
+- **Behaviour only:** set `TITLE_SYNC_MODE=off` and/or remove `DISPOSITION_CLASS_HEADINGS` (the next update restores
   bold Normal class lines).
-- **Code:** first set `DISPOSITION_CLASS_HEADINGS=normal` and run **one update with 2.28.0** (it restyles the class
-  lines back to bold Normal; test F). Only then push the report's T-2026.10.33 (or .34) read-back (`--rollback`).
-  **Required:** older code ends the summary at the first heading after its own, so on a summary with Heading 2 class
+- **Code, default (Heading 2 never switched on):** push the report's T-2026.10.33 (or .34) read-back (`--rollback`); no
+  preparation. Test F runs T-2026.10.33 and .34 over the same document after 2.28.0: each rewrites the summary in place
+  (one heading, three class lines), and 2.28.0 reads what they wrote when upgraded again.
+- **Code, Heading 2 switched on in that report:** first remove `DISPOSITION_CLASS_HEADINGS` and run **one update with
+  2.28.0** (it restyles the class lines back to bold Normal; test F). Only then push the older read-back. Rolling back to
+  2.28.0 or later needs no preparation.
+  **Why:** older code ends the summary at the first heading after its own, so on a summary with Heading 2 class
   lines its next rewrite writes a new summary under the note and keeps the Heading 2 one below it as "text typed
   below" — a duplicated summary (reproduced on the fake document with the T-2026.10.34 code). Titles written stay
   written (they are the list's titles). The `TDOC_TITLE_*`/`TITLE_SYNC_*` properties are ignored by older code and
@@ -138,7 +146,7 @@ A separate reviewer read the diff without this document. Findings and outcome:
 |---|---|---|
 | 1 | More differences than one property holds: the shown list churned each update, review entries were re-logged and pushed "applied" entries out of the log | **Fixed.** "Listed for this list title" is part of each TDoc's record (`…|review:<hash>`), so nothing is re-logged; the shown list is kept in TDoc order with a count of the rest (`__more`); the log cuts review entries before "applied"/"kept" ones (test R) |
 | 2 | Text statuses: TDocs in review/kept were re-read every update and used the 60-read budget, so a real change could starve | **Fixed.** A TDoc is read only when its list title differs from the one it was last decided for; recorded TDocs with a changed list title are read first (test R: 60, 9, then 0 reads; the real change written at once) |
-| 3 | Code rollback duplicates a summary with Heading 2 class lines | **Open decision** (below) |
+| 3 | Code rollback duplicates a summary with Heading 2 class lines | **Decided 2026-11-23:** Heading 2 is opt-in, off by default (below) |
 | 4 | Snapshot path joined a multi-line Title into one string and listed it | **Fixed.** The Title is read with its paragraphs (`titleTextOfDocsTable_`), so it is skipped as before |
 | 5 | A cell ending with an empty paragraph could lose its look/link on replacement | **Fixed** as far as testable: only the first paragraph is edited; a cell with text in two paragraphs is refused. To be confirmed once on the disposable copy (linked, bold title) |
 | 6 | Class headings were set to bold=false | **Fixed.** Bold is cleared so the Heading 2 style decides (DocumentApp `BOLD: null`; Docs API empty `textStyle` with field `bold`) |
@@ -146,7 +154,11 @@ A separate reviewer read the diff without this document. Findings and outcome:
 | 8 | Size of document properties | ~45–65 bytes per TDoc (250 TDocs ≈ 15 KB) on top of the existing per-TDoc caches; check the live stores before rollout |
 | 9 | The headings setting read document properties directly | **Fixed** (report state, like `TITLE_SYNC_MODE`) |
 
-### Decision needed: the rollback hazard of Heading 2 class lines
+### Decision (2026-11-23): Heading 2 opt-in, off by default
+Option 1 was chosen, in code rather than by the deploy script: no setting means bold Normal. Test F proves the
+backward-compatible reading (2.28.0 reads Heading 2 and bold Normal summaries, and what T-2026.10.33/.34 wrote) and the
+rollbacks over the same document. The considered options were:
+
 Older code (≤ 2.27.x) duplicates a summary that has Heading 2 class lines on its next rewrite. An emergency rollback
 may not allow "set `DISPOSITION_CLASS_HEADINGS=normal` and run one update" first. Options:
 1. **First rollout with `DISPOSITION_CLASS_HEADINGS=normal`** set in each report by the deploy script; switch Heading 2

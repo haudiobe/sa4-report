@@ -11,7 +11,7 @@
  *      the review dialog (apply, keep); the settings 'review' and 'off'.
  *   E. a report with text statuses (no report snapshot): the Title rows read at most 60 per update, the rest later;
  *      a TDoc whose list title is recorded costs nothing.
- *   F. the class lines of the Disposition Summary: Heading 2 in both forms; a summary of T-2026.10.34 restyled by the
+ *   F. the class lines of the Disposition Summary: bold Normal by default; Heading 2 (opt-in) in both forms; code rollbacks over the same document; a summary of T-2026.10.34 restyled by the
  *      next update without a rewrite or a section break; idempotent; 'normal' keeps bold Normal; text below kept,
  *      text typed into it refused as before.
  *   G. the cost changes give the same results: the scan, the Status row, the summary check (pure equivalence), and
@@ -216,10 +216,10 @@ console.log('E. a report with text statuses (no report snapshot): bounded reads,
 }
 
 // ====================================================================== F
-console.log('F. the class lines of the Disposition Summary are Heading 2');
+console.log('F. the class lines of the Disposition Summary: bold Normal by default, Heading 2 by opt-in; code rollback');
 {
-  // The three-table form.
-  const r = report();
+  // The three-table form, Heading 2 switched on (DISPOSITION_CLASS_HEADINGS heading2).
+  const r = report({ props: Object.assign({}, MAIN, { DISPOSITION_CLASS_HEADINGS: 'heading2' }) });
   r.build(); r.save(); r.update();
   r.exec(() => r.s.updateDispositionSummary()); r.save();
   check('three-table form: the class lines are Heading 2, not bold; the summary heading is Heading 1', [r.summaryLines(), r.body._children.filter((c) => !isTable(c) && c.getText() === SUMMARY)[0].getHeading()],
@@ -240,7 +240,7 @@ console.log('F. the class lines of the Disposition Summary are Heading 2');
   check('T-2026.10.34 wrote bold Normal class lines', t34.summaryLines().map((x) => [x[1], x[2]]), [['NORMAL', true], ['NORMAL', true], ['NORMAL', true]]);
   // The same summary in a report of this release: what T-2026.10.34 wrote (the same text; the class lines bold Normal).
   const toOldLook = (x) => x.user(() => x.body._children.forEach((c) => { if (!isTable(c) && x.s.isDispositionClassLineText_(c.getText())) { c.setHeading('NORMAL'); c.editAsText().setBold(true); } }));
-  const old = report();
+  const old = report({ props: Object.assign({}, MAIN, { DISPOSITION_CLASS_HEADINGS: 'heading2' }) });
   old.build(); old.save(); old.update();
   old.exec(() => old.s.updateDispositionSummary()); old.save();
   toOldLook(old);
@@ -259,7 +259,7 @@ console.log('F. the class lines of the Disposition Summary are Heading 2');
   p34.build(); p34.save(); p34.update();
   p34.exec(() => p34.s.setUpGoesToPlenary()); p34.save(); p34.update();
   check('T-2026.10.34, Goes to Plenary: four bold Normal class lines, the summary in a landscape section', [p34.summaryLines().map((x) => [x[1], x[2]]), p34.api.sectionBreaks().length], [[['NORMAL', true], ['NORMAL', true], ['NORMAL', true], ['NORMAL', true]], 1]); // one break: before the summary (no text below it)
-  const p = report();
+  const p = report({ props: Object.assign({}, MAIN, { DISPOSITION_CLASS_HEADINGS: 'heading2' }) });
   p.build(); p.save(); p.update();
   p.exec(() => p.s.setUpGoesToPlenary()); p.save(); p.update();
   toOldLook(p);
@@ -284,13 +284,67 @@ console.log('F. the class lines of the Disposition Summary are Heading 2');
   r.update();
   check('rollback preparation: DISPOSITION_CLASS_HEADINGS normal restyles the Heading 2 class lines to bold Normal in one update, the text kept',
     [r.summaryLines().map((x) => [x[1], x[2]]), JSON.stringify(r.summaryLines().map((x) => x[0])) === JSON.stringify(rbBefore)], [[['NORMAL', true], ['NORMAL', true], ['NORMAL', true]], true]);
-  r.docProps.deleteProperty('DISPOSITION_CLASS_HEADINGS');
+  r.docProps.setProperty('DISPOSITION_CLASS_HEADINGS', 'heading2');
 
   // The setting 'normal': bold Normal lines as before.
   const n = report({ props: Object.assign({}, MAIN, { DISPOSITION_CLASS_HEADINGS: 'normal' }) });
   n.build(); n.save(); n.update();
   n.exec(() => n.s.updateDispositionSummary()); n.save();
   check('DISPOSITION_CLASS_HEADINGS normal: bold Normal class lines, as in T-2026.10.34', n.summaryLines().map((x) => [x[1], x[2]]), [['NORMAL', true], ['NORMAL', true], ['NORMAL', true]]);
+
+  // Decision of 2026-11-23 (issue #28): Heading 2 is opt-in, the default is the look of T-2026.10.34. Older code runs over
+  // the SAME document (a code rollback of one report): with the default it rewrites the summary in place.
+  const T33 = ledger.codeWithoutHandedToPlenary(T34).code;
+  const classLines = (x) => x.body._children.filter((c) => !isTable(c) && r.s.isDispositionClassLineText_(c.getText())).length;
+  const summaryHeadings = (x) => x.body._children.filter((c) => !isTable(c) && c.getText() === SUMMARY).length;
+  const otherCount = (x) => x.body._children.filter((c) => !isTable(c) && /^Other Disposed Documents \(\d+\)$/.test(c.getText())).map((c) => Number(/\((\d+)\)/.exec(c.getText())[1]));
+  const fresh = (props) => { const x = report(props ? { props: props } : undefined); x.build(); x.save(); x.update(); x.exec(() => x.s.updateDispositionSummary()); x.save(); return x; };
+  const d = fresh();
+  check('default (no setting): the summary is the one T-2026.10.34 writes -- the same lines, look and bold', JSON.stringify(d.summaryLines()), JSON.stringify(t34.summaryLines()));
+  const dDoc = d.doc();
+  d.update();
+  check('... and an update of this release leaves it as it is', d.doc() === dDoc, true);
+  [['T-2026.10.34', T34], ['T-2026.10.33 (production)', T33]].forEach(([name, code]) => {
+    const x = fresh();
+    const older = report({ code: code, sameDocumentAs: x });
+    const othersBefore = otherCount(x)[0];
+    x.tdoc('S4-264003').status = 'withdrawn';
+    older.update();
+    older.exec(() => older.s.updateDispositionSummary()); older.save();
+    check('code rollback to ' + name + ' with the default: it rewrites the summary in place -- one heading, three class lines, bold Normal, the new status in it',
+      [summaryHeadings(x), classLines(x), older.summaryLines().map((l) => [l[1], l[2]]), otherCount(x)],
+      [1, 3, [['NORMAL', true], ['NORMAL', true], ['NORMAL', true]], [othersBefore + 1]]);
+    // And back again: this release reads what the older code wrote.
+    const again = report({ sameDocumentAs: x });
+    const u = again.update();
+    check('... and the upgrade after it: this release reads that summary as its own (unchanged, nothing restyled)', [u.dispositionSummary, summaryHeadings(x), classLines(x)], ['unchanged', 1, 3]);
+  });
+  // The hazard the default avoids: Heading 2 switched on, then older code without the preparation.
+  const H2 = Object.assign({}, MAIN, { DISPOSITION_CLASS_HEADINGS: 'heading2' });
+  const h = fresh(H2);
+  check('opt-in: DISPOSITION_CLASS_HEADINGS heading2 writes Heading 2 class lines, not bold', h.summaryLines().map((l) => [l[1], l[2]]), [['H2', false], ['H2', false], ['H2', false]]);
+  const hz = report({ code: T33, sameDocumentAs: h });
+  h.tdoc('S4-264003').status = 'withdrawn';
+  hz.update();
+  hz.exec(() => hz.s.updateDispositionSummary()); hz.save();
+  check('the hazard (why Heading 2 is not the default): T-2026.10.33 over Heading 2 class lines, without the preparation, leaves a second set of class lines', classLines(h) > 3, true);
+  // The preparation that removes it: the setting removed, one update of this release, then the older code.
+  const hp = fresh(H2);
+  hp.docProps.deleteProperty('DISPOSITION_CLASS_HEADINGS');
+  hp.update();
+  check('Heading 2 switched off (setting removed): one update restyles the class lines to bold Normal, the text kept', hp.summaryLines().map((l) => [l[1], l[2]]), [['NORMAL', true], ['NORMAL', true], ['NORMAL', true]]);
+  const hpBack = report({ code: T33, sameDocumentAs: hp });
+  hp.tdoc('S4-264003').status = 'withdrawn';
+  hpBack.update();
+  hpBack.exec(() => hpBack.s.updateDispositionSummary()); hpBack.save();
+  check('... then T-2026.10.33 rewrites it in place: one heading, three class lines', [summaryHeadings(hp), classLines(hp)], [1, 3]);
+  // A rollback to this release (2.28.0) with Heading 2 on is safe: this release reads Heading 2 class lines.
+  const h28 = fresh(H2);
+  const h28b = report({ sameDocumentAs: h28 });
+  h28.tdoc('S4-264003').status = 'withdrawn';
+  h28b.update();
+  h28b.exec(() => h28b.s.updateDispositionSummary()); h28b.save();
+  check('Heading 2 on and this release running (the rollback target once 2.28.0 is in production): rewritten in place', [summaryHeadings(h28), classLines(h28)], [1, 3]);
 }
 
 // ====================================================================== G
@@ -367,10 +421,13 @@ console.log('R. the findings of the independent review of PR #29');
   const docsTable = { rows: [{ tableCells: [{ content: [{ paragraph: { elements: [{ textRun: { content: 'Title\n' } }] } }] }, { content: [{ paragraph: { elements: [{ textRun: { content: 'Line A\n' } }] } }, { paragraph: { elements: [{ textRun: { content: 'Line B\n' } }] } }] }] }] };
   check('the Title of a read keeps its paragraphs apart ("Line A\\nLine B"), so a two-line title is skipped, never listed', [y.s.titleTextOfDocsTable_(docsTable), y.s.decideTitleSync_(y.s.titleTextOfDocsTable_(docsTable), 'Line A Line B', { cur: '', prev: [], ack: '', pend: '' }, 'auto').action], ['Line A\nLine B', 'skip']);
 
-  // 6. Heading 2 class lines take bold from their style: the Docs API request clears the field, it does not set false.
+  // 6. Heading 2 class lines take bold from their style: the Docs API request clears the field, it does not set false (Heading 2 switched on).
+  y.docProps.setProperty('DISPOSITION_CLASS_HEADINGS', 'heading2');
   const plan = y.s.planDispositionClassHeadings_([{}, { startIndex: 10, endIndex: 30, paragraph: { paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, elements: [{ startIndex: 10, endIndex: 30, textRun: { content: 'Other Disposed Documents (2)\n' } }] } }], { start: 0, contentEnd: 2 }, (o) => o);
   check('the restyle requests: Heading 2, and bold cleared (an empty text style with the field "bold")', plan.map((q) => Object.keys(q)[0] + ':' + JSON.stringify(q.updateParagraphStyle ? q.updateParagraphStyle.paragraphStyle : q.updateTextStyle.textStyle)),
     ['updateParagraphStyle:{"namedStyleType":"HEADING_2"}', 'updateTextStyle:{}']);
+  y.docProps.deleteProperty('DISPOSITION_CLASS_HEADINGS');
+  check('... and without the setting (the default) the same line, already bold Normal, needs no request', y.s.planDispositionClassHeadings_([{}, { startIndex: 10, endIndex: 30, paragraph: { paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, elements: [{ startIndex: 10, endIndex: 30, textRun: { content: 'Other Disposed Documents (2)\n' } }] } }], { start: 0, contentEnd: 2 }, (o) => o).length, 0);
 }
 
 // ====================================================================== H

@@ -15,8 +15,12 @@
  *     where the report still shows the title before; a title typed by hand,
  *     a list going back to an older title or an unknown difference is listed
  *     for Report > Review Title Changes… and never written. Audit log kept.
- *   - Disposition Summary: the class lines are Heading 2 (in the outline);
- *     a summary written before gets them at the next update, unrewritten.
+ *   - Disposition Summary: class lines in Heading 2 (in the outline) are
+ *     read as part of the summary. They are written only with the report
+ *     setting DISPOSITION_CLASS_HEADINGS=heading2; by default the class
+ *     lines stay bold Normal text, as before (a rollback to older code
+ *     needs no preparation). A summary written before is restyled to the
+ *     look of the setting at the next update, unrewritten.
  *   - Update costs: one read of each table in the existing-TDoc scan, the
  *     Status row found with fewer calls, no walk of the body for a summary
  *     the report does not have. Same results.
@@ -30108,11 +30112,14 @@ function generateTdocDiscussionEmails(selections, globalText) {
 //    are kept. Setting TITLE_SYNC_MODE: 'auto' (default), 'review' (nothing
 //    written by an update, everything listed), 'off'.
 // 2. DISPOSITION HEADINGS. The lines of the classes in the Disposition
-//    Summary (three, or four with Goes to Plenary) are Heading 2, under the
-//    Heading 1 "Disposition Summary": they appear in the outline. The tables,
+//    Summary (three, or four with Goes to Plenary) can be Heading 2, under the
+//    Heading 1 "Disposition Summary": they appear in the outline. Opt-in per
+//    report (DISPOSITION_CLASS_HEADINGS = 'heading2'); by default they stay
+//    bold Normal text. Heading 2 class lines are read as part of the summary
+//    in either case. The tables,
 //    their header cells and the note are unchanged. A summary written before
-//    gets its headings at the next update, without a rewrite. Setting
-//    DISPOSITION_CLASS_HEADINGS = 'normal' keeps the bold lines of before.
+//    gets the look of the setting at the next update, without a rewrite
+//    ('normal' or no setting: bold Normal lines, as before).
 // 3. UPDATE COSTS. The existing-TDoc scan reads each table once (it read it
 //    twice); the Status row is found without counting the rows and cells of
 //    every row again; a report without the text of the summary heading has
@@ -30133,7 +30140,7 @@ const TITLE_SYNC_READS_PER_UPDATE_ = 60;
 const TITLE_SYNC_MAX_JSON_ = 8500;
 /** Previous titles kept per TDoc, to tell a stale list. */
 const TITLE_SYNC_PREVIOUS_KEPT_ = 3;
-/** Document property: 'normal' keeps the class lines of the Disposition Summary bold Normal text, not Heading 2. */
+/** Report state: 'heading2' makes the class lines of the Disposition Summary Heading 2; anything else (the default) bold Normal text. */
 const DISPOSITION_CLASS_HEADINGS_KEY_ = 'DISPOSITION_CLASS_HEADINGS';
 
 /** Pure: a title as it is compared -- white space collapsed, trimmed. */
@@ -30614,9 +30621,12 @@ function applyTitleReviewDecisions(action, numbers) {
   });
 }
 
-/** Whether the class lines of the summary are Heading 2 (the default) or bold Normal text ('normal'); from the report state. */
+/**
+ * Whether the class lines of the summary are Heading 2 ('heading2', opt-in) or bold Normal text (the default, as in
+ * T-2026.10.34, so that older code reads the summary this release writes); from the report state.
+ */
 function dispositionClassHeadingsWanted_() {
-  try { return String(getReportStateStore_(null).getProperty(DISPOSITION_CLASS_HEADINGS_KEY_) || '').trim().toLowerCase() !== 'normal'; } catch (e) { return true; }
+  try { return /^(heading ?2|h2)$/.test(String(getReportStateStore_(null).getProperty(DISPOSITION_CLASS_HEADINGS_KEY_) || '').trim().toLowerCase()); } catch (e) { return false; }
 }
 
 /** A heading's text takes the look of its named style: bold is cleared, not set to false (DocumentApp). */

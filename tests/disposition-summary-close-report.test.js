@@ -204,9 +204,9 @@ console.log('B. the summary: every TDoc once, counts, order, links, title, sourc
   const at = r.body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY);
   const heading = r.body._children[at];
   const lines = r.body._children.slice(at + 1).filter((c) => c.getType() === 'PARAGRAPH' && c.getText());
-  // Issue #28 A: the class lines are Heading 2 (in the outline), not bold Normal text; the note is Normal and not bold.
-  check('the heading is a level-one heading; the class lines are Heading 2, the note is Normal; none bold', [heading.getHeading(), lines.map((p) => [p.getText().slice(0, 18), p.getHeading(), !!p._bold])],
-    ['H1', [['Written from the S', 'NORMAL', false], [TITLES[0].slice(0, 18), 'H2', false], [TITLES[1].slice(0, 18), 'H2', false], [TITLES[2].slice(0, 18), 'H2', false]]]);
+  // Issue #28 A: by default the class lines stay bold Normal text (Heading 2 is the opt-in DISPOSITION_CLASS_HEADINGS=heading2).
+  check('the heading is a level-one heading; the class lines are bold Normal text, the note is not bold', [heading.getHeading(), lines.map((p) => [p.getText().slice(0, 18), p.getHeading(), !!p._bold])],
+    ['H1', [['Written from the S', 'NORMAL', false], [TITLES[0].slice(0, 18), 'NORMAL', true], [TITLES[1].slice(0, 18), 'NORMAL', true], [TITLES[2].slice(0, 18), 'NORMAL', true]]]);
   const table = r.body._children.filter(isSummaryTable)[0];
   check('a summary table: header row bold and shaded, the rows not bold (although the line before it is bold)',
     [[0, 1, 2, 3].map((k) => table.getRow(0).getCell(k)._bold), [0, 1, 2, 3].map((k) => table.getRow(1).getCell(k)._bold), table.getRow(0).getCell(0)._background], [[true, true, true, true], [false, false, false, false], '#D9EAF7']);
@@ -1308,7 +1308,7 @@ console.log('V. T-2026.10.33: blocking issues, warnings and information (docs/CL
   check('the closing note says the warnings need no correction in the report', lastAlert(w)[1].split('\n').slice(-1)[0], NOTE_READY);
 
   // 7. Everything else as before: the summary, the statuses, the document, the counts, the findings themselves, the log.
-  const now = mixed(FULL); // Issue #28 A: the T-2026.10.34 code (the summary of today has Heading 2 class lines)
+  const now = mixed(FULL); // Issue #28 A: the T-2026.10.34 code (this part is about T-2026.10.33 and .34)
   const before = mixed(PREVIOUS);
   const rn = closeReport(now);
   const rb = closeReport(before);
