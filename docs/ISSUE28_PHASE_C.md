@@ -19,7 +19,7 @@ stage B rule (upload time, cut-off = end) is **unchanged**: existing AHG reports
 | Before the first session | the first session (the reason says "before the first session") |
 | After the last cut-off | no session, "after the last cut-off" — never the last session by default |
 | No reservation time / unreadable | no session, with the reason |
-| `05/10/2026 10:05` (day and month ≤ 12, no AM/PM) | **ambiguous: not read**, no session (preview, never a guess); `2/19/2026 3:00:31 PM` and ISO are read |
+| `05/10/2026 10:05` (day and month ≤ 12, no AM/PM) | read in the **order of its column** (below); only in a column that does not show its order (or contradicts itself): **ambiguous, not read**, no session |
 | A date without a time | a session only if the whole day falls into one window |
 | A session of several days | cut-off on its last day |
 | DST change between end and cut-off | six hours of real time (test: Europe/Amsterdam, 25 Oct 2026) |
@@ -27,9 +27,40 @@ stage B rule (upload time, cut-off = end) is **unchanged**: existing AHG reports
 | Manual "set" / "add" (ADHOC_TDOC_SESSIONS) | authoritative, as before |
 
 The reservation times are read from the TDoc list's "Reservation date" column like the uploads, and treated as UTC
-like "Uploaded" (the model's `clock`). **To be confirmed on a real list:** that "Reservation date" is UTC.
+like "Uploaded" (the model's `clock`).
 
-## 2. Carry-forward (with the reservation rule)
+### The clock of "Reservation date" (investigated 2026-11-23)
+**UTC, high confidence** — evidence in [issue28-evidence/reservation-clock/EVIDENCE.md](issue28-evidence/reservation-clock/EVIDENCE.md)
+(four SA4 lists, #135 India, #136 Montreal, #137-e, #138 Calgary; 2,081 TDocs in `per_tdoc.csv`; scripts included):
+
+- "Uploaded" is UTC (very high): it equals the GMT `Last-Modified` of the file on www.3gpp.org/ftp (median +3 s, 99 HEADs).
+- "Reservation date" on the same clock: read as UTC, no TDoc in any of the four lists is uploaded before its reservation,
+  and the shortest reservation-to-upload gap is 0.8–1.5 min in every meeting. Read as meeting-local time (H3), 282/596
+  (Calgary) and 272/497 (Montreal) would be uploaded before their reservation. Read as Paris time (H2), no gap below
+  61 min (CET) / 121 min (CEST) would exist anywhere, with the busiest gaps at that edge, and the band would move with
+  the 25 Oct DST change — it does not (0.8–1.6 min on both sides).
+- No public 3GPP source labels the zone (the Portal's TDoc view needs a login; no public web service). Certainty would
+  need MCC's statement or one TDoc reserved at a noted time.
+
+**What the code does with it (decision 4: not switched on unverified):**
+- *Date order.* "Reservation date" is a **text** cell whose format changed: the SA4#138 list of 2026-11-23 writes
+  `13/10/2026 12:34:06` (day/month, 24 h), the earlier lists `7/17/2026 12:33:23 PM`. Read value by value, **361 of
+  the 615 SA4#138 reservations were refused as ambiguous**. The order is now told from the whole column
+  (`tdocListDateOrder_`: a first field above 12 → day/month; AM/PM or a second field above 12 → month/day; both or
+  neither → each value on its own). Test A2: all 615 (#138) and 482 (#137-e) real values read.
+- *Clock check on the live list.* The preview of the rule (`previewAdhocSessionRule`) checks the list it reads:
+  a TDoc uploaded more than 2 minutes before its reservation as read means the clocks disagree, and the preview
+  is refused, naming the TDocs, and nothing is stamped, so the rule cannot be switched on. The confirmation shows
+  the check (TDocs with both times, shortest gap).
+- *Rollout.* The rule stays off in every report until the user accepts this evidence; it is then switched per report
+  by its rapporteur through the preview.
+
+## 2. Carry-forward (its own switch)
+**Decision 2026-11-23:** independent of the session rule. `ADHOC_CARRY_FORWARD_MODE=on` (Meeting Control › Carry-forward
+› Switch on…, after a preview of what it would record now, within 30 minutes; ad-hoc reports only; under the document
+lock). It works with either rule (test D: with the upload rule as well). Off by default: an existing AHG report does not
+change. Switching off keeps the recorded carries but no longer shows them.
+
 A TDoc that is not disposed (Status available/parked/reserved or empty) when a later session **starts** is carried
 into it: recorded once with the time (`ADHOC_CARRY_FORWARD`, provenance), shown as "A01 → A02, A03" in the Session
 column. No second registration row; the TDoc table is not touched. A disposed TDoc is carried no further and keeps what
@@ -67,7 +98,8 @@ Bulk actions always show what will be written and ask first.
 ## Configuration
 | Report state key | Meaning |
 |---|---|
-| `ADHOC_SESSION_RULE` | `upload` (default, stage B) or `reservation-6h` (this phase; enables carry-forward) |
+| `ADHOC_SESSION_RULE` | `upload` (default, stage B) or `reservation-6h` (this phase; needs a preview whose clock check passes) |
+| `ADHOC_CARRY_FORWARD_MODE` | `on` carries undisposed TDocs into started sessions (needs a preview); anything else off (default) |
 | `PLENARY_AGENDA_DIR_URL`, `PLENARY_SCHEDULE_DIR_URL` | override the derived folders |
 
 ## Migration and rollback
@@ -78,11 +110,12 @@ Bulk actions always show what will be written and ask first.
 
 ## Tests
 `tests/i28c-sessions-agenda.test.js` (A–G) with the real SA4#138 Agenda/Schedule listings and "Tdoc allocation
-rev9.docx" (2026-11-23) as fixtures. Full suite: 135 files, all passing.
+rev9.docx" (2026-11-23) as fixtures. Test A2: the real "Reservation date" columns of SA4#138 and SA4#137-e (tests/fixtures/tdoc-list-reservation-dates/).
 
 ## Open questions
-1. Is the Portal's "Reservation date" UTC (as "Uploaded")? Decides the clock of the rule.
-2. Should carry-forward be available without the reservation rule (its own switch)?
+1. ~~Is the Portal's "Reservation date" UTC?~~ Investigated: UTC, high confidence (above); the user's acceptance is
+   pending before any report switches the rule on.
+2. ~~Carry-forward without the reservation rule?~~ Decided: its own switch (above).
 3. The real AHG reports: which sessions/zones to use for the first opt-in (e.g. the Audio post-138 telcos of 4 and 8 Dec)?
 
 ## Independent review (2026-11-23) and what changed

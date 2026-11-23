@@ -70,6 +70,32 @@ console.log('A. parseTdocListDateTime_()');
   check('a date only; blank; garbage', [p('9/22/2026'), p(''), p('next week')], ['2026-09-22', 'blank', 'unreadable']);
 }
 
+// ====================================================================== A2
+console.log('A2. the date order of the column, on the real lists; the clock check (decisions of 2026-11-23)');
+{
+  const { S } = sandbox();
+  const FIX = path.join(__dirname, 'fixtures', 'tdoc-list-reservation-dates');
+  const col = (name) => fs.readFileSync(path.join(FIX, name), 'utf8').split(/\r?\n/).filter(Boolean);
+  const v138 = col('sa4-138.txt');
+  const v137 = col('sa4-137-e.txt');
+  const readAll = (values) => { const order = S.tdocListDateOrder_(values); return { order: order, parsed: values.map((v) => S.parseTdocListDateTime_(v, '', () => '', order)) }; };
+  const a = readAll(v138);
+  const b = readAll(v137);
+  const unread = (x) => x.parsed.filter((p) => !p.at).length;
+  check('SA4#138 (2026-11-23, "13/10/2026 12:34:06"): the column is day/month; all 615 read, none ambiguous (without the column, 361 were refused)',
+    [v138.length, a.order, unread(a), v138.map((v) => S.parseTdocListDateTime_(v, '', () => '')).filter((p) => p.ambiguous).length, a.parsed[0].at], [615, 'dmy', 0, 361, '2026-10-13T12:34:06']);
+  check('SA4#137-e ("7/17/2026 12:33:23 PM"): month/day with AM/PM; all 482 read', [v137.length, b.order, unread(b), b.parsed[0].at], [482, 'mdy', 0, '2026-07-17T12:33:23']);
+  check('the order of a column: no evidence, or a column that contradicts itself: none (each value on its own, 05/10 not guessed)',
+    [S.tdocListDateOrder_(['05/10/2026 10:05', '01/02/2026 09:00']), S.tdocListDateOrder_(['13/10/2026 12:00:00', '7/17/2026 1:00:00 PM']), S.parseTdocListDateTime_('05/10/2026 10:05', '', () => '', '').ambiguous],
+    ['', '', true]);
+  // The clock check: the reservation is never after the upload on one clock.
+  const T = (n, res, up) => ({ row: [n], tdocCol: 0, reserved: res ? { at: res } : null, uploaded: up ? { at: up } : null });
+  const ok = S.reservationClockCheck_([T('S4aA269001', '2026-09-20T08:00:00', '2026-09-20T08:01:30'), T('S4aA269002', '2026-09-20T08:00:00', '2026-09-21T08:00:00'), T('S4aA269003', '2026-09-20T08:00:00', null)]);
+  check('consistent: two checked, no inversion, the shortest gap 1.5 min', [ok.checked, ok.inversions, ok.minGapMinutes], [2, [], 1.5]);
+  const bad = S.reservationClockCheck_([T('S4aA269001', '2026-09-20T09:00:00', '2026-09-20T08:01:30'), T('S4aA269002', '2026-09-20T08:00:00', '2026-09-20T07:59:00')]);
+  check('uploaded an hour before the reservation as read: an inversion (the clocks disagree); a minute: within the tolerance', [bad.inversions, bad.checked], [['S4aA269001'], 2]);
+}
+
 // ====================================================================== B
 console.log('B. assignAdhocSessionByReservation_(): end + 6 h, as instants');
 {
@@ -110,7 +136,10 @@ console.log('C. the resolver of every caller');
   // The reservation column of the list.
   const sheet = { getRange: () => ({ getDisplayValues: () => [['Reservation date'], ['9/22/2026 9:59:59 PM'], ['05/10/2026 10:05'], ['']] }) };
   const read = ruled.readTdocReservationTimesForSessions_({ getSpreadsheetTimeZone: () => 'UTC' }, sheet, ['TDoc', 'Reservation date'], [['TDoc', 'Reservation date'], ['a', ''], ['b', ''], ['c', '']], null);
-  check('the "Reservation date" column read like the uploads; ambiguous not guessed', read.slice(1).map((x) => x.at || (x.ambiguous ? 'ambiguous' : '') || 'none'), ['2026-09-22T21:59:59', 'ambiguous', 'none']);
+  check('the "Reservation date" column read like the uploads; its order from the column (AM/PM: month/day, so 05/10 is 10 May)', read.slice(1).map((x) => x.at || (x.ambiguous ? 'ambiguous' : '') || 'none'), ['2026-09-22T21:59:59', '2026-05-10T10:05:00', 'none']);
+  const sheet2 = { getRange: () => ({ getDisplayValues: () => [['Reservation date'], ['05/10/2026 10:05'], ['01/02/2026 09:00']] }) };
+  const read2 = ruled.readTdocReservationTimesForSessions_({ getSpreadsheetTimeZone: () => 'UTC' }, sheet2, ['TDoc', 'Reservation date'], [['TDoc', 'Reservation date'], ['a', ''], ['b', '']], null);
+  check('... a column that does not show its order: ambiguous, not guessed', read2.slice(1).map((x) => (x.ambiguous ? 'ambiguous' : x.at)), ['ambiguous', 'ambiguous']);
   check('... and not read at all without the setting', base.readTdocReservationTimesForSessions_({ getSpreadsheetTimeZone: () => 'UTC' }, sheet, ['TDoc', 'Reservation date'], [[], []], null), null);
 }
 
@@ -126,7 +155,8 @@ console.log('D. carry-forward');
   check('disposed: carried no further, what it has stays', [d(['s1'], [], false), d(['s1'], [{ s: 's2', at: 'x' }], false)], [[], ['s2']]);
   check('a "set" override: never carried; no registration session: none', [d(['s1'], [{ s: 's2', at: 'x' }], true, { mode: 'set', sessions: ['s1'] }), d([], [], true)], [[], []]);
   // The update's step with the real resolver.
-  const props = Object.assign({}, ADHOC, { ADHOC_SESSIONS: SESSIONS(TWO), ADHOC_SESSION_RULE: 'reservation-6h' });
+  // Carry-forward is its own switch (decision of 2026-11-23); here with the reservation rule as well.
+  const props = Object.assign({}, ADHOC, { ADHOC_SESSIONS: SESSIONS(TWO), ADHOC_SESSION_RULE: 'reservation-6h', ADHOC_CARRY_FORWARD_MODE: 'on' });
   const { S: U, docProps } = sandbox(props);
   U.reportRunSnapshot_ = () => null;
   const status = { S4aA269001: 'available', S4aA269002: 'agreed', S4aA269003: 'reserved' };
@@ -145,12 +175,18 @@ console.log('D. carry-forward');
   status.S4aA269001 = 'agreed';
   U.syncAdhocCarryForwardOnUpdate_(U.makeAdhocTdocSessionResolver_(null), tds, index, null);
   check('disposed later: it keeps "A01 → A02" (provenance), nothing more', U.makeAdhocTdocSessionResolver_(null).cell(tds[0]), 'A01 → A02');
-  // Without the reservation rule nothing is carried or shown: an existing ad-hoc report does not change by itself.
-  const { S: V } = sandbox(Object.assign({}, ADHOC, { ADHOC_SESSIONS: SESSIONS(TWO), ADHOC_CARRY_FORWARD: docProps.getProperty('ADHOC_CARRY_FORWARD') }));
+  // Carry-forward off (no setting, even with the reservation rule): nothing carried or shown -- an existing ad-hoc report does not change by itself.
+  const { S: V } = sandbox(Object.assign({}, ADHOC, { ADHOC_SESSIONS: SESSIONS(TWO), ADHOC_SESSION_RULE: 'reservation-6h', ADHOC_CARRY_FORWARD: docProps.getProperty('ADHOC_CARRY_FORWARD') }));
   V.reportRunSnapshot_ = () => null; V.lookupTdocTableInIndex_ = U.lookupTdocTableInIndex_; V.provisionalStatusOfTable_ = U.provisionalStatusOfTable_;
-  check('without the reservation rule: no carry-forward written or shown (the upload rule of stage B as it was)', [V.syncAdhocCarryForwardOnUpdate_(V.makeAdhocTdocSessionResolver_(null), tds, index, null), V.makeAdhocTdocSessionResolver_(null).carried(tds[2])], [0, []]);
+  check('carry-forward not switched on (the reservation rule alone): no carry-forward written or shown', [V.syncAdhocCarryForwardOnUpdate_(V.makeAdhocTdocSessionResolver_(null), tds, index, null), V.makeAdhocTdocSessionResolver_(null).carried(tds[2])], [0, []]);
+  // Carry-forward on with the upload rule (stage B): independent of the reservation rule.
+  const { S: X, docProps: xProps } = sandbox(Object.assign({}, ADHOC, { ADHOC_SESSIONS: SESSIONS(TWO), ADHOC_CARRY_FORWARD_MODE: 'on' }));
+  X.reportRunSnapshot_ = () => null; X.lookupTdocTableInIndex_ = U.lookupTdocTableInIndex_; X.provisionalStatusOfTable_ = (t) => ({ S4aA269001: 'available', S4aA269002: 'agreed', S4aA269003: 'reserved' })[t.n];
+  const upl = Object.keys(status).map((n) => ({ row: [n], tdocCol: 0, uploaded: { at: '2026-09-21T10:00:00', dateOnly: null, unreadable: false } }));
+  const xr = X.makeAdhocTdocSessionResolver_(null);
+  check('carry-forward on with the upload rule: the undisposed TDocs uploaded for Call 1 carried into Call 2, shown at once', [xr.rule, X.syncAdhocCarryForwardOnUpdate_(xr, upl, index, null), xr.cell(upl[0]), xr.cell(upl[1]), !!xProps.getProperty('ADHOC_CARRY_FORWARD')], ['upload', 2, 'A01 → A02', 'A01', true]);
   // A carried session before a session added by hand later is not shown ("A01, A03", never "A01, A03 → A02").
-  const { S: W } = sandbox(Object.assign({}, ADHOC, { ADHOC_SESSION_RULE: 'reservation-6h', ADHOC_SESSIONS: SESSIONS(TWO.concat([{ id: 's3', label: 'Call 3', date: '2026-10-01', start: '14:00', end: '16:00' }])),
+  const { S: W } = sandbox(Object.assign({}, ADHOC, { ADHOC_SESSION_RULE: 'reservation-6h', ADHOC_CARRY_FORWARD_MODE: 'on', ADHOC_SESSIONS: SESSIONS(TWO.concat([{ id: 's3', label: 'Call 3', date: '2026-10-01', start: '14:00', end: '16:00' }])),
     ADHOC_CARRY_FORWARD: JSON.stringify({ v: 1, tdocs: { S4aA269001: [{ s: 's2', at: 'x' }] } }), ADHOC_TDOC_SESSIONS: JSON.stringify({ v: 1, clock: 'utc', add: { s3: ['S4aA269001'] }, set: {} }) }));
   check('a carried session before a later manual one is not shown', W.makeAdhocTdocSessionResolver_(null).cell(tds[0]), 'A01, A03');
 }
@@ -255,6 +291,22 @@ console.log('F. Meeting Control');
   a.build();
   check('the reservation rule is not switched on without a preview first', (() => { try { a.exec(() => a.s.setAdhocSessionRule('reservation-6h')); return 'set'; } catch (e) { return /Preview/.test(e.message); } })(), true);
   check('... switching back to the upload rule needs none', /by upload time/.test(a.exec(() => a.s.setAdhocSessionRule('upload'))), true);
+  check('carry-forward is not switched on without its own preview; off needs none; refused in a main report',
+    [(() => { try { a.exec(() => a.s.setAdhocCarryForward(true)); return 'set'; } catch (e) { return /Preview/.test(e.message); } })(), a.docProps.getProperty('ADHOC_CARRY_FORWARD_MODE'),
+      /Carry-forward off/.test(a.exec(() => a.s.setAdhocCarryForward(false))), (() => { try { r.exec(() => r.s.setAdhocCarryForward(true)); return 'set'; } catch (e) { return /ad-hoc report/.test(e.message); } })()],
+    [true, null, true, true]);
+  // The preview of the rule checks the clocks on the list itself (decision of 2026-11-23: not switched on unverified).
+  const pv = (res, up) => { const x = templateReport({ props: { ADHOC_SESSIONS: SESSIONS(TWO) }, tdocs: [{ id: 'S4aA269001', agenda: '4.3', status: 'available', uploaded: true, reservedAt: res, uploadedAt: up }] }); x.build(); return x; };
+  const good = pv('20/09/2026 08:00:00', '2026-09-20 08:03:00');
+  const gp = good.exec(() => good.s.previewAdhocSessionRule());
+  check('preview, a list whose times agree (a day/month column, as SA4#138): the clock check passes, the preview is stamped', [gp.ok, gp.clock.checked, gp.clock.inversions, gp.clock.minGapMinutes, !!good.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW')], [true, 1, [], 3, true]);
+  const badList = pv('20/09/2026 10:00:00', '2026-09-20 08:03:00');
+  const bp = badList.exec(() => badList.s.previewAdhocSessionRule());
+  check('preview, a TDoc uploaded 2 hours before its reservation as read: refused, named, no preview stamped, so the rule cannot be switched on',
+    [bp.ok, /S4aA269001\) were uploaded before their reservation time/.test(bp.error), badList.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW'), (() => { try { badList.exec(() => badList.s.setAdhocSessionRule('reservation-6h')); return 'set'; } catch (e) { return /Preview/.test(e.message); } })()],
+    [false, true, null, true]);
+  a.docProps.setProperty('ADHOC_CARRY_FORWARD_MODE_PREVIEW', new Date().toISOString());
+  check('... after a preview of the last 30 minutes: on', [/Carry-forward on/.test(a.exec(() => a.s.setAdhocCarryForward(true))), a.docProps.getProperty('ADHOC_CARRY_FORWARD_MODE')], [true, 'on']);
   const refusedNoZone = a.exec(() => a.s.createSessionsFromCandidates([{ group: 'Audio', date: '2026-12-04', start: '14:00', end: '15:00', zone: '' }]));
   check('a candidate with a time but no known zone: refused, nothing created (never a guess)', [/Nothing created/.test(refusedNoZone), a.docProps.getProperty('ADHOC_SESSIONS')], [true, null]);
   const made = a.exec(() => a.s.createSessionsFromCandidates([{ group: 'Audio', date: '2026-12-04', start: '14:00', end: '15:00', zone: 'CET' }]));
