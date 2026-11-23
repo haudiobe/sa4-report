@@ -136,7 +136,8 @@ console.log('D. carry-forward');
   const tds = Object.keys(status).map((n) => ({ row: [n], tdocCol: 0, reserved: { at: '2026-09-21T10:00:00', dateOnly: null, unreadable: false } }));
   const resolver = U.makeAdhocTdocSessionResolver_(null);
   check('the update: the two undisposed TDocs carried into Call 2 (both calls are over), the agreed one not', U.syncAdhocCarryForwardOnUpdate_(resolver, tds, index, null), 2);
-  const stored = JSON.parse(docProps.getProperty('ADHOC_CARRY_FORWARD'));
+  check('... and the same resolver shows it at once (the Session column of this update, not the next)', resolver.cell(tds[0]), 'A01 → A02');
+  const stored = { tdocs: U.readAdhocCarry_({ getProperty: (k) => docProps.getProperty(k) }) };
   check('recorded with the time (provenance), once', [Object.keys(stored.tdocs).sort(), stored.tdocs.S4aA269001.length, /^\d{4}-\d{2}-\d{2}T/.test(stored.tdocs.S4aA269001[0].at), U.syncAdhocCarryForwardOnUpdate_(U.makeAdhocTdocSessionResolver_(null), tds, index, null)],
     [['S4aA269001', 'S4aA269003'], 1, true, 0]);
   const r2 = U.makeAdhocTdocSessionResolver_(null);
@@ -172,12 +173,16 @@ const doc9 = (S) => S.wordDocumentText_(unzip(makeBlob(rev9)).filter((b) => b.ge
   const alloc = S.parseTdocAllocations_(doc, numbers);
   check('the allocations of the report\'s TDocs (third column; chains "2015->2139" both)', [alloc.byTdoc['S4-261967'], alloc.byTdoc['S4-261979'], alloc.byTdoc['S4-261930'], alloc.byTdoc['S4-262015'], alloc.byTdoc['S4-262139']],
     [['8.5'], ['8.6'], ['8.7'], ['10.6'], ['10.6']]);
-  check('a year (2026) and a number of another meeting ("was 1697") are no allocation', [alloc.byTdoc['S4-262026'] || null, alloc.byTdoc['S4-261697'] || null], [['10.8'], null]);
+  check('a number of another meeting ("was 1697") is no allocation; a year in the future-meetings row (20) is outside the part of an RTC report: no proposal', [alloc.byTdoc['S4-261697'] || null, S.proposedReallocations_(alloc, { 'S4-262026': '10.8' }, {})], [null, []]);
+  check('only allocations within the own part of the agenda of the report: a plenary row (14) never moves an MBS TDoc', S.proposedReallocations_({ byTdoc: { 'S4-1': ['14'], 'S4-2': ['8.4', '14'] } }, { 'S4-1': '8.5', 'S4-2': '8.5' }, {}), [{ tdoc: 'S4-2', from: '8.5', to: '8.4', kind: 'proposed' }]);
+  check('a TDoc reallocated by hand to another item: shown as "manual", never proposed (the row is kept)', S.proposedReallocations_({ byTdoc: { 'S4-3': ['8.6'] } }, { 'S4-3': '8.5' }, { 'S4-3': '8.7' }), [{ tdoc: 'S4-3', from: '8.5', to: '8.6', kind: 'manual', replaces: '8.7' }]);
   const report = { 'S4-261967': '8.5', 'S4-261979': '8.5', 'S4-261930': '8.7', 'S4-262019': '8.4' };
   check('proposed: 1979 8.5 -> 8.6, 2019 8.4 -> 8.6; one already reallocated there: not proposed', S.proposedReallocations_(alloc, report, { 'S4-262019': '8.6' }), [{ tdoc: 'S4-261979', from: '8.5', to: '8.6', kind: 'proposed' }]);
   check('a TDoc listed under two items: ambiguous, never proposed', S.proposedReallocations_({ byTdoc: { 'S4-1': ['8.5', '8.6'] } }, { 'S4-1': '8.5' }, {}), [{ tdoc: 'S4-1', from: '8.5', to: '8.5, 8.6', kind: 'ambiguous' }]);
   const cands = S.parseAhgCandidates_(doc, 2026);
   const find = (re) => cands.filter((c) => re.test(c.text))[0] || {};
+  check('"Tuesday 8th December 2026, 15-16 CET": 8 December (never the 20 of 2026)', [find(/Tuesday 8th December 2026/).date, find(/Tuesday 8th December 2026/).start, find(/Tuesday 8th December 2026/).end], ['2026-12-08', '15:00', '16:00']);
+  check('the F2F meeting 26-29 January 2027: from the 26th, several days (until the 29th), no time taken from the range', [find(/F2F Audio/).date, find(/F2F Audio/).endDate, find(/F2F Audio/).start], ['2027-01-26', '2027-01-29', '']);
   check('the MBS telco of 17 Dec: high confidence', [find(/MBS SWG AHG Telco \(Dec 17/).date, find(/MBS SWG AHG Telco \(Dec 17/).start, find(/MBS SWG AHG Telco \(Dec 17/).end, find(/MBS SWG AHG Telco \(Dec 17/).confidence], ['2026-12-17', '15:30', '17:30', 'high']);
   check('"CEST" in December: medium, said why', [find(/15:00-17:00 CEST/).confidence, /CEST does not fit/.test(find(/15:00-17:00 CEST/).why)], ['medium', true]);
   check('"9:00:10:00": the time not read, medium; 22:00-24:00 read as until 23:59', [find(/DaCAS/).confidence, find(/DaCAS/).start, find(/Jan 27, 2027, 22:00-24:00/).end], ['medium', '', '23:59']);
@@ -244,11 +249,24 @@ console.log('F. Meeting Control');
   check('accepted: one row in Document Reallocations (8.5 -> 8.6, the source named); nothing else moved', [/Added to Document Reallocations: S4-261979 → 8.6/.test(said), map['S4-261979'].new, /rev9/.test(map['S4-261979'].reason), r.order()], [true, '8.6', true, ['S4-261979', 'S4-261967', 'S4-261930'].filter((n) => r.order().indexOf(n) !== -1).length === 3 ? r.order() : 'moved']);
   const again = r.exec(() => r.s.meetingControlData());
   check('the next view: no longer proposed', again.proposals, []);
+  check('the session rule: refused in a main report', (() => { try { r.exec(() => r.s.setAdhocSessionRule('reservation-6h')); return 'set'; } catch (e) { return /ad-hoc report/.test(e.message); } })(), true);
   check('sessions from candidates: refused in a main report', (() => { try { r.exec(() => r.s.createSessionsFromCandidates([{ group: 'MBS', date: '2026-12-17', start: '15:30', end: '17:30' }])); return 'created'; } catch (e) { return /ad-hoc report only/.test(e.message); } })(), true);
   const a = templateReport({ tdocs: [{ id: 'S4aA269001', agenda: '4.3', status: 'agreed', uploaded: true }] });
   a.build();
-  const made = a.exec(() => a.s.createSessionsFromCandidates([{ group: 'Audio', date: '2026-12-04', start: '14:00', end: '15:00' }]));
-  check('in an ad-hoc report: created through Configure Sessions\' writer, after confirmation in the page', [/Sessions saved/.test(made), JSON.parse(a.docProps.getProperty('ADHOC_SESSIONS')).sessions.map((s) => [s.label, s.date, s.start, s.end])], [true, [['Audio', '2026-12-04', '14:00', '15:00']]]);
+  check('the reservation rule is not switched on without a preview first', (() => { try { a.exec(() => a.s.setAdhocSessionRule('reservation-6h')); return 'set'; } catch (e) { return /Preview/.test(e.message); } })(), true);
+  check('... switching back to the upload rule needs none', /by upload time/.test(a.exec(() => a.s.setAdhocSessionRule('upload'))), true);
+  const refusedNoZone = a.exec(() => a.s.createSessionsFromCandidates([{ group: 'Audio', date: '2026-12-04', start: '14:00', end: '15:00', zone: '' }]));
+  check('a candidate with a time but no known zone: refused, nothing created (never a guess)', [/Nothing created/.test(refusedNoZone), a.docProps.getProperty('ADHOC_SESSIONS')], [true, null]);
+  const made = a.exec(() => a.s.createSessionsFromCandidates([{ group: 'Audio', date: '2026-12-04', start: '14:00', end: '15:00', zone: 'CET' }]));
+  check('in an ad-hoc report: created through the writer of Configure Sessions, its CET time in the meeting zone (Europe/Berlin here)', [/Sessions saved/.test(made), JSON.parse(a.docProps.getProperty('ADHOC_SESSIONS')).sessions.map((s) => [s.label, s.date, s.start, s.end])], [true, [['Audio', '2026-12-04', '14:00', '15:00']]]);
+}
+
+{
+  const { S } = sandbox();
+  check('a candidate converted from its quoted zone: 15:30-17:30 CET on 17 Dec in London is 14:30-16:30; UTC as given; an unknown zone null',
+    [S.convertCandidateToMeetingZone_({ date: '2026-12-17', start: '15:30', end: '17:30', zone: 'CET' }, 'Europe/London'), S.convertCandidateToMeetingZone_({ date: '2026-12-17', start: '15:30', end: '', zone: 'UTC' }, 'Europe/London').start,
+      S.convertCandidateToMeetingZone_({ date: '2026-12-17', start: '15:30', end: '', zone: 'EST' }, 'Europe/London')],
+    [{ date: '2026-12-17', start: '14:30', end: '16:30' }, '15:30', null]);
 }
 
 // ====================================================================== G

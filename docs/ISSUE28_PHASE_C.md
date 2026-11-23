@@ -84,3 +84,20 @@ rev9.docx" (2026-11-23) as fixtures. Full suite: 135 files, all passing.
 1. Is the Portal's "Reservation date" UTC (as "Uploaded")? Decides the clock of the rule.
 2. Should carry-forward be available without the reservation rule (its own switch)?
 3. The real AHG reports: which sessions/zones to use for the first opt-in (e.g. the Audio post-138 telcos of 4 and 8 Dec)?
+
+## Independent review (2026-11-23) and what changed
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | Candidate dates: "Tuesday 8th December 2026" read as 20 December, high confidence; "26–29 January" as 9 January | **Fixed.** A day is never the first digits of a year; the earliest date of the line is taken; a second date makes a multi-day candidate (`endDate`, medium), and no time is read from the range. Tests on both real lines |
+| 2 | Carry-forward shown one update late (the cell read a stale copy) | **Fixed:** the cell reads the resolver's current carry. Test: the same resolver shows "A01 → A02" right after the sync |
+| 3 | Years and plenary-level rows produced allocations/proposals | **Fixed:** only allocations within the report's own part of the agenda (its top-level numbers) are compared, so rows 13–22 never move a SWG TDoc; dates are removed before numbers are read |
+| 4 | No preview before switching the rule; the dialog's "why" blank under the new rule | **Fixed:** "Preview" reads the TDoc list and lists every TDoc whose session changes (old → new, with the reason) before the confirmation; the switch is refused without a preview of the last 30 minutes, outside an ad-hoc report, and without a "Reservation date" column; it takes the document lock. The Assign TDoc Sessions dialog shows the reservation reason (one hook) |
+| 5 | Accepting could overwrite a manual reallocation; the server did not re-check | **Fixed:** a TDoc reallocated by hand to another item is shown as "manual" and never proposed; accepting re-reads sources and report inside the lock and writes only what is still proposed |
+| 6 | Carry state stopped silently at the size cap | **Fixed:** compact storage (v 2, about 4× smaller; v 1 still read) and a visible warning in Meeting Control when full |
+| 7 | Candidate times stored in the agenda's zone | **Fixed:** converted from the quoted zone (UTC/GMT, CET, CEST) into the meeting zone; an unknown zone with a time is refused |
+| 8 | Switching without a "Reservation date" column blanks the column | **Fixed** (refused by the preview) |
+| 9 | Repeated zone conversions | **Fixed:** instants memoised |
+| 10 | An unknown zone offset was read as UTC | **Fixed:** NaN, so no session (never a guess) |
+| 11 | Cache key collisions; a malformed % failed the listing | **Fixed:** SHA-256 key; a malformed name is kept as it is |
+| 12 | Carry decided when an update runs, not when a session starts | Accepted and documented: there is no disposition time in the data |

@@ -375,8 +375,9 @@ console.log('I. "CEST" in the code');
     if (users.indexOf(name) === -1) users.push(name);
   }
   check('"CEST" outside comments (and outside the zone table) only where deadlines quoted in e-mails are read and discussion e-mails are written -- not meeting times', users.sort(),
-    // Issue #28 C: parseAhgCandidates_() reads the zones QUOTED in the agenda's telco lines (as the e-mail readers do); it never writes one.
-    ['cleanUpWrongEmailDiscussions', 'extractDeadlineFromTitle_', 'isEmailExportReserved_', 'parseAhgCandidates_', 'parseEmailSubject_', 'parseExtendedDeadline_']);
+    // Issue #28 C: parseAhgCandidates_() and convertCandidateToMeetingZone_() read the zones QUOTED in the agenda's telco lines (as the e-mail
+    // readers do) and convert them into the meeting zone; they never write one.
+    ['cleanUpWrongEmailDiscussions', 'convertCandidateToMeetingZone_', 'extractDeadlineFromTitle_', 'isEmailExportReserved_', 'parseAhgCandidates_', 'parseEmailSubject_', 'parseExtendedDeadline_']);
   const sectionText = FULL_CODE.slice(a, b);
   check('...the meeting times themselves never name one: the opening sentence, the sessions, the clock', ['buildMeetingOpeningSentence_', 'adhocSessionWhenText_', 'convertUtcWallClockToReportZone_', 'meetingTimeZoneDisplay_'].map((n) => {
     const at = CODE.indexOf('\nfunction ' + n + '(');

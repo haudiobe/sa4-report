@@ -802,8 +802,8 @@ const RELEASE_2_30_0_CHANGES = [
 ];
 const I28C_SECTION_START = BAR + '// ISSUE 28 C: AHG SESSIONS, AGENDA UPDATES AND MEETING CONTROL (after issue 28 B)\n' + BAR;
 const I28C_SECTION_END = BAR + '// END OF ISSUE 28 C\n' + BAR;
-const I28C_SECTION_FUNCTIONS = ["adhocSessionRule_", "parseTdocListDateTime_", "readTdocReservationTimesForSessions_", "sessionZoneWallOfInstant_", "sessionZoneInstantOfWall_", "adhocReservationCutoff_", "assignAdhocSessionByReservation_", "adhocReservationReasonText_", "readAdhocCarry_", "decideAdhocCarry_", "issue28SessionResolver_", "syncAdhocCarryForwardOnUpdate_", "plenarySourceFolders_", "parseFtpFolderListing_", "newestAllocationFile_", "scheduleFiles_", "wordDocumentText_", "parseTdocAllocations_", "proposedReallocations_", "parseAhgCandidates_", "fetchMeetingSourceCached_", "fetchAllocationDocument_", "readPlenarySources_", "openMeetingControl", "registrationRowsOfReport_", "meetingControlData", "acceptProposedReallocations", "setAdhocSessionRule", "createSessionsFromCandidates", "isAdhocReportForMeetingControl_", "meetingControlHtml_"];
-const I28C_CHANGED_FUNCTIONS = ["continuousUpdateCore_","downloadAndGroupTdocs_","makeAdhocTdocSessionResolver_"];
+const I28C_SECTION_FUNCTIONS = ["adhocCarryText_","previewAdhocSessionRule","convertCandidateToMeetingZone_","meetingSourceCacheKey_","adhocSessionRule_", "parseTdocListDateTime_", "readTdocReservationTimesForSessions_", "sessionZoneWallOfInstant_", "sessionZoneInstantOfWall_", "adhocReservationCutoff_", "assignAdhocSessionByReservation_", "adhocReservationReasonText_", "readAdhocCarry_", "decideAdhocCarry_", "issue28SessionResolver_", "syncAdhocCarryForwardOnUpdate_", "plenarySourceFolders_", "parseFtpFolderListing_", "newestAllocationFile_", "scheduleFiles_", "wordDocumentText_", "parseTdocAllocations_", "proposedReallocations_", "parseAhgCandidates_", "fetchMeetingSourceCached_", "fetchAllocationDocument_", "readPlenarySources_", "openMeetingControl", "registrationRowsOfReport_", "meetingControlData", "acceptProposedReallocations", "setAdhocSessionRule", "createSessionsFromCandidates", "isAdhocReportForMeetingControl_", "meetingControlHtml_"];
+const I28C_CHANGED_FUNCTIONS = ["buildAdhocTdocSessionsDialogModel_","continuousUpdateCore_","downloadAndGroupTdocs_","makeAdhocTdocSessionResolver_"];
 const I28C_CHANGES = [
   ["    uploaded: uploaded, automatic: automatic, effective: effective,\n    cell: function (td) { return adhocTdocSessionCellText_(effective(td), sessions); }\n  // After issue 28 B: the reservation rule and the carry-forward, for every caller (ISSUE 28 C section).\n  }, context);\n}",
    "    uploaded: uploaded, automatic: automatic, effective: effective,\n    cell: function (td) { return adhocTdocSessionCellText_(effective(td), sessions); }\n  };\n}"],
@@ -816,6 +816,8 @@ const I28C_CHANGES = [
   ["      if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];\n      if (reservationTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].reserved = reservationTimes[i];\n",
    "      if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];\n"]
 ];
+I28C_CHANGES.push(["      // After issue 28 B: the reason of the reservation rule, when it is set (ISSUE 28 C section).\n      why: auto.sessionId ? '' : (resolver.rule === 'reservation-6h' ? adhocReservationReasonText_(auto.detail || auto.reason) : (REASONS[auto.reason] || '')),\n",
+   "      why: auto.sessionId ? '' : (REASONS[auto.reason] || ''),\n"]);
 const I28C_CREATOR_CHANGES = [
   ["    .addItem('Revision Expected…', 'manageExpectedRevisions')\n    // Issue #28 C: one view of what needs a decision, with the agenda's allocations and AHG sessions.\n    .addItem('Meeting Control…', 'openMeetingControl')\n",
    "    .addItem('Revision Expected…', 'manageExpectedRevisions')\n"]

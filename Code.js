@@ -19992,7 +19992,8 @@ function buildAdhocTdocSessionsDialogModel_(resolver, tdocGroups, registrationCo
       title: String(td.titleCol >= 0 ? td.row[td.titleCol] || '' : '').replace(/\s+/g, ' ').trim().slice(0, 90),
       uploaded: adhocUploadedDisplayText_(upload, withYear, !!(upload && upload.at && cutoffMinutes[upload.at.slice(0, 16)])),
       auto: auto.sessionId || '',
-      why: auto.sessionId ? '' : (REASONS[auto.reason] || ''),
+      // After issue 28 B: the reason of the reservation rule, when it is set (ISSUE 28 C section).
+      why: auto.sessionId ? '' : (resolver.rule === 'reservation-6h' ? adhocReservationReasonText_(auto.detail || auto.reason) : (REASONS[auto.reason] || '')),
       mode: manual ? manual.mode : 'auto',
       sessions: manual ? manual.sessions.slice() : []
     };
@@ -31474,9 +31475,12 @@ function parseTdocListDateTime_(display, raw, formatDate) {
 }
 
 /** The reservation times of the TDoc list, as the upload times are read (null unless an ad-hoc report with the reservation rule). */
+/** The preview of the rule reads the reservation times before the rule is set. */
+var ISSUE28_FORCE_RESERVATION_READ_ = false;
+
 function readTdocReservationTimesForSessions_(spreadsheet, sheet, headers, data, context) {
   try {
-    if (!adhocSessionsEnabled_(context) || adhocSessionRule_(getReportStateStore_(context)) !== 'reservation-6h') return null;
+    if (!adhocSessionsEnabled_(context) || (adhocSessionRule_(getReportStateStore_(context)) !== 'reservation-6h' && !ISSUE28_FORCE_RESERVATION_READ_)) return null;
     const col = headers.indexOf('Reservation date');
     if (col === -1) { Logger.log('TDoc sessions: the TDoc list has no "Reservation date" column; no session is assigned by the reservation rule.'); return null; }
     let shown = null;
@@ -31497,19 +31501,27 @@ function sessionZoneWallOfInstant_(zone, instant) {
   return Utilities.formatDate(new Date(instant), zone || Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
 }
 
-/** The instant of a wall clock in `zone` (fixed point of the zone's offset; in a gap, the instant after it). */
+/** The instant of a wall clock in `zone` (fixed point of the zone's offset; in a gap, the instant after it); NaN when the zone's offset cannot be told. Memoised. */
 function sessionZoneInstantOfWall_(zone, wall) {
+  const memo = sessionZoneInstantOfWall_.memo || (sessionZoneInstantOfWall_.memo = {});
+  const key = String(zone) + '|' + String(wall);
+  if (Object.prototype.hasOwnProperty.call(memo, key)) return memo[key];
   const m = String(wall || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
   if (!m) return NaN;
   const asUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
   const wallMs = function (text) { const x = String(text).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/); return x ? Date.UTC(+x[1], +x[2] - 1, +x[3], +x[4], +x[5], +x[6]) : NaN; };
   let guess = asUtc;
+  let result = NaN;
   for (let i = 0; i < 3; i++) {
-    const diff = wallMs(sessionZoneWallOfInstant_(zone, guess)) - asUtc;
-    if (!diff) return guess;
+    let diff;
+    try { diff = wallMs(sessionZoneWallOfInstant_(zone, guess)) - asUtc; } catch (e) { diff = NaN; }
+    if (isNaN(diff)) { result = NaN; break; }
+    if (!diff) { result = guess; break; }
     guess -= diff;
+    result = guess;
   }
-  return guess;
+  memo[key] = result;
+  return result;
 }
 
 /** Pure (given `toInstant`): the cut-off instant of a session -- its end in the meeting zone plus six hours. */
@@ -31536,7 +31548,8 @@ function assignAdhocSessionByReservation_(reservation, sessions, toInstant, cloc
     return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
   };
   const firstFor = function (at) {
-    for (let i = 0; i < ordered.length; i++) { const cut = adhocReservationCutoff_(ordered[i], toInstant); if (at <= cut) return { id: ordered[i].id, cutoff: cut, index: i }; }
+    // A cut-off that cannot be computed (an unknown zone) assigns nothing: no guess.
+    for (let i = 0; i < ordered.length; i++) { const cut = adhocReservationCutoff_(ordered[i], toInstant); if (isNaN(cut) || isNaN(at)) return null; if (at <= cut) return { id: ordered[i].id, cutoff: cut, index: i }; }
     return null;
   };
   if (reservation.at) {
@@ -31559,14 +31572,30 @@ function adhocReservationReasonText_(reason) {
     'date-only': 'only a date, shared by two sessions' }[reason] || reason;
 }
 
-/** The carried sessions of the report state: { tdoc: [{ s, at }] }. */
+/** The carried sessions of the report state: { tdoc: [{ s, at }] } (stored compactly: v 2, "s2@<epoch minute>,…"; v 1 read as well). */
 function readAdhocCarry_(store) {
   try {
     const v = JSON.parse(store.getProperty(ADHOC_CARRY_KEY_) || '{}');
-    return v && v.v === 1 && v.tdocs ? v.tdocs : {};
+    if (v && v.v === 1 && v.tdocs) return v.tdocs;
+    if (!v || v.v !== 2 || !v.tdocs) return {};
+    const out = {};
+    Object.keys(v.tdocs).forEach(function (n) {
+      out[n] = String(v.tdocs[n]).split(',').filter(Boolean).map(function (x) { const p = x.split('@'); return { s: p[0], at: p[1] ? new Date(+p[1] * 60000).toISOString() : '' }; });
+    });
+    return out;
   } catch (e) {
     return {};
   }
+}
+
+/** Pure: the carried sessions as stored (v 2). */
+function adhocCarryText_(carry) {
+  const tdocs = {};
+  Object.keys(carry).sort().forEach(function (n) {
+    if (!carry[n] || !carry[n].length) return;
+    tdocs[n] = carry[n].map(function (c) { const ms = Date.parse(c.at); return c.s + '@' + (isNaN(ms) ? '' : Math.floor(ms / 60000)); }).join(',');
+  });
+  return JSON.stringify({ v: 2, tdocs: tdocs });
 }
 
 /**
@@ -31598,7 +31627,7 @@ function decideAdhocCarry_(registered, carried, sessions, undisposed, nowMs, sta
 function issue28SessionResolver_(resolver, context) {
   const store = getReportStateStore_(context);
   const rule = adhocSessionRule_(store);
-  const carry = readAdhocCarry_(store);
+  let self = null;
   const sessions = resolver.sessions;
   const zone = resolver.zone;
   const toInstant = function (wall) { return sessionZoneInstantOfWall_(zone, wall); };
@@ -31618,10 +31647,10 @@ function issue28SessionResolver_(resolver, context) {
     const reg = registered(td);
     const last = order.reduce(function (k, id, i) { return reg.indexOf(id) !== -1 ? i : k; }, -1);
     if (last === -1) return [];
-    return (carry[n] || []).map(function (c) { return c.s; }).filter(function (id) { return order.indexOf(id) > last; });
+    return ((self.carry || {})[n] || []).map(function (c) { return c.s; }).filter(function (id) { return order.indexOf(id) > last; });
   };
   const out = Object.assign({}, resolver, {
-    rule: rule, carry: carry, toInstant: toInstant,
+    rule: rule, carry: readAdhocCarry_(store), toInstant: toInstant,
     automatic: automatic,
     registered: registered,
     carried: carriedOf,
@@ -31633,6 +31662,7 @@ function issue28SessionResolver_(resolver, context) {
       return c.length ? text + ' → ' + adhocTdocSessionCellText_(c, sessions) : text;
     }
   });
+  self = out;
   return out;
 }
 
@@ -31670,11 +31700,15 @@ function syncAdhocCarryForwardOnUpdate_(resolver, allTdocs, index, context) {
       if (next.length !== before.length) { added += next.length - before.length; if (next.length) carry[n] = next; else delete carry[n]; }
     });
     if (added) {
-      const text = JSON.stringify({ v: 1, tdocs: carry });
-      if (text.length > 8500) { Logger.log('TDoc sessions: the carried sessions do not fit one property any more; not stored (' + text.length + ' characters).'); return 0; }
+      const text = adhocCarryText_(carry);
+      if (text.length > 8500) {
+        // Said where the rapporteur looks (Meeting Control), not only in the log.
+        store.setProperty(ADHOC_CARRY_KEY_ + '_FULL', new Date().toISOString());
+        Logger.log('TDoc sessions: the carried sessions do not fit one property any more; not stored (' + text.length + ' characters).');
+        return 0;
+      }
       store.setProperty(ADHOC_CARRY_KEY_, text);
       resolver.carry = carry;
-      Object.keys(carry).forEach(function (k) { resolver.carry[k] = carry[k]; });
       Logger.log('TDoc sessions: ' + added + ' carry-forward(s) of TDocs not disposed into a later session.');
     }
     return added;
@@ -31713,7 +31747,8 @@ function parseFtpFolderListing_(html, folderUrl) {
     if (/^\?/.test(url)) return;
     if (!/^https?:/i.test(url)) url = folder.replace(/[^/]*$/, '') + url;
     if (folder && url.indexOf(folder) !== 0) return;
-    const name = decodeURIComponent(url.slice(url.lastIndexOf('/') + 1));
+    let name = url.slice(url.lastIndexOf('/') + 1);
+    try { name = decodeURIComponent(name); } catch (e) { /* a malformed escape: the name as it is */ }
     if (!name || /\/$/.test(url)) return;
     const d = row.match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{1,2}):(\d{2})/);
     out.push({ name: name, url: url, listedAt: d ? d[1] + '-' + d[2] + '-' + d[3] + 'T' + ('0' + d[4]).slice(-2) + ':' + d[5] : '' });
@@ -31763,7 +31798,8 @@ function parseTdocAllocations_(doc, numbers) {
     const cleaned = String(cells[2] || '').replace(/\([^)]*\)/g, ' ')
       .replace(new RegExp('\\b' + months + '\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s*\\d{4}', 'gi'), ' ')
       .replace(new RegExp('\\b\\d{1,2}(?:st|nd|rd|th)?(?:\\s*[-–]\\s*\\d{1,2})?\\s+' + months + ',?\\s*\\d{4}', 'gi'), ' ')
-      .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ');
+      .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
+      .replace(new RegExp(months + '\\s+(?:20\\d{2})\\b', 'gi'), ' ');
     const shorts = cleaned.match(/(?:^|[^\d])(\d{4})(?=\D|$)/g) || [];
     shorts.forEach(function (s) {
       const short = s.replace(/\D/g, '');
@@ -31774,20 +31810,29 @@ function parseTdocAllocations_(doc, numbers) {
 }
 
 /**
- * Pure: the proposed reallocations: a TDoc of the report whose allocation (one
- * agenda item) differs from its Agenda Item in the report and from a
- * reallocation already in the Document Reallocations table; a TDoc listed under
- * two items is 'ambiguous' (shown, never proposed). [{ tdoc, from, to, kind }].
+ * Pure: the proposed reallocations. Only allocations within the report's own
+ * part of the agenda count (the top-level numbers of its Agenda Items: "8" for
+ * an MBS report), so a plenary-level row (14, 15.4, the future meetings of 20)
+ * never moves a TDoc out of it. A TDoc with one such allocation that differs
+ * from its Agenda Item is proposed; listed under two of the report's items:
+ * 'ambiguous'; with a reallocation of its own to another item: 'manual'
+ * (shown, never proposed: the rapporteur's row is not replaced). [{ tdoc, from, to, kind, replaces }].
  */
 function proposedReallocations_(allocations, reportAgenda, reallocated) {
   const out = [];
+  const top = function (ai) { return String(ai || '').split('.')[0]; };
+  const tops = {};
+  Object.keys(reportAgenda).forEach(function (n) { const t = top(reportAgenda[n]); if (t) tops[t] = true; });
   Object.keys(allocations.byTdoc).sort().forEach(function (n) {
-    const ais = allocations.byTdoc[n];
     const from = reportAgenda[n];
     if (from === undefined) return;
+    const ais = allocations.byTdoc[n].filter(function (ai) { return tops[top(ai)]; });
+    if (!ais.length) return;
     if (ais.length > 1) { out.push({ tdoc: n, from: from, to: ais.join(', '), kind: 'ambiguous' }); return; }
     const to = ais[0];
-    if (to === from || (reallocated[n] && reallocated[n] === to)) return;
+    const own = reallocated[n] || '';
+    if (to === from || own === to) return;
+    if (own) { out.push({ tdoc: n, from: from, to: to, kind: 'manual', replaces: own }); return; }
     out.push({ tdoc: n, from: from, to: to, kind: 'proposed' });
   });
   return out;
@@ -31822,13 +31867,18 @@ function parseAhgCandidates_(doc, year) {
       full += ' ' + next;
     }
     text = full;
+    // Every date of the line, in order: "Dec 17, 2026" and "8th December 2026" (a day is never the first digits of a year).
+    const dates = [];
+    text.replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?!\d)(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?/gi, function (x, mo, d, yy, at) { dates.push({ at: at, month: months[mo.slice(0, 3).toLowerCase()], day: +d, y: yy ? +yy : 0 }); return x; });
+    text.replace(/\b(\d{1,2})(?!\d)(?:st|nd|rd|th)?[\s\u00a0]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?(?:,?\s*(\d{4}))?/gi, function (x, d, mo, yy, at) { dates.push({ at: at, month: months[mo.slice(0, 3).toLowerCase()], day: +d, y: yy ? +yy : 0 }); return x; });
+    dates.sort(function (a, b) { return a.at - b.at; });
+    const distinct = dates.filter(function (d, k) { return !dates.slice(0, k).some(function (e) { return Math.abs(e.at - d.at) < 4; }); });
     let month = 0, day = 0, y = 0;
-    let m = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?/i);
-    if (m) { month = months[m[1].slice(0, 3).toLowerCase()]; day = +m[2]; y = m[3] ? +m[3] : 0; }
-    else if ((m = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?[\s\u00a0]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s*(\d{4})?/i))) { day = +m[1]; month = months[m[2].slice(0, 3).toLowerCase()]; y = m[3] ? +m[3] : 0; }
+    if (distinct.length) { month = distinct[0].month; day = distinct[0].day; y = distinct[0].y || (distinct[1] && distinct[1].y) || 0; }
     const why = [];
+    let endDate = '';
     if (!y && month) { y = year && month < 7 ? year + 1 : year; why.push('year taken from the meeting'); }
-    const t = text.match(/(\d{1,2}):?(\d{2})\s*[-–]\s*(\d{1,2}):?(\d{2})/) || text.match(/\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(CET|CEST|UTC)/i);
+    const t = (distinct.length > 1 ? null : text.match(/(\d{1,2}):?(\d{2})\s*[-–]\s*(\d{1,2}):?(\d{2})/)) || text.match(/\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(CET|CEST|UTC)/i);
     let start = '', end = '';
     if (t && t[4] !== undefined && t.length > 4 && /:|\d{3,4}/.test(t[0])) { start = pad(+t[1]) + ':' + t[2]; end = (+t[3] === 24 ? '23' : pad(+t[3])) + ':' + (+t[3] === 24 ? '59' : t[4]); }
     else if (t) { start = pad(+t[1]) + ':00'; end = pad(+t[2]) + ':00'; }
@@ -31836,7 +31886,14 @@ function parseAhgCandidates_(doc, year) {
     const zone = zm ? zm[1] : '';
     const group = (text.match(/\b(MBS|RTC|Audio|Video|6G)\b/i) || [])[1] || (text.match(/Telco on ([A-Za-z0-9_-]+)/i) || [])[1] || '';
     const date = month && day && y ? y + '-' + pad(month) + '-' + pad(day) : '';
+    if (date && distinct.length > 1) {
+      const e = distinct[1];
+      const ey = e.y || y;
+      endDate = ey + '-' + pad(e.month) + '-' + pad(e.day);
+      if (endDate <= date) endDate = '';
+    }
     let confidence = 'high';
+    if (endDate) why.push('several days (until ' + endDate + ')');
     if (!date) { confidence = 'low'; why.push('no date'); }
     if (!start || !/^\d{2}:\d{2}$/.test(start) || +start.slice(0, 2) > 23 || +end.slice(0, 2) > 23) { confidence = confidence === 'high' ? 'medium' : confidence; why.push('time not read'); start = /^\d{2}:\d{2}$/.test(start) && +start.slice(0, 2) <= 23 ? start : ''; end = /^\d{2}:\d{2}$/.test(end) && +end.slice(0, 2) <= 23 ? end : ''; }
     if (!zone) { if (confidence === 'high') confidence = 'medium'; why.push('no time zone'); }
@@ -31848,14 +31905,25 @@ function parseAhgCandidates_(doc, year) {
     const key = [group, date, start, end].join('|');
     if (date && seen[key]) continue;
     seen[key] = true;
-    out.push({ text: text.slice(0, 200), group: group, date: date, start: start, end: end, zone: zone, confidence: confidence, why: why.join('; ') });
+    if (endDate && confidence === 'high') confidence = 'medium';
+    out.push({ text: text.slice(0, 200), group: group, date: date, endDate: endDate, start: start, end: end, zone: zone, confidence: confidence, why: why.join('; ') });
   }
   return out;
 }
 
+/** A cache key for a URL: its SHA-256 (no two URLs share one), else its whole base64 when the digest is not available. */
+function meetingSourceCacheKey_(url) {
+  try {
+    const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(url), Utilities.Charset.UTF_8);
+    return Utilities.base64EncodeWebSafe(bytes);
+  } catch (e) {
+    return Utilities.base64EncodeWebSafe(String(url));
+  }
+}
+
 /** UrlFetch with a CacheService cache (text, at most ~90 KB) and a check of the answer; { ok, text, from, error }. */
 function fetchMeetingSourceCached_(url, check) {
-  const key = 'I28SRC_' + Utilities.base64EncodeWebSafe(String(url)).slice(0, 200);
+  const key = 'I28SRC_' + meetingSourceCacheKey_(url);
   let cache = null;
   try { cache = CacheService.getDocumentCache() || CacheService.getScriptCache(); } catch (e) { cache = null; }
   try { const hit = cache ? cache.get(key) : null; if (hit) return { ok: true, text: hit, from: 'cache' }; } catch (e) { /* no cache */ }
@@ -31873,7 +31941,7 @@ function fetchMeetingSourceCached_(url, check) {
 
 /** The allocation document's text (document.xml of the .docx), cached as its parsed rows/paragraphs. { ok, doc, error, from }. */
 function fetchAllocationDocument_(url) {
-  const key = 'I28ALLOC_' + Utilities.base64EncodeWebSafe(String(url)).slice(0, 200);
+  const key = 'I28ALLOC_' + meetingSourceCacheKey_(url);
   let cache = null;
   try { cache = CacheService.getDocumentCache() || CacheService.getScriptCache(); } catch (e) { cache = null; }
   try { const hit = cache ? cache.get(key) : null; if (hit) return { ok: true, doc: JSON.parse(hit), from: 'cache' }; } catch (e) { /* no cache */ }
@@ -31992,7 +32060,8 @@ function meetingControlData() {
   try {
     const resolver = makeAdhocTdocSessionResolverSafely_(null);
     if (resolver) {
-      const carry = resolver.carry || {};
+      if (store.getProperty(ADHOC_CARRY_KEY_ + '_FULL')) errors.push('Carry-forward: the carried sessions no longer fit the report state since ' + store.getProperty(ADHOC_CARRY_KEY_ + '_FULL') + '; new carries are not recorded.');
+      const carry = resolver.rule === 'reservation-6h' ? resolver.carry || {} : {};
       Object.keys(carry).forEach(function (n) { if (!carry[n].length) return; row(n).tags.push('carried'); row(n).notes.push('Carried into ' + carry[n].map(function (c) { return adhocSessionCodes_(resolver.sessions)[c.s] || c.s; }).join(', ')); });
       sessions = { rule: resolver.rule, count: resolver.sessions.length, codes: adhocSessionCodes_(resolver.sessions) };
     }
@@ -32005,7 +32074,7 @@ function meetingControlData() {
       const reportAgenda = {}; registration.forEach(function (r) { reportAgenda[r.tdoc] = r.agenda; });
       const reallocated = {}; const map = getReallocationMap_(); Object.keys(map || {}).forEach(function (n) { reallocated[n] = String(map[n].new || '').trim(); });
       proposals = proposedReallocations_(sources.agenda.allocations, reportAgenda, reallocated);
-      proposals.forEach(function (p) { const r = row(p.tdoc); r.tags.push('allocation'); r.notes.push((p.kind === 'ambiguous' ? 'Listed under ' : 'Allocation ' + sources.agenda.file + ': ') + p.to + ' (report: ' + p.from + ')'); });
+      proposals.forEach(function (p) { const r = row(p.tdoc); r.tags.push('allocation'); r.notes.push((p.kind === 'ambiguous' ? 'Listed under ' : 'Allocation ' + sources.agenda.file + ': ') + p.to + ' (report: ' + p.from + (p.kind === 'manual' ? '; reallocated by hand to ' + p.replaces + ', kept' : '') + ')'); });
       delete sources.agenda.allocations;
     }
   } catch (e) { errors.push('Agenda sources: ' + e.message); }
@@ -32013,26 +32082,85 @@ function meetingControlData() {
   return { rows: rows, titles: titles, proposals: proposals, sources: sources, sessions: sessions, errors: errors, at: new Date().toISOString(), isAdhoc: isAdhocReportForMeetingControl_() };
 }
 
-/** Meeting Control: accepts proposed reallocations (only those the dialog previewed, still proposed now). Returns what was done. */
+/**
+ * Meeting Control: accepts proposed reallocations -- only those still proposed
+ * now (the sources and the report read again inside the lock: a stale page
+ * writes nothing it does not show). Returns what was done.
+ */
 function acceptProposedReallocations(items) {
   assertNotTemplateMaster_();
   return withDispositionLock_('Meeting Control', function () {
+    const body = currentReportDocument_().getBody();
+    const registration = registrationRowsOfReport_(body);
+    const sources = readPlenarySources_(getReportConfig_(), registration.map(function (r) { return r.tdoc; }));
+    if (!sources.agenda.ok) throw new Error('the allocation could not be read again: ' + sources.agenda.error);
+    const reportAgenda = {}; registration.forEach(function (r) { reportAgenda[r.tdoc] = r.agenda; });
+    const reallocated = {}; const map = getReallocationMap_(); Object.keys(map || {}).forEach(function (n) { reallocated[n] = String(map[n].new || '').trim(); });
+    const now = proposedReallocations_(sources.agenda.allocations, reportAgenda, reallocated).filter(function (p) { return p.kind === 'proposed'; });
     const done = [];
+    const skipped = [];
     (items || []).forEach(function (p) {
-      if (!isRegisteredTdocNumber_(p.tdoc) || !/^\d+(\.\d+)*$/.test(String(p.to || ''))) return;
-      saveReallocation(p.tdoc, String(p.from || ''), String(p.to), 'TDoc allocation ' + String(p.source || '') + ' (accepted in Meeting Control ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC)');
-      done.push(p.tdoc + ' → ' + p.to);
+      const still = now.filter(function (x) { return x.tdoc === p.tdoc && x.to === String(p.to) && x.from === String(p.from); })[0];
+      if (!still) { skipped.push(String(p.tdoc)); return; }
+      saveReallocation(still.tdoc, still.from, still.to, 'TDoc allocation ' + sources.agenda.file + ' (accepted in Meeting Control ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC)');
+      done.push(still.tdoc + ' → ' + still.to);
     });
-    return done.length ? 'Added to Document Reallocations: ' + done.join(', ') + '. Run Apply Reallocations to Report… (or the next build) to move the TDoc tables.' : 'Nothing was accepted.';
+    return (done.length ? 'Added to Document Reallocations: ' + done.join(', ') + '. Run Apply Reallocations to Report… (or the next build) to move the TDoc tables.' : 'Nothing was accepted.') +
+      (skipped.length ? ' Not proposed any more (left out): ' + skipped.join(', ') + '.' : '');
   });
 }
 
-/** Meeting Control (ad-hoc report): the session rule, after the preview of what moves. Returns what was done. */
+/**
+ * Meeting Control (ad-hoc report): what the reservation rule would change, from
+ * the TDoc list now: { ok, error, column, moves: [{ tdoc, upload, reservation, why }],
+ * same, count }. Read-only.
+ */
+function previewAdhocSessionRule() {
+  assertNotTemplateMaster_();
+  if (!isAdhocReportForMeetingControl_()) throw new Error('the session rule is a setting of an ad-hoc report');
+  ISSUE28_FORCE_RESERVATION_READ_ = true;
+  try {
+    const cfg = getReportConfig_();
+    const groups = downloadAndGroupTdocs_(cfg, null);
+    const all = flattenTdocGroups_(groups);
+    const resolver = makeAdhocTdocSessionResolverSafely_(null);
+    if (!resolver) return { ok: false, error: 'no sessions are configured' };
+    const column = all.some(function (td) { return td.reserved !== undefined; });
+    if (!column) return { ok: false, column: false, error: 'the TDoc list has no "Reservation date" column: the rule would assign no TDoc' };
+    const toInstant = resolver.toInstant;
+    const codes = adhocSessionCodes_(resolver.sessions);
+    const name = function (id) { return id ? codes[id] || id : '–'; };
+    const moves = [];
+    let same = 0;
+    all.forEach(function (td) {
+      // The rule is not switched yet: the resolver's automatic session is the upload rule's.
+      const up = resolver.automatic(td);
+      const re = assignAdhocSessionByReservation_(td.reserved, resolver.sessions, toInstant, resolver.clock === 'session' ? 'session' : 'utc');
+      if (up.sessionId === re.sessionId) { same++; return; }
+      moves.push({ tdoc: tdocNumberOf_(td), upload: name(up.sessionId), reservation: name(re.sessionId), why: adhocReservationReasonText_(re.reason) });
+    });
+    const stamp = new Date().toISOString();
+    getReportStateStore_(null).setProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW', stamp);
+    return { ok: true, column: true, moves: moves, same: same, count: all.length, at: stamp };
+  } finally {
+    ISSUE28_FORCE_RESERVATION_READ_ = false;
+  }
+}
+
+/** Meeting Control (ad-hoc report): the session rule; the reservation rule only after a preview of the last 30 minutes. */
 function setAdhocSessionRule(rule) {
   assertNotTemplateMaster_();
-  const value = rule === 'reservation-6h' ? 'reservation-6h' : 'upload';
-  getReportStateStore_(null).setProperty(ADHOC_SESSION_RULE_KEY_, value);
-  return 'Session rule: ' + (value === 'upload' ? 'by upload time (as before)' : 'by reservation time, cut-off at the end of a session + 6 hours') + '. The next update writes the Session column.';
+  return withDispositionLock_('Meeting Control', function () {
+    if (!isAdhocReportForMeetingControl_()) throw new Error('the session rule is a setting of an ad-hoc report');
+    const store = getReportStateStore_(null);
+    const value = rule === 'reservation-6h' ? 'reservation-6h' : 'upload';
+    if (value === 'reservation-6h') {
+      const at = Date.parse(store.getProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW') || '');
+      if (isNaN(at) || Date.now() - at > 30 * 60000) throw new Error('show what the rule changes first (Preview) -- then switch');
+    }
+    store.setProperty(ADHOC_SESSION_RULE_KEY_, value);
+    return 'Session rule: ' + (value === 'upload' ? 'by upload time (as before)' : 'by reservation time, cut-off at the end of a session + 6 hours') + '. The next update writes the Session column.';
+  });
 }
 
 /** Meeting Control (ad-hoc report): creates sessions from confirmed candidates (they are validated as Configure Sessions does). */
@@ -32045,13 +32173,38 @@ function createSessionsFromCandidates(candidates) {
     const parsed = parseAdhocSessionsProperty_(store.getProperty(ADHOC_SESSIONS_KEY_));
     const existing = parsed.status === 'ok' ? parsed.config.sessions : [];
     const rows = existing.map(function (s) { return { id: s.id, label: s.label, date: s.date, endDate: s.endDate || '', start: s.start, end: s.end }; });
+    const meetingZone = meetingSessionTimeZone_(null) || Session.getScriptTimeZone();
+    const refused = [];
     (candidates || []).forEach(function (c) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) return;
-      rows.push({ id: '', label: String(c.group || 'AHG').slice(0, 16), date: c.date, endDate: '', start: /^\d{2}:\d{2}$/.test(c.start || '') ? c.start : '', end: /^\d{2}:\d{2}$/.test(c.end || '') ? c.end : '' });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) { refused.push(String(c.text || c.group || '?').slice(0, 40) + ' (no date)'); return; }
+      const conv = convertCandidateToMeetingZone_(c, meetingZone);
+      if (!conv) { refused.push(String(c.group || '?') + ' ' + c.date + ' (its time zone "' + c.zone + '" is not known: enter it in Configure Sessions)'); return; }
+      rows.push({ id: '', label: String(c.group || 'AHG').slice(0, 16), date: conv.date, endDate: /^\d{4}-\d{2}-\d{2}$/.test(String(c.endDate || '')) ? c.endDate : '', start: conv.start, end: conv.end });
     });
+    if (refused.length && rows.length === existing.length) return 'Nothing created: ' + refused.join('; ') + '.';
     const saved = saveAdhocSessionsConfiguration(rows);
     return saved && saved.ok === false ? 'Not created: ' + (saved.errors || []).join(' ') : 'Sessions saved. Check their times in Configure Sessions…: the agenda gives times in its own zone, the sessions use the meeting zone.';
   })();
+}
+
+/**
+ * Pure (given the zone functions): a candidate's date and times in the meeting
+ * zone: its quoted zone (the abbreviations of the agenda: UTC/GMT 0, CET +1,
+ * CEST +2) to instants, then to the meeting zone's wall clock. No time: the date
+ * as it is. An unknown zone with a time: null.
+ */
+function convertCandidateToMeetingZone_(c, meetingZone) {
+  const offsets = { UTC: 0, GMT: 0, CET: 60, CEST: 120 };
+  if (!c.start) return { date: c.date, start: '', end: '' };
+  if (!Object.prototype.hasOwnProperty.call(offsets, String(c.zone || ''))) return null;
+  const toMeeting = function (hhmm) {
+    const m = c.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const instant = Date.UTC(+m[1], +m[2] - 1, +m[3], +hhmm.slice(0, 2), +hhmm.slice(3, 5)) - offsets[c.zone] * 60000;
+    return sessionZoneWallOfInstant_(meetingZone, instant);
+  };
+  const s = toMeeting(c.start);
+  const e = c.end ? toMeeting(c.end) : '';
+  return { date: s.slice(0, 10), start: s.slice(11, 16), end: e && e.slice(0, 10) === s.slice(0, 10) ? e.slice(11, 16) : '' };
 }
 
 /** Whether this report is an ad-hoc one (in any runtime; the menu's own test lives in ReportCreator.js). */
@@ -32077,7 +32230,8 @@ function meetingControlHtml_() {
     'function alloc(){var p=D.proposals.filter(function(x){return x.kind==="proposed";});var s=D.sources&&D.sources.agenda;var h="<h4>Changed allocations</h4>";' +
     'if(!s||!s.ok){h+="<div class=err>"+esc(s?s.error:"not read")+"</div>";}else{h+="<div class=note>Source: <a target=_blank href=\\""+esc(s.url)+"\\">"+esc(s.file)+"</a> (rev "+esc(s.rev)+", listed "+esc(s.listedAt||"?")+", "+esc(s.from)+", observed "+esc(D.sources.observedAt.slice(0,16).replace("T"," "))+" UTC). Nothing is applied until you accept it.</div>";' +
     'h+=p.length?"<table><tr><th></th><th>TDoc</th><th>Report A.I.</th><th>Allocation</th></tr>"+p.map(function(x,i){return "<tr><td><input type=checkbox class=ap value="+i+"></td><td>"+esc(x.tdoc)+"</td><td>"+esc(x.from)+"</td><td>"+esc(x.to)+"</td></tr>";}).join("")+"</table><button onclick=\\"acc()\\">Preview and accept selected…</button>":"<p>No changed allocation.</p>";' +
-    'var a=D.proposals.filter(function(x){return x.kind==="ambiguous";});if(a.length)h+="<p class=note>Listed under several items (not proposed): "+a.map(function(x){return esc(x.tdoc+" ("+x.to+")");}).join(", ")+"</p>";}document.getElementById("alloc").innerHTML=h;}' +
+    'var a=D.proposals.filter(function(x){return x.kind==="ambiguous";});if(a.length)h+="<p class=note>Listed under several items (not proposed): "+a.map(function(x){return esc(x.tdoc+" ("+x.to+")");}).join(", ")+"</p>";' +
+    'var mm=D.proposals.filter(function(x){return x.kind==="manual";});if(mm.length)h+="<p class=note>Reallocated by hand to another item (kept, not proposed): "+mm.map(function(x){return esc(x.tdoc+" (yours: "+x.replaces+", allocation: "+x.to+")");}).join(", ")+"</p>";}document.getElementById("alloc").innerHTML=h;}' +
     'function acc(){var p=D.proposals.filter(function(x){return x.kind==="proposed";});var pick=[].slice.call(document.querySelectorAll(".ap:checked")).map(function(c){var x=p[+c.value];return{tdoc:x.tdoc,from:x.from,to:x.to,source:D.sources.agenda.file};});if(!pick.length){msg("Choose at least one.");return;}' +
     'if(!confirm("Add to Document Reallocations:\\n"+pick.map(function(x){return x.tdoc+": "+x.from+" -> "+x.to;}).join("\\n")+"\\n\\nThe TDoc tables move when the reallocations are applied."))return;msg("Working…");google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).acceptProposedReallocations(pick);}' +
     'function src(){var c=(D.sources&&D.sources.candidates)||[];var sc=D.sources&&D.sources.schedule;var h="<h4>AHG sessions in the agenda (candidates)</h4>";' +
@@ -32085,8 +32239,10 @@ function meetingControlHtml_() {
     'h+="<h4>Schedule</h4>"+(sc&&sc.ok?(sc.files.length?"<ul>"+sc.files.map(function(f){return "<li><a target=_blank href=\\""+esc(f.url)+"\\">"+esc(f.name)+"</a> ("+esc(f.listedAt)+")</li>";}).join("")+"</ul><p class=note>The version order of these files is not known: a hint only.</p>":"<p>No file.</p>"):"<div class=err>"+esc(sc?sc.error:"not read")+"</div>");document.getElementById("src").innerHTML=h;}' +
     'function mk(){var c=D.sources.candidates;var pick=[].slice.call(document.querySelectorAll(".cc:checked")).map(function(x){return c[+x.value];});if(!pick.length){msg("Choose at least one.");return;}' +
     'if(!confirm("Create "+pick.length+" session(s):\\n"+pick.map(function(x){return x.group+" "+x.date+" "+x.start+"-"+x.end+" "+x.zone+" ("+x.confidence+")";}).join("\\n")+"\\n\\nCheck the times afterwards in Configure Sessions."))return;msg("Working…");google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).createSessionsFromCandidates(pick);}' +
-    'function ses(){if(!D.sessions){document.getElementById("ses").innerHTML="";return;}var r=D.sessions.rule;document.getElementById("ses").innerHTML="<h4>Session rule</h4><p>"+(r==="upload"?"By upload time (as before).":"By reservation time; cut-off: the end of a session + 6 hours.")+" <button onclick=\\"rule(\'"+(r==="upload"?"reservation-6h":"upload")+"\')\\">Switch to "+(r==="upload"?"reservation + 6 h":"upload time")+"…</button></p><p class=note>Before switching, Sessions and Attendance › Assign TDoc Sessions… shows each TDoc\'s automatic session; manual assignments stay.</p>";}' +
-    'function rule(v){if(!confirm("Change the session rule? The next update rewrites the Session column; manual assignments stay."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocSessionRule(v);}' +
+    'function ses(){if(!D.sessions){document.getElementById("ses").innerHTML="";return;}var r=D.sessions.rule;document.getElementById("ses").innerHTML="<h4>Session rule</h4><p>"+(r==="upload"?"By upload time (as before).":"By reservation time; cut-off: the end of a session + 6 hours.")+" <button onclick=\\"rule(\'"+(r==="upload"?"reservation-6h":"upload")+"\')\\">Switch to "+(r==="upload"?"reservation + 6 h":"upload time")+"…</button></p><p class=note>Switching to the reservation rule first shows which TDocs change their session; manual assignments stay.</p>";}' +
+    'function rule(v){if(v==="upload"){if(!confirm("Back to the upload rule? The next update rewrites the Session column; manual assignments stay."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocSessionRule(v);return;}' +
+    'msg("Reading the TDoc list for the preview…");google.script.run.withSuccessHandler(function(p){if(!p.ok){msg("Not switched: "+p.error);return;}var t=p.moves.length?p.moves.map(function(x){return x.tdoc+": "+x.upload+" -> "+x.reservation+(x.reservation==="–"?" ("+x.why+")":"");}).join("\\n"):"No TDoc changes its session.";' +
+    'if(!confirm("With the reservation rule ("+p.count+" TDocs, "+p.same+" unchanged):\\n"+t+"\\n\\nSwitch? Manual assignments stay."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocSessionRule(v);}).withFailureHandler(function(e){msg("Preview failed: "+e.message);}).previewAdhocSessionRule();}' +
     'function msg(t){document.getElementById("msg").textContent=t;}' +
     'google.script.run.withSuccessHandler(function(d){D=d;document.getElementById("load").style.display="none";document.getElementById("app").style.display="";document.getElementById("errs").innerHTML=d.errors.map(esc).join("<br>");draw();alloc();src();ses();})' +
     '.withFailureHandler(function(e){document.getElementById("load").textContent="Could not read: "+e.message;}).meetingControlData();</script>';
