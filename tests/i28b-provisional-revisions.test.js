@@ -54,7 +54,7 @@ function report(o) {
   r.update = function () { const out = up.apply(this, arguments); r.body._state.dirty = false; r.body._state.closed = false; return out; };
   r.save = () => { r.body._state.dirty = false; r.body._state.closed = false; };
   r.record = (input) => { const out = r.exec(() => r.s.saveExpectedRevision(input)); r.save(); return out; };
-  r.change = (action, original) => { const out = r.exec(() => r.s.changeExpectedRevision(action, original)); r.save(); return out; };
+  r.change = (action, original, details) => { const out = r.exec(() => r.s.changeExpectedRevision(action, original, details)); r.save(); return out; };
   r.rec = (id) => JSON.parse(r.docProps.getProperty('PROVREV_' + id) || 'null');
   /** 3GU registers `id` as the revision of `of` (both directions of the list say it). */
   r.register = (id, of, extra) => { r.tdocs.push(Object.assign({ id: id, agenda: r.tdoc(of).agenda, status: 'reserved', title: r.tdoc(of).title, isRevisionOf: of, uploaded: false }, extra || {})); r.tdoc(of).revisedTo = id; r.tdoc(of).status = 'revised'; };
@@ -188,7 +188,7 @@ console.log('F. cancel and undo');
   const r = report();
   r.build(); r.save(); r.update();
   r.record({ original: 'S4-265001', decision: 'agreed' });
-  r.change('cancel', 'S4-265001');
+  r.change('cancel', 'S4-265001', { reason: 'No longer wanted by the group.' });
   r.register('S4-265101', 'S4-265001');
   r.update();
   check('cancelled while waiting: nothing transferred when the revision is registered', [r.rec('S4-265001').state, r.shown('S4-265101')], ['cancelled', 'dropdown:reserved']);
@@ -209,6 +209,52 @@ console.log('F. cancel and undo');
   r.update();
   check('undo refused when the revision was changed meanwhile: kept, said', [r.shown('S4-265103'), r.rec('S4-265003').state, /no longer shows "agreed"/.test(r.rec('S4-265003').reason)], ['dropdown:noted', 'transferred', true]);
   check('cancel/undo of the wrong state: refused', [(() => { try { r.change('cancel', 'S4-265003'); return 'done'; } catch (e) { return /only a record that waits/.test(e.message); } })(), (() => { try { r.change('undo', 'S4-265001'); return 'done'; } catch (e) { return /only a transfer can be undone/.test(e.message); } })()], [true, true]);
+}
+
+// ====================================================================== F2
+console.log('F2. a revision never registered: closed explicitly, audited, information in Close Report (decision 2026-11-23)');
+{
+  const r = report();
+  r.s.Session.getActiveUser = () => ({ getEmail: () => 'rapporteur@example.org' });
+  r.build(); r.save(); r.update();
+  r.record({ original: 'S4-265001', decision: 'agreed', plenary: '', agenda: '' });
+  r.update();
+  check('waiting: Close Report blocks on it', [r.closeProblems().some((p) => /^S4-265001: a revision is expected/.test(p)), r.exec(() => r.s.closeReportCore_()).ready], [true, false]);
+  const refuse = (fn) => { try { fn(); return 'done'; } catch (e) { return e.message; } };
+  check('resolving needs an outcome and a reason of 10 characters; cancelling a reason: refused otherwise, nothing changed',
+    [/choose an outcome/.test(refuse(() => r.change('resolve', 'S4-265001', { outcome: '', reason: 'never came in time' }))),
+      /at least 10 characters/.test(refuse(() => r.change('resolve', 'S4-265001', { outcome: 'not-submitted', reason: 'no' }))),
+      /at least 10 characters/.test(refuse(() => r.change('cancel', 'S4-265001'))), r.rec('S4-265001').state], [true, true, true, 'pending']);
+  const said = r.change('resolve', 'S4-265001', { outcome: 'not-submitted', reason: '  The source company did not submit the revision before the deadline.  ' });
+  const rec = r.rec('S4-265001');
+  check('resolved: the outcome, the reason, who, when and the state before are kept in the record and the log',
+    [/Resolved without a revision/.test(said), rec.state, rec.resolution.outcome, rec.resolution.reason, rec.resolution.by, /^\d{4}-\d\d-\d\dT/.test(rec.resolution.at), /^pending/.test(rec.resolution.before),
+      JSON.parse(r.docProps.getProperty('PROVREV_LOG'))[0].a, JSON.parse(r.docProps.getProperty('PROVREV_LOG'))[0].by],
+    [true, 'resolved', 'not-submitted', 'The source company did not submit the revision before the deadline.', 'rapporteur@example.org', true, true, 'resolved', 'rapporteur@example.org']);
+  const res = r.exec(() => r.s.closeReportCore_());
+  check('Close Report: no longer blocking; listed under Information with the outcome, the reason, who and when',
+    [r.closeProblems().length, res.informationNotes.filter((n) => /^S4-265001: the revision expected \("agreed"\) was closed without a transfer -- the revision was never submitted or registered: "The source company did not submit the revision before the deadline\." \(rapporteur@example\.org, \d{4}-\d\d-\d\d \d\d:\d\d UTC\)\.$/.test(n)).length, res.information >= 1],
+    [0, 1, true]);
+  r.register('S4-265101', 'S4-265001');
+  r.update(); r.update();
+  check('a revision registered after the resolution: nothing transferred, the record stays resolved', [r.shown('S4-265101'), r.rec('S4-265001').state], ['dropdown:reserved', 'resolved']);
+  check('a resolved record cannot be resolved or cancelled again', /only a record that waits or is in conflict/.test(refuse(() => r.change('cancel', 'S4-265001', { reason: 'second thoughts here' }))), true);
+  // Cancel with a reason (the outcome "cancelled"), from a conflict.
+  r.record({ original: 'S4-265002', decision: 'endorsed', successor: 'S4-265199' });
+  r.register('S4-265102', 'S4-265002');
+  r.update();
+  check('a conflict blocks', r.rec('S4-265002').state, 'conflict');
+  r.change('cancel', 'S4-265002', { reason: 'Recorded for the wrong TDoc by mistake.' });
+  check('cancelled from a conflict with a reason: information, not blocking; nothing written into the revision',
+    [r.rec('S4-265002').state, r.rec('S4-265002').resolution.outcome, r.closeProblems().length, r.exec(() => r.s.closeReportCore_()).informationNotes.some((n) => /^S4-265002: .*cancelled \(recorded by mistake or no longer wanted\): "Recorded for the wrong TDoc by mistake\."/.test(n)), r.shown('S4-265102')],
+    ['cancelled', 'cancelled', 0, true, 'dropdown:reserved']);
+  r.exec(() => r.s.manageExpectedRevisions());
+  const html = r.ui.dialogs[r.ui.dialogs.length - 1][1];
+  check('the dialog: a form to close a record (outcome, required reason), the resolution shown in the list',
+    [/Close a record without a transfer/.test(html), /Reason \(required/.test(html), /did not submit the revision/.test(html), /Resolved without a revision/.test(html)], [true, true, true, true]);
+  const noUser = report();
+  noUser.s.Session.getActiveUser = () => { throw new Error('no permission'); };
+  check('no user e-mail available: recorded as "dialog"', noUser.s.provisionalAuditUser_(), 'dialog');
 }
 
 // ====================================================================== R

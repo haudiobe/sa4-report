@@ -13,7 +13,7 @@ item once it appears, and was tempted to set the *original* to "agreed", which i
 *Report › Revision Expected…*: TDoc (autocomplete from the Registration of Documents table), decision (agreed,
 endorsed, approved, noted, merged, replied, postponed; "partially agreed" is no option of the template's dropdown), Goes to Plenary (Yes/No/–), plenary agenda
 item, optionally the expected TDoc number. **The original's Status is not changed.** The dialog lists every record with
-its state, a search box, Cancel (while waiting or in conflict) and Undo transfer, and the log.
+its state, a search box, **Close…** (while waiting or in conflict, see below) and Undo transfer, and the log.
 
 ## What an update does (only an interactive update, as for the summary and Goes to Plenary)
 
@@ -46,6 +46,23 @@ its state, a search box, Cancel (while waiting or in conflict) and Undo transfer
 Blocking (in `result.problems`): a record waiting for 3GU, a conflict, an undo still to be done, a Plenary choice to be
 set by hand. Rationale: the decision is not yet in any registered TDoc, so the report is not complete.
 
+**Decision 2026-11-23: blocking, with an explicit, auditable way out.** When a successor is never registered, the
+rapporteur closes the record in the dialog ("Close a record without a transfer"):
+
+| Outcome | Meaning |
+|---|---|
+| `not-submitted` | the revision was never submitted or registered |
+| `decided-on-original` | decided on the original TDoc instead (its Status is then set by hand, as any decision) |
+| `withdrawn` | the revision was withdrawn |
+| `other` | resolved otherwise |
+| `cancelled` | the record was made by mistake or is no longer wanted |
+
+A reason of at least 10 characters is required. The record keeps `resolution: { outcome, reason, by, at, before }`
+(`by` the e-mail Apps Script gives for the user, else `dialog`; `before` the state and reason it was closed from) and the
+log gets an entry with the same. Such a record no longer blocks: Close Report lists it under **Information** with outcome,
+reason, who and when (`appendProvisionalRevisionInformation_`, a hook after the classification). It is never transferred
+afterwards, even if a revision is registered later (test F2). Nothing is written into the document by closing a record.
+
 ## State
 `PROVREV_<original>` (JSON, ~300 bytes) and `PROVREV_LOG` (≤ 8.5 KB) in the report state; the Plenary keys of the
 existing Goes to Plenary model. No new document structure; nothing is written into the TDoc tables when a record is made.
@@ -64,12 +81,13 @@ transferred (set those revisions by hand); transfers already made stay as writte
 `tests/i28b-provisional-revisions.test.js` (A–H): validation incl. `r01` names; every decision of the pure function;
 recorded/waiting/transferred-once on an MBS report of SA4#138 with Status dropdowns; conflicts (hand decision, two
 successors, unexpected successor) and their resolution; Goes to Plenary for a new and an existing revision row; a typed
-plenary agenda item kept; cancel; undo (done, and refused after a hand change); no cost without records; ledger.
-Full suite: 134 files, all passing.
+plenary agenda item kept; cancel; undo (done, and refused after a hand change); F2: closing a record without a transfer
+(outcome and reason required, audit fields, information in Close Report, no transfer afterwards); no cost without
+records; ledger.
 
 ## Open questions
-1. Should a waiting record block Close Report (current) or only warn? The original is undisposed anyway, so it blocks
-   already unless handed to the plenary.
+1. ~~Should a waiting record block Close Report or only warn?~~ Decided 2026-11-23: it blocks; an explicit resolution
+   with a reason ends the block (above).
 2. Should "Plenary to be set by hand" be resolved automatically by replacing the existing dropdown (delete + insert
    through the Docs API)? Not done: the code has never changed an existing Plenary dropdown, and a live session may be
    editing it.

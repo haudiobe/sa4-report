@@ -17,8 +17,11 @@
  *     registered successor ("Revised to" / "Is revision of"), an update writes
  *     the decision into it exactly once, only while it is undecided; the
  *     original becomes "revised". Two successors, another than expected, or a
- *     successor decided by hand: a conflict, never a guess. Cancel and undo.
- *     Close Report blocks while one waits or is in conflict.
+ *     successor decided by hand: a conflict, never a guess. Undo.
+ *     Close Report blocks while one waits or is in conflict. A record
+ *     whose revision is never registered is closed explicitly: resolved
+ *     (outcome and reason) or cancelled (reason), with who and when; it is
+ *     then shown under Information in Close Report, not blocking.
  * 2.28.0 (2026-11-23)
  *   (Issue #28 phase A, candidate on T-2026.10.34 / 2.27.2.)
  *   - Titles: a title changed in the TDoc list after the reservation is
@@ -23861,6 +23864,8 @@ function closeReportCore_() {
   // After issue 28 A: a revision expected that waits or is in conflict blocks (ISSUE 28 B section).
   appendProvisionalRevisionProblems_(result);
   classifyCloseReportFindings_(result, summary);
+  // After issue 28 A: a revision expected that was resolved or cancelled with a reason is information (ISSUE 28 B section).
+  appendProvisionalRevisionInformation_(result);
   Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.undisposedTotal + ' not yet disposed, ' +
     REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState +
     '; external verification ' + (result.externalVerified ? 'completed (' + result.externalSource + ')' : 'NOT completed'));
@@ -30794,7 +30799,9 @@ function findStatusRowOfTable_(table) {
 // A successor that is itself revised further is followed down the chain of
 // the list to the newest registered TDoc. No successor yet: the record waits
 // (and Close Report says so); two successors, or another one than expected:
-// a conflict, never a guess. A record can be cancelled while it waits; a
+// a conflict, never a guess. A record whose revision is never registered is
+// closed explicitly -- resolved (an outcome and a reason) or cancelled (a
+// reason), with who and when; Close Report lists it as information. A
 // transfer can be undone, by the next update and only while the successor
 // still shows the transferred decision.
 
@@ -31205,14 +31212,14 @@ function manageExpectedRevisions() {
 /** Pure: the dialog. */
 function provisionalDialogHtml_(records, log, numbers, plenaryOn) {
   const esc = function (s) { return String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
-  const states = { pending: 'Waiting for 3GU', conflict: 'Conflict', transferring: 'Written, confirmed at the next update', transferred: 'Transferred', cancelled: 'Cancelled', undo: 'Undo at next update', undoing: 'Undo written, confirmed at the next update', undone: 'Undone' };
-  const keys = Object.keys(records || {}).sort(function (a, b) { const order = ['conflict', 'pending', 'transferring', 'undo', 'undoing', 'transferred', 'undone', 'cancelled']; return order.indexOf(records[a].state) - order.indexOf(records[b].state) || a.localeCompare(b); });
+  const states = { pending: 'Waiting for 3GU', conflict: 'Conflict', transferring: 'Written, confirmed at the next update', transferred: 'Transferred', cancelled: 'Cancelled', resolved: 'Resolved without a revision', undo: 'Undo at next update', undoing: 'Undo written, confirmed at the next update', undone: 'Undone' };
+  const keys = Object.keys(records || {}).sort(function (a, b) { const order = ['conflict', 'pending', 'transferring', 'undo', 'undoing', 'transferred', 'undone', 'resolved', 'cancelled']; return order.indexOf(records[a].state) - order.indexOf(records[b].state) || a.localeCompare(b); });
   const rows = keys.map(function (k) {
     const r = records[k];
-    const action = r.state === 'pending' || r.state === 'conflict' ? '<button onclick="act(\'cancel\',\'' + esc(r.original) + '\')">Cancel</button>'
+    const action = r.state === 'pending' || r.state === 'conflict' ? '<button onclick="pick(\'' + esc(r.original) + '\')">Close…</button>'
       : r.state === 'transferred' && r.previous !== undefined ? '<button onclick="act(\'undo\',\'' + esc(r.original) + '\')">Undo transfer</button>' : '';
     return '<tr class="r" data-s="' + esc((r.original + ' ' + (r.to || '') + ' ' + (r.successor || '') + ' ' + r.state).toLowerCase()) + '"><td>' + esc(r.original) + '</td><td>' + esc(r.decision) + '</td><td>' + esc(r.plenary ? (r.plenary === 'yes' ? 'Yes' : 'No') : '') +
-      (r.agenda ? ' ' + esc(r.agenda) : '') + '</td><td>' + esc(r.successor || '') + '</td><td><b>' + esc(states[r.state] || r.state) + '</b>' + (r.to ? ' → ' + esc(r.to) : '') + (r.reason ? '<br><small>' + esc(r.reason) + '</small>' : '') + '</td><td>' + action + '</td></tr>';
+      (r.agenda ? ' ' + esc(r.agenda) : '') + '</td><td>' + esc(r.successor || '') + '</td><td><b>' + esc(states[r.state] || r.state) + '</b>' + (r.to ? ' → ' + esc(r.to) : '') + (r.reason ? '<br><small>' + esc(r.reason) + '</small>' : '') + (r.resolution ? '<br><small>' + esc((PROVREV_RESOLUTIONS_[r.resolution.outcome] || r.resolution.outcome) + ': ' + r.resolution.reason + ' (' + r.resolution.by + ', ' + String(r.resolution.at || '').replace('T', ' ').slice(0, 16) + ')') + '</small>' : '') + '</td><td>' + action + '</td></tr>';
   }).join('');
   const options = PROVREV_DECISIONS_.map(function (d) { return '<option>' + esc(d) + '</option>'; }).join('');
   const list = (numbers || []).map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
@@ -31224,7 +31231,10 @@ function provisionalDialogHtml_(records, log, numbers, plenaryOn) {
     '<fieldset><legend>Revision expected</legend><label>TDoc<input id="o" list="nums" size="12" placeholder="S4-26xxxx"></label><datalist id="nums">' + list + '</datalist>' +
     '<label>Decision<select id="d">' + options + '</select></label><label>Goes to Plenary<select id="p"><option value="">–</option><option value="yes">Yes</option><option value="no">No</option></select></label>' +
     '<label>Plenary A.I.<input id="a" size="6" placeholder="15.4"></label><label>Expected TDoc (optional)<input id="s" size="12" placeholder="S4-26yyyy"></label>' +
-    '<button onclick="save()">Record</button></fieldset><div id="msg"></div>' +
+    '<button onclick="save()">Record</button></fieldset>' +
+    '<fieldset><legend>Close a record without a transfer (its revision is never registered)</legend><label>TDoc<input id="c" size="12" placeholder="S4-26xxxx"></label>' +
+    '<label>Outcome<select id="co"><option value="">–</option>' + Object.keys(PROVREV_RESOLUTIONS_).map(function (k) { return '<option value="' + esc(k) + '">' + esc(PROVREV_RESOLUTIONS_[k]) + '</option>'; }).join('') + '</select></label><br>' +
+    '<label>Reason (required, kept and shown in Close Report)<input id="cr" size="70"></label> <button onclick="closeRec()">Close record</button></fieldset><div id="msg"></div>' +
     '<input id="q" placeholder="Search…" oninput="filter()" size="30"> ' +
     (rows ? '<table><tr><th>Original</th><th>Decision</th><th>Plenary</th><th>Expected</th><th>State</th><th></th></tr>' + rows + '</table>' : '<p>No revision is expected.</p>') +
     '<h4>Log</h4>' + (logRows ? '<table><tr><th>When (UTC)</th><th>Original</th><th>What</th><th>Revision</th><th>Detail</th></tr>' + logRows + '</table>' : '<p>Empty.</p>') +
@@ -31232,6 +31242,8 @@ function provisionalDialogHtml_(records, log, numbers, plenaryOn) {
     'function done(t){msg(t);setTimeout(function(){google.script.host.close();},1500);}' +
     'function save(){msg("Saving…");google.script.run.withSuccessHandler(done).withFailureHandler(function(e){msg("Not saved: "+e.message);}).saveExpectedRevision({original:v("o"),decision:v("d"),plenary:v("p"),agenda:v("a"),successor:v("s")});}' +
     'function act(a,o){msg("Working…");google.script.run.withSuccessHandler(done).withFailureHandler(function(e){msg("Failed: "+e.message);}).changeExpectedRevision(a,o);}' +
+    'function pick(o){document.getElementById("c").value=o;document.getElementById("cr").focus();}' +
+    'function closeRec(){var o=v("co");msg("Working…");google.script.run.withSuccessHandler(done).withFailureHandler(function(e){msg("Not closed: "+e.message);}).changeExpectedRevision(o==="cancelled"?"cancel":"resolve",v("c"),{outcome:o,reason:v("cr")});}' +
     'function v(id){return document.getElementById(id).value;}' +
     'function filter(){var q=v("q").toLowerCase();[].slice.call(document.querySelectorAll("tr.r")).forEach(function(r){r.style.display=r.getAttribute("data-s").indexOf(q)===-1?"none":"";});}</script>';
 }
@@ -31257,8 +31269,12 @@ function saveExpectedRevision(input) {
   });
 }
 
-/** The dialog: 'cancel' a record that waits (or is in conflict), or 'undo' a transfer (done by the next update). Returns what was done. */
-function changeExpectedRevision(action, original) {
+/**
+ * The dialog: 'cancel' a record that waits (or is in conflict), 'resolve' it without a successor, or 'undo' a
+ * transfer (done by the next update). `details` ({ outcome, reason }): a cancel needs a reason, a resolution an
+ * outcome and a reason; both are kept in the record with who and when, and logged. Returns what was done.
+ */
+function changeExpectedRevision(action, original, details) {
   assertNotTemplateMaster_();
   return withDispositionLock_('Revision Expected', function () {
     const store = getReportStateStore_(null);
@@ -31266,12 +31282,20 @@ function changeExpectedRevision(action, original) {
     const r = provisionalRecordOf_(store.getProperty(key));
     if (!r) throw new Error('no revision is expected for ' + original);
     const now = new Date().toISOString();
-    if (action === 'cancel') {
-      if (r.state !== 'pending' && r.state !== 'conflict') throw new Error(r.original + ' is ' + r.state + '; only a record that waits or is in conflict can be cancelled');
-      r.state = 'cancelled'; r.reason = ''; r.cancelledAt = now;
+    if (action === 'cancel' || action === 'resolve') {
+      if (r.state !== 'pending' && r.state !== 'conflict') throw new Error(r.original + ' is ' + r.state + '; only a record that waits or is in conflict can be ' + (action === 'cancel' ? 'cancelled' : 'resolved'));
+      const checked = validateProvisionalResolution_(action === 'cancel' ? 'cancelled' : details && details.outcome, details && details.reason);
+      if (!checked.ok) throw new Error(checked.error);
+      const by = provisionalAuditUser_();
+      const before = r.state + (r.reason ? ' (' + r.reason + ')' : '');
+      r.resolution = { outcome: checked.outcome, reason: checked.reason, by: by, at: now, before: before };
+      r.state = action === 'cancel' ? 'cancelled' : 'resolved';
+      r.reason = '';
+      if (action === 'cancel') r.cancelledAt = now; else r.resolvedAt = now;
       store.setProperty(key, JSON.stringify(r));
-      appendProvisionalLog_(store, [{ t: r.original, a: 'cancelled', n: '', at: now, by: 'dialog', why: '' }]);
-      return 'Cancelled: nothing will be transferred for ' + r.original + '.';
+      appendProvisionalLog_(store, [{ t: r.original, a: r.state, n: '', at: now, by: by, why: PROVREV_RESOLUTIONS_[checked.outcome] + ': ' + checked.reason }]);
+      return (action === 'cancel' ? 'Cancelled' : 'Resolved without a revision (' + PROVREV_RESOLUTIONS_[checked.outcome] + ')') + ': nothing will be transferred for ' + r.original +
+        '. Close Report shows it under Information, with the reason.';
     }
     if (action === 'undo') {
       if (r.state !== 'transferred') throw new Error(r.original + ' is ' + r.state + '; only a transfer can be undone');
@@ -31283,6 +31307,53 @@ function changeExpectedRevision(action, original) {
     }
     throw new Error('unknown action ' + action);
   });
+}
+
+/** The outcomes of a record closed without a transfer, as Close Report and the log name them. */
+const PROVREV_RESOLUTIONS_ = {
+  'not-submitted': 'the revision was never submitted or registered',
+  'decided-on-original': 'decided on the original TDoc instead',
+  'withdrawn': 'the revision was withdrawn',
+  'other': 'resolved otherwise',
+  'cancelled': 'cancelled (recorded by mistake or no longer wanted)'
+};
+/** A reason must say something: at least this many characters. */
+const PROVREV_MIN_REASON_ = 10;
+
+/** Pure: { ok, outcome, reason, error } -- an outcome of PROVREV_RESOLUTIONS_ and a reason of PROVREV_MIN_REASON_ characters or more. */
+function validateProvisionalResolution_(outcome, reason) {
+  const o = String(outcome === null || outcome === undefined ? '' : outcome).trim();
+  if (!Object.prototype.hasOwnProperty.call(PROVREV_RESOLUTIONS_, o)) return { ok: false, error: 'choose an outcome (' + Object.keys(PROVREV_RESOLUTIONS_).filter(function (k) { return k !== 'cancelled'; }).join(', ') + ')' };
+  const text = String(reason === null || reason === undefined ? '' : reason).replace(/\s+/g, ' ').trim();
+  if (text.length < PROVREV_MIN_REASON_) return { ok: false, error: 'a reason of at least ' + PROVREV_MIN_REASON_ + ' characters is required (it is kept for the audit trail and shown in Close Report)' };
+  return { ok: true, outcome: o, reason: text.slice(0, 500) };
+}
+
+/** Who closed a record, for the audit trail: the user Apps Script names (in the document's own state only), else 'dialog'. */
+function provisionalAuditUser_() {
+  try {
+    const email = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
+    return email || 'dialog';
+  } catch (e) {
+    return 'dialog';
+  }
+}
+
+/** Close Report, after the classification: each record resolved or cancelled with a reason is information (not blocking). */
+function appendProvisionalRevisionInformation_(result) {
+  try {
+    const records = readProvisionalRecords_(getReportStateStore_(null));
+    Object.keys(records).sort().forEach(function (k) {
+      const r = records[k];
+      if ((r.state !== 'resolved' && r.state !== 'cancelled') || !r.resolution) return;
+      const what = '"' + r.decision + '"' + (r.plenary ? ', Plenary ' + (r.plenary === 'yes' ? 'Yes' : 'No') : '') + (r.agenda ? ' (' + r.agenda + ')' : '');
+      result.informationNotes.push(r.original + ': the revision expected (' + what + ') was closed without a transfer -- ' + (PROVREV_RESOLUTIONS_[r.resolution.outcome] || r.resolution.outcome) +
+        ': "' + r.resolution.reason + '" (' + r.resolution.by + ', ' + String(r.resolution.at || '').replace('T', ' ').slice(0, 16) + ' UTC).');
+    });
+    result.information = (result.plenaryRouted || []).length + result.informationNotes.length;
+  } catch (e) {
+    Logger.log('Close Report: the revisions expected closed without a transfer could not be listed (' + e.message + ').');
+  }
 }
 
 // =========================================================
