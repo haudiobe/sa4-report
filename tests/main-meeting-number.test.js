@@ -273,7 +273,7 @@ console.log('H. what changed in Code.js');
     [MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS.slice().sort(), []]);
   // Brought to master after issue #16 (it was on release/T-2026.10.24 only); released with T-2026.10.27 (2.26.11),
   // whose header the ledger takes out with the outermost layer: without it, the version is master's before it (2.26.7).
-  check('the version is 2.28.0 (issue #28 phase A, on T-2026.10.34); without this layer and the later ones 2.26.7', [(FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], (view.code.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1]], ['2.28.0', '2.26.7']);
+  check('the version is 2.29.0 (issue #28 phase B, on phase A); without this layer and the later ones 2.26.7', [(FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], (view.code.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1]], ['2.29.0', '2.26.7']);
   let candidate = null;
   let from = '';
   // master before it (the merge of PR #17); on the release branch it was release/T-2026.10.24.

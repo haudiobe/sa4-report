@@ -36,8 +36,10 @@ function check(name, actual, expected) {
 }
 
 const ROOT = path.join(__dirname, '..');
-const FULL = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
-const T34 = ledger.codeWithoutIssue28A(FULL).code;
+// The layer checks (H) are about phase A: a later phase is taken out first.
+const RAW = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+const FULL = ledger.hasIssue28B && ledger.hasIssue28B(RAW) ? ledger.codeWithoutIssue28B(RAW).code : RAW;
+const T34 = ledger.codeWithoutIssue28A(RAW).code;
 const AGENDA_138 = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'agenda-S4-261857.google-items.json'), 'utf8')).items
   .map((i) => ({ number: i.number, title: i.title, level: i.level, heading: 'NORMAL', text: '' }));
 const MAIN = { SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main', MEETING_NAME: 'SA4#138', MEETING_ID: '60780', REPORT_SUFFIX: 'MBS', MEETING_DATE: 'November 16, 2026',
@@ -439,9 +441,9 @@ console.log('H. the ledger');
   if (base === null) console.log('  note: commit 21e0b8e is not available; the byte comparison is skipped.');
   else check('without it, Code.js is that of T-2026.10.34 (21e0b8e), byte for byte', view.code === base, true);
   const creator = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
-  const cview = ledger.creatorWithoutIssue28A(creator);
+  const cview = ledger.creatorWithoutIssue28A(creator); // takes a later phase's item out first
   const cbase = (() => { try { return execFileSync('git', ['show', '21e0b8e:template/ReportCreator.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); } catch (e) { return null; } })();
-  check('ReportCreator.js: one menu item; without it, that of T-2026.10.34', [cview.problems, cbase === null || cview.code === cbase], [[], true]);
+  check('ReportCreator.js: its menu item; without it (and later phases), that of T-2026.10.34', [cview.problems, cbase === null || cview.code === cbase], [[], true]);
   check('the version is 2.28.0', (FULL.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.28.0');
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((x) => x.slice(9, -1));
   const bodyOf = (code, n) => { const at = code.indexOf('\nfunction ' + n + '('); if (at === -1) return null; const end = code.indexOf('\n}\n', at); return code.slice(at, end); };

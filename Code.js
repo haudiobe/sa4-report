@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.28.0 (2026-11-23)
+ * Version: 2.29.0 (2026-11-23)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,17 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.29.0 (2026-11-23)
+ *   (Issue #28 phase B, candidate on 2.28.0.)
+ *   - Revision expected: Report > Revision Expected… records what the
+ *     revision of a TDoc is to get (decision, Goes to Plenary, plenary agenda
+ *     item, optionally the expected number) before 3GU registers it; the
+ *     original's Status is not changed. When the TDoc list names the
+ *     registered successor ("Revised to" / "Is revision of"), an update writes
+ *     the decision into it exactly once, only while it is undecided; the
+ *     original becomes "revised". Two successors, another than expected, or a
+ *     successor decided by hand: a conflict, never a guess. Cancel and undo.
+ *     Close Report blocks while one waits or is in conflict.
  * 2.28.0 (2026-11-23)
  *   (Issue #28 phase A, candidate on T-2026.10.34 / 2.27.2.)
  *   - Titles: a title changed in the TDoc list after the reservation is
@@ -1605,6 +1616,9 @@ function continuousUpdateCore_(context) {
     // After T-2026.10.17: for the TDocs the report has registered -- the
     // TDocs of the list read above among them.
     if (!context) {
+      // After issue 28 A: a revision expected gets its decision once its successor is registered (ISSUE 28 B section).
+      const provisional = syncProvisionalRevisionsOnUpdate_(allTdocs, tdocTableIndex, context);
+      if (provisional.transferred || provisional.conflicts || provisional.undone) result.revisionsExpected = provisional.summary;
       // After T-2026.10.29: the revision relationships (every report), and the Goes to Plenary data (GOES TO PLENARY section).
       syncTdocRevisionsOnUpdate_(allTdocs, tdocTableIndex);
       const plenary = syncPlenarySelectionOnUpdate_(body, allTdocs, tdocTableIndex);
@@ -23842,6 +23856,8 @@ function closeReportCore_() {
   REVISION_CHECK_STATES_.forEach(function (s) { result.counts[s.kind] = result.revisions.filter(function (r) { return r.kind === s.kind; }).length; });
 
   // After T-2026.10.32: blocking issues, warnings and information; only a blocking issue keeps the report from closing (CLOSE REPORT VALIDATION section).
+  // After issue 28 A: a revision expected that waits or is in conflict blocks (ISSUE 28 B section).
+  appendProvisionalRevisionProblems_(result);
   classifyCloseReportFindings_(result, summary);
   Logger.log('Close Report: ' + (result.ready ? 'ready to close' : 'NOT ready to close') + ' -- ' + result.checked + ' TDocs, ' + result.undisposedTotal + ' not yet disposed, ' +
     REVISION_CHECK_STATES_.map(function (s) { return result.counts[s.kind] + ' ' + s.short; }).join(', ') + ', ' + result.problems.length + ' problem(s); summary ' + result.summaryState +
@@ -30745,4 +30761,439 @@ function findStatusRowOfTable_(table) {
 
 // =========================================================
 // END OF ISSUE 28 A
+// =========================================================
+
+// =========================================================
+// ISSUE 28 B: PROVISIONAL REVISION DECISIONS (after issue 28 A)
+// =========================================================
+//
+// Issue #28, phase B (docs/ISSUE28_PHASE_B.md). In the meeting a contribution
+// is often agreed "with changes": its revision will be a new TDoc that is not
+// registered in 3GU yet. The rapporteur records now what the revision is to
+// get -- the decision, Goes to Plenary Yes/No and the SA4 plenary agenda item,
+// optionally the expected TDoc number -- without changing the original's
+// Status (Report > Revision Expected…). The record is a state of its own,
+// PROVREV_<original> in the report state; nothing is written into the TDoc
+// tables when it is made.
+//
+// When the TDoc list says who the successor is -- only the list's "Revised to"
+// of the original or "Is revision of" of the successor, never a number, a
+// title or a file such as S4-261234r01.docx in a revisions folder -- and the
+// successor is registered (it has a row in the list and a TDoc table in the
+// report), an update transfers the record EXACTLY ONCE:
+//   - the successor's Status gets the decision, through the update's own
+//     status path, and only while it is undecided (reserved / available); a
+//     successor decided by hand is never written: a conflict;
+//   - with Goes to Plenary, its Plenary choice and agenda item go with it
+//     where its compact row is made in that update (a successor already
+//     carrying a Plenary dropdown with another choice is reported, never
+//     changed), and a plenary agenda item typed for it is kept;
+//   - the original's Status becomes "revised" (as the Portal status would).
+// A successor that is itself revised further is followed down the chain of
+// the list to the newest registered TDoc. No successor yet: the record waits
+// (and Close Report says so); two successors, or another one than expected:
+// a conflict, never a guess. A record can be cancelled while it waits; a
+// transfer can be undone, by the next update and only while the successor
+// still shows the transferred decision.
+
+/** Report state, per original TDoc: its provisional decision (JSON, see provisionalRecordOf_()). */
+const PROVREV_PREFIX_ = 'PROVREV_';
+/** Report state: the log of provisional decisions, newest first (bounded). */
+const PROVREV_LOG_KEY_ = 'PROVREV_LOG';
+/** The decisions that can be recorded for a revision (labels of the Status dropdown). */
+const PROVREV_DECISIONS_ = ['agreed', 'partially agreed', 'endorsed', 'approved', 'noted', 'merged', 'replied', 'postponed'];
+/** How many generations of "Revised to" are followed from the original. */
+const PROVREV_MAX_CHAIN_ = 5;
+/** Statuses of a successor that count as undecided (the transfer may write it). */
+const PROVREV_UNDECIDED_ = ['reserved', 'available', ''];
+
+/**
+ * Pure: a stored record (JSON) as an object, or null. Fields: v, original,
+ * decision, plenary ('yes' | 'no' | ''), agenda, successor (expected, optional),
+ * state ('pending' | 'transferred' | 'conflict' | 'cancelled' | 'undo' | 'undone'),
+ * reason, at (made), by ('dialog'), to (the successor written), previous
+ * (its Status before), plenaryDone ('pending' | 'manual' | 'same' | 'off' | ''),
+ * transferredAt, undoneAt.
+ */
+function provisionalRecordOf_(text) {
+  try {
+    const r = JSON.parse(text || '');
+    if (!r || r.v !== 1 || !r.original || !r.decision) return null;
+    return r;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Pure: whether `value` is a TDoc number as 3GU registers it (never a file name such as S4-261234r01.docx). */
+function isRegisteredTdocNumber_(value) {
+  const text = String(value === null || value === undefined ? '' : value).trim();
+  const parsed = parseExactSA4DocumentId_(text);
+  return parsed.isValid && parsed.raw === text;
+}
+
+/**
+ * Pure: the validation of a record before it is stored: { ok, record, error }.
+ * `input`: { original, decision, plenary, agenda, successor }.
+ */
+function validateProvisionalInput_(input) {
+  const original = String((input && input.original) || '').trim();
+  if (!isRegisteredTdocNumber_(original)) return { ok: false, error: '"' + original + '" is not a TDoc number' };
+  const decision = String((input && input.decision) || '').trim().toLowerCase();
+  if (PROVREV_DECISIONS_.indexOf(decision) === -1) return { ok: false, error: 'the decision must be one of ' + PROVREV_DECISIONS_.join(', ') };
+  const plenary = String((input && input.plenary) || '').trim().toLowerCase();
+  if (['yes', 'no', ''].indexOf(plenary) === -1) return { ok: false, error: 'Goes to Plenary must be Yes, No or blank' };
+  const agenda = String((input && input.agenda) || '').trim();
+  if (agenda && !/^\d+(\.\d+)*$/.test(agenda)) return { ok: false, error: 'the plenary agenda item must be a number such as 15.4' };
+  const successor = String((input && input.successor) || '').trim();
+  if (successor) {
+    if (/r\d+/i.test(successor.replace(/^S4[a-z]*-\d+/i, '')) || !isRegisteredTdocNumber_(successor)) {
+      return { ok: false, error: '"' + successor + '" is not a TDoc number (a local revision file such as S4-261234r01 is not a successor; its TDoc is registered with a new number)' };
+    }
+    if (successor === original) return { ok: false, error: 'the successor cannot be the original itself' };
+  }
+  return { ok: true, record: { v: 1, original: original, decision: decision, plenary: plenary, agenda: agenda, successor: successor, state: 'pending', reason: '' } };
+}
+
+/**
+ * Pure: the registered successors of `number` in the list facts (plenaryListFactsOf_()):
+ * its "Revised to", and every TDoc whose "Is revision of" names it -- only TDocs
+ * the list has. { listed: [..], named: [..] } -- `named` the "Revised to" not in the list (yet).
+ */
+function provisionalSuccessorsOf_(facts, number) {
+  const own = (facts[number] && facts[number].revisedTo) || [];
+  const set = {};
+  const named = [];
+  own.forEach(function (id) { if (id === number) return; if (facts[id]) set[id] = true; else if (named.indexOf(id) === -1) named.push(id); });
+  Object.keys(facts).forEach(function (id) { if (id !== number && (facts[id].isRevisionOf || []).indexOf(number) !== -1) set[id] = true; });
+  return { listed: Object.keys(set).sort(), named: named };
+}
+
+/**
+ * Pure: what an update does with one pending record. `facts` the list facts,
+ * `statusOf(number)` the successor's report status: { exists, label } (label
+ * lowercase, '' when none). Returns { action, successor, reason }:
+ *   'wait'      no registered successor yet (reason says why)
+ *   'transfer'  write it to `successor`
+ *   'done'      the successor already shows the decision: recorded as transferred, nothing written
+ *   'conflict'  never a guess: two successors, not the one expected, or decided by hand
+ */
+function decideProvisionalTransfer_(record, facts, statusOf) {
+  if (!facts[record.original]) return { action: 'wait', reason: 'the original is not in the TDoc list of this update' };
+  let current = record.original;
+  let chain = [];
+  for (let hop = 0; hop < PROVREV_MAX_CHAIN_; hop++) {
+    const s = provisionalSuccessorsOf_(facts, current);
+    if (!s.listed.length) {
+      if (!chain.length) return { action: 'wait', reason: s.named.length ? 'the TDoc list names ' + s.named.join(', ') + ' as the revision, not registered yet' : 'no revision is registered in 3GU yet' };
+      break;
+    }
+    if (s.listed.length > 1) {
+      return { action: 'conflict', reason: (chain.length ? chain[chain.length - 1] : record.original) + ' has ' + s.listed.length + ' successors in the TDoc list (' + s.listed.join(', ') + '): choose one' };
+    }
+    if (chain.indexOf(s.listed[0]) !== -1 || s.listed[0] === record.original) return { action: 'conflict', reason: 'the revisions of the TDoc list form a cycle (' + chain.concat(s.listed[0]).join(' -> ') + ')' };
+    chain.push(s.listed[0]);
+    current = s.listed[0];
+  }
+  const successor = chain[chain.length - 1];
+  if (record.successor && chain.indexOf(record.successor) === -1) {
+    return { action: 'conflict', successor: successor, reason: record.successor + ' was expected, but the TDoc list makes ' + chain.join(' -> ') + ' the revision' };
+  }
+  const st = statusOf(successor) || { exists: false, label: '' };
+  if (!st.exists) return { action: 'wait', successor: successor, reason: successor + ' is registered but has no TDoc table in the report yet' };
+  if (st.label === record.decision) return { action: 'done', successor: successor };
+  if (PROVREV_UNDECIDED_.indexOf(st.label) === -1) {
+    return { action: 'conflict', successor: successor, reason: successor + ' is already "' + st.label + '" in the report (decided by hand); the recorded "' + record.decision + '" was not written' };
+  }
+  return { action: 'transfer', successor: successor };
+}
+
+/** The records of the report state: { original: record } (cancelled and undone ones included), from one read. */
+function readProvisionalRecords_(store) {
+  const out = {};
+  let all = null;
+  try { all = typeof store.getProperties === 'function' ? store.getProperties() : null; } catch (e) { all = null; }
+  if (!all) return out;
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf(PROVREV_PREFIX_) !== 0 || k === PROVREV_LOG_KEY_) return;
+    const r = provisionalRecordOf_(all[k]);
+    if (r) out[r.original] = r;
+  });
+  return out;
+}
+
+/** Appends entries to the log (newest first, one property value at most). */
+function appendProvisionalLog_(store, entries) {
+  if (!entries.length) return;
+  let log = [];
+  try { log = JSON.parse(store.getProperty(PROVREV_LOG_KEY_) || '[]') || []; } catch (e) { log = []; }
+  store.setProperty(PROVREV_LOG_KEY_, titleSyncBoundedJson_(entries.concat(log)));
+}
+
+/** The report status of a TDoc table, lowercase ('' when none or unreadable). */
+function provisionalStatusOfTable_(table) {
+  try {
+    const info = findStatusInDocTable_(table);
+    if (!info) return '';
+    return statusDropdownLabel_(readTdocStatus_(table, info.value));
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * Writes `status` into the Status of `table` (the update's status path: text,
+ * or the dropdown at the end of the run), only while it shows `expected`
+ * (lowercase); returns true when written or queued.
+ */
+function writeProvisionalStatus_(table, number, status, expected) {
+  const info = findStatusInDocTable_(table);
+  if (!info) return false;
+  if (statusDropdownLabel_(readTdocStatus_(table, info.value)) !== expected) return false;
+  if (statusCellHoldsDropdown_(info.cell) && !(isCompactStatusCellText_(info.cell.getText()) && info.value)) {
+    const entry = statusDropdownEntryOfTable_(table);
+    const run = statusDropdownRun_();
+    if (!entry || !run.index) return false;
+    const definition = (run.index.definitions || {})[entry.definitionId];
+    const options = (definition && definition.dropdownDefinitionProperties && definition.dropdownDefinitionProperties.options) || [];
+    const option = mapPortalStatusToDropdownOption_(status, options);
+    if (!option) return false;
+    run.updates[number] = status;
+    entry.displayValue = String(option.displayValue);
+    entry.selectedOptionId = option.optionId;
+    return true;
+  }
+  setStatusCellText_(info.cell, status);
+  try { styleStatusCell_(table); } catch (e) { /* the look never decides */ }
+  noteStatusDropdownCandidate_(number, status);
+  return true;
+}
+
+/**
+ * The Plenary part of a transfer to `successor` (a report with Goes to Plenary):
+ * 'pending' (its compact row is made in this update with the choice), 'same'
+ * (it shows that choice already), 'manual' (it has another choice: to be set by
+ * hand), 'off' (no Goes to Plenary, or nothing chosen). The agenda item is kept
+ * as a manual value unless one is there already. Returns { done, writes }.
+ */
+function planProvisionalPlenary_(record, successor, stored, plenaryEntry) {
+  const writes = {};
+  if (!plenarySelectionEnabled_() || !record.plenary) return { done: 'off', writes: writes };
+  if (record.agenda && !Object.prototype.hasOwnProperty.call(stored, PLENARY_MANUAL_KEY_PREFIX_ + successor)) writes[PLENARY_MANUAL_KEY_PREFIX_ + successor] = record.agenda;
+  if (plenaryEntry && plenaryEntry.kind === 'dropdown') {
+    return { done: plenaryChoiceOfText_(plenaryEntry.displayValue) === record.plenary ? 'same' : 'manual', writes: writes };
+  }
+  writes[PLENARY_PENDING_KEY_PREFIX_ + successor] = record.plenary;
+  return { done: 'pending', writes: writes };
+}
+
+/**
+ * The update (not a background run): every pending record is decided against
+ * the TDoc list of this run and transferred where it can be; every undo asked
+ * for is done. Returns { transferred, waiting, conflicts, undone, summary }.
+ * Never throws.
+ */
+function syncProvisionalRevisionsOnUpdate_(allTdocs, index, context) {
+  const out = { transferred: 0, waiting: 0, conflicts: 0, undone: 0, summary: '' };
+  try {
+    const store = getReportStateStore_(context);
+    const records = readProvisionalRecords_(store);
+    const open = Object.keys(records).filter(function (k) { return ['pending', 'conflict', 'undo'].indexOf(records[k].state) !== -1; });
+    if (!open.length) return out;
+    const facts = plenaryListFactsOf_(allTdocs);
+    const stored = PropertiesService.getDocumentProperties().getProperties() || {};
+    const plenaryIndex = (statusDropdownRun_().index || {}).plenary || {};
+    const tableOf = function (n) { return index ? lookupTdocTableInIndex_(index, n) : null; };
+    const statusOf = function (n) { const t = tableOf(n); return t ? { exists: true, label: provisionalStatusOfTable_(t) } : { exists: false, label: '' }; };
+    const now = new Date().toISOString();
+    const writes = {};
+    const plenaryWrites = {};
+    const plenaryDeletes = [];
+    const log = [];
+    open.forEach(function (key) {
+      const r = records[key];
+      const k = PROVREV_PREFIX_ + r.original;
+      if (r.state === 'undo') {
+        const t = tableOf(r.to);
+        const ok = t && r.previous !== undefined && writeProvisionalStatus_(t, r.to, r.previous || 'available', r.decision);
+        r.state = ok ? 'undone' : 'transferred';
+        r.reason = ok ? '' : r.to + ' no longer shows "' + r.decision + '"; the transfer was not undone (change its Status by hand if wanted)';
+        r.undoneAt = ok ? now : r.undoneAt;
+        if (ok) {
+          // A Plenary choice still waiting for its row is withdrawn; one already in a dropdown stays (said in the dialog).
+          if (r.plenaryDone === 'pending' && stored[PLENARY_PENDING_KEY_PREFIX_ + r.to] === r.plenary) plenaryDeletes.push(PLENARY_PENDING_KEY_PREFIX_ + r.to);
+          out.undone++;
+        }
+        writes[k] = JSON.stringify(r);
+        log.push({ t: r.original, a: ok ? 'undone' : 'undo-refused', n: r.to, at: now, by: 'update', why: r.reason });
+        return;
+      }
+      const d = decideProvisionalTransfer_(r, facts, statusOf);
+      if (d.action === 'wait') {
+        out.waiting++;
+        if (r.state !== 'pending' || r.reason !== d.reason) { r.state = 'pending'; r.reason = d.reason; writes[k] = JSON.stringify(r); }
+        return;
+      }
+      if (d.action === 'conflict') {
+        out.conflicts++;
+        if (r.state !== 'conflict' || r.reason !== d.reason) {
+          r.state = 'conflict'; r.reason = d.reason; writes[k] = JSON.stringify(r);
+          log.push({ t: r.original, a: 'conflict', n: d.successor || '', at: now, by: 'update', why: d.reason });
+          Logger.log('Revision expected for ' + r.original + ': ' + d.reason + '.');
+        }
+        return;
+      }
+      const table = tableOf(d.successor);
+      const previous = statusOf(d.successor).label;
+      if (d.action === 'transfer' && !writeProvisionalStatus_(table, d.successor, r.decision, previous)) {
+        out.conflicts++;
+        r.state = 'conflict'; r.reason = 'the Status of ' + d.successor + ' could not be written ("' + r.decision + '" has no option there, or its Status changed meanwhile)';
+        writes[k] = JSON.stringify(r);
+        return;
+      }
+      const pl = planProvisionalPlenary_(r, d.successor, stored, plenaryIndex[d.successor]);
+      Object.keys(pl.writes).forEach(function (w) { plenaryWrites[w] = pl.writes[w]; });
+      // The original: revised, as the Portal status would make it (never over a status of the list's own).
+      const orig = tableOf(r.original);
+      if (orig) { const was = statusOf(r.original).label; if (was !== 'revised' && PROVREV_UNDECIDED_.indexOf(was) !== -1) writeProvisionalStatus_(orig, r.original, 'revised', was); }
+      r.state = 'transferred'; r.to = d.successor; r.plenaryDone = pl.done; r.transferredAt = now;
+      // Only a Status this transfer wrote can be undone; one the successor showed already is not this code's.
+      if (d.action === 'transfer') r.previous = previous; else delete r.previous;
+      r.reason = pl.done === 'manual' ? d.successor + ' already has a Plenary choice other than "' + r.plenary + '": set it by hand' : '';
+      writes[k] = JSON.stringify(r);
+      out.transferred++;
+      log.push({ t: r.original, a: d.action === 'done' ? 'already-shown' : 'transferred', n: d.successor, at: now, by: 'update', why: r.decision + (r.plenary ? ', Plenary ' + r.plenary : '') + (r.agenda ? ' ' + r.agenda : '') });
+      Logger.log('Revision expected for ' + r.original + ': "' + r.decision + '" transferred to ' + d.successor + (pl.done === 'manual' ? ' (its Plenary choice is to be set by hand)' : '') + '.');
+    });
+    // The Goes to Plenary keys are document properties (as the GOES TO PLENARY section keeps them).
+    const plenaryProps = PropertiesService.getDocumentProperties();
+    if (Object.keys(plenaryWrites).length) plenaryProps.setProperties(plenaryWrites);
+    plenaryDeletes.forEach(function (key) { plenaryProps.deleteProperty(key); });
+    writeTitleSyncState_(store, writes);
+    appendProvisionalLog_(store, log);
+    out.summary = out.transferred + ' transferred, ' + out.waiting + ' waiting for 3GU, ' + out.conflicts + ' conflict(s)' + (out.undone ? ', ' + out.undone + ' undone' : '');
+    Logger.log('Revisions expected: ' + out.summary + '.');
+  } catch (e) {
+    Logger.log('Revisions expected: not checked (' + e.message + '); the next update tries again.');
+    out.summary = 'failed: ' + e.message;
+  }
+  return out;
+}
+
+/** Close Report: a record that waits or is in conflict blocks (the decision is in no registered TDoc); a Plenary choice to be set by hand too. */
+function appendProvisionalRevisionProblems_(result) {
+  try {
+    const records = readProvisionalRecords_(getReportStateStore_(null));
+    Object.keys(records).sort().forEach(function (k) {
+      const r = records[k];
+      const what = '"' + r.decision + '"' + (r.plenary ? ', Plenary ' + (r.plenary === 'yes' ? 'Yes' : 'No') : '') + (r.agenda ? ' (' + r.agenda + ')' : '');
+      if (r.state === 'pending') result.problems.push(r.original + ': a revision is expected (' + what + '), but ' + (r.reason || 'it is not registered in 3GU yet') + '. Register it, or cancel the record (Report > Revision Expected…).');
+      else if (r.state === 'conflict') result.problems.push(r.original + ': the expected revision (' + what + ') could not be transferred: ' + r.reason + '. Resolve it in Report > Revision Expected….');
+      else if (r.state === 'undo') result.problems.push(r.original + ': undoing the transfer to ' + r.to + ' waits for the next update.');
+      else if (r.state === 'transferred' && r.plenaryDone === 'manual') result.problems.push(r.original + ': ' + r.reason + '.');
+    });
+  } catch (e) {
+    result.problems.push('The revisions expected could not be checked (' + e.message + ').');
+  }
+}
+
+/** Report > Revision Expected…: the records, and a form to make one. */
+function manageExpectedRevisions() {
+  assertNotTemplateMaster_();
+  const store = getReportStateStore_(null);
+  const records = readProvisionalRecords_(store);
+  let log = [];
+  try { log = JSON.parse(store.getProperty(PROVREV_LOG_KEY_) || '[]') || []; } catch (e) { log = []; }
+  const numbers = [];
+  try {
+    currentReportDocument_().getBody().getTables().forEach(function (t) { if (registrationTableColumns_(t)) for (let r = 1; r < t.getNumRows(); r++) { const n = t.getRow(r).getCell(0).getText().trim(); if (isRegisteredTdocNumber_(n)) numbers.push(n); } });
+  } catch (e) { /* the form works without the list of numbers */ }
+  const html = HtmlService.createHtmlOutput(provisionalDialogHtml_(records, log, numbers, plenarySelectionEnabled_())).setWidth(820).setHeight(600);
+  DocumentApp.getUi().showModalDialog(html, 'Revision Expected');
+}
+
+/** Pure: the dialog. */
+function provisionalDialogHtml_(records, log, numbers, plenaryOn) {
+  const esc = function (s) { return String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  const states = { pending: 'Waiting for 3GU', conflict: 'Conflict', transferred: 'Transferred', cancelled: 'Cancelled', undo: 'Undo at next update', undone: 'Undone' };
+  const keys = Object.keys(records || {}).sort(function (a, b) { const order = ['conflict', 'pending', 'undo', 'transferred', 'undone', 'cancelled']; return order.indexOf(records[a].state) - order.indexOf(records[b].state) || a.localeCompare(b); });
+  const rows = keys.map(function (k) {
+    const r = records[k];
+    const action = r.state === 'pending' || r.state === 'conflict' ? '<button onclick="act(\'cancel\',\'' + esc(r.original) + '\')">Cancel</button>'
+      : r.state === 'transferred' ? '<button onclick="act(\'undo\',\'' + esc(r.original) + '\')">Undo transfer</button>' : '';
+    return '<tr class="r" data-s="' + esc((r.original + ' ' + (r.to || '') + ' ' + (r.successor || '') + ' ' + r.state).toLowerCase()) + '"><td>' + esc(r.original) + '</td><td>' + esc(r.decision) + '</td><td>' + esc(r.plenary ? (r.plenary === 'yes' ? 'Yes' : 'No') : '') +
+      (r.agenda ? ' ' + esc(r.agenda) : '') + '</td><td>' + esc(r.successor || '') + '</td><td><b>' + esc(states[r.state] || r.state) + '</b>' + (r.to ? ' → ' + esc(r.to) : '') + (r.reason ? '<br><small>' + esc(r.reason) + '</small>' : '') + '</td><td>' + action + '</td></tr>';
+  }).join('');
+  const options = PROVREV_DECISIONS_.map(function (d) { return '<option>' + esc(d) + '</option>'; }).join('');
+  const list = (numbers || []).map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
+  const logRows = (log || []).slice(0, 30).map(function (e) { return '<tr><td>' + esc(String(e.at || '').replace('T', ' ').slice(0, 16)) + '</td><td>' + esc(e.t) + '</td><td>' + esc(e.a) + '</td><td>' + esc(e.n || '') + '</td><td>' + esc(e.why || '') + '</td></tr>'; }).join('');
+  return '<style>body{font:13px Arial,sans-serif;margin:8px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:3px 5px;text-align:left;vertical-align:top}th{background:#f1f3f4}' +
+    'fieldset{margin:0 0 10px}label{margin-right:10px}input,select{margin-left:4px}.note{color:#555}#msg{font-weight:bold;margin:6px 0}</style>' +
+    '<div class="note">Record now what the revision of a TDoc is to get, before 3GU registers it. The original keeps its Status. When the TDoc list names the revision ("Revised to" / "Is revision of") and its table is in the report, an update writes the decision into it once' +
+    (plenaryOn ? ', with Goes to Plenary and the plenary agenda item' : ' (Goes to Plenary is not set up in this report: the Plenary choice is kept but not written)') + ', and the original becomes "revised". A revision file such as S4-261234r01 in a revisions folder is not a revision TDoc.</div>' +
+    '<fieldset><legend>Revision expected</legend><label>TDoc<input id="o" list="nums" size="12" placeholder="S4-26xxxx"></label><datalist id="nums">' + list + '</datalist>' +
+    '<label>Decision<select id="d">' + options + '</select></label><label>Goes to Plenary<select id="p"><option value="">–</option><option value="yes">Yes</option><option value="no">No</option></select></label>' +
+    '<label>Plenary A.I.<input id="a" size="6" placeholder="15.4"></label><label>Expected TDoc (optional)<input id="s" size="12" placeholder="S4-26yyyy"></label>' +
+    '<button onclick="save()">Record</button></fieldset><div id="msg"></div>' +
+    '<input id="q" placeholder="Search…" oninput="filter()" size="30"> ' +
+    (rows ? '<table><tr><th>Original</th><th>Decision</th><th>Plenary</th><th>Expected</th><th>State</th><th></th></tr>' + rows + '</table>' : '<p>No revision is expected.</p>') +
+    '<h4>Log</h4>' + (logRows ? '<table><tr><th>When (UTC)</th><th>Original</th><th>What</th><th>Revision</th><th>Detail</th></tr>' + logRows + '</table>' : '<p>Empty.</p>') +
+    '<script>function msg(t){document.getElementById("msg").textContent=t;}' +
+    'function done(t){msg(t);setTimeout(function(){google.script.host.close();},1500);}' +
+    'function save(){msg("Saving…");google.script.run.withSuccessHandler(done).withFailureHandler(function(e){msg("Not saved: "+e.message);}).saveExpectedRevision({original:v("o"),decision:v("d"),plenary:v("p"),agenda:v("a"),successor:v("s")});}' +
+    'function act(a,o){msg("Working…");google.script.run.withSuccessHandler(done).withFailureHandler(function(e){msg("Failed: "+e.message);}).changeExpectedRevision(a,o);}' +
+    'function v(id){return document.getElementById(id).value;}' +
+    'function filter(){var q=v("q").toLowerCase();[].slice.call(document.querySelectorAll("tr.r")).forEach(function(r){r.style.display=r.getAttribute("data-s").indexOf(q)===-1?"none":"";});}</script>';
+}
+
+/** The dialog: records a revision expected for a TDoc of the report. Returns what was done (text); throws with the reason when refused. */
+function saveExpectedRevision(input) {
+  assertNotTemplateMaster_();
+  return withDispositionLock_('Revision Expected', function () {
+    const checked = validateProvisionalInput_(input);
+    if (!checked.ok) throw new Error(checked.error);
+    const r = checked.record;
+    const store = getReportStateStore_(null);
+    const existing = provisionalRecordOf_(store.getProperty(PROVREV_PREFIX_ + r.original));
+    if (existing && (existing.state === 'transferred' || existing.state === 'undo')) throw new Error(r.original + ' was already transferred to ' + existing.to + '; undo that first');
+    const body = currentReportDocument_().getBody();
+    if (!lookupTdocTableInIndex_(buildTdocTableIndex_(body.getTables()), r.original)) throw new Error(r.original + ' has no TDoc table in this report');
+    r.at = new Date().toISOString();
+    r.by = 'dialog';
+    store.setProperty(PROVREV_PREFIX_ + r.original, JSON.stringify(r));
+    appendProvisionalLog_(store, [{ t: r.original, a: existing ? 'changed' : 'recorded', n: r.successor, at: r.at, by: 'dialog', why: r.decision + (r.plenary ? ', Plenary ' + r.plenary : '') + (r.agenda ? ' ' + r.agenda : '') }]);
+    return 'Recorded: the revision of ' + r.original + ' is to be "' + r.decision + '"' + (r.plenary ? ', Plenary ' + (r.plenary === 'yes' ? 'Yes' : 'No') : '') + (r.agenda ? ' (' + r.agenda + ')' : '') +
+      '. The Status of ' + r.original + ' is unchanged. The next update writes it into the revision once 3GU registers it.';
+  });
+}
+
+/** The dialog: 'cancel' a record that waits (or is in conflict), or 'undo' a transfer (done by the next update). Returns what was done. */
+function changeExpectedRevision(action, original) {
+  assertNotTemplateMaster_();
+  return withDispositionLock_('Revision Expected', function () {
+    const store = getReportStateStore_(null);
+    const key = PROVREV_PREFIX_ + String(original || '').trim();
+    const r = provisionalRecordOf_(store.getProperty(key));
+    if (!r) throw new Error('no revision is expected for ' + original);
+    const now = new Date().toISOString();
+    if (action === 'cancel') {
+      if (r.state !== 'pending' && r.state !== 'conflict') throw new Error(r.original + ' is ' + r.state + '; only a record that waits or is in conflict can be cancelled');
+      r.state = 'cancelled'; r.reason = ''; r.cancelledAt = now;
+      store.setProperty(key, JSON.stringify(r));
+      appendProvisionalLog_(store, [{ t: r.original, a: 'cancelled', n: '', at: now, by: 'dialog', why: '' }]);
+      return 'Cancelled: nothing will be transferred for ' + r.original + '.';
+    }
+    if (action === 'undo') {
+      if (r.state !== 'transferred') throw new Error(r.original + ' is ' + r.state + '; only a transfer can be undone');
+      r.state = 'undo'; r.reason = '';
+      store.setProperty(key, JSON.stringify(r));
+      appendProvisionalLog_(store, [{ t: r.original, a: 'undo-asked', n: r.to, at: now, by: 'dialog', why: '' }]);
+      return 'The next update sets ' + r.to + ' back to "' + (r.previous || 'available') + '" if it still shows "' + r.decision + '". A Plenary choice already made in its row stays: change it by hand if needed.';
+    }
+    throw new Error('unknown action ' + action);
+  });
+}
+
+// =========================================================
+// END OF ISSUE 28 B
 // =========================================================
