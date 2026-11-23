@@ -252,6 +252,13 @@ console.log('F2. a revision never registered: closed explicitly, audited, inform
   const html = r.ui.dialogs[r.ui.dialogs.length - 1][1];
   check('the dialog: a form to close a record (outcome, required reason), the resolution shown in the list',
     [/Close a record without a transfer/.test(html), /Reason \(required/.test(html), /did not submit the revision/.test(html), /Resolved without a revision/.test(html)], [true, true, true, true]);
+  // Recorded again after it was closed: allowed, and the resolution is kept in the history; logged as reopened, with the user.
+  r.record({ original: 'S4-265001', decision: 'noted' });
+  const reopened = r.rec('S4-265001');
+  check('recorded again after its resolution: pending, the resolution kept in history, logged "reopened" by the user',
+    [reopened.state, reopened.history.length, reopened.history[0].state, reopened.history[0].resolution.reason, reopened.by, JSON.parse(r.docProps.getProperty('PROVREV_LOG'))[0].a, JSON.parse(r.docProps.getProperty('PROVREV_LOG'))[0].by],
+    ['pending', 1, 'resolved', 'The source company did not submit the revision before the deadline.', 'rapporteur@example.org', 'reopened', 'rapporteur@example.org']);
+  check('"cancelled" is not a resolution outcome (Cancel is)', /use Cancel/.test(refuse(() => r.change('resolve', 'S4-265001', { outcome: 'cancelled', reason: 'should be refused here' }))), true);
   const noUser = report();
   noUser.s.Session.getActiveUser = () => { throw new Error('no permission'); };
   check('no user e-mail available: recorded as "dialog"', noUser.s.provisionalAuditUser_(), 'dialog');
@@ -327,11 +334,12 @@ console.log('H. the ledger');
   const git = (spec) => { try { return execFileSync('git', ['show', spec], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); } catch (e) { return null; } };
   const view = ledger.codeWithoutIssue28B(RAW);
   check('every change of the layer is in Code.js exactly once', view.problems, []);
-  const a = git('feature/i28-a-titles-headings-perf:Code.js') || git('origin/feature/i28-a-titles-headings-perf:Code.js');
+  // Phase A pinned by its commit (6f8c9df); the branch names only as a fallback.
+  const a = git('6f8c9df:Code.js') || git('feature/i28-a-titles-headings-perf:Code.js') || git('origin/feature/i28-a-titles-headings-perf:Code.js');
   if (a === null) console.log('  note: the phase A branch is not available; the byte comparison is skipped.');
   else check('without it, Code.js is that of phase A, byte for byte', view.code === a, true);
   const creator = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
-  const ca = git('feature/i28-a-titles-headings-perf:template/ReportCreator.js') || git('origin/feature/i28-a-titles-headings-perf:template/ReportCreator.js');
+  const ca = git('6f8c9df:template/ReportCreator.js') || git('feature/i28-a-titles-headings-perf:template/ReportCreator.js') || git('origin/feature/i28-a-titles-headings-perf:template/ReportCreator.js');
   check('ReportCreator.js: one menu item; without it, that of phase A', [ledger.creatorWithoutIssue28B(creator).problems, ca === null || ledger.creatorWithoutIssue28B(creator).code === ca], [[], true]);
   check('the version is 2.29.0', (RAW.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.29.0');
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((x) => x.slice(9, -1));

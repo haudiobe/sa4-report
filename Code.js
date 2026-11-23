@@ -30820,10 +30820,11 @@ const PROVREV_UNDECIDED_ = ['reserved', 'available', ''];
 /**
  * Pure: a stored record (JSON) as an object, or null. Fields: v, original,
  * decision, plenary ('yes' | 'no' | ''), agenda, successor (expected, optional),
- * state ('pending' | 'transferred' | 'conflict' | 'cancelled' | 'undo' | 'undone'),
+ * state ('pending' | 'transferring' | 'transferred' | 'conflict' | 'cancelled' | 'resolved' | 'undo' | 'undoing' | 'undone'),
  * reason, at (made), by ('dialog'), to (the successor written), previous
  * (its Status before), plenaryDone ('pending' | 'manual' | 'same' | 'off' | ''),
- * transferredAt, undoneAt.
+ * transferredAt, undoneAt; resolution ({ outcome, reason, by, at, before }) of a record closed
+ * without a transfer; history (the resolutions of a record closed and recorded again).
  */
 function provisionalRecordOf_(text) {
   try {
@@ -31183,7 +31184,7 @@ function appendProvisionalRevisionProblems_(result) {
     Object.keys(records).sort().forEach(function (k) {
       const r = records[k];
       const what = '"' + r.decision + '"' + (r.plenary ? ', Plenary ' + (r.plenary === 'yes' ? 'Yes' : 'No') : '') + (r.agenda ? ' (' + r.agenda + ')' : '');
-      if (r.state === 'pending') result.problems.push(r.original + ': a revision is expected (' + what + '), but ' + (r.reason || 'it is not registered in 3GU yet') + ' (as of the last update). Register it and run an update, or cancel the record (Report > Revision Expected…).');
+      if (r.state === 'pending') result.problems.push(r.original + ': a revision is expected (' + what + '), but ' + (r.reason || 'it is not registered in 3GU yet') + ' (as of the last update). Register it and run an update, or close the record with a reason (Report > Revision Expected… > Close…).');
       else if (r.state === 'conflict') result.problems.push(r.original + ': the expected revision (' + what + ') could not be transferred: ' + r.reason + '. Resolve it in Report > Revision Expected….');
       else if (r.state === 'transferring') result.problems.push(r.original + ': ' + what + ' was written to ' + r.to + ' by the last update and is confirmed by the next one. Run an update.');
       else if (r.state === 'undo' || r.state === 'undoing') result.problems.push(r.original + ': undoing the transfer to ' + r.to + ' is done by the next update. Run an update.');
@@ -31261,9 +31262,12 @@ function saveExpectedRevision(input) {
     const body = currentReportDocument_().getBody();
     if (!lookupTdocTableInIndex_(buildTdocTableIndex_(body.getTables()), r.original)) throw new Error(r.original + ' has no TDoc table in this report');
     r.at = new Date().toISOString();
-    r.by = 'dialog';
+    r.by = provisionalAuditUser_();
+    // A record closed before (resolved or cancelled) and recorded again keeps what closed it: the audit is never overwritten.
+    if (existing) r.history = (existing.history || []).concat(existing.resolution ? [{ state: existing.state, resolution: existing.resolution }] : []).slice(-10);
+    if (r.history && !r.history.length) delete r.history;
     store.setProperty(PROVREV_PREFIX_ + r.original, JSON.stringify(r));
-    appendProvisionalLog_(store, [{ t: r.original, a: existing ? 'changed' : 'recorded', n: r.successor, at: r.at, by: 'dialog', why: r.decision + (r.plenary ? ', Plenary ' + r.plenary : '') + (r.agenda ? ' ' + r.agenda : '') }]);
+    appendProvisionalLog_(store, [{ t: r.original, a: existing ? (existing.resolution ? 'reopened' : 'changed') : 'recorded', n: r.successor, at: r.at, by: r.by, why: r.decision + (r.plenary ? ', Plenary ' + r.plenary : '') + (r.agenda ? ' ' + r.agenda : '') }]);
     return 'Recorded: the revision of ' + r.original + ' is to be "' + r.decision + '"' + (r.plenary ? ', Plenary ' + (r.plenary === 'yes' ? 'Yes' : 'No') : '') + (r.agenda ? ' (' + r.agenda + ')' : '') +
       '. The Status of ' + r.original + ' is unchanged. The next update writes it into the revision once 3GU registers it.';
   });
@@ -31284,6 +31288,7 @@ function changeExpectedRevision(action, original, details) {
     const now = new Date().toISOString();
     if (action === 'cancel' || action === 'resolve') {
       if (r.state !== 'pending' && r.state !== 'conflict') throw new Error(r.original + ' is ' + r.state + '; only a record that waits or is in conflict can be ' + (action === 'cancel' ? 'cancelled' : 'resolved'));
+      if (action === 'resolve' && details && String(details.outcome || '').trim() === 'cancelled') throw new Error('use Cancel for the outcome "cancelled"');
       const checked = validateProvisionalResolution_(action === 'cancel' ? 'cancelled' : details && details.outcome, details && details.reason);
       if (!checked.ok) throw new Error(checked.error);
       const by = provisionalAuditUser_();
@@ -31302,7 +31307,7 @@ function changeExpectedRevision(action, original, details) {
       if (r.previous === undefined) throw new Error(r.to + ' showed "' + r.decision + '" already; nothing was written to undo');
       r.state = 'undo'; r.reason = '';
       store.setProperty(key, JSON.stringify(r));
-      appendProvisionalLog_(store, [{ t: r.original, a: 'undo-asked', n: r.to, at: now, by: 'dialog', why: '' }]);
+      appendProvisionalLog_(store, [{ t: r.original, a: 'undo-asked', n: r.to, at: now, by: provisionalAuditUser_(), why: '' }]);
       return 'The next update sets ' + r.to + ' back to "' + (r.previous || 'available') + '" if it still shows "' + r.decision + '". A Plenary choice already made in its row stays: change it by hand if needed.';
     }
     throw new Error('unknown action ' + action);

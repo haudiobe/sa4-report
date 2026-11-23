@@ -62,6 +62,8 @@ A reason of at least 10 characters is required. The record keeps `resolution: { 
 log gets an entry with the same. Such a record no longer blocks: Close Report lists it under **Information** with outcome,
 reason, who and when (`appendProvisionalRevisionInformation_`, a hook after the classification). It is never transferred
 afterwards, even if a revision is registered later (test F2). Nothing is written into the document by closing a record.
+A closed record can be recorded again (a revision turns up after all): it is open again, its earlier resolution kept in
+`history`, and the log says "reopened" with the user. Every log entry of this phase names the user (`provisionalAuditUser_`).
 
 ## State
 `PROVREV_<original>` (JSON, ~300 bytes) and `PROVREV_LOG` (≤ 8.5 KB) in the report state; the Plenary keys of the
