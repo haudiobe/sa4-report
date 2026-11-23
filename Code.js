@@ -32050,7 +32050,7 @@ function createSessionsFromCandidates(candidates) {
       rows.push({ id: '', label: String(c.group || 'AHG').slice(0, 16), date: c.date, endDate: '', start: /^\d{2}:\d{2}$/.test(c.start || '') ? c.start : '', end: /^\d{2}:\d{2}$/.test(c.end || '') ? c.end : '' });
     });
     const saved = saveAdhocSessionsConfiguration(rows);
-    return saved && saved.ok === false ? 'Not created: ' + (saved.errors || []).join(' ') : 'Sessions saved. Check their times in Configure Sessions…: the times of the agenda are in the agenda's own zone, the sessions use the meeting zone.';
+    return saved && saved.ok === false ? 'Not created: ' + (saved.errors || []).join(' ') : 'Sessions saved. Check their times in Configure Sessions…: the agenda gives times in its own zone, the sessions use the meeting zone.';
   })();
 }
 
