@@ -11,7 +11,7 @@ item once it appears, and was tempted to set the *original* to "agreed", which i
 
 ## What the rapporteur does
 *Report › Revision Expected…*: TDoc (autocomplete from the Registration of Documents table), decision (agreed,
-partially agreed, endorsed, approved, noted, merged, replied, postponed), Goes to Plenary (Yes/No/–), plenary agenda
+endorsed, approved, noted, merged, replied, postponed; "partially agreed" is no option of the template's dropdown), Goes to Plenary (Yes/No/–), plenary agenda
 item, optionally the expected TDoc number. **The original's Status is not changed.** The dialog lists every record with
 its state, a search box, Cancel (while waiting or in conflict) and Undo transfer, and the log.
 
@@ -73,3 +73,18 @@ Full suite: 134 files, all passing.
 2. Should "Plenary to be set by hand" be resolved automatically by replacing the existing dropdown (delete + insert
    through the Docs API)? Not done: the code has never changed an existing Plenary dropdown, and a live session may be
    editing it.
+
+## Independent review (2026-11-23) and what changed
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | A queued dropdown write (transfer or undo) was sent at the end of the run without checking the fresh read: a delegate's choice made during the update was overwritten | **Fixed.** Each provisional write carries what it expects (`run.expect`); `planStatusDropdownRequests_` sends it only if the fresh read still shows that, else leaves it (one guard line, ledgered). Test R |
+| 2 | "Set the Plenary choice by hand" blocked Close Report for ever | **Fixed.** Every update re-checks such records and clears the flag once the revision's dropdown shows the choice. Test E |
+| 3 | A record was marked transferred before the write was confirmed; a failed write was lost | **Fixed.** New states `transferring` / `undoing`; the next update confirms against the revision itself: shows the decision → transferred; still undecided → written again; decided otherwise → transferred with a note "changed by hand after the transfer" (kept, not blocking). Close Report asks for the confirming update. Test R |
+| 4 | Two records naming one revision: the Plenary choice was last-wins | **Fixed.** Different choices → both conflicts; identical → one transfers, the other is "shared". Test R |
+| 5 | A chain stopped at a middle revision whose own "Revised to" was not registered yet | **Fixed:** waits. Test R |
+| 6 | Plenary rows not readable (no status index) were treated as "pending" | **Fixed:** treated as "to be set by hand" (verified by the next update) |
+| 7 | "partially agreed" offered but no template dropdown option | **Fixed:** not offered |
+| 8 | Undo offered where nothing was written; the agenda item not restored | **Fixed:** Undo only when this code wrote the Status; the agenda item it wrote is removed on undo. The original stays "revised" (as the list says) |
+| 9 | An expected number anywhere in the chain is accepted (B expected, A→B→C written to C) | By design: the decision belongs to the newest revision; documented here |
+| 10 | Close Report reads the state of the last update | Messages now say "as of the last update … run an update" |

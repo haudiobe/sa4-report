@@ -802,14 +802,16 @@ const RELEASE_2_29_0_CHANGES = [
 ];
 const I28B_SECTION_START = BAR + '// ISSUE 28 B: PROVISIONAL REVISION DECISIONS (after issue 28 A)\n' + BAR;
 const I28B_SECTION_END = BAR + '// END OF ISSUE 28 B\n' + BAR;
-const I28B_SECTION_FUNCTIONS = ["provisionalRecordOf_", "isRegisteredTdocNumber_", "validateProvisionalInput_", "provisionalSuccessorsOf_", "decideProvisionalTransfer_", "readProvisionalRecords_", "appendProvisionalLog_", "provisionalStatusOfTable_", "writeProvisionalStatus_", "planProvisionalPlenary_", "syncProvisionalRevisionsOnUpdate_", "appendProvisionalRevisionProblems_", "manageExpectedRevisions", "provisionalDialogHtml_", "saveExpectedRevision", "changeExpectedRevision"];
-const I28B_CHANGED_FUNCTIONS = ["closeReportCore_","continuousUpdateCore_"];
+const I28B_SECTION_FUNCTIONS = ["provisionalWriteStillExpected_","provisionalRecordOf_", "isRegisteredTdocNumber_", "validateProvisionalInput_", "provisionalSuccessorsOf_", "decideProvisionalTransfer_", "readProvisionalRecords_", "appendProvisionalLog_", "provisionalStatusOfTable_", "writeProvisionalStatus_", "planProvisionalPlenary_", "syncProvisionalRevisionsOnUpdate_", "appendProvisionalRevisionProblems_", "manageExpectedRevisions", "provisionalDialogHtml_", "saveExpectedRevision", "changeExpectedRevision"];
+const I28B_CHANGED_FUNCTIONS = ["closeReportCore_","continuousUpdateCore_","planStatusDropdownRequests_"];
 const I28B_CHANGES = [
-  ["    if (!context) {\n      // After issue 28 A: a revision expected gets its decision once its successor is registered (ISSUE 28 B section).\n      const provisional = syncProvisionalRevisionsOnUpdate_(allTdocs, tdocTableIndex, context);\n      if (provisional.transferred || provisional.conflicts || provisional.undone) result.revisionsExpected = provisional.summary;\n      // After T-2026.10.29: the revision relationships (every report), and the Goes to Plenary data (GOES TO PLENARY section).\n",
+  ["    if (!context) {\n      // After issue 28 A: a revision expected gets its decision once its successor is registered (ISSUE 28 B section).\n      const provisional = syncProvisionalRevisionsOnUpdate_(allTdocs, tdocTableIndex, context);\n      if (provisional.written || provisional.transferred || provisional.conflicts || provisional.undone) result.revisionsExpected = provisional.summary;\n      // After T-2026.10.29: the revision relationships (every report), and the Goes to Plenary data (GOES TO PLENARY section).\n",
    "    if (!context) {\n      // After T-2026.10.29: the revision relationships (every report), and the Goes to Plenary data (GOES TO PLENARY section).\n"],
   ["  // After issue 28 A: a revision expected that waits or is in conflict blocks (ISSUE 28 B section).\n  appendProvisionalRevisionProblems_(result);\n  classifyCloseReportFindings_(result, summary);\n",
    "  classifyCloseReportFindings_(result, summary);\n"]
 ];
+I28B_CHANGES.push(["    if (!entry || entry.kind !== 'dropdown' || index.duplicates[number]) { out.left.push(number); return; }\n    // After issue 28 A: a revision expected is written only while the dropdown still shows what it expected (ISSUE 28 B section).\n    if (!provisionalWriteStillExpected_(number, entry)) { out.left.push(number); return; }\n",
+   "    if (!entry || entry.kind !== 'dropdown' || index.duplicates[number]) { out.left.push(number); return; }\n"]);
 const I28B_CREATOR_CHANGES = [
   ["    .addItem('Review Title Changes…', 'reviewTitleChanges')\n    // Issue #28 B: the decision of a revision recorded before 3GU registers it.\n    .addItem('Revision Expected…', 'manageExpectedRevisions')\n",
    "    .addItem('Review Title Changes…', 'reviewTitleChanges')\n"]

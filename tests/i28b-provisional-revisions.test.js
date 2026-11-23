@@ -58,7 +58,7 @@ function report(o) {
   r.rec = (id) => JSON.parse(r.docProps.getProperty('PROVREV_' + id) || 'null');
   /** 3GU registers `id` as the revision of `of` (both directions of the list say it). */
   r.register = (id, of, extra) => { r.tdocs.push(Object.assign({ id: id, agenda: r.tdoc(of).agenda, status: 'reserved', title: r.tdoc(of).title, isRevisionOf: of, uploaded: false }, extra || {})); r.tdoc(of).revisedTo = id; r.tdoc(of).status = 'revised'; };
-  r.closeProblems = () => { const res = r.exec(() => r.s.closeReportCore_()); return res.problems.filter((p) => /revision is expected|could not be transferred|set it by hand|undoing/.test(p)); };
+  r.closeProblems = () => { const res = r.exec(() => r.s.closeReportCore_()); return res.problems.filter((p) => /revision is expected|could not be transferred|set it by hand|undoing|by the last update/.test(p)); };
   return r;
 }
 
@@ -106,14 +106,17 @@ console.log('C. recorded, waiting, transferred exactly once');
   check('Close Report blocks while it waits, and says what to do', r.closeProblems().length === 1 && /S4-265001: a revision is expected \("agreed"\)/.test(r.closeProblems()[0]), true);
   r.register('S4-265101', 'S4-265001');
   const u = r.update();
-  check('3GU registers S4-265101 as its revision: the decision written into it, the original revised, recorded as transferred',
-    [r.shown('S4-265101'), r.shown('S4-265001'), r.rec('S4-265001').state, r.rec('S4-265001').to, u.revisionsExpected], ['dropdown:agreed', 'dropdown:revised', 'transferred', 'S4-265101', '1 transferred, 0 waiting for 3GU, 0 conflict(s)']);
+  check('3GU registers S4-265101 as its revision: the decision written into it, the original revised; "transferring" until confirmed',
+    [r.shown('S4-265101'), r.shown('S4-265001'), r.rec('S4-265001').state, r.rec('S4-265001').to, u.revisionsExpected], ['dropdown:agreed', 'dropdown:revised', 'transferring', 'S4-265101', '1 written, 0 transferred, 0 waiting for 3GU, 0 conflict(s)']);
+  check('Close Report asks for the confirming update', r.closeProblems().some((p) => /written to S4-265101 by the last update/.test(p)), true);
+  const u2 = r.update();
+  check('the next update sees the revision show it: transferred', [r.rec('S4-265001').state, u2.revisionsExpected], ['transferred', '1 transferred, 0 waiting for 3GU, 0 conflict(s)']);
   check('Close Report no longer lists it', r.closeProblems(), []);
   r.user(() => r.api.pick('S4-265101', 'noted'));
   r.update(); r.update();
   check('exactly once: a later change of the revision by hand stays', [r.shown('S4-265101'), r.rec('S4-265001').state], ['dropdown:noted', 'transferred']);
   const log = JSON.parse(r.docProps.getProperty('PROVREV_LOG'));
-  check('the log: recorded, then transferred', log.map((e) => e.a).reverse().slice(0, 2), ['recorded', 'transferred']);
+  check('the log: recorded, written, transferred', log.map((e) => e.a).reverse().slice(0, 3), ['recorded', 'written', 'transferred']);
   r.exec(() => r.s.manageExpectedRevisions());
   const html = r.ui.dialogs[r.ui.dialogs.length - 1];
   check('the dialog lists it as transferred, with Undo, and the TDocs of the report to choose from', [html[0], /Transferred<\/b> → S4-265101/.test(html[1]), /Undo transfer/.test(html[1]), /<option value="S4-265002">/.test(html[1])], ['Revision Expected', true, true, true]);
@@ -145,7 +148,7 @@ console.log('D. conflicts: nothing written');
   check('Close Report blocks for each conflict', r.closeProblems().length, 3);
   // Resolution: a new record naming the right successor.
   r.record({ original: 'S4-265001', decision: 'agreed', successor: 'S4-265101' });
-  r.update();
+  r.update(); r.update();
   check('resolved by recording the right revision: transferred', [r.rec('S4-265001').state, r.shown('S4-265101')], ['transferred', 'dropdown:agreed']);
 }
 
@@ -162,11 +165,14 @@ console.log('E. Goes to Plenary: the choice and the agenda item go with the deci
   r.tdocs.push({ id: 'S4-265102', agenda: '8.6', status: 'reserved', title: 'y', uploaded: false });
   r.update();
   r.tdoc('S4-265002').revisedTo = 'S4-265102'; r.tdoc('S4-265102').isRevisionOf = 'S4-265002';
-  r.update();
+  r.update(); r.update();
   check('a new revision: agreed, Plenary Yes, A.I. 15.4 shown', [r.api.compactOf('S4-265101').status, r.api.compactOf('S4-265101').plenary, r.api.compactOf('S4-265101').ai], ['dropdown:agreed', YES, 'A.I.: 15.4']);
   check('a revision that has a Plenary choice already: its Status written, its Plenary NOT changed; to be set by hand',
     [r.api.compactOf('S4-265102').status, r.api.compactOf('S4-265102').plenary, r.rec('S4-265002').plenaryDone], ['dropdown:agreed', NO, 'manual']);
-  check('Close Report says to set it by hand', r.closeProblems().some((p) => /S4-265102 already has a Plenary choice other than "yes": set it by hand/.test(p)), true);
+  check('Close Report says to set it by hand', r.closeProblems().some((p) => /S4-265102 has another Plenary choice than "yes".*set it by hand/.test(p)), true);
+  r.user(() => r.api.pickPlenary('S4-265102', YES));
+  r.update();
+  check('once the rapporteur sets it, the next update clears it; Close Report no longer blocks', [r.rec('S4-265002').plenaryDone, r.closeProblems().some((p) => /S4-265102/.test(p))], ['same', false]);
   check('a plenary agenda item typed for the revision is kept (not replaced by the record)', (() => {
     const x = report(); x.build(); x.save(); x.update(); x.exec(() => x.s.setUpGoesToPlenary()); x.save(); x.update();
     x.record({ original: 'S4-265001', decision: 'agreed', plenary: 'yes', agenda: '15.4' });
@@ -188,21 +194,76 @@ console.log('F. cancel and undo');
   check('cancelled while waiting: nothing transferred when the revision is registered', [r.rec('S4-265001').state, r.shown('S4-265101')], ['cancelled', 'dropdown:reserved']);
   r.record({ original: 'S4-265002', decision: 'endorsed' });
   r.register('S4-265102', 'S4-265002');
-  r.update();
-  check('transferred', r.shown('S4-265102'), 'dropdown:endorsed');
+  r.update(); r.update();
+  check('transferred', [r.shown('S4-265102'), r.rec('S4-265002').state], ['dropdown:endorsed', 'transferred']);
   const said = r.change('undo', 'S4-265002');
   check('undo asked: done by the next update', [/The next update sets S4-265102 back to "reserved"/.test(said), r.rec('S4-265002').state], [true, 'undo']);
   check('Close Report waits for it', r.closeProblems().some((p) => /undoing the transfer to S4-265102/.test(p)), true);
-  r.update();
-  check('the next update sets the revision back (it still showed the decision)', [r.shown('S4-265102'), r.rec('S4-265002').state], ['dropdown:reserved', 'undone']);
+  r.update(); r.update();
+  check('the next update sets the revision back (it still showed the decision), the one after confirms it', [r.shown('S4-265102'), r.rec('S4-265002').state], ['dropdown:reserved', 'undone']);
   r.record({ original: 'S4-265003', decision: 'agreed' });
   r.register('S4-265103', 'S4-265003');
-  r.update();
+  r.update(); r.update();
   r.change('undo', 'S4-265003');
   r.user(() => r.api.pick('S4-265103', 'noted'));
   r.update();
   check('undo refused when the revision was changed meanwhile: kept, said', [r.shown('S4-265103'), r.rec('S4-265003').state, /no longer shows "agreed"/.test(r.rec('S4-265003').reason)], ['dropdown:noted', 'transferred', true]);
   check('cancel/undo of the wrong state: refused', [(() => { try { r.change('cancel', 'S4-265003'); return 'done'; } catch (e) { return /only a record that waits/.test(e.message); } })(), (() => { try { r.change('undo', 'S4-265001'); return 'done'; } catch (e) { return /only a transfer can be undone/.test(e.message); } })()], [true, true]);
+}
+
+// ====================================================================== R
+console.log('R. the findings of the independent review of PR #30');
+{
+  // 1. A delegate decides the revision while the update runs: the queued write is not sent (left), the choice stays.
+  const r = report();
+  r.build(); r.save(); r.update();
+  r.register('S4-265101', 'S4-265001'); r.update(); // the revision exists (dropdown "reserved") before the record links it
+  r.tdoc('S4-265001').revisedTo = ''; r.tdoc('S4-265101').isRevisionOf = ''; r.tdoc('S4-265001').status = 'available'; r.update();
+  r.record({ original: 'S4-265001', decision: 'agreed' });
+  r.tdoc('S4-265001').revisedTo = 'S4-265101'; r.tdoc('S4-265101').isRevisionOf = 'S4-265001';
+  const real = r.s.finalizeStatusDropdowns_;
+  r.s.finalizeStatusDropdowns_ = function () { r.api.pick('S4-265101', 'noted'); r.body._state.dirty = false; return real.apply(this, arguments); };
+  r.update();
+  r.s.finalizeStatusDropdowns_ = real;
+  check('a decision a delegate made during the update is not overwritten (the queued write is left)', r.shown('S4-265101'), 'dropdown:noted');
+  r.update();
+  check('... the next update records it as transferred, changed by hand afterwards, without blocking', [r.rec('S4-265001').state, /changed to "noted" after the transfer/.test(r.rec('S4-265001').note || ''), r.closeProblems()], ['transferred', true, []]);
+
+  // 3. The write fails at the end of the run: the record stays "transferring" and the next update writes it again.
+  const f = report();
+  f.build(); f.save(); f.update();
+  f.register('S4-265102', 'S4-265002'); f.update();
+  f.tdoc('S4-265002').revisedTo = ''; f.tdoc('S4-265102').isRevisionOf = ''; f.tdoc('S4-265002').status = 'available'; f.update();
+  f.record({ original: 'S4-265002', decision: 'endorsed' });
+  f.tdoc('S4-265002').revisedTo = 'S4-265102'; f.tdoc('S4-265102').isRevisionOf = 'S4-265002';
+  const fin = f.s.finalizeStatusDropdowns_;
+  f.s.finalizeStatusDropdowns_ = function () { return { ran: false, inserted: 0, updated: 0, reason: 'simulated failure' }; };
+  f.update();
+  f.s.finalizeStatusDropdowns_ = fin;
+  check('the write did not happen: still "reserved", the record "transferring" (not lost)', [f.shown('S4-265102'), f.rec('S4-265002').state], ['dropdown:reserved', 'transferring']);
+  f.update(); f.update();
+  check('... the next update writes it again, the one after confirms it', [f.shown('S4-265102'), f.rec('S4-265002').state], ['dropdown:endorsed', 'transferred']);
+
+  // 4. Two records naming one revision with different choices: both conflicts, nothing written.
+  const g = report();
+  g.build(); g.save(); g.update();
+  g.record({ original: 'S4-265001', decision: 'agreed' });
+  g.record({ original: 'S4-265002', decision: 'noted' });
+  g.tdocs.push({ id: 'S4-265109', agenda: '8.5', status: 'reserved', title: 'merged', isRevisionOf: 'S4-265001', uploaded: false });
+  g.tdoc('S4-265002').revisedTo = 'S4-265109';
+  g.update();
+  check('two records, one revision, different choices: both conflicts, the revision untouched', [g.rec('S4-265001').state, g.rec('S4-265002').state, g.shown('S4-265109')], ['conflict', 'conflict', 'dropdown:reserved']);
+
+  // 5. A chain whose newest revision is named but not registered: wait (never written to the middle one).
+  const { sandbox: S } = loadCode({ documentProperties: {} });
+  const facts = { A: { revisedTo: ['B'], isRevisionOf: [] }, B: { revisedTo: ['C'], isRevisionOf: ['A'] } };
+  const d = S.decideProvisionalTransfer_({ v: 1, original: 'A', decision: 'agreed', state: 'pending' }, facts, () => ({ exists: true, label: 'reserved' }));
+  check('A -> B -> C with C not registered yet: wait', [d.action, d.reason], ['wait', 'B is revised to C, not registered yet']);
+
+  // 7, 8. "partially agreed" not offered; Undo not offered for a record whose revision showed the decision already.
+  check('"partially agreed" is not offered (no option of the template dropdown)', S.validateProvisionalInput_({ original: 'S4-265001', decision: 'partially agreed' }).ok, false);
+  const h = S.provisionalDialogHtml_({ 'S4-1': { original: 'S4-1', decision: 'agreed', plenary: '', agenda: '', state: 'transferred', to: 'S4-2' } }, [], [], false);
+  check('a record whose revision showed the decision already: no Undo button', /Undo transfer/.test(h), false);
 }
 
 // ====================================================================== G
