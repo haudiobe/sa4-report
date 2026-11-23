@@ -48,10 +48,15 @@ like "Uploaded" (the model's `clock`).
   the 615 SA4#138 reservations were refused as ambiguous**. The order is now told from the whole column
   (`tdocListDateOrder_`: a first field above 12 → day/month; AM/PM or a second field above 12 → month/day; both or
   neither → each value on its own). Test A2: all 615 (#138) and 482 (#137-e) real values read.
-- *Clock check on the live list.* The preview of the rule (`previewAdhocSessionRule`) checks the list it reads:
-  a TDoc uploaded more than 2 minutes before its reservation as read means the clocks disagree, and the preview
-  is refused, naming the TDocs, and nothing is stamped, so the rule cannot be switched on. The confirmation shows
-  the check (TDocs with both times, shortest gap).
+- *Clock check on the live list.* The preview of the rule (`previewAdhocSessionRule`) checks the list it reads and is
+  refused (an earlier preview taken back, so the rule cannot be switched on) when: a TDoc was uploaded more than 2
+  minutes before its reservation as read (a reservation clock ahead); fewer than 20 TDocs have both times (nothing can
+  be told); or no TDoc was uploaded within 30 minutes of its reservation (a clock behind, e.g. meeting-local time —
+  on one clock the shortest gap is about 1 minute in every list examined). The confirmation shows the check. A
+  switch uses its preview up.
+- *Again on every update while the rule is on* (`recheckReservationClockOnUpdate_`): a regenerated list on another
+  clock sets `ADHOC_RESERVATION_CLOCK_ALERT`, shown in Meeting Control and logged (the sessions are not switched
+  back by themselves); it is cleared when the list agrees again.
 - *Rollout.* The rule stays off in every report until the user accepts this evidence; it is then switched per report
   by its rapporteur through the preview.
 
@@ -59,7 +64,9 @@ like "Uploaded" (the model's `clock`).
 **Decision 2026-11-23:** independent of the session rule. `ADHOC_CARRY_FORWARD_MODE=on` (Meeting Control › Carry-forward
 › Switch on…, after a preview of what it would record now, within 30 minutes; ad-hoc reports only; under the document
 lock). It works with either rule (test D: with the upload rule as well). Off by default: an existing AHG report does not
-change. Switching off keeps the recorded carries but no longer shows them.
+change. Switching off keeps the recorded carries but no longer shows them; the preview of switching on lists the new
+carries **and** those recorded before that will be shown again. Note for a copy that ran an earlier 2.30.0 candidate
+with `reservation-6h` (carry-forward came with the rule then): its carries are hidden until carry-forward is switched on.
 
 A TDoc that is not disposed (Status available/parked/reserved or empty) when a later session **starts** is carried
 into it: recorded once with the time (`ADHOC_CARRY_FORWARD`, provenance), shown as "A01 → A02, A03" in the Session

@@ -31443,6 +31443,12 @@ const ADHOC_CARRY_KEY_ = 'ADHOC_CARRY_FORWARD';
 const ADHOC_CARRY_MODE_KEY_ = 'ADHOC_CARRY_FORWARD_MODE';
 /** The reservation and upload clocks agree when no TDoc is uploaded more than this before its reservation as read. */
 const RESERVATION_CLOCK_TOLERANCE_MS_ = 2 * 60000;
+/** The clock check needs this many TDocs with both times (fewer: nothing can be told, so nothing is switched). */
+const RESERVATION_CLOCK_MIN_CHECKED_ = 20;
+/** On one clock the shortest reservation-to-upload time is about a minute (four SA4 lists); longer than this: a lagging clock. */
+const RESERVATION_CLOCK_MAX_MIN_GAP_MINUTES_ = 30;
+/** Report state: the last update found the reservation clock not agreeing with the upload clock (text and time). */
+const ADHOC_RESERVATION_CLOCK_ALERT_KEY_ = 'ADHOC_RESERVATION_CLOCK_ALERT';
 /** Report state: the plenary Agenda / Schedule folders, when they are not those derived from FTP_BASE. */
 const PLENARY_AGENDA_DIR_KEY_ = 'PLENARY_AGENDA_DIR_URL';
 const PLENARY_SCHEDULE_DIR_KEY_ = 'PLENARY_SCHEDULE_DIR_URL';
@@ -31533,6 +31539,20 @@ function reservationClockCheck_(tdocs) {
     else if (gap >= 0 && (min === null || gap < min)) min = gap;
   });
   return { checked: checked, inversions: inversions, minGapMinutes: min === null ? null : Math.round(min / 6000) / 10 };
+}
+
+/**
+ * Pure: the verdict of a clock check: '' when the two clocks agree, else why not. Too few TDocs with both times
+ * cannot tell; a reservation after its upload means a clock ahead; a shortest gap above the bound a clock behind.
+ */
+function reservationClockProblem_(clock) {
+  if (clock.inversions.length) return clock.inversions.length + ' TDoc(s) of the list (' + clock.inversions.slice(0, 5).join(', ') + (clock.inversions.length > 5 ? ', …' : '') +
+    ') were uploaded before their reservation time as read: the reservation clock does not agree with the upload clock (UTC)';
+  if (clock.checked < RESERVATION_CLOCK_MIN_CHECKED_) return 'only ' + clock.checked + ' TDoc(s) of the list have both a reservation and an upload time; at least ' + RESERVATION_CLOCK_MIN_CHECKED_ +
+    ' are needed to check the reservation clock -- try again when more are uploaded';
+  if (clock.minGapMinutes === null || clock.minGapMinutes > RESERVATION_CLOCK_MAX_MIN_GAP_MINUTES_) return 'no TDoc was uploaded within ' + RESERVATION_CLOCK_MAX_MIN_GAP_MINUTES_ +
+    ' minutes of its reservation (the shortest: ' + clock.minGapMinutes + ' min): the reservation clock may be behind the upload clock (UTC)';
+  return '';
 }
 
 /** The reservation times of the TDoc list, as the upload times are read (null unless an ad-hoc report with the reservation rule). */
@@ -31737,6 +31757,8 @@ function issue28SessionResolver_(resolver, context) {
  * (an ad-hoc report is small). Returns the number of new carries. Never throws.
  */
 function syncAdhocCarryForwardOnUpdate_(resolver, allTdocs, index, context) {
+  // While the reservation rule is on, every update checks the clock of the list again (a list can be regenerated differently).
+  if (resolver && resolver.rule === 'reservation-6h') recheckReservationClockOnUpdate_(allTdocs, context);
   try {
     if (!resolver || !resolver.registered || !resolver.carryOn) return 0;
     const store = getReportStateStore_(context);
@@ -31759,6 +31781,31 @@ function syncAdhocCarryForwardOnUpdate_(resolver, allTdocs, index, context) {
   } catch (e) {
     Logger.log('TDoc sessions: carry-forward not updated (' + e.message + ').');
     return 0;
+  }
+}
+
+/**
+ * The update, with the reservation rule on: the clock check of the list again. A problem is kept in the report state
+ * (ADHOC_RESERVATION_CLOCK_ALERT, shown in Meeting Control) and logged; it is cleared when the list agrees again. Too
+ * few TDocs with both times is no problem here (the rule was verified when switched on). Never throws.
+ */
+function recheckReservationClockOnUpdate_(allTdocs, context) {
+  try {
+    const store = getReportStateStore_(context);
+    const clock = reservationClockCheck_(allTdocs);
+    const problem = clock.checked < RESERVATION_CLOCK_MIN_CHECKED_ && !clock.inversions.length ? '' : reservationClockProblem_(clock);
+    const had = store.getProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_);
+    if (problem) {
+      const text = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC: ' + problem + '. The sessions by reservation may be wrong: check the list, or switch back to the upload rule.';
+      if (!had || had.slice(22) !== text.slice(22)) store.setProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_, text);
+      Logger.log('TDoc sessions: ' + text);
+    } else if (had) {
+      store.deleteProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_);
+    }
+    return problem;
+  } catch (e) {
+    Logger.log('TDoc sessions: the reservation clock was not checked (' + e.message + ').');
+    return '';
   }
 }
 
@@ -32141,6 +32188,7 @@ function meetingControlData() {
   try {
     const resolver = makeAdhocTdocSessionResolverSafely_(null);
     if (resolver) {
+      if (resolver.rule === 'reservation-6h' && store.getProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_)) errors.push('Reservation clock: ' + store.getProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_));
       if (store.getProperty(ADHOC_CARRY_KEY_ + '_FULL')) errors.push('Carry-forward: the carried sessions no longer fit the report state since ' + store.getProperty(ADHOC_CARRY_KEY_ + '_FULL') + '; new carries are not recorded.');
       const carry = resolver.carryOn ? resolver.carry || {} : {};
       Object.keys(carry).forEach(function (n) { if (!carry[n].length) return; row(n).tags.push('carried'); row(n).notes.push('Carried into ' + carry[n].map(function (c) { return adhocSessionCodes_(resolver.sessions)[c.s] || c.s; }).join(', ')); });
@@ -32210,9 +32258,11 @@ function previewAdhocSessionRule() {
     if (!column) return { ok: false, column: false, error: 'the TDoc list has no "Reservation date" column: the rule would assign no TDoc' };
     // The clock of the reservation times (UTC, as the uploads; issue #28 evidence of 2026-11-23), checked on THIS list.
     const clock = reservationClockCheck_(all);
-    if (clock.inversions.length) {
-      return { ok: false, column: true, clock: clock, error: clock.inversions.length + ' TDoc(s) of the list (' + clock.inversions.slice(0, 5).join(', ') + (clock.inversions.length > 5 ? ', …' : '') +
-        ') were uploaded before their reservation time as read: the reservation clock does not agree with the upload clock (UTC). The rule is not switched; report this list (issue #28).' };
+    const problem = reservationClockProblem_(clock);
+    if (problem) {
+      // A refused preview takes back an earlier one: the rule cannot be switched on from a preview of before.
+      getReportStateStore_(null).deleteProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW');
+      return { ok: false, column: true, clock: clock, error: problem + '. The rule is not switched (issue #28).' };
     }
     const toInstant = resolver.toInstant;
     const codes = adhocSessionCodes_(resolver.sessions);
@@ -32244,6 +32294,7 @@ function setAdhocSessionRule(rule) {
     if (value === 'reservation-6h') {
       const at = Date.parse(store.getProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW') || '');
       if (isNaN(at) || Date.now() - at > 30 * 60000) throw new Error('show what the rule changes first (Preview) -- then switch');
+      store.deleteProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW');
     }
     store.setProperty(ADHOC_SESSION_RULE_KEY_, value);
     return 'Session rule: ' + (value === 'upload' ? 'by upload time (as before)' : 'by reservation time, cut-off at the end of a session + 6 hours') + '. The next update writes the Session column.';
@@ -32263,11 +32314,15 @@ function previewAdhocCarryForward() {
   if (!resolver) return { ok: false, error: 'no sessions are configured' };
   const store = getReportStateStore_(null);
   const index = buildTdocTableIndex_(currentReportDocument_().getBody().getTables());
-  const plan = adhocCarryPlan_(resolver, all, index, readAdhocCarry_(store));
+  const stored = readAdhocCarry_(store);
+  const plan = adhocCarryPlan_(resolver, all, index, stored);
   const codes = adhocSessionCodes_(resolver.sessions);
   const stamp = new Date().toISOString();
   store.setProperty(ADHOC_CARRY_MODE_KEY_ + '_PREVIEW', stamp);
-  return { ok: true, changes: plan.changes.map(function (c) { return { tdoc: c.tdoc, into: c.sessions.map(function (id) { return codes[id] || id; }).join(', ') }; }), count: all.length, at: stamp };
+  const names = function (ids) { return ids.map(function (id) { return codes[id] || id; }).join(', '); };
+  // Carries recorded before (carry-forward on earlier) are shown again when it is switched on: listed too.
+  const kept = Object.keys(stored).sort().filter(function (n) { return stored[n] && stored[n].length; }).map(function (n) { return { tdoc: n, into: names(stored[n].map(function (c) { return c.s; })) }; });
+  return { ok: true, changes: plan.changes.map(function (c) { return { tdoc: c.tdoc, into: names(c.sessions) }; }), kept: kept, count: all.length, at: stamp };
 }
 
 /** Meeting Control (ad-hoc report): carry-forward on (after a preview of the last 30 minutes) or off. */
@@ -32279,6 +32334,7 @@ function setAdhocCarryForward(on) {
     if (on) {
       const at = Date.parse(store.getProperty(ADHOC_CARRY_MODE_KEY_ + '_PREVIEW') || '');
       if (isNaN(at) || Date.now() - at > 30 * 60000) throw new Error('show what carry-forward records first (Preview) -- then switch');
+      store.deleteProperty(ADHOC_CARRY_MODE_KEY_ + '_PREVIEW');
       store.setProperty(ADHOC_CARRY_MODE_KEY_, 'on');
       return 'Carry-forward on: the next update carries the TDocs not disposed into the sessions that have started ("A01 → A02").';
     }
@@ -32365,7 +32421,7 @@ function meetingControlHtml_() {
     'if(!confirm("Create "+pick.length+" session(s):\\n"+pick.map(function(x){return x.group+" "+x.date+" "+x.start+"-"+x.end+" "+x.zone+" ("+x.confidence+")";}).join("\\n")+"\\n\\nCheck the times afterwards in Configure Sessions."))return;msg("Working…");google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).createSessionsFromCandidates(pick);}' +
     'function ses(){if(!D.sessions){document.getElementById("ses").innerHTML="";return;}var r=D.sessions.rule;document.getElementById("ses").innerHTML="<h4>Session rule</h4><p>"+(r==="upload"?"By upload time (as before).":"By reservation time; cut-off: the end of a session + 6 hours.")+" <button onclick=\\"rule(\'"+(r==="upload"?"reservation-6h":"upload")+"\')\\">Switch to "+(r==="upload"?"reservation + 6 h":"upload time")+"…</button></p><p class=note>Switching to the reservation rule first shows which TDocs change their session and checks that the reservation and upload times of the list agree (UTC); manual assignments stay.</p>"+"<h4>Carry-forward</h4><p>"+(D.sessions.carryOn?"On: TDocs not disposed are carried into the sessions that have started.":"Off.")+" <button onclick=\\"carry("+(D.sessions.carryOn?"false":"true")+")\\">"+(D.sessions.carryOn?"Switch off…":"Switch on…")+"</button></p>";}' +
     'function carry(on){if(!on){if(!confirm("Switch carry-forward off? The carries recorded so far are kept, not shown."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocCarryForward(false);return;}' +
-    'msg("Reading the TDoc list for the preview…");google.script.run.withSuccessHandler(function(p){if(!p.ok){msg("Not switched: "+p.error);return;}var t=p.changes.length?p.changes.map(function(x){return x.tdoc+" -> "+x.into;}).join("\\n"):"Nothing would be carried now.";' +
+    'msg("Reading the TDoc list for the preview…");google.script.run.withSuccessHandler(function(p){if(!p.ok){msg("Not switched: "+p.error);return;}var t=(p.changes.length?p.changes.map(function(x){return x.tdoc+" -> "+x.into;}).join("\\n"):"Nothing new would be carried now.")+(p.kept.length?"\\n\\nShown again (recorded before):\\n"+p.kept.map(function(x){return x.tdoc+" -> "+x.into;}).join("\\n"):"");' +
     'if(!confirm("Carry-forward would record now ("+p.count+" TDocs in the list):\\n"+t+"\\n\\nSwitch on?"))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocCarryForward(true);}).withFailureHandler(function(e){msg("Preview failed: "+e.message);}).previewAdhocCarryForward();}' +
     'function rule(v){if(v==="upload"){if(!confirm("Back to the upload rule? The next update rewrites the Session column; manual assignments stay."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocSessionRule(v);return;}' +
     'msg("Reading the TDoc list for the preview…");google.script.run.withSuccessHandler(function(p){if(!p.ok){msg("Not switched: "+p.error);return;}var t=p.moves.length?p.moves.map(function(x){return x.tdoc+": "+x.upload+" -> "+x.reservation+(x.reservation==="–"?" ("+x.why+")":"");}).join("\\n"):"No TDoc changes its session.";' +

@@ -1,5 +1,9 @@
 # Which clock are "Reservation date" and "Uploaded" in? (3GPP TDoc list xlsx)
 
+> In the repository: this file, `per_tdoc.csv`, `analysis_output.md` (written to `data/` by the scripts) and `scripts/`.
+> The raw downloads (`downloads/`) and the per-meeting extracts (`data/*.csv`) are not committed: they are the public
+> files at the URLs below, and `scripts/extract.py` makes the extracts again.
+
 Investigation date: 2026-11-23 (all retrieval times below are UTC, taken from the local clock and
 cross-checked against the server `Date:` headers, which agree to the second).
 

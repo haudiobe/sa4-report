@@ -296,15 +296,44 @@ console.log('F. Meeting Control');
       /Carry-forward off/.test(a.exec(() => a.s.setAdhocCarryForward(false))), (() => { try { r.exec(() => r.s.setAdhocCarryForward(true)); return 'set'; } catch (e) { return /ad-hoc report/.test(e.message); } })()],
     [true, null, true, true]);
   // The preview of the rule checks the clocks on the list itself (decision of 2026-11-23: not switched on unverified).
-  const pv = (res, up) => { const x = templateReport({ props: { ADHOC_SESSIONS: SESSIONS(TWO) }, tdocs: [{ id: 'S4aA269001', agenda: '4.3', status: 'available', uploaded: true, reservedAt: res, uploadedAt: up }] }); x.build(); return x; };
-  const good = pv('20/09/2026 08:00:00', '2026-09-20 08:03:00');
+  // The preview of the rule checks the clocks on the list itself (decision of 2026-11-23: not switched on unverified).
+  const id = (k) => 'S4aA2690' + String(k).padStart(2, '0');
+  const pad = (n) => String(n).padStart(2, '0');
+  // n TDocs reserved on 20 September (a day/month column, as SA4#138), each uploaded `gap(k)` minutes later.
+  const pv = (n, gap) => { const x = templateReport({ props: { ADHOC_SESSIONS: SESSIONS(TWO) }, tdocs: Array.from({ length: n }, (v, k) => ({ id: id(k + 1), agenda: '4.3', status: 'available', uploaded: true,
+    reservedAt: '20/09/2026 ' + pad(8 + Math.floor(k / 4)) + ':' + pad((k % 4) * 10) + ':00', uploadedAt: new Date(Date.UTC(2026, 8, 20, 8 + Math.floor(k / 4), (k % 4) * 10) + gap(k) * 60000).toISOString().slice(0, 19).replace('T', ' ') })) }); x.build(); return x; };
+  const good = pv(25, (k) => (k === 3 ? 2 : 90 + k));
   const gp = good.exec(() => good.s.previewAdhocSessionRule());
-  check('preview, a list whose times agree (a day/month column, as SA4#138): the clock check passes, the preview is stamped', [gp.ok, gp.clock.checked, gp.clock.inversions, gp.clock.minGapMinutes, !!good.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW')], [true, 1, [], 3, true]);
-  const badList = pv('20/09/2026 10:00:00', '2026-09-20 08:03:00');
-  const bp = badList.exec(() => badList.s.previewAdhocSessionRule());
-  check('preview, a TDoc uploaded 2 hours before its reservation as read: refused, named, no preview stamped, so the rule cannot be switched on',
-    [bp.ok, /S4aA269001\) were uploaded before their reservation time/.test(bp.error), badList.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW'), (() => { try { badList.exec(() => badList.s.setAdhocSessionRule('reservation-6h')); return 'set'; } catch (e) { return /Preview/.test(e.message); } })()],
+  check('preview, 25 TDocs whose times agree (shortest gap 2 min): the clock check passes, the preview is stamped', [gp.ok, gp.clock.checked, gp.clock.inversions, gp.clock.minGapMinutes, !!good.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW')], [true, 25, [], 2, true]);
+  check('... the switch uses the preview up: a second switch needs a new one', [/by reservation time/.test(good.exec(() => good.s.setAdhocSessionRule('reservation-6h'))), good.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW')], [true, null]);
+  const few = pv(1, () => 3);
+  const fp = few.exec(() => few.s.previewAdhocSessionRule());
+  check('preview, one TDoc with both times: too few to tell -- refused, nothing stamped', [fp.ok, /only 1 TDoc\(s\) of the list have both/.test(fp.error), few.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW')], [false, true, null]);
+  const ahead = pv(25, (k) => (k === 5 ? -120 : 3));
+  const ap = ahead.exec(() => ahead.s.previewAdhocSessionRule());
+  check('preview, a TDoc uploaded 2 hours before its reservation as read (a clock ahead): refused, named', [ap.ok, /S4aA269006\) were uploaded before their reservation time/.test(ap.error)], [false, true]);
+  const behind = pv(25, (k) => 360 + k);
+  behind.docProps.setProperty('ADHOC_SESSION_RULE_PREVIEW', new Date().toISOString());
+  const bhp = behind.exec(() => behind.s.previewAdhocSessionRule());
+  check('preview, every upload 6 hours or more after its reservation (a clock behind, e.g. Calgary time): refused; an earlier preview taken back, so no switch',
+    [bhp.ok, /may be behind the upload clock/.test(bhp.error), behind.docProps.getProperty('ADHOC_SESSION_RULE_PREVIEW'), (() => { try { behind.exec(() => behind.s.setAdhocSessionRule('reservation-6h')); return 'set'; } catch (e) { return /Preview/.test(e.message); } })()],
     [false, true, null, true]);
+  // While the rule is on, each update checks the clock again: an alert in the report state (Meeting Control), cleared when it agrees.
+  const live = pv(25, (k) => (k === 3 ? 2 : 90 + k));
+  live.docProps.setProperty('ADHOC_SESSION_RULE', 'reservation-6h');
+  const tdocsOf = (x, g) => x.tdocs.map((t, k) => ({ row: [t.id], tdocCol: 0, reserved: { at: '2026-09-20T' + pad(8 + Math.floor(k / 4)) + ':' + pad((k % 4) * 10) + ':00' }, uploaded: { at: new Date(Date.UTC(2026, 8, 20, 8 + Math.floor(k / 4), (k % 4) * 10) + g(k) * 60000).toISOString().slice(0, 19) } }));
+  check('an update with a list that agrees: no alert', [live.exec(() => live.s.recheckReservationClockOnUpdate_(tdocsOf(live, (k) => (k === 3 ? 2 : 90)), null)), live.docProps.getProperty('ADHOC_RESERVATION_CLOCK_ALERT')], ['', null]);
+  live.exec(() => live.s.recheckReservationClockOnUpdate_(tdocsOf(live, (k) => (k === 7 ? -90 : 3)), null));
+  check('a regenerated list on another clock: the alert is kept and shown by Meeting Control', [/S4aA269008/.test(live.docProps.getProperty('ADHOC_RESERVATION_CLOCK_ALERT') || ''),
+    live.exec(() => live.s.meetingControlData()).errors.some((x) => /^Reservation clock: .*were uploaded before their reservation/.test(x))], [true, true]);
+  live.exec(() => live.s.recheckReservationClockOnUpdate_(tdocsOf(live, () => 3), null));
+  check('... cleared when the list agrees again', live.docProps.getProperty('ADHOC_RESERVATION_CLOCK_ALERT'), null);
+  // Carry-forward: its preview end to end, then the switch (which uses the preview up).
+  const cp = good.exec(() => good.s.previewAdhocCarryForward());
+  check('carry-forward preview: read-only listing (new carries and those recorded before), stamped', [cp.ok, Array.isArray(cp.changes), Array.isArray(cp.kept), cp.count >= 25, !!good.docProps.getProperty('ADHOC_CARRY_FORWARD_MODE_PREVIEW'), good.docProps.getProperty('ADHOC_CARRY_FORWARD_MODE')], [true, true, true, true, true, null]);
+  good.docProps.setProperty('ADHOC_CARRY_FORWARD', JSON.stringify({ v: 1, tdocs: { S4aA269001: [{ s: 's2', at: '2026-09-24T12:00:00.000Z' }] } }));
+  check('... a carry recorded while it was on before is listed as shown again', good.exec(() => good.s.previewAdhocCarryForward()).kept, [{ tdoc: 'S4aA269001', into: 'A02' }]);
+  check('... the switch after it: on, the preview used up', [/Carry-forward on/.test(good.exec(() => good.s.setAdhocCarryForward(true))), good.docProps.getProperty('ADHOC_CARRY_FORWARD_MODE'), good.docProps.getProperty('ADHOC_CARRY_FORWARD_MODE_PREVIEW')], [true, 'on', null]);
   a.docProps.setProperty('ADHOC_CARRY_FORWARD_MODE_PREVIEW', new Date().toISOString());
   check('... after a preview of the last 30 minutes: on', [/Carry-forward on/.test(a.exec(() => a.s.setAdhocCarryForward(true))), a.docProps.getProperty('ADHOC_CARRY_FORWARD_MODE')], [true, 'on']);
   const refusedNoZone = a.exec(() => a.s.createSessionsFromCandidates([{ group: 'Audio', date: '2026-12-04', start: '14:00', end: '15:00', zone: '' }]));
@@ -327,11 +356,12 @@ console.log('G. the ledger');
   const git = (spec) => { try { return execFileSync('git', ['show', spec], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); } catch (e) { return null; } };
   const view = ledger.codeWithoutIssue28C(RAW);
   check('every change of the layer is in Code.js exactly once', view.problems, []);
-  const b = git('feature/i28-b-provisional-revisions:Code.js');
+  // Phase B pinned by its commit (8c32552); the branch name only as a fallback.
+  const b = git('8c32552:Code.js') || git('feature/i28-b-provisional-revisions:Code.js');
   if (b === null) console.log('  note: the phase B branch is not available; the byte comparison is skipped.');
   else check('without it, Code.js is that of phase B, byte for byte', view.code === b, true);
   const creator = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
-  const cb = git('feature/i28-b-provisional-revisions:template/ReportCreator.js');
+  const cb = git('8c32552:template/ReportCreator.js') || git('feature/i28-b-provisional-revisions:template/ReportCreator.js');
   check('ReportCreator.js: one menu item; without it, that of phase B', [ledger.creatorWithoutIssue28C(creator).problems, cb === null || ledger.creatorWithoutIssue28C(creator).code === cb], [[], true]);
   check('the version is 2.30.0', (RAW.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.30.0');
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((x) => x.slice(9, -1));
