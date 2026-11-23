@@ -792,6 +792,53 @@ function creatorWithoutGoesToPlenary(code) {
   return { code: view.code, problems: newer.problems.concat(view.problems) };
 }
 
+// Issue #28 phase C (after issue #28 phase B): AHG sessions, agenda updates, Meeting Control (docs/ISSUE28_PHASE_C.md).
+// The newest layer, taken out before everything else: the release header of 2.30.0, the section whole, its changes.
+const RELEASE_2_30_0_CHANGES = [
+  [" * Version: 2.30.0 (2026-11-23)\n",
+   " * Version: 2.29.0 (2026-11-23)\n"],
+  [" * CHANGELOG\n * 2.30.0 (2026-11-23)\n *   (Issue #28 phase C, candidate on 2.29.0.)\n *   - Ad-hoc sessions, opt-in per report (ADHOC_SESSION_RULE=reservation-6h):\n *     a TDoc belongs to the first session whose end + 6 hours (meeting zone,\n *     instants) is not before its reservation; before the first session the\n *     first; after the last cut-off, no time or an ambiguous date: none,\n *     with the reason. Manual assignments stay authoritative.\n *   - Carry-forward: a TDoc not disposed when a later session starts is\n *     carried into it (\"A01 → A02\"), recorded with the time; never a second\n *     registration; a disposed TDoc is carried no further.\n *   - Report > Meeting Control…: one searchable view (new, titles, revisions\n *     expected, changed allocations, carry-forward, not disposed, plenary);\n *     the newest \"Tdoc allocation revN\" of the plenary Agenda folder compared\n *     with the report (accept to Document Reallocations); AHG telcos of the\n *     agenda as candidates with a confidence (sessions created only on\n *     confirmation); the Schedule folder as a hint. Read-only sources, cached.\n * 2.29.0 (2026-11-23)\n",
+   " * CHANGELOG\n * 2.29.0 (2026-11-23)\n"]
+];
+const I28C_SECTION_START = BAR + '// ISSUE 28 C: AHG SESSIONS, AGENDA UPDATES AND MEETING CONTROL (after issue 28 B)\n' + BAR;
+const I28C_SECTION_END = BAR + '// END OF ISSUE 28 C\n' + BAR;
+const I28C_SECTION_FUNCTIONS = ["adhocSessionRule_", "parseTdocListDateTime_", "readTdocReservationTimesForSessions_", "sessionZoneWallOfInstant_", "sessionZoneInstantOfWall_", "adhocReservationCutoff_", "assignAdhocSessionByReservation_", "adhocReservationReasonText_", "readAdhocCarry_", "decideAdhocCarry_", "issue28SessionResolver_", "syncAdhocCarryForwardOnUpdate_", "plenarySourceFolders_", "parseFtpFolderListing_", "newestAllocationFile_", "scheduleFiles_", "wordDocumentText_", "parseTdocAllocations_", "proposedReallocations_", "parseAhgCandidates_", "fetchMeetingSourceCached_", "fetchAllocationDocument_", "readPlenarySources_", "openMeetingControl", "registrationRowsOfReport_", "meetingControlData", "acceptProposedReallocations", "setAdhocSessionRule", "createSessionsFromCandidates", "isAdhocReportForMeetingControl_", "meetingControlHtml_"];
+const I28C_CHANGED_FUNCTIONS = ["continuousUpdateCore_","downloadAndGroupTdocs_","makeAdhocTdocSessionResolver_"];
+const I28C_CHANGES = [
+  ["    uploaded: uploaded, automatic: automatic, effective: effective,\n    cell: function (td) { return adhocTdocSessionCellText_(effective(td), sessions); }\n  // After issue 28 B: the reservation rule and the carry-forward, for every caller (ISSUE 28 C section).\n  }, context);\n}",
+   "    uploaded: uploaded, automatic: automatic, effective: effective,\n    cell: function (td) { return adhocTdocSessionCellText_(effective(td), sessions); }\n  };\n}"],
+  ["  return issue28SessionResolver_({\n    sessions: sessions, zone: sessionZone, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,",
+   "  return {\n    sessions: sessions, zone: sessionZone, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,"],
+  ["    const tdocSessions = makeAdhocTdocSessionResolverSafely_(context);\n    // After issue 28 B: TDocs not disposed are carried into the sessions that started since (ISSUE 28 C section).\n    syncAdhocCarryForwardOnUpdate_(tdocSessions, allTdocs, tdocTableIndex, context);\n",
+   "    const tdocSessions = makeAdhocTdocSessionResolverSafely_(context);\n"],
+  ["    const uploadTimes = readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, context);\n    // After issue 28 B: the reservation times, for a report with the reservation rule (ISSUE 28 C section).\n    const reservationTimes = readTdocReservationTimesForSessions_(spreadsheet, sheet, headers, data, context);\n",
+   "    const uploadTimes = readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, context);\n"],
+  ["      if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];\n      if (reservationTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].reserved = reservationTimes[i];\n",
+   "      if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];\n"]
+];
+const I28C_CREATOR_CHANGES = [
+  ["    .addItem('Revision Expected…', 'manageExpectedRevisions')\n    // Issue #28 C: one view of what needs a decision, with the agenda's allocations and AHG sessions.\n    .addItem('Meeting Control…', 'openMeetingControl')\n",
+   "    .addItem('Revision Expected…', 'manageExpectedRevisions')\n"]
+];
+
+/** Code.js without issue #28 phase C, release header included: the Code.js of issue #28 phase B. { code, problems }. */
+function codeWithoutIssue28C(code) {
+  const header = takeOut(code, null, null, RELEASE_2_30_0_CHANGES, 'RELEASE 2.30.0 HEADER');
+  const text = String(header.code).split(String.fromCharCode(13)).join('');
+  const view = takeOut(text.replace('\n' + I28C_SECTION_START, I28C_SECTION_START), I28C_SECTION_START, I28C_SECTION_END, I28C_CHANGES, 'ISSUE 28 C');
+  return { code: view.code, problems: header.problems.concat(view.problems) };
+}
+
+/** template/ReportCreator.js without issue #28 phase C (its menu item). { code, problems }. */
+function creatorWithoutIssue28C(code) {
+  return takeOut(code, null, null, I28C_CREATOR_CHANGES, 'ISSUE 28 C (ReportCreator.js)');
+}
+
+/** True when `code` (Code.js) has issue #28 phase C. */
+function hasIssue28C(code) {
+  return String(code).split(String.fromCharCode(13)).join('').indexOf(I28C_SECTION_START) !== -1;
+}
+
 // Issue #28 phase B (after issue #28 phase A): provisional revision decisions (docs/ISSUE28_PHASE_B.md). The newest layer,
 // taken out before everything else: the release header of 2.29.0, the section whole, its changes [now, before].
 const RELEASE_2_29_0_CHANGES = [
@@ -819,6 +866,8 @@ const I28B_CREATOR_CHANGES = [
 
 /** Code.js without issue #28 phase B, release header included: the Code.js of issue #28 phase A. { code, problems }. */
 function codeWithoutIssue28B(code) {
+  // Issue #28 phase C came after: its layer is taken out first when the code has it.
+  if (hasIssue28C(code)) { const newer = codeWithoutIssue28C(code); const rest = codeWithoutIssue28B(newer.code); return { code: rest.code, problems: newer.problems.concat(rest.problems) }; }
   const header = takeOut(code, null, null, RELEASE_2_29_0_CHANGES, 'RELEASE 2.29.0 HEADER');
   const text = String(header.code).split(String.fromCharCode(13)).join('');
   const view = takeOut(text.replace('\n' + I28B_SECTION_START, I28B_SECTION_START).replace(I28B_SECTION_END + '\n', I28B_SECTION_END), I28B_SECTION_START, I28B_SECTION_END, I28B_CHANGES, 'ISSUE 28 B');
@@ -827,6 +876,8 @@ function codeWithoutIssue28B(code) {
 
 /** template/ReportCreator.js without issue #28 phase B (its menu item). { code, problems }. */
 function creatorWithoutIssue28B(code) {
+  // Issue #28 phase C came after: its menu item is taken out first when the code has it.
+  if (String(code).indexOf("'openMeetingControl'") !== -1) { const newer = creatorWithoutIssue28C(code); const rest = creatorWithoutIssue28B(newer.code); return { code: rest.code, problems: newer.problems.concat(rest.problems) }; }
   return takeOut(code, null, null, I28B_CREATOR_CHANGES, 'ISSUE 28 B (ReportCreator.js)');
 }
 
@@ -1465,6 +1516,6 @@ function codeBeforeStructureFix(code) {
   return { code: view.code, problems: dispositionless.problems.concat(attendanceless.problems, abstractless.problems, unreleased.problems, guardless.problems, view.problems) };
 }
 
-module.exports = { codeWithoutIssue28B, creatorWithoutIssue28B, hasIssue28B, I28B_SECTION_START, I28B_SECTION_FUNCTIONS, I28B_CHANGED_FUNCTIONS, codeWithoutIssue28A, creatorWithoutIssue28A, hasIssue28A, RELEASE_2_28_0_CHANGES, I28A_SECTION_START, I28A_SECTION_END, I28A_SECTION_FUNCTIONS, I28A_CHANGED_FUNCTIONS, I28A_CHANGES, I28A_CREATOR_CHANGED_FUNCTIONS, codeWithoutHandedToPlenary, HANDED_TO_PLENARY_NEW_FUNCTIONS, HANDED_TO_PLENARY_CHANGED_FUNCTIONS, codeWithoutCloseReportValidation, codeWithoutRelease2_27_1Header, CLOSE_VALIDATION_SECTION_START, CLOSE_VALIDATION_SECTION_END, CLOSE_VALIDATION_SECTION_FUNCTIONS, CLOSE_VALIDATION_CHANGED_FUNCTIONS, codeWithoutUndisposedDocuments, codeWithoutRelease2_27_0Header, UNDISPOSED_SECTION_START, UNDISPOSED_SECTION_END, UNDISPOSED_SECTION_FUNCTIONS, UNDISPOSED_CHANGED_FUNCTIONS, codeWithoutRelease2_26_15Header, codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS, PLENARY_CREATOR_CHANGED_FUNCTIONS, codeWithoutOvernightPause, OVERNIGHT_PAUSE_NEW_FUNCTIONS, OVERNIGHT_PAUSE_CHANGED_FUNCTIONS, codeWithoutRevisionsCellCleanup, CELL_CLEANUP_NEW_FUNCTIONS, CELL_CLEANUP_CHANGED_FUNCTIONS, codeWithoutLocalListingAgent, LOCAL_LISTING_AGENT_NEW_FUNCTIONS, LOCAL_LISTING_AGENT_CHANGED_FUNCTIONS, codeWithoutSessionSectionFix, SESSION_SECTION_NEW_FUNCTIONS, SESSION_SECTION_CHANGED_FUNCTIONS, codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutDualRevisions, creatorWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS, DUAL_REVISIONS_CREATOR_CHANGED_FUNCTIONS, codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
+module.exports = { codeWithoutIssue28C, creatorWithoutIssue28C, hasIssue28C, I28C_SECTION_FUNCTIONS, I28C_CHANGED_FUNCTIONS, codeWithoutIssue28B, creatorWithoutIssue28B, hasIssue28B, I28B_SECTION_START, I28B_SECTION_FUNCTIONS, I28B_CHANGED_FUNCTIONS, codeWithoutIssue28A, creatorWithoutIssue28A, hasIssue28A, RELEASE_2_28_0_CHANGES, I28A_SECTION_START, I28A_SECTION_END, I28A_SECTION_FUNCTIONS, I28A_CHANGED_FUNCTIONS, I28A_CHANGES, I28A_CREATOR_CHANGED_FUNCTIONS, codeWithoutHandedToPlenary, HANDED_TO_PLENARY_NEW_FUNCTIONS, HANDED_TO_PLENARY_CHANGED_FUNCTIONS, codeWithoutCloseReportValidation, codeWithoutRelease2_27_1Header, CLOSE_VALIDATION_SECTION_START, CLOSE_VALIDATION_SECTION_END, CLOSE_VALIDATION_SECTION_FUNCTIONS, CLOSE_VALIDATION_CHANGED_FUNCTIONS, codeWithoutUndisposedDocuments, codeWithoutRelease2_27_0Header, UNDISPOSED_SECTION_START, UNDISPOSED_SECTION_END, UNDISPOSED_SECTION_FUNCTIONS, UNDISPOSED_CHANGED_FUNCTIONS, codeWithoutRelease2_26_15Header, codeWithoutRelease2_26_14Header, codeWithoutGoesToPlenary, creatorWithoutGoesToPlenary, PLENARY_SECTION_START, PLENARY_SECTION_END, PLENARY_SECTION_FUNCTIONS, PLENARY_CHANGED_FUNCTIONS, PLENARY_CREATOR_CHANGED_FUNCTIONS, codeWithoutOvernightPause, OVERNIGHT_PAUSE_NEW_FUNCTIONS, OVERNIGHT_PAUSE_CHANGED_FUNCTIONS, codeWithoutRevisionsCellCleanup, CELL_CLEANUP_NEW_FUNCTIONS, CELL_CLEANUP_CHANGED_FUNCTIONS, codeWithoutLocalListingAgent, LOCAL_LISTING_AGENT_NEW_FUNCTIONS, LOCAL_LISTING_AGENT_CHANGED_FUNCTIONS, codeWithoutSessionSectionFix, SESSION_SECTION_NEW_FUNCTIONS, SESSION_SECTION_CHANGED_FUNCTIONS, codeWithoutSessionTimesBuild, codeWithoutMainMeetingNumber, MAIN_MEETING_NUMBER_SECTION_START, MAIN_MEETING_NUMBER_SECTION_END, MAIN_MEETING_NUMBER_SECTION_FUNCTIONS, MAIN_MEETING_NUMBER_CHANGED_FUNCTIONS, codeWithoutDualRevisions, creatorWithoutDualRevisions, DUAL_REVISIONS_NEW_FUNCTIONS, DUAL_REVISIONS_CHANGED_FUNCTIONS, DUAL_REVISIONS_CREATOR_CHANGED_FUNCTIONS, codeWithoutLocalRevisions, LOCAL_REVISIONS_NEW_FUNCTIONS, LOCAL_REVISIONS_CHANGED_FUNCTIONS, codeWithoutSessionTimes, creatorWithoutSessionTimes, SESSION_TIMES_NEW_FUNCTIONS, SESSION_TIMES_CHANGED_FUNCTIONS, SESSION_TIMES_CREATOR_NEW_FUNCTIONS, SESSION_TIMES_CREATOR_CHANGED_FUNCTIONS, codeWithoutMeetingTimeZones, creatorWithoutMeetingTimeZones, MEETING_TIME_ZONES_SECTION_START, MEETING_TIME_ZONES_SECTION_END, MEETING_TIME_ZONES_SECTION_FUNCTIONS, codeWithoutLargeBuildCheckpoints, LARGE_BUILD_SECTION_START, LARGE_BUILD_SECTION_END, LARGE_BUILD_SECTION_FUNCTIONS, LARGE_BUILD_CHANGED_FUNCTIONS, LARGE_BUILD_DOCUMENT_ACCESS_COUNT, codeWithoutTdocListDownload, TDOC_LIST_DOWNLOAD_SECTION_START, TDOC_LIST_DOWNLOAD_SECTION_END, TDOC_LIST_DOWNLOAD_SECTION_FUNCTIONS, TDOC_LIST_DOWNLOAD_CHANGED_FUNCTIONS, codeWithoutAgendaReaders, AGENDA_READERS_SECTION_START, AGENDA_READERS_SECTION_END, AGENDA_READERS_SECTION_FUNCTIONS, AGENDA_READERS_CHANGED_FUNCTIONS, codeWithoutAgendaWordConversion,AGENDA_CONVERSION_SECTION_START, AGENDA_CONVERSION_SECTION_END, AGENDA_CONVERSION_SECTION_FUNCTIONS, AGENDA_CONVERSION_CHANGED_FUNCTIONS, codeWithoutCloseReportPageFallback,PAGE_FALLBACK_SECTION_START, PAGE_FALLBACK_SECTION_END, PAGE_FALLBACK_SECTION_FUNCTIONS, PAGE_FALLBACK_CHANGED_FUNCTIONS, codeWithoutReportLocalScope, REPORT_LOCAL_SCOPE_NEW_FUNCTIONS, REPORT_LOCAL_SCOPE_CHANGED_FUNCTIONS, codeWithoutListIdentity, IDENTITY_SECTION_START, IDENTITY_SECTION_END, IDENTITY_SECTION_FUNCTIONS, IDENTITY_CHANGED_FUNCTIONS, codeWithoutDispositionSummary, creatorWithoutDispositionSummary, DISPOSITION_SECTION_START, DISPOSITION_SECTION_END, DISPOSITION_SECTION_FUNCTIONS, DISPOSITION_CHANGED_FUNCTIONS, DISPOSITION_CREATOR_CHANGED_FUNCTIONS,
   codeBeforeStructureFix,codeWithoutConfigurationGuard, codeWithoutReleaseHeader, codeWithoutAbstractCacheChange, ABSTRACT_CACHE_CHANGED_FUNCTIONS, codeWithoutAttendanceEmptyTextFix, ATTENDANCE_EMPTY_TEXT_CHANGED_FUNCTIONS, creatorWithoutConfigurationGuard, GUARD_CREATOR_CHANGED_FUNCTIONS, SECTION_START, SECTION_END, SECTION_FUNCTIONS, CHANGED_FUNCTIONS,
   GUARD_SECTION_START, GUARD_SECTION_END, GUARD_SECTION_FUNCTIONS, GUARD_CHANGED_FUNCTIONS };

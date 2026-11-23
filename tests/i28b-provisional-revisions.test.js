@@ -30,7 +30,9 @@ function check(name, actual, expected) {
 }
 
 const ROOT = path.join(__dirname, '..');
-const RAW = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+// The layer checks (H) are about phase B: a later phase is taken out first.
+const RAW0 = fs.readFileSync(CODE_JS_PATH, 'utf8').replace(/\r/g, '');
+const RAW = ledger.hasIssue28C && ledger.hasIssue28C(RAW0) ? ledger.codeWithoutIssue28C(RAW0).code : RAW0;
 const AGENDA_138 = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'agenda-S4-261857.google-items.json'), 'utf8')).items
   .map((i) => ({ number: i.number, title: i.title, level: i.level, heading: 'NORMAL', text: '' }));
 const MAIN = { SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main', MEETING_NAME: 'SA4#138', MEETING_ID: '60780', REPORT_SUFFIX: 'MBS', MEETING_DATE: 'November 16, 2026',
@@ -340,7 +342,7 @@ console.log('H. the ledger');
   else check('without it, Code.js is that of phase A, byte for byte', view.code === a, true);
   const creator = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
   const ca = git('6f8c9df:template/ReportCreator.js') || git('feature/i28-a-titles-headings-perf:template/ReportCreator.js') || git('origin/feature/i28-a-titles-headings-perf:template/ReportCreator.js');
-  check('ReportCreator.js: one menu item; without it, that of phase A', [ledger.creatorWithoutIssue28B(creator).problems, ca === null || ledger.creatorWithoutIssue28B(creator).code === ca], [[], true]);
+  check('ReportCreator.js: its menu item; without it (and later phases), that of phase A', [ledger.creatorWithoutIssue28B(creator).problems, ca === null || ledger.creatorWithoutIssue28B(creator).code === ca], [[], true]);
   check('the version is 2.29.0', (RAW.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.29.0');
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((x) => x.slice(9, -1));
   const bodyOf = (code, n) => { const at = code.indexOf('\nfunction ' + n + '('); if (at === -1) return null; return code.slice(at, code.indexOf('\n}\n', at)); };
