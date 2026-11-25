@@ -976,6 +976,8 @@ function it28RunStep_(step, state) {
       const downloaded = /Downloaded (\d+) TDOCs/.exec(log);
       const total = /TOTAL continuousUpdate[^\d]*(\d+) ?ms/.exec(log);
       out.tdocsDownloaded = downloaded ? Number(downloaded[1]) : null;
+      // The update's own stage timings ([PERF] lines), so that a slow stage is seen without the execution log.
+      out.perf = log.split('\n').filter(function (l) { return /\[PERF\]/.test(l) && !/^\s*$/.test(l); }).map(function (l) { return l.replace(/^.*?\[PERF\]\s*/, '').slice(0, 120); }).slice(-40);
       out.perfTotalMs = total ? Number(total[1]) : null;
       out.result = r ? { success: r.success !== false, notUpdated: !!r.notUpdated, error: r.error ? String(r.error).slice(0, 600) : '', incomplete: r.incomplete || null } : null;
       if (!r || r.success === false || r.notUpdated) throw new Error('the update did not run' + (r && r.notUpdated ? ' (nothing changed)' : '') + ': ' + ((r && r.error) || 'no result'));

@@ -16,6 +16,7 @@ import os from 'os';
 import path from 'path';
 import { createRequire } from 'module';
 import { execFileSync, spawnSync } from 'child_process';
+import zlib from 'zlib';
 
 const require = createRequire(import.meta.url);
 const J = require('./issue28-jobs.js');
@@ -121,6 +122,39 @@ const target = arg('--target');
 const script = arg('--script');
 if (!J.PLAN[target] || !script) { console.error('--target main|ahg and --script are required'); process.exit(2); }
 const plan = argv.includes('--plan');
+// Before a plan: the copy's TDoc list as the update will fetch it (read locally, public URL). On 2026-11-25 the Portal
+// list of 86178 turned for a while into the list of another meeting (S4aP260008..0043, without its agenda TDoc);
+// the report refused it, rightly. A plan does not start on such a list.
+const LISTS = { main: { url: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/TDoc_List_Meeting_SA4%23138.xlsx', must: 'S4-26' },
+  ahg: { url: 'https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId=86178', must: 'S4aP260149' } };
+/** One file of a zip (an xlsx), from its central directory; null when not there. */
+const zipFile = (buf, name) => {
+  let end = buf.length - 22;
+  while (end >= 0 && buf.readUInt32LE(end) !== 0x06054b50) end--;
+  if (end < 0) return null;
+  let at = buf.readUInt32LE(end + 16);
+  for (let n = buf.readUInt16LE(end + 10); n > 0; n--) {
+    if (buf.readUInt32LE(at) !== 0x02014b50) return null;
+    const method = buf.readUInt16LE(at + 10), size = buf.readUInt32LE(at + 20), nameLen = buf.readUInt16LE(at + 28), extra = buf.readUInt16LE(at + 30), comment = buf.readUInt16LE(at + 32), local = buf.readUInt32LE(at + 42);
+    if (buf.slice(at + 46, at + 46 + nameLen).toString() === name) {
+      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.slice(start, start + size);
+      return method === 8 ? zlib.inflateRawSync(data) : data;
+    }
+    at += 46 + nameLen + extra + comment;
+  }
+  return null;
+};
+const precheck = async (t) => {
+  const l = LISTS[t];
+  const r = await fetch(l.url);
+  const b = Buffer.from(await r.arrayBuffer());
+  let strings = null;
+  try { strings = zipFile(b, 'xl/sharedStrings.xml'); } catch (e) { strings = null; }
+  const ok = r.ok && !!strings && strings.toString('utf8').indexOf(l.must) !== -1;
+  console.log('TDoc list precheck (' + t + '): HTTP ' + r.status + ', ' + b.length + ' bytes, ' + (ok ? 'contains ' + l.must : 'does NOT contain ' + l.must + ' -- the plan does not start'));
+  return ok;
+};
 // --from <n>: resume the plan at its n-th job (1 = the first), after jobs that already passed.
 const from = Math.max(1, Number(arg('--from') || 1));
 const steps = plan ? J.PLAN[target].slice(from - 1) : [[arg('--stage'), arg('--job')]];
@@ -140,6 +174,7 @@ const cleanup = async (stage) => {
   return false;
 };
 const statePath = path.join(ROOT, 'dist', 'integration-test', 'i28-copies', target, 'state.json');
+if (plan && !argv.includes('--no-precheck') && !(await precheck(target))) process.exit(3);
 for (const [stage, name] of steps) {
   console.log('\n=== ' + target + ': stage ' + stage + ', job ' + name);
   const r = await one(target, script, stage, name);
