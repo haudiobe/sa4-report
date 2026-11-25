@@ -32,19 +32,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rc = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.clasprc.json'), 'utf8'));
 const cred = rc.tokens[Object.keys(rc.tokens)[0]];
 let token = null;
+let tokenAt = 0;
+// The access token is kept for 50 minutes (it is valid for 60), not fetched again for every poll.
 const refresh = async () => {
+  if (token && Date.now() - tokenAt < 50 * 60000) return;
   const t = await (await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: cred.client_id, client_secret: cred.client_secret, refresh_token: cred.refresh_token, grant_type: 'refresh_token' }) })).json();
-  if (!t.access_token) throw new Error('the clasp token could not be refreshed');
+  if (!t.access_token) throw new Error('the clasp token could not be refreshed (' + (t.error || '?') + ')');
   token = t.access_token;
+  tokenAt = Date.now();
 };
 /** Drive metadata of the result files whose name contains `text` (drive.metadata.readonly: names and descriptions only). */
+// A passing Drive or network error (seen: HTTP 500) is retried; the poll goes on.
 const resultFiles = async (text) => {
-  await refresh();
   const q = encodeURIComponent("name contains '" + text.replace(/'/g, "\\'") + "' and trashed = false");
-  const r = await fetch('https://www.googleapis.com/drive/v3/files?pageSize=200&orderBy=createdTime desc&fields=files(name,description,createdTime)&q=' + q, { headers: { authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('Drive answered ' + r.status);
-  return (await r.json()).files || [];
+  let last = '';
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      await refresh();
+      const r = await fetch('https://www.googleapis.com/drive/v3/files?pageSize=200&orderBy=createdTime desc&fields=files(name,description,createdTime)&q=' + q, { headers: { authorization: 'Bearer ' + token } });
+      if (r.ok) return (await r.json()).files || [];
+      last = 'Drive answered ' + r.status;
+      if (r.status < 500 && r.status !== 429) throw new Error(last);
+    } catch (e) {
+      last = e.message;
+      if (/Drive answered 4\d\d/.test(last) && !/429/.test(last)) throw e;
+    }
+    await sleep(attempt * 10000);
+  }
+  throw new Error(last + ' (6 attempts)');
 };
 const runnerOf = async (documentName) => {
   const events = (await resultFiles('IT28 result runner')).map((f) => { try { return JSON.parse(f.description || '{}'); } catch (e) { return {}; } }).filter((e) => !documentName || e.document === documentName);
