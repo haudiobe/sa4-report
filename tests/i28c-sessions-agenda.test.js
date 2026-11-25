@@ -350,6 +350,67 @@ console.log('F. Meeting Control');
     [{ date: '2026-12-17', start: '14:30', end: '16:30' }, '15:30', null]);
 }
 
+// ====================================================================== F2
+console.log('F2. Meeting Control: one read of the report, no plenary folders in an ad-hoc report (2026-11-25: 281 s)');
+{
+  const MAIN = { SA4_BOOTSTRAP_STATE: 'done', MEETING_TYPE: 'main', MEETING_NAME: 'SA4#138', MEETING_ID: '60780', REPORT_SUFFIX: 'MBS', MEETING_DATE: 'November 16, 2026',
+    FTP_BASE: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/', TDOC_LIST_URL: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/TDoc_List_Meeting_SA4%23138.xlsx', AGENDA_TDOC: 'S4-261857' };
+  const AGENDA_138 = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'agenda-S4-261857.google-items.json'), 'utf8')).items.map((i) => ({ number: i.number, title: i.title, level: i.level, heading: 'NORMAL', text: '' }));
+  const TDOCS = [
+    { id: 'S4-261967', agenda: '8.5', status: 'agreed', title: 'AMD pCR', uploaded: true },
+    { id: 'S4-261979', agenda: '8.5', status: 'available', title: 'Energy pCR', uploaded: true },
+    { id: 'S4-261930', agenda: '8.7', status: 'reserved', title: 'QUIC eval', uploaded: false }];
+  const prepare = (o) => {
+    const x = templateReport(Object.assign({ props: MAIN, agenda: AGENDA_138, tableSeparators: true, endParagraph: true, tdocs: TDOCS }, o));
+    const cache = {}; x.s.CacheService = { getDocumentCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; } }) };
+    x.s.Utilities.base64EncodeWebSafe = (s) => Buffer.from(String(s)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
+    x.build(); x.body._state.dirty = false; x.update(); x.body._state.dirty = false;
+    // After build and update (the helper sets its own fetch there): the plenary folders answer 404, everything is recorded.
+    x.fetched = [];
+    const realFetch = x.s.UrlFetchApp.fetch;
+    x.s.UrlFetchApp = { fetch: (url, opt) => { x.fetched.push(url); if (/\/Plenary\//.test(url)) return { getResponseCode: () => 404, getContentText: () => '' }; return realFetch(url, opt); } };
+    return x;
+  };
+  // The three DocumentApp walks of before, counted.
+  const walks = (x) => {
+    let n = 0;
+    const names = ['registrationRowsOfReport_', 'reportTdocScope_', 'readReportDispositions_'];
+    const real = {};
+    names.forEach((k) => { real[k] = x.s[k]; x.s[k] = function () { n++; return real[k].apply(this, arguments); }; });
+    return () => { names.forEach((k) => { x.s[k] = real[k]; }); return n; };
+  };
+  const viaDocs = prepare({});
+  const viaApp = prepare({ docs: false });
+  const getsBefore = viaDocs.api.calls.filter((k) => k.call === 'get').length;
+  const stopDocs = walks(viaDocs);
+  const d1 = viaDocs.exec(() => viaDocs.s.meetingControlData());
+  const docsWalks = stopDocs();
+  const getsAfter = viaDocs.api.calls.filter((k) => k.call === 'get').length;
+  const stopApp = walks(viaApp);
+  const d2 = viaApp.exec(() => viaApp.s.meetingControlData());
+  const appWalks = stopApp();
+  const strip = (d) => d.rows.map((r) => [r.tdoc, r.title, r.agenda, r.status, r.plenary, r.tags.slice().sort().join(',')].join('|'));
+  check('with the Docs API: at most ONE read of the report and none of the three DocumentApp walks (registration, scope, statuses)', [d1.timing.via, getsAfter - getsBefore <= 1, docsWalks, d1.rows.length > 0], ['docs-api', true, 0, true]);
+  check('without it: the three DocumentApp walks, as before', [d2.timing.via, appWalks], ['documentapp', 3]);
+  check('both ways the same rows (TDoc, title, agenda, status, plenary, tags), no errors', [strip(d1), d1.errors, d2.errors], [strip(d2), [], []]);
+  check('... and the rows are real: the new (reserved) TDoc and the unresolved one listed', [d1.rows.some((r) => r.tdoc === 'S4-261930' && r.tags.indexOf('new') !== -1), d1.rows.some((r) => r.tags.indexOf('unresolved') !== -1)], [true, true]);
+  check('the time of each part is returned (and logged)', ['read', 'tables', 'registration', 'scope', 'statuses', 'sources', 'total'].filter((k) => typeof d1.timing[k] !== 'number'), []);
+  const tables = viaDocs.s.plenaryDocsTables_(viaDocs.s.plenarySnapshot_(viaDocs.s.currentReportDocument_().getId()).content);
+  const fromDocs = viaDocs.s.registrationRowsOfDocsTables_(tables);
+  check('registrationRowsOfDocsTables_ gives what registrationRowsOfReport_ gives from DocumentApp', [fromDocs.length > 0, JSON.stringify(fromDocs)], [true, JSON.stringify(viaDocs.exec(() => viaDocs.s.registrationRowsOfReport_(viaDocs.body)))]);
+  check('a main report still reads its plenary Agenda and Schedule folders', [viaDocs.fetched.some((u) => /\/Plenary\/Agenda\//.test(u)), viaDocs.fetched.some((u) => /\/Plenary\/Schedule\//.test(u)), !d1.sources.skipped], [true, true, true]);
+  const adhoc = templateReport({ tdocs: [{ id: 'S4aA269001', agenda: '4.3', status: 'agreed', uploaded: true }, { id: 'S4aA269002', agenda: '4.4', status: 'reserved', uploaded: false }] });
+  const acache = {}; adhoc.s.CacheService = { getDocumentCache: () => ({ get: (k) => acache[k] || null, put: (k, v) => { acache[k] = v; } }) };
+  adhoc.build();
+  const aFetched = [];
+  const aReal = adhoc.s.UrlFetchApp.fetch;
+  adhoc.s.UrlFetchApp = { fetch: (url, opt) => { aFetched.push(url); return aReal(url, opt); } };
+  const d3 = adhoc.exec(() => adhoc.s.meetingControlData());
+  check('an ad-hoc report: the plenary folders are not read (nothing fetched for them), and the page says why', [d3.isAdhoc, aFetched.filter((u) => /\/Plenary\/(Agenda|Schedule)\//.test(u)).length, /ad-hoc meeting: the plenary Agenda and Schedule folders/.test(d3.sources.skipped), d3.timing.sources, d3.errors], [true, 0, true, undefined, []]);
+  check('... its rows are read as before (the new TDoc listed)', d3.rows.filter((r) => r.tdoc === 'S4aA269002' && r.tags.indexOf('new') !== -1).length, 1);
+  check('the page shows the note instead of the sources when they are skipped', /D\.sources&&D\.sources\.skipped/.test(viaDocs.s.meetingControlHtml_()), true);
+}
+
 // ====================================================================== G
 console.log('G. the ledger');
 {

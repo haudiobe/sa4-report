@@ -29,6 +29,9 @@
  *     with the report (accept to Document Reallocations); AHG telcos of the
  *     agenda as candidates with a confidence (sessions created only on
  *     confirmation); the Schedule folder as a hint. Read-only sources, cached.
+ *     The report is read once through the Docs API (not three walks of the
+ *     document: 281 s on a 115-TDoc ad-hoc copy); an ad-hoc report does not
+ *     read the plenary Agenda/Schedule folders; each part's time is logged.
  * 2.29.0 (2026-11-23)
  *   (Issue #28 phase B, candidate on 2.28.0.)
  *   - Revision expected: Report > Revision Expected… records what the
@@ -32146,6 +32149,26 @@ function registrationRowsOfReport_(body) {
 }
 
 /**
+ * Pure: the registration rows from the tables of ONE Docs API read (plenaryDocsTables_()), as
+ * registrationRowsOfReport_() gives them from DocumentApp: [{ tdoc, title, agenda }]. The registration table is the one
+ * whose header is the Registration of Documents header (with or without the ad-hoc Session column).
+ */
+function registrationRowsOfDocsTables_(tables) {
+  const out = [];
+  (tables || []).forEach(function (t) {
+    const h = t.header || [];
+    const registration = (h.length === 4 || h.length === 5) && REGISTRATION_TABLE_HEADER_.every(function (x, i) { return h[i] === x; }) && (h.length === 4 || h[4] === ADHOC_SESSION_COLUMN_HEADER_);
+    if (!registration) return;
+    (t.rows || []).slice(1).forEach(function (row) {
+      const cells = row.tableCells || [];
+      const n = statusDocsCellText_(cells[0] || {}).trim();
+      if (isRegisteredTdocNumber_(n)) out.push({ tdoc: n, title: statusDocsCellText_(cells[1] || {}).trim(), agenda: cells.length > 3 ? statusDocsCellText_(cells[3]).trim() : '' });
+    });
+  });
+  return out;
+}
+
+/**
  * The data of Meeting Control (the dialog asks for it): { rows: [{ tdoc, title, agenda,
  * status, plenary, tags: [..], notes: [..] }], sources, sessions, titles, revisions,
  * proposals, errors }. Each part is read on its own; a part that fails is named
@@ -32153,22 +32176,33 @@ function registrationRowsOfReport_(body) {
  */
 function meetingControlData() {
   const errors = [];
+  // The time of each part (logged, and returned for the page and the tests): Meeting Control took 281 s on a 115-TDoc
+  // ad-hoc copy (2026-11-25), three walks of the document through DocumentApp.
+  const timing = {};
+  const started = Date.now();
+  const timed = function (part, fn) { const t0 = Date.now(); try { return fn(); } finally { timing[part] = Date.now() - t0; } };
   const store = getReportStateStore_(null);
   const body = currentReportDocument_().getBody();
   const cfg = getReportConfig_();
   const byTdoc = {};
   const row = function (n) { return byTdoc[n] = byTdoc[n] || { tdoc: n, title: '', agenda: '', status: '', plenary: '', tags: [], notes: [] }; };
+  // ONE read of the report through the Docs API, when the service is there; the registration, the scope and the
+  // statuses come from it. Without it (or when it cannot be read) each is read through DocumentApp, as before.
+  const snap = timed('read', function () { try { return statusDropdownsAvailable_() ? plenarySnapshot_(currentReportDocument_().getId()) : null; } catch (e) { return null; } });
+  const docsTables = snap ? timed('tables', function () { return plenaryDocsTables_(snap.content); }) : null;
+  timing.via = docsTables ? 'docs-api' : 'documentapp';
   let registration = [];
-  try { registration = registrationRowsOfReport_(body); registration.forEach(function (r) { Object.assign(row(r.tdoc), { title: r.title, agenda: r.agenda }); }); } catch (e) { errors.push('Registration of Documents: ' + e.message); }
+  try { registration = timed('registration', function () { return docsTables ? registrationRowsOfDocsTables_(docsTables) : registrationRowsOfReport_(body); }); registration.forEach(function (r) { Object.assign(row(r.tdoc), { title: r.title, agenda: r.agenda }); }); } catch (e) { errors.push('Registration of Documents: ' + e.message); }
   try {
-    const scope = reportTdocScope_(body);
+    const scope = timed('scope', function () { return docsTables ? plenaryScopeOfTables_(docsTables) : reportTdocScope_(body); });
     if (scope && scope.ok) {
       let entries = [];
-      if (plenarySelectionEnabled_()) {
-        const snap = plenarySnapshot_(currentReportDocument_().getId());
-        entries = snap ? readPlenaryDispositionsOfTables_(plenaryDocsTables_(snap.content), plenaryScopeOfTables_(plenaryDocsTables_(snap.content)), {}, PropertiesService.getDocumentProperties().getProperties() || {}).entries : [];
+      if (docsTables) {
+        entries = timed('statuses', function () { return readPlenaryDispositionsOfTables_(docsTables, scope, {}, PropertiesService.getDocumentProperties().getProperties() || {}).entries; });
+      } else if (plenarySelectionEnabled_()) {
+        entries = [];
       } else {
-        entries = readReportDispositions_(body, { scope: scope }).entries;
+        entries = timed('statuses', function () { return readReportDispositions_(body, { scope: scope }).entries; });
       }
       entries.forEach(function (e) {
         const r = row(e.tdoc);
@@ -32197,9 +32231,13 @@ function meetingControlData() {
   } catch (e) { errors.push('Sessions: ' + e.message); }
   let sources = null;
   let proposals = [];
+  const adhoc = isAdhocReportForMeetingControl_();
   try {
-    sources = readPlenarySources_(cfg, registration.map(function (r) { return r.tdoc; }));
-    if (sources.agenda.ok) {
+    // The plenary Agenda and Schedule folders are those of a main meeting: an ad-hoc report does not read them (they do
+    // not exist for it: HTTP 403 on the 86178 copy, 2026-11-25).
+    sources = adhoc ? { skipped: 'An ad-hoc meeting: the plenary Agenda and Schedule folders of a main meeting are not read.' }
+      : timed('sources', function () { return readPlenarySources_(cfg, registration.map(function (r) { return r.tdoc; })); });
+    if (sources.agenda && sources.agenda.ok) {
       const reportAgenda = {}; registration.forEach(function (r) { reportAgenda[r.tdoc] = r.agenda; });
       const reallocated = {}; const map = getReallocationMap_(); Object.keys(map || {}).forEach(function (n) { reallocated[n] = String(map[n].new || '').trim(); });
       proposals = proposedReallocations_(sources.agenda.allocations, reportAgenda, reallocated);
@@ -32208,7 +32246,9 @@ function meetingControlData() {
     }
   } catch (e) { errors.push('Agenda sources: ' + e.message); }
   const rows = Object.keys(byTdoc).sort().map(function (n) { return byTdoc[n]; }).filter(function (r) { return r.tags.length; });
-  return { rows: rows, titles: titles, proposals: proposals, sources: sources, sessions: sessions, errors: errors, at: new Date().toISOString(), isAdhoc: isAdhocReportForMeetingControl_() };
+  timing.total = Date.now() - started;
+  Logger.log('[PERF] Meeting Control: ' + JSON.stringify(timing));
+  return { rows: rows, titles: titles, proposals: proposals, sources: sources, sessions: sessions, errors: errors, at: new Date().toISOString(), isAdhoc: adhoc, timing: timing };
 }
 
 /**
@@ -32414,7 +32454,7 @@ function meetingControlHtml_() {
     'var mm=D.proposals.filter(function(x){return x.kind==="manual";});if(mm.length)h+="<p class=note>Reallocated by hand to another item (kept, not proposed): "+mm.map(function(x){return esc(x.tdoc+" (yours: "+x.replaces+", allocation: "+x.to+")");}).join(", ")+"</p>";}document.getElementById("alloc").innerHTML=h;}' +
     'function acc(){var p=D.proposals.filter(function(x){return x.kind==="proposed";});var pick=[].slice.call(document.querySelectorAll(".ap:checked")).map(function(c){var x=p[+c.value];return{tdoc:x.tdoc,from:x.from,to:x.to,source:D.sources.agenda.file};});if(!pick.length){msg("Choose at least one.");return;}' +
     'if(!confirm("Add to Document Reallocations:\\n"+pick.map(function(x){return x.tdoc+": "+x.from+" -> "+x.to;}).join("\\n")+"\\n\\nThe TDoc tables move when the reallocations are applied."))return;msg("Working…");google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).acceptProposedReallocations(pick);}' +
-    'function src(){var c=(D.sources&&D.sources.candidates)||[];var sc=D.sources&&D.sources.schedule;var h="<h4>AHG sessions in the agenda (candidates)</h4>";' +
+    'function src(){if(D.sources&&D.sources.skipped){document.getElementById("src").innerHTML="<div class=\\"note\\">"+esc(D.sources.skipped)+"</div>";return;}var c=(D.sources&&D.sources.candidates)||[];var sc=D.sources&&D.sources.schedule;var h="<h4>AHG sessions in the agenda (candidates)</h4>";' +
     'h+=c.length?"<table><tr><th></th><th>Group</th><th>Date</th><th>Time</th><th>Zone</th><th>Confidence</th><th>Text</th></tr>"+c.map(function(x,i){return "<tr><td>"+(D.isAdhoc?"<input type=checkbox class=cc value="+i+">":"")+"</td><td>"+esc(x.group)+"</td><td>"+esc(x.date)+"</td><td>"+esc(x.start)+(x.end?"–"+esc(x.end):"")+"</td><td>"+esc(x.zone)+"</td><td class="+esc(x.confidence)+">"+esc(x.confidence)+(x.why?"<br><small>"+esc(x.why)+"</small>":"")+"</td><td><small>"+esc(x.text)+"</small></td></tr>";}).join("")+"</table>"+(D.isAdhoc?"<button onclick=\\"mk()\\">Create sessions from selected…</button>":"<p class=note>Sessions are created in an ad-hoc report.</p>"):"<p>None found.</p>";' +
     'h+="<h4>Schedule</h4>"+(sc&&sc.ok?(sc.files.length?"<ul>"+sc.files.map(function(f){return "<li><a target=_blank href=\\""+esc(f.url)+"\\">"+esc(f.name)+"</a> ("+esc(f.listedAt)+")</li>";}).join("")+"</ul><p class=note>The version order of these files is not known: a hint only.</p>":"<p>No file.</p>"):"<div class=err>"+esc(sc?sc.error:"not read")+"</div>");document.getElementById("src").innerHTML=h;}' +
     'function mk(){var c=D.sources.candidates;var pick=[].slice.call(document.querySelectorAll(".cc:checked")).map(function(x){return c[+x.value];});if(!pick.length){msg("Choose at least one.");return;}' +
