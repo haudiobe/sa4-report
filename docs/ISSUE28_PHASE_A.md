@@ -181,4 +181,8 @@ The first run on a disposable copy of the 6G Media report was killed at Apps Scr
   - the revision moves: 60 s.
 
   The stages after them keep their budgets on the update's clock.
-- **Tests.** `tests/i28a-update-journal.test.js`.
+- **Resuming.** A TDoc loop stopped by its budget records where it stopped (`UPDATE_TDOC_CURSOR`), and the next update starts there, wrapping around to the beginning. Without this, every update would spend its budget on the same first TDocs and never reach the last ones (found by the convergence fixture). New TDocs keep their order, and the stages after the loop keep the list order.
+- **A repairing update** reports itself as "updated only in part": its read of the report was taken before the repair. The next update completes it, for example turning a Status that is still text back into a dropdown, and closes the record.
+- **Tests.** `tests/i28a-update-journal.test.js`. Part E covers:
+  - a move killed between its insert and its remove; after recovery the report equals one an uninterrupted update produces;
+  - twelve new TDocs under the budget, converging across several updates to the document of a single unbudgeted update, after which a further update changes nothing.
