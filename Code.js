@@ -44,7 +44,10 @@
  *     left twice with identical content (a killed move) and names any with
  *     different content; the record is closed by an update that completes.
  *     The TDoc loop may take 100 s and the revision moves 60 s: the rest is
- *     left to the next update ("updated only in part"), not killed.
+ *     left to the next update ("updated only in part"), not killed; the
+ *     next TDoc loop goes on where the last one stopped (UPDATE_TDOC_CURSOR).
+ *     An update that repaired the report says it is in part; the next one
+ *     completes it.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -1536,7 +1539,8 @@ function continuousUpdateCore_(context) {
     // upload; the abstract sweep below does not ask for them again.
     const abstractAskedThisRun = {};
 
-    allTdocs.forEach(tdocData => {
+    // After issue 28 A: the loop goes on where the last update left it (its time budget); the rest of the update keeps the list order (ISSUE 28 A section).
+    tdocLoopOrder_(allTdocs).forEach(tdocData => {
       const row = tdocData.row;
       const tdocNumber = String(row[tdocData.tdocCol] || '').trim();
       perfCount_('TDocs processed (loop iterations)');
@@ -30792,6 +30796,8 @@ function findStatusRowOfTable_(table) {
 /** Report state: the update that runs now ({ startedAt, stage }); removed at its end. Found at the start of the next update: that one did not end. */
 const UPDATE_RUN_KEY_ = 'UPDATE_RUN';
 /** Report state: an update that did not end, until an update completes: { startedAt, stage, detectedAt, removed, differing }. */
+/** Report state: the TDoc where the last update's TDoc loop stopped on its budget ({ tdoc, at }); the next starts there. */
+const UPDATE_TDOC_CURSOR_KEY_ = 'UPDATE_TDOC_CURSOR';
 const UPDATE_INTERRUPTED_KEY_ = 'UPDATE_INTERRUPTED';
 /**
  * The time the TDoc loop (new TDoc tables, statuses) and the revision moves may take in one update, each on its own
@@ -30886,10 +30892,31 @@ function repairAfterInterruptedUpdate_(body, context) {
   });
   j.interrupted.removed = removed;
   j.interrupted.differing = differing;
+  // What this update read of the report before the repair (its snapshot) no longer matches it: the update says it is
+  // in part, and the next update -- reading the repaired report -- completes it and closes the record.
+  if (removed.length) deferReportUpdateStage_('the report after the repair of the interrupted update (the next update completes it)');
   try { if (j.store) j.store.setProperty(UPDATE_INTERRUPTED_KEY_, JSON.stringify(j.interrupted)); } catch (e) { /* logged below anyway */ }
   Logger.log('Update journal: after the interrupted update, ' + (removed.length ? 'TDoc tables that were there twice with the same content, one removed: ' + removed.join(', ') : 'no TDoc table twice with the same content') +
     (differing.length ? '; TDoc tables more than once with DIFFERENT content, not changed -- check them: ' + differing.join(', ') : '') + '.');
   return { removed: removed, differing: differing };
+}
+
+/**
+ * The order of the TDoc loop: from the TDoc where the last update stopped on its budget, to the end, then from the
+ * start -- so that every TDoc is reached even when one update cannot do them all (a loop that always started at the
+ * top would never reach the last ones). New TDocs keep their order: those before the cursor were inserted already.
+ * Only the loop's order: the list itself, used by the stages after it, is not changed.
+ */
+function tdocLoopOrder_(allTdocs) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.store) return allTdocs;
+  let cursor = null;
+  try { cursor = JSON.parse(j.store.getProperty(UPDATE_TDOC_CURSOR_KEY_) || 'null'); } catch (e) { cursor = null; }
+  if (!cursor || !cursor.tdoc) return allTdocs;
+  const at = allTdocs.findIndex(function (t) { return String(t.row[t.tdocCol] || '').trim() === cursor.tdoc; });
+  if (at <= 0) return allTdocs;
+  Logger.log('Update: the TDoc loop goes on at ' + cursor.tdoc + ' (where the last update stopped on its time budget).');
+  return allTdocs.slice(at).concat(allTdocs.slice(0, at));
 }
 
 /** The TDoc loop of the update: past its time budget (its own clock), the rest is left to the next update (said once). */
@@ -30901,6 +30928,7 @@ function tdocLoopOverBudget_(tdocNumber) {
   if (!j.tdocsStartedAt) j.tdocsStartedAt = now;
   if (now - j.tdocsStartedAt <= REPORT_UPDATE_TDOCS_LOOP_MS_) return false;
   j.tdocsDeferred = true;
+  try { if (j.store) j.store.setProperty(UPDATE_TDOC_CURSOR_KEY_, JSON.stringify({ tdoc: tdocNumber, at: new Date().toISOString() })); } catch (e) { /* the next update starts at the top */ }
   deferReportUpdateStage_('TDoc tables from ' + tdocNumber + ' on (new TDocs and statuses)');
   return true;
 }
@@ -30928,6 +30956,8 @@ function updateJournalEnd_(result) {
   if (!j || !j.store) return;
   try {
     j.store.deleteProperty(UPDATE_RUN_KEY_);
+    // A whole pass of the TDoc loop: the next one starts at the top again.
+    if (j.tdocsStartedAt && !j.tdocsDeferred) j.store.deleteProperty(UPDATE_TDOC_CURSOR_KEY_);
     if (!j.interrupted) return;
     if (result) result.interrupted = { startedAt: j.interrupted.startedAt, stage: j.interrupted.stage, removed: j.interrupted.removed || [], differing: j.interrupted.differing || [] };
     const complete = !!result && result.success !== false && !(result.incomplete && result.incomplete.length) && !(j.interrupted.differing || []).length;
