@@ -55,9 +55,12 @@ async function waitFor(job, target) {
   const dir = path.join(ROOT, 'dist', 'integration-test', 'i28-copies', target || job.target || 'unknown', 'jobs');
   fs.mkdirSync(dir, { recursive: true });
   const limit = jobsWaited++ === 0 ? firstMinutes : minutes;
+  let lastStatus = '';
   const until = Date.now() + limit * 60000;
   process.stdout.write('Waiting for the runner (job ' + job.id + ', up to ' + limit + ' min)');
   for (;;) {
+    const st = (await resultFiles('IT28 status')).map((f) => { try { return JSON.parse(f.description || '{}'); } catch (e) { return {}; } }).find((s) => s.status && String(s.status).indexOf(job.id) !== -1);
+    if (st && st.status !== lastStatus) { lastStatus = st.status; process.stdout.write('\n  [' + st.at.slice(11, 19) + ' UTC] ' + st.status); }
     const files = await resultFiles('IT28 result ' + job.id);
     const err = files.find((f) => / ERROR /.test(f.name));
     if (err) { console.log('\nRUNNER ERROR: ' + err.description); return { ok: false }; }
@@ -102,7 +105,9 @@ const target = arg('--target');
 const script = arg('--script');
 if (!J.PLAN[target] || !script) { console.error('--target main|ahg and --script are required'); process.exit(2); }
 const plan = argv.includes('--plan');
-const steps = plan ? J.PLAN[target] : [[arg('--stage'), arg('--job')]];
+// --from <n>: resume the plan at its n-th job (1 = the first), after jobs that already passed.
+const from = Math.max(1, Number(arg('--from') || 1));
+const steps = plan ? J.PLAN[target].slice(from - 1) : [[arg('--stage'), arg('--job')]];
 const pushOriginal = () => {
   const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'integration-test', 'push-issue28-copy.mjs'), '--target', target, '--script', script, '--stage', 'original', '--write'], { encoding: 'utf8' });
   process.stdout.write((r.stdout || '') + (r.stderr || ''));

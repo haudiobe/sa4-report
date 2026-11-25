@@ -72,8 +72,8 @@ const CODE_PATHS = { Code: 'Code.js', HyperLink: 'HyperLink.js', ReportCreator: 
 const RELEASE_T33_SHA = '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac10006828e321b';
 const STAGES = ['base', 't33', 'A', 'B', 'C', 'original'];
 // The pinned Issue28Check.js (re-pinned deliberately 2026-11-25: fingerprint v2 -- Docs REST read with a field mask, canonical,
-// compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read). Before: 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
-const CHECK_SHA = 'ef08027fbf5fedee71fee4914169e3c9b0baabdb24a471d062f61cba371fbb0e';
+// compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read; no retry loops, status). Before: ef08027f..., 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
+const CHECK_SHA = 'dc844234e919a015ddb89be92631c8369b6f87e1bdc752ae958dc1ea7bfb53ad';
 
 /** Every reason why this script/document may not be written as `target` ([] when it may). Pure. */
 function identityRefusals(target, scriptId, project, file) {

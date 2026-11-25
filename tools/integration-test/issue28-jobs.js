@@ -15,8 +15,11 @@ const MANUAL_ROWS = /^(discussion|decision|comments?|minutes|notes)$/i;
 // The copies' meetings, from the 3GPP Portal (looked up 2026-11-25), never a meeting in progress:
 // main: SA4#138 Calgary (portal 60780, 2026-11-16..20), family 6G Media -- the meeting of the 6G Media report it copies.
 const MAIN_MEETING = { meetingId: 60780, expectType: 'main', reportType: '6G', overrides: { meetingFolder: 'TSGS4_138_Calgary', meetingNumber: '138' } };
-// ahg: "3GPPSA4-e (AH) on FS_6G_MED" (portal 86178, 2026-09-22..10-28, ended), family 6G Media.
-const AHG_MEETING = { meetingId: 86178, expectType: 'adhoc', reportType: '6G' };
+// ahg: "3GPPSA4-e (AH) on FS_6G_MED" (portal 86178, 2026-09-22..10-28, ended), family 6G Media. The meeting has two
+// agendas, so Discover cannot choose and an update is refused ("Discover or select the agenda document", seen
+// 2026-11-25): S4aP260149 is taken -- the latest agenda, for the final call of 26-28 Oct, with the whole schedule,
+// the one current when the report was last edited (2026-11-01). S4aP260098 was the agenda of the 22 Sep call.
+const AHG_MEETING = { meetingId: 86178, expectType: 'adhoc', reportType: '6G', overrides: { agendaTdoc: 'S4aP260149' } };
 // Its sessions as the meeting's own agendas give them (S4aP260098, S4aP260149: "Date | Start Time (CET/CEST) | End
 // Time"): the conference call of 22 Sep 2026 and the three-day call of 26-28 Oct 2026, 15:00-18:00 each day. The
 // offline meetings of 22 Sep and 5 Oct (S4aP260115) were not sessions of the call. Not taken from the document's tabs.

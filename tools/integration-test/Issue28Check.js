@@ -849,6 +849,9 @@ var IT28_RUNNER_KEY_ = 'IT28_RUNNER';
 var IT28_RUNNER_HOURS_ = 72;
 var IT28_RUNNER_TICK_MS_ = 4 * 60 * 1000;
 var IT28_RESULT_CHUNK_ = 3000;
+/** Steps that need a whole execution (the report's update has its own time budget from the start of the execution). */
+var IT28_FRESH_STEPS_ = ['update', 'meetingControl'];
+var IT28_STATUS_KEY_ = 'IT28_SNAP_STATUS_FILE';
 
 function it28RunnerTriggers_() {
   return ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === IT28_RUNNER_HANDLER_; });
@@ -879,6 +882,18 @@ function it28WriteResult_(jobId, result) {
     const f = folder.createFile(Utilities.newBlob(i === 0 ? JSON.stringify(result, null, 1) : '', 'text/plain', 'IT28 result ' + jobId + ' ' + (i + 1) + '/' + n + '.txt'));
     f.setDescription(text.slice(i * IT28_RESULT_CHUNK_, (i + 1) * IT28_RESULT_CHUNK_));
   }
+}
+
+/** The copy's status file (one Drive file whose description says what the runner does now); never throws. Replaced in the tests. */
+function it28Status_(text) {
+  try {
+    const props = PropertiesService.getDocumentProperties();
+    let file = null;
+    const id = props.getProperty(IT28_STATUS_KEY_);
+    if (id) { try { file = DriveApp.getFileById(id); } catch (e) { file = null; } }
+    if (!file) { file = it28Folder_().createFile(Utilities.newBlob('', 'text/plain', 'IT28 status ' + DocumentApp.getActiveDocument().getName() + '.txt')); props.setProperty(IT28_STATUS_KEY_, file.getId()); }
+    file.setDescription(JSON.stringify({ document: DocumentApp.getActiveDocument().getName(), at: new Date().toISOString(), status: String(text).slice(0, 1500) }));
+  } catch (e) { /* the status is only a help */ }
 }
 
 /** Pure: one compare as a compact result (identical, how many lines, the first ones). */
@@ -1005,6 +1020,8 @@ function it28RunStep_(step, state) {
         meetingFolder: '', meetingNumber: '', mailingList: '', mailingListMode: 'derived', agendaSourceDocId: '', showPreview: false }, step.overrides || {});
       saveConfigurationSettings(config);
       out.config = { meetingId: config.meetingId, meetingType: config.meetingType, meetingName: config.meetingName, meetingDate: config.meetingDate, ftpBase: config.ftpBase, tdocUrl: config.tdocUrl, agendaTdoc: config.agendaTdoc, reportType: config.reportType };
+      out.agendaDiscovered = v('agendaTdoc');
+      out.agendaCandidates = (preview.agendaCandidates || []).map(function (a) { return typeof a === 'string' ? a : (a && (a.tdoc || a.number || a.id)) || JSON.stringify(a).slice(0, 80); });
     } else if (step.do === 'saveSessions') {
       const r = saveAdhocSessionsConfiguration(step.rows);
       if (r && r.ok === false) throw new Error('sessions not saved: ' + (r.errors || []).join('; '));
@@ -1090,18 +1107,40 @@ function it28RunnerTick() {
     jobId = job.id;
     if (!state.current || state.current.id !== job.id) state.current = { id: job.id, next: 0, results: [], startedAt: new Date().toISOString(), release: it28Release_() };
     const started = Date.now();
+    // A step marked as started but never finished: the execution was ended (the 6-minute limit). It is recorded as
+    // failed and the job stops -- never run again (a retried update could run into the same limit for ever).
+    if (state.current.inProgress !== undefined && state.current.inProgress === state.current.next) {
+      const lost = job.steps[state.current.next];
+      state.current.results.push({ do: lost.do, ok: false, error: 'the execution ended during this step (Apps Script limit of 6 minutes?); not run again', ms: Date.now() - state.current.inProgressAt });
+      delete state.current.inProgress;
+      state.current.next++;
+      if (IT28_CHANGING_STEPS_.indexOf(lost.do) !== -1) { state.current.stoppedAt = state.current.next; state.current.next = job.steps.length; }
+      props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
+    }
+    let ranThisTick = 0;
     // At least one step per tick (progress), then more while the tick has time.
-    do {
+    while (state.current.next < job.steps.length) {
       const step = job.steps[state.current.next];
+      // An update (and Meeting Control) only as the first step of an execution: the whole budget is its own.
+      if (ranThisTick && IT28_FRESH_STEPS_.indexOf(step.do) !== -1) break;
+      if (ranThisTick && Date.now() - started >= IT28_RUNNER_TICK_MS_) break;
+      state.current.inProgress = state.current.next;
+      state.current.inProgressAt = Date.now();
+      props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
+      it28Status_('job ' + job.id + ': step ' + (state.current.next + 1) + '/' + job.steps.length + ' (' + step.do + ') started');
       const r = it28RunStep_(step, state);
+      ranThisTick++;
+      delete state.current.inProgress;
+      delete state.current.inProgressAt;
       state.current.results.push(r);
       state.current.next++;
       // A failed step that changes something stops the job: the rest is not run (the orchestrator cleans up).
       if (!r.ok && IT28_CHANGING_STEPS_.indexOf(step.do) !== -1 && step.do !== 'uninstall') { state.current.stoppedAt = state.current.next; state.current.next = job.steps.length; }
       if (state.uninstalled) break;
       props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
-    } while (state.current.next < job.steps.length && Date.now() - started < IT28_RUNNER_TICK_MS_);
-    if (state.current.next < job.steps.length) return;
+    }
+    if (state.current.next < job.steps.length) { it28Status_('job ' + job.id + ': ' + state.current.next + '/' + job.steps.length + ' steps done, continues in the next tick'); return; }
+    it28Status_('job ' + job.id + ': finished');
     const result = { job: job.id, release: state.current.release, startedAt: state.current.startedAt, finishedAt: new Date().toISOString(),
       ok: state.current.results.every(function (r) { return r.ok; }) && !state.current.stoppedAt, stoppedAt: state.current.stoppedAt || null, steps: state.current.results };
     if (state.uninstalled) {

@@ -328,6 +328,8 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.it28GetFile_ = (id) => files[id].text;
   const results = [];
   S.it28WriteResult_ = (id, r) => { if (!r.document) r.document = docName; results.push({ id: id, r: JSON.parse(JSON.stringify(r)) }); };
+  const status = [];
+  S.it28Status_ = (s) => status.push(s);
   let triggers = [];
   S.ScriptApp.getProjectTriggers = () => triggers.slice();
   S.ScriptApp.deleteTrigger = (t) => { triggers = triggers.filter((x) => x !== t); };
@@ -346,6 +348,8 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.Logger.getLog = () => 'Downloaded 128 TDOCs\n[PERF] TOTAL continuousUpdate: 41234 ms';
   S.Logger.log = () => {};
   const J = require('../tools/integration-test/issue28-jobs.js');
+  // A job with updates takes several ticks (an update only first in an execution): tick until its result is written.
+  const tickUntilDone = () => { const k = results.length; for (let i = 0; i < 12 && results.length === k; i++) S.it28RunnerTick(); };
   S.it28InstallRunner();
   check('install: one 5-minute trigger for the runner, its state, an "installed" result with the document name', [triggers.length, triggers[0].getHandlerFunction(), triggers[0].minutes, !!store.IT28_RUNNER, results[0].id, results[0].r.event, results[0].r.document], [1, 'it28RunnerTick', 5, true, 'runner', 'installed', 'DISPOSABLE Issue28 - test']);
   S.it28InstallRunner();
@@ -359,6 +363,8 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   check('a long job goes on in the next tick: one step per tick here, the state kept', [JSON.parse(store.IT28_RUNNER).current.next, results.length], [1, 2]);
   S.IT28_RUNNER_TICK_MS_ = 4 * 60 * 1000;
   S.it28RunnerTick();
+  check('an update only as the first step of an execution: the tick ran the first update fresh and stopped before the second', [JSON.parse(store.IT28_RUNNER).current.next, /step 2\/8 \(update\) started/.test(status.join('|'))], [4, true]);
+  S.it28RunnerTick();
   const res = results[results.length - 1];
   check('... and finishes: one result for the job, every step ok, the update timed, the compares as the job asks', [res.id, res.r.ok, res.r.steps.map((s) => s.do + (s.ok ? '' : '!')).join(','), typeof res.r.steps[1].updateMs, res.r.steps[3].identical, res.r.steps[6].identical, res.r.release],
     [job.id, true, 'snap,update,snap,compare,update,snap,compare,compare', 'number', false, true, 'T-2026.10.33 / 2.27.1 @b7299c1']);
@@ -366,10 +372,19 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   const n = results.length;
   S.it28RunnerTick();
   check('the same job again: not run twice', results.length, n);
+  check('the status file says what runs, step by step', [status.some((s) => /step 2\/8 \(update\) started/.test(s)), /finished$/.test(status[status.length - 1])], [true, true]);
+  // an execution ended inside a step (the 6-minute limit): recorded, the job stops, the step is not run again
+  const killed = { id: 'main-killed-t1c', steps: [{ do: 'update' }, { do: 'snap' }] };
+  S.IT28_JOB_ = killed;
+  const st0 = JSON.parse(store.IT28_RUNNER); st0.current = { id: killed.id, next: 0, results: [], startedAt: 'x', release: 'y', inProgress: 0, inProgressAt: Date.now() - 360000 }; store.IT28_RUNNER = JSON.stringify(st0);
+  const updatesBefore = updates;
+  S.it28RunnerTick();
+  const kr = results[results.length - 1].r;
+  check('an execution ended during an update: a failed step (not run again), the job stops', [kr.job, kr.ok, kr.stoppedAt, /execution ended during this step/.test(kr.steps[0].error), kr.steps.length, updates === updatesBefore], [killed.id, false, 1, true, 1, true]);
   check('an update records the TDocs downloaded and its own total time (from its log)', [res.r.steps[1].tdocsDownloaded, res.r.steps[1].perfTotalMs, res.r.steps[1].result.success], [128, 41234, true]);
   refuse = 'Cannot build report yet. Open Configure Meeting to finish the setup.';
   S.IT28_JOB_ = { id: 'ahg-diagnose-t1b', steps: J.makeJob('ahg', 'diagnose', 'x').steps.concat([{ do: 'snap' }]) };
-  S.it28RunnerTick();
+  tickUntilDone();
   const dg = results[results.length - 1].r;
   check('an update that is refused (success false, not updated -- no exception): a failed step with its error, and the job stops (found 2026-11-25)', [dg.ok, dg.stoppedAt, dg.steps[1].ok, /the update did not run \(nothing changed\): Cannot build report yet/.test(dg.steps[1].error), dg.steps.length], [false, 2, false, true, 2]);
   refuse = '';
@@ -411,7 +426,7 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
     : { ready: true, problems: [], blockingRevisions: [], unresolved: [], informationNotes: ['S4-261002: revision record closed (not-submitted)'] });
   const pb = J.makeJob('main', 'phase-b', 't6');
   S.IT28_JOB_ = { id: pb.id, steps: pb.steps };
-  S.it28RunnerTick();
+  tickUntilDone();
   const pbr = results[results.length - 1].r;
   check('phase B: a TDoc whose named successor is not listed gets "revision expected"; it blocks Close Report; closed with an outcome and a reason it is information', [pbr.ok, pbr.steps[1].original, pbr.steps[6].tdocBlocking, pbr.steps[8].tdocBlocking, pbr.steps[8].tdocInformation, records['S4-261002'], J.evaluate(pb, pbr)],
     [true, 'S4-261002', true, false, true, 'resolve:not-submitted', []]);
@@ -424,7 +439,7 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.setAdhocCarryForward = (on) => { carry = on; return 'carry ' + on; };
   const pc = J.makeJob('ahg', 'phase-c', 't7');
   S.IT28_JOB_ = { id: pc.id, steps: pc.steps };
-  S.it28RunnerTick();
+  tickUntilDone();
   const pcr = results[results.length - 1].r;
   check('phase C: the reservation rule is not switched when its preview refuses (said so); carry-forward on after its preview, then both back off', [pcr.ok, pcr.steps[2].previewOk, /preview refused the rule/.test(pcr.steps[3].skipped), pcr.steps[8].message, rule, carry, J.evaluate(pc, pcr)],
     [true, false, true, 'carry true', 'upload', false, []]);
