@@ -125,7 +125,8 @@ if (jobPath) {
 if (stage === 'original') {
   const runner = await api('GET', 'https://www.googleapis.com/drive/v3/files?pageSize=50&orderBy=createdTime desc&fields=files(name,description,createdTime)&q=' + encodeURIComponent("name contains 'IT28 result runner' and trashed = false"));
   const mine = (runner.files || []).map((f) => { try { return JSON.parse(f.description || '{}'); } catch (e) { return {}; } }).filter((r) => r.document === id1.file.name);
-  if (mine.length && mine[0].event === 'installed') fail('the runner of this copy is still installed (since ' + mine[0].at + '): run its uninstall job first');
+  if (mine.length && ['uninstalled', 'expired'].indexOf(mine[0].event) === -1) fail('the runner of this copy is not verifiably removed (last: ' + mine[0].event + ', ' + mine[0].at + '): run its uninstall job first');
+  if (mine.length && mine[0].cleanup && mine[0].cleanup.clean === false) fail('the cleanup of this copy was incomplete: ' + JSON.stringify(mine[0].cleanup).slice(0, 300));
 }
 let files;
 try {

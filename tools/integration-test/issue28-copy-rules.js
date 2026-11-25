@@ -72,8 +72,8 @@ const CODE_PATHS = { Code: 'Code.js', HyperLink: 'HyperLink.js', ReportCreator: 
 const RELEASE_T33_SHA = '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac10006828e321b';
 const STAGES = ['base', 't33', 'A', 'B', 'C', 'original'];
 // The pinned Issue28Check.js (re-pinned deliberately 2026-11-25: fingerprint v2 -- Docs REST read with a field mask, canonical,
-// compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner). Before: a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
-const CHECK_SHA = '9389a540b52024f20298c847f5470c8bf97f7dadf136dd85cf3978ed055f02a1';
+// compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup). Before: 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
+const CHECK_SHA = '799c1c56ea430f5a4234b423c421e80d13899cf93601751a382e63268a963547';
 
 /** Every reason why this script/document may not be written as `target` ([] when it may). Pure. */
 function identityRefusals(target, scriptId, project, file) {

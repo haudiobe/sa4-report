@@ -1,42 +1,73 @@
 /**
  * INTEGRATION TEST ONLY -- issue #28. The jobs of the runner in Issue28Check.js (pure; tested by
- * tests/issue28-jobs.test.js) and the rules a result is checked against. run-issue28-validation.mjs pushes a job with
- * a stage and reads its result.
+ * tests/issue28-jobs.test.js), the rules a result is checked against, and the plan of each copy.
+ * run-issue28-validation.mjs pushes a job with a stage, reads its result and stops (and cleans up) on a failure.
  *
- * Steps: probe | props | snap | compare {from: previous|baseline|<label>} | update | configure {config} |
- *        setProps {props} | call {fn, args} | uninstall
+ * Steps (a fixed list; Issue28Check.js runs nothing else): probe | props | snap | compare {from} | update |
+ *   configureMeeting {meetingId, expectType, reportType, overrides} | saveSessions {rows} | setProps {props} |
+ *   candidates | expectRevision {decision} | resolveRevision {outcome, reason} | closeReportCheck | meetingControl |
+ *   sessionRulePreview | sessionRuleSet {rule} | carryPreview | carrySet {on} | uninstall
  */
 
 // Rows typed by hand in a TDoc table: an update or a code change must never change them.
 const MANUAL_ROWS = /^(discussion|decision|comments?|minutes|notes)$/i;
 
-// The SA4#138 main meeting of the copy of the 6G Media report (a completed meeting; the copy only).
-const MAIN_CONFIG = { meetingType: 'main', meetingNumber: '138', meetingFolder: 'TSGS4_138_Calgary', reportType: '6G' };
+// The copies' meetings, from the 3GPP Portal (looked up 2026-11-25), never a meeting in progress:
+// main: SA4#138 Calgary (portal 60780, 2026-11-16..20), family 6G Media -- the meeting of the 6G Media report it copies.
+const MAIN_MEETING = { meetingId: 60780, expectType: 'main', reportType: '6G', overrides: { meetingFolder: 'TSGS4_138_Calgary', meetingNumber: '138' } };
+// ahg: "3GPPSA4-e (AH) on FS_6G_MED" (portal 86178, 2026-09-22..10-28, ended), family 6G Media.
+const AHG_MEETING = { meetingId: 86178, expectType: 'adhoc', reportType: '6G' };
+// Its sessions as the meeting's own agendas give them (S4aP260098, S4aP260149: "Date | Start Time (CET/CEST) | End
+// Time"): the conference call of 22 Sep 2026 and the three-day call of 26-28 Oct 2026, 15:00-18:00 each day. The
+// offline meetings of 22 Sep and 5 Oct (S4aP260115) were not sessions of the call. Not taken from the document's tabs.
+const AHG_SESSIONS = [
+  { id: '', label: 'Call 1', date: '2026-09-22', start: '15:00', end: '18:00' },
+  { id: '', label: 'Call 2', date: '2026-10-26', endDate: '2026-10-28', start: '15:00', end: '18:00' }
+];
 
 const snapUpdateTwice = () => [
   { do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
   { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }, { do: 'compare', from: 'baseline' }
 ];
+const ok = (...steps) => steps.map((s) => ({ step: s, rule: 'ok' }));
 
 /** The jobs: steps and the checks of their result (index into steps). */
 const JOBS = {
   // What the copy is: tabs, TDoc tables, first headings and text, its settings. Reads only.
-  inventory: () => ({ steps: [{ do: 'probe' }, { do: 'props' }], expect: [{ step: 0, rule: 'ok' }, { step: 1, rule: 'ok' }] }),
+  inventory: () => ({ steps: [{ do: 'probe' }, { do: 'props' }], expect: ok(0, 1) }),
   // Two snapshots of the unchanged document: no difference (the fingerprint is deterministic).
-  determinism: () => ({ steps: [{ do: 'snap' }, { do: 'snap' }, { do: 'compare', from: 'previous' }], expect: [{ step: 2, rule: 'identical' }] }),
-  // The main copy's meeting, saved in its document properties (as Configure Meeting > Save does).
-  'configure-main': () => ({ steps: [{ do: 'configure', config: MAIN_CONFIG }, { do: 'props' }], expect: [{ step: 0, rule: 'ok' }, { step: 1, rule: 'ok' }] }),
-  // A stage (T-2026.10.33, A, B, C, the rollback): update twice. The second update changes nothing (idempotent);
-  // no update and no stage changes the manual rows or removes text outside the TDoc tables.
+  determinism: () => ({ steps: [{ do: 'snap' }, { do: 'snap' }, { do: 'compare', from: 'previous' }], expect: ok(0, 1).concat([{ step: 2, rule: 'identical' }]) }),
+  // The copy's meeting, as Configure Meeting saves it (Resolve from the Portal, then Save), in the copy only.
+  'configure-main': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, MAIN_MEETING), { do: 'props' }], expect: ok(0, 1) }),
+  'configure-ahg': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, AHG_MEETING), { do: 'saveSessions', rows: AHG_SESSIONS }, { do: 'props' }], expect: ok(0, 1, 2) }),
+  // A stage (T-2026.10.33, A, A+B, A+B+C, the rollback): update twice. The second update changes nothing; no update and
+  // no stage changes a manual row or removes text, a TDoc table or a tab.
   stage: () => ({ steps: snapUpdateTwice(),
-    expect: [{ step: 1, rule: 'ok' }, { step: 4, rule: 'ok' }, { step: 3, rule: 'manualKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'manualKept' }] }),
-  // Phase A: Heading 2 class lines switched on, then off again; the summary is rewritten in place, nothing else changes.
+    expect: ok(0, 1, 4).concat([{ step: 3, rule: 'manualKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'manualKept' }]) }),
+  // Phase A: Heading 2 class lines on, then off again: only the Disposition Summary changes.
   headings: () => ({ steps: [
     { do: 'snap' }, { do: 'setProps', props: { DISPOSITION_CLASS_HEADINGS: 'heading2' } }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
     { do: 'setProps', props: { DISPOSITION_CLASS_HEADINGS: null } }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }],
-  expect: [{ step: 2, rule: 'ok' }, { step: 6, rule: 'ok' }, { step: 4, rule: 'manualKept' }, { step: 8, rule: 'manualKept' }, { step: 4, rule: 'onlySummary' }, { step: 8, rule: 'onlySummary' }] }),
-  // The end: the runner removes its trigger (before the original script goes back).
-  uninstall: () => ({ steps: [{ do: 'uninstall' }], expect: [{ step: 0, rule: 'ok' }] })
+  expect: ok(1, 2, 5, 6).concat([{ step: 4, rule: 'manualKept' }, { step: 8, rule: 'manualKept' }, { step: 4, rule: 'onlySummary' }, { step: 8, rule: 'onlySummary' }]) }),
+  // Phase B: "revision expected" for a TDoc whose successor is never registered blocks Close Report; closed with an
+  // outcome and a reason it is information, not blocking; the updates keep everything typed.
+  'phase-b': () => ({ steps: [
+    { do: 'candidates' }, { do: 'expectRevision', decision: 'noted' }, { do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
+    { do: 'closeReportCheck' }, { do: 'resolveRevision', outcome: 'not-submitted', reason: 'Integration test (issue #28): the successor was never registered.' },
+    { do: 'closeReportCheck' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }],
+  expect: ok(0, 1, 3, 7, 9).concat([{ step: 5, rule: 'manualKept' }, { step: 6, rule: 'closeBlocks' }, { step: 8, rule: 'closeInformation' }, { step: 11, rule: 'manualKept' }]) }),
+  // Phase C, main meeting: Meeting Control's data (plenary agenda and schedule sources) is read without errors.
+  'meeting-control': () => ({ steps: [{ do: 'meetingControl' }], expect: ok(0) }),
+  // Phase C, ad-hoc: Meeting Control; the reservation rule (only if its preview, with the clock check, passes on the live
+  // list); carry-forward (only after its preview); both back off; every update keeps what was typed.
+  'phase-c': () => ({ steps: [
+    { do: 'meetingControl' }, { do: 'snap' },
+    { do: 'sessionRulePreview' }, { do: 'sessionRuleSet', rule: 'reservation-6h' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
+    { do: 'carryPreview' }, { do: 'carrySet', on: true }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
+    { do: 'carrySet', on: false }, { do: 'sessionRuleSet', rule: 'upload' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }],
+  expect: ok(0, 2, 3, 4, 7, 8, 9, 12, 13, 14).concat([{ step: 6, rule: 'manualKept' }, { step: 11, rule: 'manualKept' }, { step: 16, rule: 'manualKept' }]) }),
+  // The end: every trigger, document and script property the tests left removed (the snapshot index kept), proven.
+  uninstall: () => ({ steps: [{ do: 'uninstall' }], expect: [{ step: 0, rule: 'clean' }] })
 };
 
 /** A job for a copy: id unique per push. */
@@ -50,11 +81,12 @@ function makeJob(target, name, stamp) {
 function evaluate(job, result) {
   const failures = [];
   if (!result || !Array.isArray(result.steps)) return ['no result'];
-  if (result.steps.length !== job.steps.length) failures.push('the result has ' + result.steps.length + ' steps, the job ' + job.steps.length);
+  if (result.stoppedAt) failures.push('stopped after step ' + result.stoppedAt + ' (a step that changes something failed)');
+  if (result.steps.length !== job.steps.length && !result.stoppedAt) failures.push('the result has ' + result.steps.length + ' steps, the job ' + job.steps.length);
   job.expect.forEach((e) => {
     const r = result.steps[e.step];
     const at = 'step ' + (e.step + 1) + ' (' + job.steps[e.step].do + ')';
-    if (!r) { failures.push(at + ': no result'); return; }
+    if (!r) { if (!result.stoppedAt) failures.push(at + ': no result'); return; }
     if (!r.ok) { failures.push(at + ': ' + (r.error || 'failed')); return; }
     if (e.rule === 'identical' && !r.identical) failures.push(at + ': expected no difference, got ' + r.lines + ' line(s): ' + (r.first || []).slice(0, 5).join(' | '));
     if (e.rule === 'manualKept') {
@@ -71,6 +103,9 @@ function evaluate(job, result) {
       const outside = Object.keys(c.rows || {}).length + c.tdocsAdded + c.tdocsRemoved + (c.other ? c.other.changed + c.other.added + c.other.removed : 0);
       if (outside) failures.push(at + ': changes outside the Disposition Summary (' + outside + ')');
     }
+    if (e.rule === 'closeBlocks' && !r.tdocBlocking) failures.push(at + ': the unresolved expected revision of ' + r.tdoc + ' does not block Close Report');
+    if (e.rule === 'closeInformation' && (r.tdocBlocking || !r.tdocInformation)) failures.push(at + ': the closed record of ' + r.tdoc + ' is ' + (r.tdocBlocking ? 'still blocking' : 'not listed as information'));
+    if (e.rule === 'clean' && !r.clean) failures.push(at + ': cleanup incomplete');
   });
   return failures;
 }
@@ -92,10 +127,13 @@ function assemble(id, files) {
   return JSON.parse(text);
 }
 
-/** The sequence for a copy: the stage pushed with each job. */
+/** The agreed sequence for each copy: the stage pushed with each job. After the last job the original script goes back. */
 const PLAN = {
-  main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'], ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['C', 'stage'], ['t33', 'stage'], ['t33', 'uninstall']],
-  ahg: [['t33', 'inventory'], ['t33', 'determinism']]
+  main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
+    ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
+    ['t33', 'stage'], ['t33', 'uninstall']],
+  ahg: [['t33', 'inventory'], ['t33', 'determinism'], ['t33', 'configure-ahg'], ['t33', 'stage'],
+    ['A', 'stage'], ['B', 'stage'], ['C', 'stage'], ['C', 'phase-c'], ['t33', 'stage'], ['t33', 'uninstall']]
 };
 
-module.exports = { JOBS, MANUAL_ROWS, MAIN_CONFIG, PLAN, makeJob, evaluate, assemble };
+module.exports = { JOBS, MANUAL_ROWS, MAIN_MEETING, AHG_MEETING, AHG_SESSIONS, PLAN, makeJob, evaluate, assemble };

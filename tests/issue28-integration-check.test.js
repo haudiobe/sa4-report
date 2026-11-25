@@ -317,9 +317,11 @@ console.log('it28Snap / it28Compare / it28Snapshots / it28Probe: the Docs REST r
 console.log('the runner: jobs pushed with a stage run by themselves in the copy (one install, then no editor)');
 {
   const store = {};
+  const sprops = {};
   S.PropertiesService.getDocumentProperties = () => ({ getProperties: () => Object.assign({}, store), getProperty: (k) => (k in store ? store[k] : null), setProperty: (k, v) => { store[k] = String(v); }, deleteProperty: (k) => { delete store[k]; } });
+  S.PropertiesService.getScriptProperties = () => ({ getProperties: () => Object.assign({}, sprops), deleteProperty: (k) => { delete sprops[k]; } });
   let docName = 'DISPOSABLE Issue28 - test';
-  S.DocumentApp.getActiveDocument = () => ({ getId: () => FAKE.own, getName: () => docName });
+  S.DocumentApp.getActiveDocument = () => ({ getId: () => FAKE.own, getName: () => docName, getBody: () => ({ getTables: () => [] }) });
   const files = {};
   let fileNo = 0;
   S.it28PutFile_ = (name, text) => { const id = 'f' + (++fileNo); files[id] = { name, text }; return id; };
@@ -338,15 +340,14 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.SA4_RELEASE_ = { releaseId: 'T-2026.10.33', codeVersion: '2.27.1', gitCommit: 'b7299c12d12b' };
   let updates = 0;
   S.continuousUpdate = () => { updates++; if (updates === 1) current = doc({ t: { 'S4-261001': { status: 'noted' } } }); };
-  S.saveConfigurationSettings = (cfg) => { Object.keys(cfg).forEach((k) => { store['CFG_' + k] = cfg[k]; }); };
   S.Logger.log = () => {};
+  const J = require('../tools/integration-test/issue28-jobs.js');
   S.it28InstallRunner();
   check('install: one 5-minute trigger for the runner, its state, an "installed" result with the document name', [triggers.length, triggers[0].getHandlerFunction(), triggers[0].minutes, !!store.IT28_RUNNER, results[0].id, results[0].r.event, results[0].r.document], [1, 'it28RunnerTick', 5, true, 'runner', 'installed', 'DISPOSABLE Issue28 - test']);
   S.it28InstallRunner();
   check('install again: still one trigger', triggers.length, 1);
   S.it28RunnerTick();
   check('a tick without a job: nothing happens', results.length, 2);
-  const J = require('../tools/integration-test/issue28-jobs.js');
   const job = J.makeJob('main', 'stage', 't1');
   S.IT28_JOB_ = { id: job.id, steps: job.steps };
   S.IT28_RUNNER_TICK_MS_ = -1;
@@ -357,32 +358,94 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   const res = results[results.length - 1];
   check('... and finishes: one result for the job, every step ok, the update timed, the compares as the job asks', [res.id, res.r.ok, res.r.steps.map((s) => s.do + (s.ok ? '' : '!')).join(','), typeof res.r.steps[1].updateMs, res.r.steps[3].identical, res.r.steps[6].identical, res.r.release],
     [job.id, true, 'snap,update,snap,compare,update,snap,compare,compare', 'number', false, true, 'T-2026.10.33 / 2.27.1 @b7299c1']);
-  check('... the compare counters name the row and field (Status text), for the rules', res.r.steps[3].counters.rows, { 'Status / text (with its styles)': 1 });
-  check('... and the job checks pass', J.evaluate(job, res.r), []);
+  check('... the compare counters name the row and field, for the rules; the job checks pass', [res.r.steps[3].counters.rows, J.evaluate(job, res.r)], [{ 'Status / text (with its styles)': 1 }, []]);
   const n = results.length;
   S.it28RunnerTick();
   check('the same job again: not run twice', results.length, n);
-  S.IT28_JOB_ = { id: 'main-misc-t2', steps: [{ do: 'props' }, { do: 'configure', config: { meetingType: 'main', meetingNumber: '138' } }, { do: 'setProps', props: { DISPOSITION_CLASS_HEADINGS: 'heading2' } }, { do: 'setProps', props: { IT28_RUNNER: 'x' } }, { do: 'call', fn: 'it28SnapLabels_', args: [{ IT28_SNAP_s2: '1' }] }, { do: 'call', fn: 'noSuchFunction' }, { do: 'compare', from: 'nothing' }, { do: 'explode' }] };
+
+  // configureMeeting: Resolve (+ Discover for ad-hoc) from the Portal, then Save -- as the dialog does
+  const saved = [];
+  S.resolveMeetingForConfigDialog_ = (id) => ({ ok: true, resolved: { id: id }, preview: { meetingId: { value: id }, meetingType: { value: id === '86178' ? 'adhoc' : 'main' }, meetingName: { value: id === '86178' ? '3GPPSA4-e (AH) on FS_6G_MED' : '3GPPSA4#138' }, meetingDate: { value: 'x' }, ftpBase: { value: 'https://ftp/' + id }, agendaTdoc: { value: '' }, revisionsUrl: { value: '' }, tdocListUrl: { value: '' } } });
+  S.discoverAgendaForConfigDialog_ = (id, r) => ({ ok: true, preview: Object.assign({}, S.resolveMeetingForConfigDialog_(id).preview, { agendaTdoc: { value: 'S4aP260149' }, tdocListUrl: { value: 'https://portal/list/' + id } }) });
+  S.saveConfigurationSettings = (cfg) => { saved.push(cfg); store.MEETING_TYPE = cfg.meetingType; store.MEETING_ID = cfg.meetingId; };
+  const sessionsSaved = [];
+  S.saveAdhocSessionsConfiguration = (rows) => { sessionsSaved.push(rows); store.ADHOC_SESSIONS = JSON.stringify(rows); return { ok: true }; };
+  const cfgJob = J.makeJob('ahg', 'configure-ahg', 't2');
+  S.IT28_JOB_ = { id: cfgJob.id, steps: cfgJob.steps };
   S.it28RunnerTick();
-  const misc = results[results.length - 1].r;
-  check('steps: configure and setProps write the copy\'s settings; a call returns its result; IT28_* keys refused; errors are results, never thrown', [misc.ok, misc.steps.map((s) => s.ok), store.CFG_meetingNumber, store.DISPOSITION_CLASS_HEADINGS, misc.steps[4].result, /may not touch IT28_RUNNER/.test(misc.steps[3].error), /no function noSuchFunction/.test(misc.steps[5].error), /unknown step explode/.test(misc.steps[7].error)],
-    [false, [true, true, true, false, true, false, false, false], '138', 'heading2', '["s2"]', true, true, true]);
+  const cfg = results[results.length - 1].r;
+  check('configure the AHG copy: meeting 86178 resolved and discovered from the Portal, saved as ad-hoc 6G; its two historical sessions saved', [cfg.ok, saved[0].meetingId, saved[0].meetingType, saved[0].reportType, saved[0].agendaTdoc, saved[0].tdocUrl, cfg.steps[1].sessions, J.evaluate(cfgJob, cfg)],
+    [true, '86178', 'adhoc', '6G', 'S4aP260149', 'https://portal/list/86178', ['Call 1 2026-09-22 15:00-18:00', 'Call 2 2026-10-26..2026-10-28 15:00-18:00'], []]);
+  const wrong = { id: 'main-wrong-t3', steps: [{ do: 'configureMeeting', meetingId: 86178, expectType: 'main', reportType: '6G' }, { do: 'snap' }] };
+  S.IT28_JOB_ = wrong;
+  S.it28RunnerTick();
+  const w = results[results.length - 1].r;
+  check('a meeting of another type than expected: nothing saved, and the job stops there (a step that changes something failed)', [w.ok, w.stoppedAt, w.steps.length, /is "adhoc", not main -- nothing saved/.test(w.steps[0].error), saved.length], [false, 1, 1, true, 1]);
+  const bad = { id: 'main-bad-t4', steps: [{ do: 'props' }, { do: 'setProps', props: { IT28_RUNNER: 'x' } }, { do: 'snap' }] };
+  S.IT28_JOB_ = bad;
+  S.it28RunnerTick();
+  const b = results[results.length - 1].r;
+  check('setProps may not touch the harness keys: refused, the job stops; an unknown step is refused too (no free calls)', [b.steps.map((s) => s.ok), b.stoppedAt, /may not touch IT28_RUNNER/.test(b.steps[1].error)], [[true, false], 2, true]);
+  S.IT28_JOB_ = { id: 'main-call-t5', steps: [{ do: 'call', fn: 'it28Cleanup_' }] };
+  S.it28RunnerTick();
+  check('... a "call" step does not exist', /unknown step call/.test(results[results.length - 1].r.steps[0].error), true);
+
+  // phase B and C steps
+  S.it28Candidates = () => ({ successorUndecided: [], successorDecided: [], namedNotListed: ['S4-261002 -> S4-269999'] });
+  const records = {};
+  S.saveExpectedRevision = (input) => { records[input.original] = 'pending'; return 'Recorded ' + input.original + ' ' + input.decision; };
+  S.changeExpectedRevision = (action, original, details) => { records[original] = action + ':' + details.outcome; return 'Closed ' + original; };
+  S.withDispositionLock_ = (name, fn) => fn();
+  S.closeReportCore_ = () => (Object.values(records)[0] === 'pending' ? { ready: false, problems: ['S4-261002: revision expected, not registered'], blockingRevisions: [], unresolved: [], informationNotes: [] }
+    : { ready: true, problems: [], blockingRevisions: [], unresolved: [], informationNotes: ['S4-261002: revision record closed (not-submitted)'] });
+  const pb = J.makeJob('main', 'phase-b', 't6');
+  S.IT28_JOB_ = { id: pb.id, steps: pb.steps };
+  S.it28RunnerTick();
+  const pbr = results[results.length - 1].r;
+  check('phase B: a TDoc whose named successor is not listed gets "revision expected"; it blocks Close Report; closed with an outcome and a reason it is information', [pbr.ok, pbr.steps[1].original, pbr.steps[6].tdocBlocking, pbr.steps[8].tdocBlocking, pbr.steps[8].tdocInformation, records['S4-261002'], J.evaluate(pb, pbr)],
+    [true, 'S4-261002', true, false, true, 'resolve:not-submitted', []]);
+  S.meetingControlData = () => ({ errors: [], rows: 3 });
+  S.previewAdhocSessionRule = () => ({ ok: false, error: 'only 3 TDoc(s) of the list have both times' });
+  let rule = 'upload';
+  S.setAdhocSessionRule = (r) => { rule = r; return 'rule ' + r; };
+  S.previewAdhocCarryForward = () => ({ ok: true, changes: [], kept: [] });
+  let carry = false;
+  S.setAdhocCarryForward = (on) => { carry = on; return 'carry ' + on; };
+  const pc = J.makeJob('ahg', 'phase-c', 't7');
+  S.IT28_JOB_ = { id: pc.id, steps: pc.steps };
+  S.it28RunnerTick();
+  const pcr = results[results.length - 1].r;
+  check('phase C: the reservation rule is not switched when its preview refuses (said so); carry-forward on after its preview, then both back off', [pcr.ok, pcr.steps[2].previewOk, /preview refused the rule/.test(pcr.steps[3].skipped), pcr.steps[8].message, rule, carry, J.evaluate(pc, pcr)],
+    [true, false, true, 'carry true', 'upload', false, []]);
+
   lockFree = false;
-  S.IT28_JOB_ = { id: 'main-x-t3', steps: [{ do: 'props' }] };
-  S.it28RunnerTick();
-  check('another run holds the lock: the tick does nothing', results.length, n + 1);
-  lockFree = true;
-  S.IT28_JOB_ = { id: 'main-uninstall-t4', steps: [{ do: 'uninstall' }] };
-  S.it28RunnerTick();
-  check('uninstall: the trigger removed, the state removed, the job result and an "uninstalled" result', [triggers.length, 'IT28_RUNNER' in store, results.slice(-2).map((x) => x.id), results[results.length - 1].r.event], [0, false, ['main-uninstall-t4', 'runner'], 'uninstalled']);
-  S.it28InstallRunner();
-  const st = JSON.parse(store.IT28_RUNNER); st.deadline = Date.now() - 1; store.IT28_RUNNER = JSON.stringify(st);
-  S.it28RunnerTick();
-  check('past its deadline: the runner removes itself', [triggers.length, 'IT28_RUNNER' in store, results[results.length - 1].r.event], [0, false, 'expired']);
-  docName = 'Not disposable';
+  S.IT28_JOB_ = { id: 'main-x-t8', steps: [{ do: 'props' }] };
   const before = results.length;
   S.it28RunnerTick();
-  check('in a document not named DISPOSABLE: refuses (an error result, nothing run)', [results.length, / ERROR$/.test(results[results.length - 1].id)], [before + 1, true]);
+  check('another run holds the lock: the tick does nothing', results.length, before);
+  lockFree = true;
+
+  // uninstall: every trigger, every document property but the snapshot index, every script property -- proven
+  triggers.push({ getHandlerFunction: () => 'continuousUpdate', minutes: 60 });
+  sprops.REVIEWER_API_TOKEN = 'x';
+  store.DISPOSITION_CLASS_HEADINGS = 'heading2';
+  const snapKeys = Object.keys(store).filter((k) => k.indexOf('IT28_SNAP_') === 0);
+  S.IT28_JOB_ = { id: 'main-uninstall-t9', steps: [{ do: 'uninstall' }] };
+  S.it28RunnerTick();
+  const u = results.slice(-2);
+  check('uninstall: all triggers (not only the runner\'s), all test settings and script properties removed; the snapshot index kept; proven in the result and an "uninstalled" record',
+    [triggers.length, Object.keys(store).filter((k) => k.indexOf('IT28_SNAP_') !== 0), Object.keys(sprops), Object.keys(store).filter((k) => k.indexOf('IT28_SNAP_') === 0).length === snapKeys.length && snapKeys.length > 0, u[0].r.steps[0].clean, u[1].id, u[1].r.event, J.evaluate(J.makeJob('main', 'uninstall', 'x'), u[0].r)],
+    [0, [], [], true, true, 'runner', 'uninstalled', []]);
+  S.it28InstallRunner();
+  store.MEETING_TYPE = 'main';
+  const st = JSON.parse(store.IT28_RUNNER); st.deadline = Date.now() - 1; store.IT28_RUNNER = JSON.stringify(st);
+  S.it28RunnerTick();
+  const ex = results[results.length - 1].r;
+  check('past its 72-hour limit: the runner cleans up by itself (triggers and test settings), proven', [triggers.length, 'IT28_RUNNER' in store, 'MEETING_TYPE' in store, ex.event, ex.cleanup.clean], [0, false, false, 'expired', true]);
+  docName = 'Not disposable';
+  const before2 = results.length;
+  S.it28RunnerTick();
+  check('in a document not named DISPOSABLE: refuses (an error result, nothing run)', [results.length, / ERROR$/.test(results[results.length - 1].id)], [before2 + 1, true]);
 }
 
 if (failures) { console.log(`\n${failures} check(s) FAILED`); process.exit(1); }

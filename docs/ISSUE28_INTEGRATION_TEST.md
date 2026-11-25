@@ -159,7 +159,7 @@ There is no supported way to run code in a bound Apps Script project without it.
    - It refuses to run in any document not named DISPOSABLE, and in the template, the five reports or Legacy.
 2. **Every stage after that** is automatic. `tools/integration-test/run-issue28-validation.mjs` does the following:
    - pushes the stage together with a job file (`Issue28Job.js`) through `push-issue28-copy.mjs --job`, with identity checks, the pinned original, compare-and-swap and read-back;
-   - waits for the runner, which runs the job's steps: snapshot, compare, timed update, configure, set test settings, call a function, uninstall;
+   - waits for the runner, which runs the job's steps from a fixed list: snapshot, compare, timed update, configure the meeting (Resolve and Discover from the 3GPP Portal, then Save, as the dialog does), save sessions, set test settings, the phase B steps (record and close an expected revision, Close Report check), the phase C steps (Meeting Control, rule and carry-forward previews and switches), and cleanup. A failed step that changes something stops the job;
    - reads the result from the descriptions of its Drive files, using Drive metadata only;
    - checks the result against the rules in `tools/integration-test/issue28-jobs.js`.
 3. **The rules checked:**
@@ -168,7 +168,7 @@ There is no supported way to run code in a bound Apps Script project without it.
    - No update and no stage changes a manual row (Discussion, Decision, Comments, Minutes, Notes).
    - No update or stage removes text outside the TDoc tables, removes a TDoc table, or adds or removes a tab.
    - Switching Heading 2 class lines on or off changes only the Disposition Summary.
-4. **Before the last push.** The push tool refuses the final `original` stage while the runner of that copy is still installed, because the trigger would then point at a missing function.
+4. **Cleanup.** The uninstall job, and the runner itself at its 72-hour limit, remove every trigger of the project and every document and script property except the snapshot index; the copies had none before. The result lists what is left, as proof. The orchestrator runs this cleanup after any failure or timeout. It pushes the original script back only after the cleanup is verified, and the push tool refuses `original` unless the copy's last runner record is "uninstalled" or "expired".
 
 ### The plan
 
@@ -180,17 +180,22 @@ node tools/integration-test/push-issue28-copy.mjs --target main --script <id> --
 
 - **main:**
   1. inventory and determinism at T-2026.10.33;
-  2. configure the copy's meeting: SA4#138, main, 6G — a completed meeting, the copy only;
+  2. configure the copy's meeting from the Portal: SA4#138 Calgary, portal 60780, main, 6G Media — a completed meeting, the copy only;
   3. the update stage at T-2026.10.33;
   4. A, with the Heading 2 on/off check;
   5. A+B;
   6. A+B+C;
   7. the rollback to T-2026.10.33;
   8. uninstall.
-- **ahg:** inventory and determinism. The configuration of its ad-hoc sessions (phase C) waits for the inventory of its 4 tabs.
+- **ahg:**
+  1. inventory and determinism;
+  2. configure "3GPPSA4-e (AH) on FS_6G_MED" (portal 86178, ad-hoc, 6G Media) with its two historical sessions from the meeting's agendas S4aP260098 and S4aP260149: 22 Sep 2026, and 26–28 Oct 2026, each 15:00–18:00. They are not taken from the document's tabs;
+  3. the T-2026.10.33 stage, then A, A+B and A+B+C;
+  4. phase C: Meeting Control, the reservation rule (only if its preview passes), carry-forward on, then both off;
+  5. the rollback, then uninstall.
+- **main** also runs phase B on A+B (an expected revision whose successor never comes: it blocks Close Report, and is information once closed with a reason) and Meeting Control on A+B+C.
 
 ### What still needs a person or another decision
 
 - The one-time `it28InstallRunner()` in each copy.
-- The ad-hoc configuration of the AHG copy for phase C: which meeting and which sessions. It follows from the inventory.
 - Interactive dialogs (Revision Expected, Meeting Control, Review Title Changes) as a person sees them. Their server functions can be run as `call` steps; the dialogs themselves cannot.

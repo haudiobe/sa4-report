@@ -23,6 +23,9 @@ const argv = process.argv.slice(2);
 const arg = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
 const write = argv.includes('--write');
 const minutes = Number(arg('--minutes') || 45);
+// The first job waits longer: until the runner is installed (it28InstallRunner, once per copy).
+const firstMinutes = Number(arg('--first-minutes') || minutes);
+let jobsWaited = 0;
 const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -51,8 +54,9 @@ const runnerOf = async (documentName) => {
 async function waitFor(job, target) {
   const dir = path.join(ROOT, 'dist', 'integration-test', 'i28-copies', target || job.target || 'unknown', 'jobs');
   fs.mkdirSync(dir, { recursive: true });
-  const until = Date.now() + minutes * 60000;
-  process.stdout.write('Waiting for the runner (job ' + job.id + ', up to ' + minutes + ' min)');
+  const limit = jobsWaited++ === 0 ? firstMinutes : minutes;
+  const until = Date.now() + limit * 60000;
+  process.stdout.write('Waiting for the runner (job ' + job.id + ', up to ' + limit + ' min)');
   for (;;) {
     const files = await resultFiles('IT28 result ' + job.id);
     const err = files.find((f) => / ERROR /.test(f.name));
@@ -67,7 +71,7 @@ async function waitFor(job, target) {
       failures.forEach((f) => console.log('  ! ' + f));
       return { ok: !failures.length, result, failures };
     }
-    if (Date.now() > until) { console.log('\nNo result within ' + minutes + ' minutes (is the runner installed? see it28InstallRunner).'); return { ok: false, timeout: true }; }
+    if (Date.now() > until) { console.log('\nNo result within ' + limit + ' minutes (is the runner installed? see it28InstallRunner).'); return { ok: false, timeout: true }; }
     process.stdout.write('.');
     await sleep(60000);
   }
@@ -97,10 +101,38 @@ if (arg('--wait')) {
 const target = arg('--target');
 const script = arg('--script');
 if (!J.PLAN[target] || !script) { console.error('--target main|ahg and --script are required'); process.exit(2); }
-const steps = argv.includes('--plan') ? J.PLAN[target] : [[arg('--stage'), arg('--job')]];
+const plan = argv.includes('--plan');
+const steps = plan ? J.PLAN[target] : [[arg('--stage'), arg('--job')]];
+const pushOriginal = () => {
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'integration-test', 'push-issue28-copy.mjs'), '--target', target, '--script', script, '--stage', 'original', '--write'], { encoding: 'utf8' });
+  process.stdout.write((r.stdout || '') + (r.stderr || ''));
+  return r.status === 0;
+};
+// Cleanup on any failure: the uninstall job (every trigger, document and script property the tests left), at the stage
+// the copy is at; then, once it is proven clean, the copy's original script. If the runner does not answer, its
+// 72-hour limit removes the trigger and the settings, and the original is pushed later.
+const cleanup = async (stage) => {
+  console.log('\n=== ' + target + ': CLEANUP (uninstall job at stage ' + stage + ')');
+  const r = await one(target, script, stage, 'uninstall');
+  if (r.ok) { console.log('Cleanup verified.'); return pushOriginal(); }
+  console.log('Cleanup NOT verified: the runner removes itself and the test settings at its 72-hour limit; push the original after that.');
+  return false;
+};
+const statePath = path.join(ROOT, 'dist', 'integration-test', 'i28-copies', target, 'state.json');
 for (const [stage, name] of steps) {
   console.log('\n=== ' + target + ': stage ' + stage + ', job ' + name);
   const r = await one(target, script, stage, name);
-  if (!r.ok) { console.log('Stopped at stage ' + stage + ', job ' + name + '.'); process.exit(1); }
+  if (!r.ok) {
+    console.log('Stopped at stage ' + stage + ', job ' + name + '.');
+    if (write && plan && !r.dryRun) {
+      const at = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')).stage : stage;
+      if (name !== 'uninstall') await cleanup(at);
+    }
+    process.exit(1);
+  }
+}
+if (write && plan) {
+  console.log('\n=== ' + target + ': the original script back (cleanup verified by the uninstall job)');
+  if (!pushOriginal()) { console.log('The original was NOT pushed back.'); process.exit(1); }
 }
 console.log('\nAll done.');

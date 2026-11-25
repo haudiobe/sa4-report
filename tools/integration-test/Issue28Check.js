@@ -835,11 +835,14 @@ function it28Candidates() {
 // So that nobody has to run editor functions by hand at every stage: it28InstallRunner() -- once per DISPOSABLE copy,
 // from the editor -- installs a time trigger IN THIS COPY ONLY that runs it28RunnerTick() every 5 minutes. A tick
 // does nothing unless the pushed job file (Issue28Job.js: var IT28_JOB_ = { id, steps }) names a job not done yet;
-// then it runs the steps (snapshot, compare, timed update, configure, call), saving after each step (a long job goes
+// then it runs the steps (a fixed list: snapshot, compare, timed update, configure the meeting, sessions, phase B and C
+// checks), saving after each step (a long job goes
 // on in the next tick), and writes the result as the description of Drive files "IT28 result <job> <i>/<n>" in the
 // snapshot folder, where tools/integration-test/run-issue28-validation.mjs reads it (Drive metadata only). It never
-// throws (an error is a result), removes its trigger after IT28_RUNNER_HOURS_ hours or at a job step 'uninstall', and
-// refuses to run in anything but a DISPOSABLE copy. No web app, no API executable, no new permission.
+// throws (an error is a result); a failed step that changes something stops the job. it28Cleanup_() -- at a job step
+// 'uninstall' and when IT28_RUNNER_HOURS_ hours are over -- removes every trigger of the project and every document
+// and script property but the snapshot index (the copies had none), and reports what is left. It refuses to run in
+// anything but a DISPOSABLE copy. No web app, no API executable, no new permission.
 
 var IT28_RUNNER_HANDLER_ = 'it28RunnerTick';
 var IT28_RUNNER_KEY_ = 'IT28_RUNNER';
@@ -895,12 +898,32 @@ function it28CompareResult_(a, b, d) {
       summary: n(d.summary), other: n(d.other), counts: d.counts } };
 }
 
-/** The functions a 'call' step may run: the report's own server functions and the harness, by name (this copy only). */
-function it28Callable_(name) {
-  const g = (function () { return this; })() || {};
-  const fn = g[name];
-  if (typeof fn !== 'function') throw new Error('no function ' + name);
-  return fn;
+/** Steps that change something: when one fails, the rest of the job is not run. */
+var IT28_CHANGING_STEPS_ = ['update', 'configureMeeting', 'saveSessions', 'setProps', 'expectRevision', 'resolveRevision', 'sessionRuleSet', 'carrySet', 'uninstall'];
+
+/**
+ * Removes what the tests left in this copy: every trigger of the project, every document property but the snapshot
+ * index (IT28_SNAP_*: the evidence), every script property. The copies had none of them before (preflight
+ * 2026-11-25). Returns what is left, as the proof of the cleanup.
+ */
+function it28Cleanup_() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  const docProps = PropertiesService.getDocumentProperties();
+  Object.keys(docProps.getProperties()).forEach(function (k) { if (k.indexOf(IT28_SNAP_KEY_) !== 0) docProps.deleteProperty(k); });
+  const scriptProps = PropertiesService.getScriptProperties();
+  Object.keys(scriptProps.getProperties()).forEach(function (k) { scriptProps.deleteProperty(k); });
+  const left = Object.keys(docProps.getProperties()).filter(function (k) { return k.indexOf(IT28_SNAP_KEY_) !== 0; });
+  return { triggersLeft: ScriptApp.getProjectTriggers().length, documentPropertiesLeft: left, scriptPropertiesLeft: Object.keys(scriptProps.getProperties()),
+    clean: !ScriptApp.getProjectTriggers().length && !left.length && !Object.keys(scriptProps.getProperties()).length };
+}
+
+/** Pure: the counts of a Close Report result, and whether a TDoc is named among the blocking findings or the information. */
+function it28CloseReportSummary_(result, tdoc) {
+  const blocking = JSON.stringify([result.problems || [], result.blockingRevisions || [], result.unresolved || []]);
+  const information = JSON.stringify(result.informationNotes || []);
+  return { ready: !!result.ready, problems: (result.problems || []).length, blockingRevisions: (result.blockingRevisions || []).length, unresolved: (result.unresolved || []).length,
+    information: (result.informationNotes || []).length, tdoc: tdoc || '', tdocBlocking: !!tdoc && blocking.indexOf(tdoc) !== -1, tdocInformation: !!tdoc && information.indexOf(tdoc) !== -1,
+    informationFirst: (result.informationNotes || []).slice(0, 3).map(function (x) { return String(typeof x === 'string' ? x : JSON.stringify(x)).slice(0, 200); }) };
 }
 
 /** One step of a job; returns its result (an error is a result). */
@@ -952,14 +975,75 @@ function it28RunStep_(step, state) {
       Object.keys(step.props || {}).forEach(function (k) { if (k.indexOf('IT28_') === 0) throw new Error('setProps may not touch ' + k); });
       Object.keys(step.props || {}).forEach(function (k) { if (step.props[k] === null) props.deleteProperty(k); else props.setProperty(k, String(step.props[k])); });
       out.set = Object.keys(step.props || {}).sort();
-    } else if (step.do === 'call') {
-      const r = it28Callable_(step.fn).apply(null, step.args || []);
-      out.fn = step.fn;
-      out.result = JSON.stringify(r === undefined ? null : r).slice(0, 1500);
+    } else if (step.do === 'configureMeeting') {
+      // As Configure Meeting does: Resolve (and Discover Agenda / TDocs for an ad-hoc meeting) from the 3GPP Portal, then Save.
+      const resolved = resolveMeetingForConfigDialog_(String(step.meetingId));
+      if (!resolved.ok) throw new Error('Resolve ' + step.meetingId + ': ' + resolved.error);
+      let preview = resolved.preview;
+      if (step.expectType === 'adhoc') {
+        const found = discoverAgendaForConfigDialog_(String(step.meetingId), resolved.resolved);
+        if (!found.ok) throw new Error('Discover ' + step.meetingId + ': ' + found.error);
+        preview = found.preview;
+      }
+      const v = function (f) { return preview[f] && preview[f].value ? String(preview[f].value) : ''; };
+      if (v('meetingType') !== step.expectType) throw new Error('meeting ' + step.meetingId + ' is "' + v('meetingType') + '", not ' + step.expectType + ' -- nothing saved');
+      const config = Object.assign({ meetingId: v('meetingId'), meetingType: v('meetingType'), meetingName: v('meetingName'), meetingDate: v('meetingDate'), ftpBase: v('ftpBase'),
+        agendaTdoc: v('agendaTdoc'), agendaCsvUrl: v('agendaCsvUrl'), tdocUrl: v('tdocListUrl'), revisionsUrl: v('revisionsUrl'), reportType: step.reportType,
+        meetingFolder: '', meetingNumber: '', mailingList: '', mailingListMode: 'derived', agendaSourceDocId: '', showPreview: false }, step.overrides || {});
+      saveConfigurationSettings(config);
+      out.config = { meetingId: config.meetingId, meetingType: config.meetingType, meetingName: config.meetingName, meetingDate: config.meetingDate, ftpBase: config.ftpBase, tdocUrl: config.tdocUrl, agendaTdoc: config.agendaTdoc, reportType: config.reportType };
+    } else if (step.do === 'saveSessions') {
+      const r = saveAdhocSessionsConfiguration(step.rows);
+      if (r && r.ok === false) throw new Error('sessions not saved: ' + (r.errors || []).join('; '));
+      out.sessions = (step.rows || []).map(function (s) { return s.label + ' ' + s.date + (s.endDate ? '..' + s.endDate : '') + ' ' + s.start + '-' + s.end; });
+    } else if (step.do === 'candidates') {
+      out.candidates = it28Candidates();
+      state.candidates = out.candidates;
+    } else if (step.do === 'expectRevision') {
+      // Phase B: "revision expected" for a TDoc of this report whose successor is never registered.
+      const named = ((state.candidates || {}).namedNotListed || []).map(function (x) { return x.split(' -> ')[0]; });
+      let original = named[0] || '';
+      if (!original) {
+        const index = buildTdocTableIndex_(it28Document_().getBody().getTables());
+        const all = flattenTdocGroups_(downloadAndGroupTdocs_(getReportConfig_(), null));
+        const facts = plenaryListFactsOf_(all);
+        original = Object.keys(facts).sort().filter(function (n) { const tb = lookupTdocTableInIndex_(index, n); return tb && PROVREV_UNDECIDED_.indexOf(provisionalStatusOfTable_(tb)) !== -1; })[0] || '';
+      }
+      if (!original) throw new Error('no TDoc of this report is undecided: nothing to record');
+      out.message = saveExpectedRevision({ original: original, decision: step.decision || 'noted', plenary: '', agenda: '', successor: '' });
+      out.original = original;
+      state.revisionOriginal = original;
+    } else if (step.do === 'resolveRevision') {
+      if (!state.revisionOriginal) throw new Error('no expected revision recorded in this job');
+      out.message = changeExpectedRevision('resolve', state.revisionOriginal, { outcome: step.outcome || 'not-submitted', reason: step.reason || 'Integration test: the successor was never registered.' });
+      out.original = state.revisionOriginal;
+    } else if (step.do === 'closeReportCheck') {
+      // Close Report's checks only (its core, under its lock); not the dialog, not the writes after it.
+      Object.assign(out, it28CloseReportSummary_(withDispositionLock_('Close Report', closeReportCore_), state.revisionOriginal));
+    } else if (step.do === 'meetingControl') {
+      const data = meetingControlData();
+      out.meetingControl = JSON.stringify(data).slice(0, 1500);
+      out.errors = (data && data.errors) || [];
+    } else if (step.do === 'sessionRulePreview') {
+      const r = previewAdhocSessionRule();
+      out.preview = JSON.stringify(r).slice(0, 1200);
+      out.previewOk = !!(r && r.ok);
+      state.sessionRulePreviewOk = out.previewOk;
+    } else if (step.do === 'sessionRuleSet') {
+      if (step.rule !== 'upload' && !state.sessionRulePreviewOk) { out.skipped = 'the preview refused the rule (see the step before): not switched'; }
+      else out.message = setAdhocSessionRule(step.rule);
+    } else if (step.do === 'carryPreview') {
+      const r = previewAdhocCarryForward();
+      out.preview = JSON.stringify(r).slice(0, 1200);
+      out.previewOk = !!(r && r.ok);
+      state.carryPreviewOk = out.previewOk;
+    } else if (step.do === 'carrySet') {
+      if (step.on && !state.carryPreviewOk) { out.skipped = 'the preview refused carry-forward: not switched'; }
+      else out.message = setAdhocCarryForward(!!step.on);
     } else if (step.do === 'uninstall') {
-      it28RunnerTriggers_().forEach(function (t) { ScriptApp.deleteTrigger(t); });
-      out.triggersLeft = it28RunnerTriggers_().length;
+      Object.assign(out, it28Cleanup_());
       state.uninstalled = true;
+      if (!out.clean) throw new Error('cleanup incomplete: ' + JSON.stringify({ triggers: out.triggersLeft, documentProperties: out.documentPropertiesLeft, scriptProperties: out.scriptPropertiesLeft }));
     } else {
       throw new Error('unknown step ' + step.do);
     }
@@ -985,9 +1069,7 @@ function it28RunnerTick() {
     const state = JSON.parse(props.getProperty(IT28_RUNNER_KEY_) || 'null');
     if (!state) return;
     if (Date.now() > state.deadline) {
-      it28RunnerTriggers_().forEach(function (t) { ScriptApp.deleteTrigger(t); });
-      props.deleteProperty(IT28_RUNNER_KEY_);
-      it28WriteResult_('runner', { event: 'expired', at: new Date().toISOString() });
+      it28WriteResult_('runner', { event: 'expired', at: new Date().toISOString(), cleanup: it28Cleanup_() });
       return;
     }
     const job = typeof IT28_JOB_ !== 'undefined' ? IT28_JOB_ : null;
@@ -997,18 +1079,29 @@ function it28RunnerTick() {
     const started = Date.now();
     // At least one step per tick (progress), then more while the tick has time.
     do {
-      state.current.results.push(it28RunStep_(job.steps[state.current.next], state));
+      const step = job.steps[state.current.next];
+      const r = it28RunStep_(step, state);
+      state.current.results.push(r);
       state.current.next++;
+      // A failed step that changes something stops the job: the rest is not run (the orchestrator cleans up).
+      if (!r.ok && IT28_CHANGING_STEPS_.indexOf(step.do) !== -1 && step.do !== 'uninstall') { state.current.stoppedAt = state.current.next; state.current.next = job.steps.length; }
+      if (state.uninstalled) break;
       props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
     } while (state.current.next < job.steps.length && Date.now() - started < IT28_RUNNER_TICK_MS_);
     if (state.current.next < job.steps.length) return;
     const result = { job: job.id, release: state.current.release, startedAt: state.current.startedAt, finishedAt: new Date().toISOString(),
-      ok: state.current.results.every(function (r) { return r.ok; }), steps: state.current.results };
+      ok: state.current.results.every(function (r) { return r.ok; }) && !state.current.stoppedAt, stoppedAt: state.current.stoppedAt || null, steps: state.current.results };
+    if (state.uninstalled) {
+      // it28Cleanup_ removed the runner's state with everything else; nothing is written back.
+      it28WriteResult_(job.id, result);
+      const u = result.steps[result.steps.length - 1];
+      it28WriteResult_('runner', { event: u && u.clean ? 'uninstalled' : 'uninstall incomplete', at: result.finishedAt, job: job.id, cleanup: u });
+      return;
+    }
     state.done[job.id] = true;
     state.current = null;
-    if (state.uninstalled) props.deleteProperty(IT28_RUNNER_KEY_); else props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
+    props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
     it28WriteResult_(job.id, result);
-    if (state.uninstalled) it28WriteResult_('runner', { event: 'uninstalled', at: result.finishedAt, job: job.id });
   } catch (e) {
     try { it28WriteResult_(jobId + ' ERROR', { job: jobId, error: String((e && e.message) || e).slice(0, 600), at: new Date().toISOString() }); } catch (e2) { /* nothing more can be done */ }
   } finally {
