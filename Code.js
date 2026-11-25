@@ -38,6 +38,13 @@
  *   - Update costs: one read of each table in the existing-TDoc scan, the
  *     Status row found with fewer calls, no walk of the body for a summary
  *     the report does not have. Same results.
+ *   - An update stopped from outside (the 6-minute limit) is no longer
+ *     silent: the update keeps a journal (UPDATE_RUN: start and stage); the
+ *     next update finds it, records UPDATE_INTERRUPTED, removes a TDoc table
+ *     left twice with identical content (a killed move) and names any with
+ *     different content; the record is closed by an update that completes.
+ *     The TDoc loop may take 100 s and the revision moves 60 s: the rest is
+ *     left to the next update ("updated only in part"), not killed.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -1293,6 +1300,8 @@ function perfCounterValue_(label) {
  */
 function perfTimed_(label, fn) {
   const start = Date.now();
+  // After issue 28 A: the stage of a running update, for its journal (ISSUE 28 A section).
+  updateJournalStage_(label);
   try {
     return fn();
   } finally {
@@ -1428,6 +1437,8 @@ function continuousUpdateCore_(context) {
   const perfTotalStart = Date.now();
   // After T-2026.10.29: what can wait is left to the next update when this one runs long (GOES TO PLENARY section).
   markReportUpdateStart_();
+  // After issue 28 A: the journal of this update; one that did not end before is found and recorded (ISSUE 28 A section).
+  updateJournalStart_(context);
   const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_(context));
   const body = getReportBody_(context);
   perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
@@ -1469,6 +1480,8 @@ function continuousUpdateCore_(context) {
     }
     // After T-2026.10.31: a TDoc the meeting-room server has is no longer taken as reserved (UNDISPOSED DOCUMENTS section).
     applyLocalDocsAvailabilitySafely_(tdocGroups, context);
+    // After issue 28 A: what an interrupted update may have left, before the report is scanned (ISSUE 28 A section).
+    repairAfterInterruptedUpdate_(body, context);
     const allTdocs = [];
     Object.keys(tdocGroups).forEach(key => {
       tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
@@ -1527,6 +1540,8 @@ function continuousUpdateCore_(context) {
       const row = tdocData.row;
       const tdocNumber = String(row[tdocData.tdocCol] || '').trim();
       perfCount_('TDocs processed (loop iterations)');
+      // After issue 28 A: the TDoc tables within the time budget; the rest in the next update (ISSUE 28 A section).
+      if (tdocLoopOverBudget_(tdocNumber)) return;
 
       if (!existingTdocs.has(tdocNumber)) {
         // The title of its agenda item, for a heading the report does not have yet.
@@ -1699,6 +1714,8 @@ function continuousUpdateCore_(context) {
     // lines (as far as they got) are the only available evidence.
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
     // After T-2026.10.29: what follows in this execution is no update (GOES TO PLENARY section).
+    // After issue 28 A: the journal of this update ends (ISSUE 28 A section).
+    updateJournalEnd_(result);
     endReportUpdate_();
     perfLogSummary_();
   }
@@ -7698,6 +7715,8 @@ function rearrangeRevisionTables_(cfg, groups, index, context) {
     const childTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, child, index));
     if (!childTable) { stats.missingChild++; return; }
 
+    // After issue 28 A: no move after the time budget; the rest in the next update (ISSUE 28 A section).
+    if (revisionMovesOverBudget_()) return;
     const movedTable = perfTimedAccum_('  rearrangeRevisionTables_: moveTableAfter_ (accumulated)', () => moveTableAfter_(body, childTable, parentTable));
     if (movedTable) {
       if (index) {
@@ -30764,6 +30783,161 @@ function findStatusRowOfTable_(table) {
     return { cell: cell, value: statusPartOfCellText_(cell.getText()).trim() };
   }
   return null;
+}
+
+// ---- After the first real-document run (2026-11-25): an update killed at the 6-minute limit left no trace, and one
+// killed inside a revision move left the moved TDoc table twice (moveTableAfter_ inserts the copy, then removes the
+// original). The journal makes such an update visible to the next one, which repairs what can be repaired safely.
+
+/** Report state: the update that runs now ({ startedAt, stage }); removed at its end. Found at the start of the next update: that one did not end. */
+const UPDATE_RUN_KEY_ = 'UPDATE_RUN';
+/** Report state: an update that did not end, until an update completes: { startedAt, stage, detectedAt, removed, differing }. */
+const UPDATE_INTERRUPTED_KEY_ = 'UPDATE_INTERRUPTED';
+/**
+ * The time the TDoc loop (new TDoc tables, statuses) and the revision moves may take in one update, each on its own
+ * clock: with the TDoc list (up to about a minute) the update is past them by about 220 s, and the stages after them
+ * keep their own budgets on the update's clock (collectors 150 s, revisions 215 s, formatting 240 s, summary 285 s).
+ */
+const REPORT_UPDATE_TDOCS_LOOP_MS_ = 100000;
+const REPORT_UPDATE_MOVES_MS_ = 60000;
+
+/** The clock of these stage budgets (replaced in the tests). */
+function updateBudgetNow_() {
+  return Date.now();
+}
+/** The journal of the update that runs in this execution, or null. */
+let UPDATE_JOURNAL_ = null;
+
+/**
+ * The start of an update (before anything in the document is changed): an UPDATE_RUN left by an update that did not
+ * end is recorded as UPDATE_INTERRUPTED (and logged); then this update's own UPDATE_RUN. Returns the interruption
+ * known (null when none). Never throws: without its properties the update runs as before, without a journal.
+ */
+function updateJournalStart_(context) {
+  UPDATE_JOURNAL_ = { store: null, interrupted: null, stage: 'start', tdocsDeferred: false, movesDeferred: false, tdocsStartedAt: 0, movesStartedAt: 0 };
+  try {
+    const store = getReportStateStore_(context);
+    let interrupted = null;
+    try { interrupted = JSON.parse(store.getProperty(UPDATE_INTERRUPTED_KEY_) || 'null'); } catch (e) { interrupted = null; }
+    const raw = store.getProperty(UPDATE_RUN_KEY_);
+    if (raw) {
+      let previous = {};
+      try { previous = JSON.parse(raw) || {}; } catch (e) { previous = {}; }
+      interrupted = { startedAt: String(previous.startedAt || ''), stage: String(previous.stage || ''), detectedAt: new Date().toISOString(), removed: [], differing: [] };
+      store.setProperty(UPDATE_INTERRUPTED_KEY_, JSON.stringify(interrupted));
+      Logger.log('Update journal: the update started ' + interrupted.startedAt + ' did not end (it was stopped during "' + interrupted.stage +
+        '", e.g. at the 6-minute limit). This update checks the report for what it may have left.');
+    }
+    store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: new Date().toISOString(), stage: 'start' }));
+    UPDATE_JOURNAL_.store = store;
+    UPDATE_JOURNAL_.interrupted = interrupted;
+  } catch (e) {
+    Logger.log('Update journal: not kept (' + e.message + ').');
+  }
+  return UPDATE_JOURNAL_.interrupted;
+}
+
+/** The stage the running update has reached (perfTimed_() labels); kept in UPDATE_RUN. Never throws. */
+function updateJournalStage_(stage) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.store || j.stage === stage) return;
+  j.stage = stage;
+  try { j.store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: (JSON.parse(j.store.getProperty(UPDATE_RUN_KEY_) || '{}') || {}).startedAt || '', stage: String(stage).slice(0, 120) })); } catch (e) { /* the journal is a help only */ }
+}
+
+/** Pure: the text of a table, row by row and cell by cell (two tables with the same key have the same content). */
+function tdocTableContentKey_(table) {
+  const rows = [];
+  for (let r = 0; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    const cells = [];
+    for (let c = 0; c < row.getNumCells(); c++) cells.push(row.getCell(c).getText());
+    rows.push(cells.join('\u241F'));
+  }
+  return rows.join('\u241E');
+}
+
+/**
+ * After an interrupted update only: a TDoc table that is in the report more than once with IDENTICAL content keeps
+ * one (the first); one with different content is not touched and is named (someone may have typed in either). The
+ * result is kept in UPDATE_INTERRUPTED and logged. A move interrupted by the time limit leaves exactly such a copy.
+ */
+function repairAfterInterruptedUpdate_(body, context) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.interrupted) return null;
+  const groups = {};
+  body.getTables().forEach(function (t) {
+    if (!isTDocTable_(t)) return;
+    const parsed = parseExactSA4DocumentId_(safeCellText_(t, 0, 1));
+    if (parsed.isValid) (groups[parsed.raw] = groups[parsed.raw] || []).push(t);
+  });
+  const removed = [];
+  const differing = [];
+  Object.keys(groups).sort().forEach(function (n) {
+    const tables = groups[n];
+    if (tables.length < 2) return;
+    const first = tdocTableContentKey_(tables[0]);
+    if (tables.slice(1).every(function (t) { return tdocTableContentKey_(t) === first; })) {
+      tables.slice(1).forEach(function (t) { removeTableWithItsSeparator_(body, t); });
+      removed.push(n + (tables.length > 2 ? ' (' + (tables.length - 1) + ' copies)' : ''));
+    } else {
+      differing.push(n);
+    }
+  });
+  j.interrupted.removed = removed;
+  j.interrupted.differing = differing;
+  try { if (j.store) j.store.setProperty(UPDATE_INTERRUPTED_KEY_, JSON.stringify(j.interrupted)); } catch (e) { /* logged below anyway */ }
+  Logger.log('Update journal: after the interrupted update, ' + (removed.length ? 'TDoc tables that were there twice with the same content, one removed: ' + removed.join(', ') : 'no TDoc table twice with the same content') +
+    (differing.length ? '; TDoc tables more than once with DIFFERENT content, not changed -- check them: ' + differing.join(', ') : '') + '.');
+  return { removed: removed, differing: differing };
+}
+
+/** The TDoc loop of the update: past its time budget (its own clock), the rest is left to the next update (said once). */
+function tdocLoopOverBudget_(tdocNumber) {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return false;
+  if (j.tdocsDeferred) return true;
+  const now = updateBudgetNow_();
+  if (!j.tdocsStartedAt) j.tdocsStartedAt = now;
+  if (now - j.tdocsStartedAt <= REPORT_UPDATE_TDOCS_LOOP_MS_) return false;
+  j.tdocsDeferred = true;
+  deferReportUpdateStage_('TDoc tables from ' + tdocNumber + ' on (new TDocs and statuses)');
+  return true;
+}
+
+/** The revision moves of the update: past their time budget (their own clock), the rest is left to the next update (said once). */
+function revisionMovesOverBudget_() {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return false;
+  if (j.movesDeferred) return true;
+  const now = updateBudgetNow_();
+  if (!j.movesStartedAt) j.movesStartedAt = now;
+  if (now - j.movesStartedAt <= REPORT_UPDATE_MOVES_MS_) return false;
+  j.movesDeferred = true;
+  deferReportUpdateStage_('revision placement');
+  return true;
+}
+
+/**
+ * The end of an update (its finally): UPDATE_RUN removed; an interruption is named in the result, and closed when this
+ * update completed (not in part, no TDoc table left with different copies). Never throws.
+ */
+function updateJournalEnd_(result) {
+  const j = UPDATE_JOURNAL_;
+  UPDATE_JOURNAL_ = null;
+  if (!j || !j.store) return;
+  try {
+    j.store.deleteProperty(UPDATE_RUN_KEY_);
+    if (!j.interrupted) return;
+    if (result) result.interrupted = { startedAt: j.interrupted.startedAt, stage: j.interrupted.stage, removed: j.interrupted.removed || [], differing: j.interrupted.differing || [] };
+    const complete = !!result && result.success !== false && !(result.incomplete && result.incomplete.length) && !(j.interrupted.differing || []).length;
+    if (complete) {
+      j.store.deleteProperty(UPDATE_INTERRUPTED_KEY_);
+      Logger.log('Update journal: this update completed; the interrupted update of ' + j.interrupted.startedAt + ' is closed.');
+    }
+  } catch (e) {
+    Logger.log('Update journal: ' + e.message);
+  }
 }
 
 // =========================================================

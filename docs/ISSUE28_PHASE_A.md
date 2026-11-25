@@ -165,3 +165,20 @@ may not allow "set `DISPOSITION_CLASS_HEADINGS=normal` and run one update" first
    on per report one release later, when the rollback target (2.28.0) reads Heading 2 class lines. Safest.
 2. Ship a tolerant reader as a separate hotfix (2.27.3) first, then 2.28.0 with Heading 2 on.
 3. Accept the documented two-step rollback.
+
+## An update stopped from outside (added 2026-11-25)
+
+The first run on a disposable copy of the 6G Media report was killed at Apps Script's 6-minute limit, and nothing recorded it. The copy started without document properties, as every Drive copy does, so the update ran in text-status mode. In that mode an update of 150 TDocs makes about 15,800 DocumentApp calls in 2.28.0 (21,400 in T-2026.10.34). In the Status-dropdown mode it makes about 340.
+
+- **Journal.** The update keeps `UPDATE_RUN` in the report state: when it started and which stage it reached. The stage is updated by `perfTimed_`, and the record is removed when the update ends. The next update finds a leftover record, keeps it as `UPDATE_INTERRUPTED` and logs it.
+- **Repair.** Only after an interruption, a TDoc table that is in the report more than once is handled:
+  - **Identical content:** one copy is kept. A move killed between its insert and its remove leaves exactly such a copy.
+  - **Different content:** the copies are not touched; they are named in the log and in the result.
+
+  The record closes after an update that completes, with no stage left over and no differing copies.
+- **Budgets.** Each budget runs on its stage's own clock, and the rest is left to the next update ("updated only in part"):
+  - the TDoc loop (new TDoc tables, statuses): 100 s;
+  - the revision moves: 60 s.
+
+  The stages after them keep their budgets on the update's clock.
+- **Tests.** `tests/i28a-update-journal.test.js`.
