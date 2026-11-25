@@ -333,13 +333,17 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.ScriptApp.deleteTrigger = (t) => { triggers = triggers.filter((x) => x !== t); };
   S.ScriptApp.newTrigger = (h) => ({ timeBased: () => ({ everyMinutes: (m) => ({ create: () => { const t = { getHandlerFunction: () => h, minutes: m }; triggers.push(t); return t; } }) }) });
   let lockFree = true;
-  S.LockService = { getScriptLock: () => ({ tryLock: () => lockFree, releaseLock: () => {} }) };
+  S.LockService = { getScriptLock: () => ({ tryLock: () => lockFree, releaseLock: () => {} }), getDocumentLock: () => docLock };
   let current = doc();
   S.ScriptApp.getOAuthToken = () => 'token';
   S.UrlFetchApp = { fetch: () => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify(current) }) };
   S.SA4_RELEASE_ = { releaseId: 'T-2026.10.33', codeVersion: '2.27.1', gitCommit: 'b7299c12d12b' };
   let updates = 0;
-  S.continuousUpdate = () => { updates++; if (updates === 1) current = doc({ t: { 'S4-261001': { status: 'noted' } } }); };
+  let refuse = '';
+  const docLock = { tryLock: () => true, releaseLock: () => {} };
+  S.continuousUpdateCore_ = () => { if (refuse) return { success: false, error: refuse, notUpdated: true }; updates++; if (updates === 1) current = doc({ t: { 'S4-261001': { status: 'noted' } } }); return { success: true, error: null }; };
+  S.continuousUpdate = () => { throw new Error('the runner must not call continuousUpdate (it drops the result)'); };
+  S.Logger.getLog = () => 'Downloaded 128 TDOCs\n[PERF] TOTAL continuousUpdate: 41234 ms';
   S.Logger.log = () => {};
   const J = require('../tools/integration-test/issue28-jobs.js');
   S.it28InstallRunner();
@@ -362,6 +366,13 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   const n = results.length;
   S.it28RunnerTick();
   check('the same job again: not run twice', results.length, n);
+  check('an update records the TDocs downloaded and its own total time (from its log)', [res.r.steps[1].tdocsDownloaded, res.r.steps[1].perfTotalMs, res.r.steps[1].result.success], [128, 41234, true]);
+  refuse = 'Cannot build report yet. Open Configure Meeting to finish the setup.';
+  S.IT28_JOB_ = { id: 'ahg-diagnose-t1b', steps: J.makeJob('ahg', 'diagnose', 'x').steps.concat([{ do: 'snap' }]) };
+  S.it28RunnerTick();
+  const dg = results[results.length - 1].r;
+  check('an update that is refused (success false, not updated -- no exception): a failed step with its error, and the job stops (found 2026-11-25)', [dg.ok, dg.stoppedAt, dg.steps[1].ok, /the update did not run \(nothing changed\): Cannot build report yet/.test(dg.steps[1].error), dg.steps.length], [false, 2, false, true, 2]);
+  refuse = '';
 
   // configureMeeting: Resolve (+ Discover for ad-hoc) from the Portal, then Save -- as the dialog does
   const saved = [];

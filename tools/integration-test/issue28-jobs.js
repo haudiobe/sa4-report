@@ -66,6 +66,8 @@ const JOBS = {
     { do: 'carryPreview' }, { do: 'carrySet', on: true }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
     { do: 'carrySet', on: false }, { do: 'sessionRuleSet', rule: 'upload' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }],
   expect: ok(0, 2, 3, 4, 7, 8, 9, 12, 13, 14).concat([{ step: 6, rule: 'manualKept' }, { step: 11, rule: 'manualKept' }, { step: 16, rule: 'manualKept' }]) }),
+  // One update and the settings, to see why an update does not run (its error is in the result).
+  diagnose: () => ({ steps: [{ do: 'props' }, { do: 'update' }], expect: ok(0, 1) }),
   // The end: every trigger, document and script property the tests left removed (the snapshot index kept), proven.
   uninstall: () => ({ steps: [{ do: 'uninstall' }], expect: [{ step: 0, rule: 'clean' }] })
 };

@@ -947,10 +947,23 @@ function it28RunStep_(step, state) {
       if (!a || !b) throw new Error('nothing to compare (' + a + ' -> ' + b + ')');
       Object.assign(out, it28CompareResult_(a, b, it28DiffOf_(it28LoadSnapshot_(a), it28LoadSnapshot_(b))));
     } else if (step.do === 'update') {
+      // As continuousUpdate() does (its document lock, its core), but the core's result is read: continuousUpdate()
+      // drops it, and a refused or failed update returns { success: false, notUpdated } without throwing (found
+      // 2026-11-25: every update of the AHG copy took under 2 s and was taken for a pass).
       it28Document_();
+      const lock = LockService.getDocumentLock();
+      if (!lock.tryLock(30000)) throw new Error('another update holds the document lock: not run');
       const t0 = Date.now();
-      continuousUpdate();
+      let r;
+      try { r = continuousUpdateCore_(); } finally { lock.releaseLock(); }
       out.updateMs = Date.now() - t0;
+      const log = String(Logger.getLog ? Logger.getLog() : '');
+      const downloaded = /Downloaded (\d+) TDOCs/.exec(log);
+      const total = /TOTAL continuousUpdate[^\d]*(\d+) ?ms/.exec(log);
+      out.tdocsDownloaded = downloaded ? Number(downloaded[1]) : null;
+      out.perfTotalMs = total ? Number(total[1]) : null;
+      out.result = r ? { success: r.success !== false, notUpdated: !!r.notUpdated, error: r.error ? String(r.error).slice(0, 600) : '', incomplete: r.incomplete || null } : null;
+      if (!r || r.success === false || r.notUpdated) throw new Error('the update did not run' + (r && r.notUpdated ? ' (nothing changed)' : '') + ': ' + ((r && r.error) || 'no result'));
     } else if (step.do === 'probe') {
       const timing = {};
       const snap = it28ReadSnapshot_(it28Document_().getId(), timing);
