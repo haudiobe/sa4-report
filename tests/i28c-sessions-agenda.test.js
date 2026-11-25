@@ -409,6 +409,11 @@ console.log('F2. Meeting Control: one read of the report, no plenary folders in 
   check('an ad-hoc report: the plenary folders are not read (nothing fetched for them), and the page says why', [d3.isAdhoc, aFetched.filter((u) => /\/Plenary\/(Agenda|Schedule)\//.test(u)).length, /ad-hoc meeting: the plenary Agenda and Schedule folders/.test(d3.sources.skipped), d3.timing.sources, d3.errors], [true, 0, true, undefined, []]);
   check('... its rows are read as before (the new TDoc listed)', d3.rows.filter((r) => r.tdoc === 'S4aA269002' && r.tags.indexOf('new') !== -1).length, 1);
   check('the page shows the note instead of the sources when they are skipped', /D\.sources&&D\.sources\.skipped/.test(viaDocs.s.meetingControlHtml_()), true);
+  viaDocs.docProps.setProperty('UPDATE_INTERRUPTED', JSON.stringify({ startedAt: '2026-11-25T14:20:00.000Z', stage: 'revision ordering', removed: ['S4-261979'], differing: ['S4-261930'] }));
+  const d4 = viaDocs.exec(() => viaDocs.s.meetingControlData());
+  check('an update that did not end is said in Meeting Control (stage, what was removed, what to check)', d4.errors.filter((x) => /^Update interrupted: the update started 2026-11-25T14:20:00.000Z did not end \(stopped during "revision ordering"\); .*one removed: S4-261979; .*check them: S4-261930;/.test(x)).length, 1);
+  viaDocs.docProps.deleteProperty('UPDATE_INTERRUPTED');
+  check('... and not when there is none', viaDocs.exec(() => viaDocs.s.meetingControlData()).errors.filter((x) => /^Update interrupted/.test(x)).length, 0);
 }
 
 // ====================================================================== G

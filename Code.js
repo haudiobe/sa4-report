@@ -32356,6 +32356,14 @@ function meetingControlData() {
   const started = Date.now();
   const timed = function (part, fn) { const t0 = Date.now(); try { return fn(); } finally { timing[part] = Date.now() - t0; } };
   const store = getReportStateStore_(null);
+  // An update that did not end (phase A's journal) is said here until an update completes.
+  try {
+    const stopped = JSON.parse(store.getProperty(UPDATE_INTERRUPTED_KEY_) || 'null');
+    if (stopped) errors.push('Update interrupted: the update started ' + stopped.startedAt + ' did not end (stopped during "' + stopped.stage + '"); ' +
+      ((stopped.removed || []).length ? 'TDoc tables that were there twice with the same content, one removed: ' + stopped.removed.join(', ') + '; ' : '') +
+      ((stopped.differing || []).length ? 'TDoc tables more than once with DIFFERENT content -- check them: ' + stopped.differing.join(', ') + '; ' : '') +
+      'the record closes when an update completes.');
+  } catch (e) { /* the notice is a help only */ }
   const body = currentReportDocument_().getBody();
   const cfg = getReportConfig_();
   const byTdoc = {};
