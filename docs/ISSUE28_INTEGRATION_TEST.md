@@ -27,7 +27,7 @@ node tools/integration-test/push-issue28-copy.mjs --target main|ahg --script <Sc
 |---|---|
 | `base` | The copy's own script as first seen, plus `Issue28Check.js`. Report code is unchanged. |
 | `t33` | The T-2026.10.33 code (b7299c1) and the production Release.js, plus `Issue28Check.js`. |
-| `A`, `B`, `C` | The phase code at its pinned commit (A 74d6a4b, B 8adde44, C 421e33d), plus `Issue28Check.js`. Release.js is marked "NOT RELEASED". |
+| `A`, `B`, `C` | The phase code at its pinned commit (A 03d7aa4, B 8e2d0f5, C 1ea0c06), plus `Issue28Check.js`. Release.js is marked "NOT RELEASED". |
 | `original` | The copy's own script exactly as first seen, without `Issue28Check.js`. |
 
 The sequence is:

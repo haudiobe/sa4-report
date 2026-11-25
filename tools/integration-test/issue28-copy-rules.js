@@ -78,9 +78,9 @@ const REFUSED_SCRIPT_DIGESTS = {
 // The code of each stage, by commit: a branch that moved is not pushed (its code must equal the pinned commit's).
 const STAGE_PINS = {
   t33: { commit: 'b7299c12d12befe089070379ba5f50541d5dd929', branch: null, label: 'T-2026.10.33 (production)' },
-  A: { commit: '74d6a4b057327b9a38a5294c0ffec787d3967c6b', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
-  B: { commit: '8adde44f3e06a39f2f0e88410372e7d9a2542560', branch: 'feature/i28-b-provisional-revisions', label: 'phases A+B' },
-  C: { commit: '421e33d2ae1cd596dd22980b640ad3b66f93255d', branch: 'feature/i28-c-ahg-sessions-agenda', label: 'phases A+B+C' }
+  A: { commit: '03d7aa4222f64d197773b1bfc528f97d009214d6', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
+  B: { commit: '8e2d0f54ac41edd5143d9cf1fc19beb6b8cb4856', branch: 'feature/i28-b-provisional-revisions', label: 'phases A+B' },
+  C: { commit: '1ea0c06d2d263e610d38c2ea7980d282a5e377a8', branch: 'feature/i28-c-ahg-sessions-agenda', label: 'phases A+B+C' }
 };
 const CODE_PATHS = { Code: 'Code.js', HyperLink: 'HyperLink.js', ReportCreator: 'template/ReportCreator.js' };
 // Release.js of T-2026.10.33 as the five production reports read it back on 2026-11-20 (= the main copy's original).
