@@ -86,7 +86,7 @@ check('a file the bundle does not know: refused', (() => { try { R.stageFiles('B
 
 console.log('pinned commits');
 check('a branch still at its pinned code: allowed', R.pinRefusal('A', (ref, p) => '// ' + p), '');
-check('a branch whose code moved: refused, files named', /has moved from its pinned commit 6f8c9df \(Code\.js differ\)/.test(R.pinRefusal('A', (ref, p) => (ref === R.STAGE_PINS.A.branch && p === 'Code.js' ? 'new' : '// ' + p))), true);
+check('a branch whose code moved: refused, files named', new RegExp('has moved from its pinned commit ' + R.STAGE_PINS.A.commit.slice(0, 7) + ' \\(Code\\.js differ\\)').test(R.pinRefusal('A', (ref, p) => (ref === R.STAGE_PINS.A.branch && p === 'Code.js' ? 'new' : '// ' + p))), true);
 check('t33 has no branch: nothing to move', R.pinRefusal('t33', () => { throw new Error('not called'); }), '');
 const git = (...x) => execFileSync('git', ['-C', ROOT, ...x], { encoding: 'utf8', maxBuffer: 1 << 28 });
 const realAt = (ref, p) => git('show', ref + ':' + p);
