@@ -41,7 +41,7 @@ const JOBS = {
   // Two snapshots of the unchanged document: no difference (the fingerprint is deterministic).
   determinism: () => ({ steps: [{ do: 'snap' }, { do: 'snap' }, { do: 'compare', from: 'previous' }], expect: ok(0, 1).concat([{ step: 2, rule: 'identical' }]) }),
   // The copy's meeting, as Configure Meeting saves it (Resolve from the Portal, then Save), in the copy only.
-  'configure-main': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, MAIN_MEETING), { do: 'props' }], expect: ok(0, 1) }),
+  'configure-main': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, MAIN_MEETING), { do: 'markStatusDropdowns' }, { do: 'props' }], expect: ok(0, 1, 2) }),
   'configure-ahg': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, AHG_MEETING), { do: 'saveSessions', rows: AHG_SESSIONS }, { do: 'props' }], expect: ok(0, 1, 2) }),
   // A stage (T-2026.10.33, A, A+B, A+B+C, the rollback): update twice. The second update changes nothing; no update and
   // no stage changes a manual row or removes text, a TDoc table or a tab.
@@ -59,6 +59,8 @@ const JOBS = {
     { do: 'closeReportCheck' }, { do: 'resolveRevision', outcome: 'not-submitted', reason: 'Integration test (issue #28): the successor was never registered.' },
     { do: 'closeReportCheck' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }],
   expect: ok(0, 1, 3, 7, 9).concat([{ step: 5, rule: 'manualKept' }, { step: 6, rule: 'closeBlocks' }, { step: 8, rule: 'closeInformation' }, { step: 11, rule: 'manualKept' }]) }),
+  // Phase C on the AHG copy as it is: Meeting Control's time on the real document (281 s before the fix of 2026-11-25).
+  'mc-benchmark': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, AHG_MEETING), { do: 'meetingControl' }, { do: 'meetingControl' }], expect: ok(0, 1, 2) }),
   // Phase C, main meeting: Meeting Control's data (plenary agenda and schedule sources) is read without errors.
   'meeting-control': () => ({ steps: [{ do: 'meetingControl' }], expect: ok(0) }),
   // Phase C, ad-hoc: Meeting Control; the reservation rule (only if its preview, with the clock check, passes on the live
@@ -134,6 +136,10 @@ function assemble(id, files) {
 
 /** The agreed sequence for each copy: the stage pushed with each job. After the last job the original script goes back. */
 const PLAN = {
+  // The clean copy of 2026-11-25 (the first main copy was changed by the killed updates and is kept as evidence).
+  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
+    ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
+    ['t33', 'stage'], ['t33', 'uninstall']],
   main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
     ['t33', 'stage'], ['t33', 'uninstall']],

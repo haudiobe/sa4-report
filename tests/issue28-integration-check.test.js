@@ -451,6 +451,32 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   check('another run holds the lock: the tick does nothing', results.length, before);
   lockFree = true;
 
+  // the production-equivalent Status mode of a copy: marked only when its Status cells are dropdowns
+  const tablesOf = (kinds) => kinds.map((k, i) => ({ number: 'S4-26' + (1000 + i), statusEntry: { kind: k } }));
+  S.plenarySnapshot_ = () => ({ content: [] });
+  let kinds = new Array(10).fill('dropdown');
+  S.plenaryDocsTables_ = () => tablesOf(kinds);
+  delete store.STATUS_DROPDOWNS;
+  S.IT28_JOB_ = { id: 'main2-mark-t10', steps: [{ do: 'markStatusDropdowns' }] };
+  tickUntilDone();
+  const mk = results[results.length - 1].r.steps[0];
+  check('a copy whose Status cells are dropdowns: marked (STATUS_DROPDOWNS), counts recorded', [mk.ok, mk.marked, mk.dropdownStatuses, mk.tdocTablesWithStatus, store.STATUS_DROPDOWNS], [true, true, 10, 10, '1']);
+  delete store.STATUS_DROPDOWNS;
+  kinds = ['dropdown', 'dropdown', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text'];
+  S.IT28_JOB_ = { id: 'main2-mark-t11', steps: [{ do: 'markStatusDropdowns' }] };
+  tickUntilDone();
+  const tx = results[results.length - 1].r.steps[0];
+  check('a copy with text statuses: not marked (production would be in text mode too)', [tx.ok, tx.marked, 'STATUS_DROPDOWNS' in store, /^text statuses \(2\/10 dropdowns\)/.test(tx.decision)], [true, false, false, true]);
+  store.STATUS_DROPDOWNS = '1';
+  kinds = new Array(10).fill('dropdown');
+  S.IT28_JOB_ = { id: 'main2-mark-t12', steps: [{ do: 'markStatusDropdowns' }] };
+  tickUntilDone();
+  check('a copy already marked: left as it is', [results[results.length - 1].r.steps[0].markedBefore, store.STATUS_DROPDOWNS], [true, '1']);
+  S.plenarySnapshot_ = () => null;
+  S.IT28_JOB_ = { id: 'main2-mark-t13', steps: [{ do: 'markStatusDropdowns' }] };
+  tickUntilDone();
+  check('a copy that cannot be read: an error, nothing marked', [results[results.length - 1].r.steps[0].ok, /could not be read/.test(results[results.length - 1].r.steps[0].error)], [false, true]);
+  delete store.STATUS_DROPDOWNS;
   // uninstall: every trigger, every document property but the snapshot index, every script property -- proven
   triggers.push({ getHandlerFunction: () => 'continuousUpdate', minutes: 60 });
   sprops.REVIEWER_API_TOKEN = 'x';

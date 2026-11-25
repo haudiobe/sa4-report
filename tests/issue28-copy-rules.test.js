@@ -51,6 +51,8 @@ if (fs.existsSync(clasp)) {
 }
 check('the protected tables: 7 documents (template, five reports, Legacy 6G AH) and 6 scripts', [Object.keys(R.REFUSED_DOCUMENT_DIGESTS).length - 1, Object.keys(R.REFUSED_SCRIPT_DIGESTS).length - 1], [7, 6]);
 
+check('the first main copy is retired (changed by the killed updates): refused before anything else', R.identityRefusals('main', 'x', { scriptId: 'x' }, { id: 'y' }), ['the target is retired: the first main copy, changed by the killed updates of 2026-11-25 and kept as evidence']);
+check('the clean copy (main2) without its Script ID yet: refused, said why', /not known yet/.test(R.identityRefusals('main2', 'x', { scriptId: 'x' }, { id: 'y' })[0]), true);
 console.log('the original, compare-and-swap');
 check('the copy as first seen equals the pin: accepted; one byte else: not', [R.originalShaMap('test', files0).matchesPin, R.originalShaMap('test', files0.map((f) => (f.name === 'Code' ? Object.assign({}, f, { source: '// code v2\n' }) : f))).matchesPin], [true, false]);
 check('... a file more or less: not', [R.originalShaMap('test', files0.slice(1)).matchesPin, R.originalShaMap('test', files0.concat([{ name: 'X', type: 'SERVER_JS', source: '' }])).matchesPin], [false, false]);

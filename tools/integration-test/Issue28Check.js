@@ -987,9 +987,29 @@ function it28RunStep_(step, state) {
       out.timing = timing;
       out.tabs = snap.tabs.map(function (x) {
         const c = x.content;
-        return { path: x.path, id: x.id, title: x.title, parent: x.parent, tdocTables: c.counts.tdocTables, tables: c.counts.tables, paragraphs: c.counts.paragraphs, summary: c.summary.length > 0,
+        // The Status rows of the TDoc tables: dropdown chips or text (a copy of a report with Status dropdowns is not marked).
+        const status = { dropdown: 0, text: 0 };
+        c.tdocs.forEach(function (t) { t.rows.forEach(function (r) { if (/^status$/i.test(r.key)) status[/^\[dropdown/.test(r.x) ? 'dropdown' : 'text']++; }); });
+        return { path: x.path, id: x.id, title: x.title, parent: x.parent, tdocTables: c.counts.tdocTables, tables: c.counts.tables, paragraphs: c.counts.paragraphs, summary: c.summary.length > 0, status: status,
           headings: c.headings.slice(0, 6).map(function (h) { return h.slice(0, 90); }), firstText: c.other.filter(function (e) { return e.k === 'p' && e.x; }).slice(0, 4).map(function (e) { return e.x.slice(0, 120); }) };
       });
+    } else if (step.do === 'markStatusDropdowns') {
+      // Production-equivalent: a Drive copy has no document properties, so a report with Status dropdowns is not
+      // marked (STATUS_DROPDOWNS) and runs every update in text-status mode (~16-21 thousand DocumentApp calls for 150
+      // TDocs, killed at 6 min on the 6G copy, 2026-11-25); the report marks itself by evidence only when it already
+      // reads itself through the Docs API. Here: ONE Docs API read of this copy; the mark is set only when (nearly)
+      // every Status of its TDoc tables is a dropdown -- what the report has, nothing else. The production report is
+      // never touched by this.
+      const snap = plenarySnapshot_(it28Document_().getId());
+      if (!snap) throw new Error('the report could not be read through the Docs API');
+      const tables = plenaryDocsTables_(snap.content).filter(function (t) { return t.number && t.statusEntry; });
+      const dropdowns = tables.filter(function (t) { return t.statusEntry.kind === 'dropdown'; }).length;
+      out.tdocTablesWithStatus = tables.length;
+      out.dropdownStatuses = dropdowns;
+      out.markedBefore = props.getProperty('STATUS_DROPDOWNS') === '1';
+      out.marked = tables.length > 0 && dropdowns / tables.length >= 0.9;
+      if (out.marked && !out.markedBefore) props.setProperty('STATUS_DROPDOWNS', '1');
+      out.decision = out.marked ? 'Status dropdowns (' + dropdowns + '/' + tables.length + '): marked as the report is' : 'text statuses (' + dropdowns + '/' + tables.length + ' dropdowns): not marked';
     } else if (step.do === 'props') {
       const all = props.getProperties();
       out.names = Object.keys(all).filter(function (k) { return k.indexOf('IT28_') !== 0; }).sort();

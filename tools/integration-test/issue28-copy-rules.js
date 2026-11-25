@@ -17,7 +17,22 @@ const sourceSha = (s) => crypto.createHash('sha256').update(String(s).replace(/\
 // (2026-11-25 07:44 UTC, read-only, before anything was pushed). main: a copy of 6G Media SA4#138, T-2026.10.33.
 // ahg: a copy of the Legacy 6G AH report, T-2026.10.19 (its own adoption of 2026-11-01).
 const TARGETS = {
+  // The clean copy (2026-11-25 16:18 UTC) of the 6G Media SA4#138 report; its bound script is named by the user
+  // (no API finds it): scriptDigest is set then, and its first read must equal the production T-2026.10.33 bundle.
+  main2: {
+    documentDigest: '00e2719b841d479c10de1325d55a0e783aa915777f0770f01f54501cd7df7ef0',
+    scriptDigest: null,
+    original: {
+      appsscript: '4c2cc5ea159da448851aa22363457c1cf1cdd272a980bff45ecad8e5cf651082',
+      Code: '99bf89d44592bd8920b41ebd69d81d5b9bc5cbaada6da2200d97391e26eeac23',
+      HyperLink: 'df0e1b10d6860f705b6ed26ac86453ed3ee0e81a680f19128241d10ca92ce9fa',
+      Release: '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac10006828e321b',
+      ReportCreator: '7fe51e5e2203a638af1c7c6d07a0d901cc711eb877d23b796bd4705594dd07b0'
+    }
+  },
   main: {
+    // Changed by the updates killed on 2026-11-25 (139 -> 140 TDoc tables): kept as evidence, never written again.
+    retired: 'the first main copy, changed by the killed updates of 2026-11-25 and kept as evidence',
     documentDigest: 'e8f43b8da78448e92f220dbc3f6ab8092a0c55a8d901923d807a8bbdc9fce1b1',
     scriptDigest: 'e9cc31be0635e92b41ac76c114e0959fcd2dcebf9086b0f6a38bab88c38a8c20',
     original: {
@@ -73,13 +88,15 @@ const RELEASE_T33_SHA = '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac1000
 const STAGES = ['base', 't33', 'A', 'B', 'C', 'original'];
 // The pinned Issue28Check.js (re-pinned deliberately 2026-11-25: fingerprint v2 -- Docs REST read with a field mask, canonical,
 // compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read; no retry loops, status). Before: ef08027f..., 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
-const CHECK_SHA = '557bf773d5ae85fb3cbd7ec030ee7826e16f131b46beb492a9ad8920c3b6a340';
+const CHECK_SHA = '857c11c2dd54767ca53374a8a73d66e17ae4b3524031c37b756f785e5851a62a';
 
 /** Every reason why this script/document may not be written as `target` ([] when it may). Pure. */
 function identityRefusals(target, scriptId, project, file) {
   const out = [];
   const t = TARGETS[target];
   if (!t) return ['unknown target ' + target];
+  if (t.retired) return ['the target is retired: ' + t.retired];
+  if (!t.scriptDigest) return ['the bound script of the ' + target + ' copy is not known yet (its Script ID is needed once)'];
   const sd = idDigest(scriptId);
   if (REFUSED_SCRIPT_DIGESTS[sd]) out.push('the script is ' + REFUSED_SCRIPT_DIGESTS[sd]);
   const pk = protectedProjectKey(scriptId);

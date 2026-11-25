@@ -126,6 +126,7 @@ const plan = argv.includes('--plan');
 // list of 86178 turned for a while into the list of another meeting (S4aP260008..0043, without its agenda TDoc);
 // the report refused it, rightly. A plan does not start on such a list.
 const LISTS = { main: { url: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/TDoc_List_Meeting_SA4%23138.xlsx', must: 'S4-26' },
+  main2: { url: 'https://www.3gpp.org/ftp/tsg_sa/WG4_CODEC/TSGS4_138_Calgary/Docs/TDoc_List_Meeting_SA4%23138.xlsx', must: 'S4-26' },
   ahg: { url: 'https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId=86178', must: 'S4aP260149' } };
 /** One file of a zip (an xlsx), from its central directory; null when not there. */
 const zipFile = (buf, name) => {
