@@ -4,7 +4,8 @@ Test tooling only. Nothing here is part of a release bundle.
 
 ## Copies
 
-- **main**: a copy of the 6G Media SA4#138 report. It runs T-2026.10.33.
+- **main2**: the clean copy of the 6G Media SA4#138 report (2026-11-25 16:18 UTC). It runs T-2026.10.33. Its bound script was registered on 2026-11-26 after a read-only first read: bound to this document, only its HEAD deployment, no versions, every file equal to the production T-2026.10.33 bundle.
+- **main**: the first copy of the same report. Retired: updates killed at the 6-minute limit left a TDoc table twice in it. The tooling refuses it, and it is kept as evidence.
 - **ahg**: a copy of the Legacy 6G AH report. It runs T-2026.10.19.
 
 Both are private Google Docs named `DISPOSABLE …`. This repository is public, so the tooling knows the copies and the protected reports only by the SHA-256 digest of their IDs.
@@ -193,6 +194,7 @@ node tools/integration-test/push-issue28-copy.mjs --target main --script <id> --
   3. the T-2026.10.33 stage, then A, A+B and A+B+C;
   4. phase C: Meeting Control, the reservation rule (only if its preview passes), carry-forward on, then both off;
   5. the rollback, then uninstall.
+- **The Meeting Control benchmark** (`--job mc-benchmark`, ahg at A+B+C) does not use the Portal. It saves the settings Configure Meeting resolved for 86178 on 2026-11-25 through the report's own Save, then the two sessions. It sets the Status mark only if the copy's own Status entries are dropdowns, then runs Meeting Control twice and records its time per part. On 2026-11-25 the Portal's TDoc list for 86178 served another meeting's list. Meeting Control does not read that list.
 - **main** also runs phase B on A+B (an expected revision whose successor never comes: it blocks Close Report, and is information once closed with a reason) and Meeting Control on A+B+C.
 
 ### What still needs a person or another decision

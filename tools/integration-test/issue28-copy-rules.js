@@ -18,10 +18,12 @@ const sourceSha = (s) => crypto.createHash('sha256').update(String(s).replace(/\
 // ahg: a copy of the Legacy 6G AH report, T-2026.10.19 (its own adoption of 2026-11-01).
 const TARGETS = {
   // The clean copy (2026-11-25 16:18 UTC) of the 6G Media SA4#138 report; its bound script is named by the user
-  // (no API finds it): scriptDigest is set then, and its first read must equal the production T-2026.10.33 bundle.
+  // (no API finds it). Named 2026-11-26; read-only first read the same day: bound to this document (parentId), only
+  // its HEAD deployment, no versions, every file equal to the production T-2026.10.33 bundle below. It replaces the
+  // retired main copy.
   main2: {
     documentDigest: '00e2719b841d479c10de1325d55a0e783aa915777f0770f01f54501cd7df7ef0',
-    scriptDigest: null,
+    scriptDigest: '71371d644e36741e4d74cc3e0585591a9d7e7449a5bdf9e27c8ec150ac24f09b',
     original: {
       appsscript: '4c2cc5ea159da448851aa22363457c1cf1cdd272a980bff45ecad8e5cf651082',
       Code: '99bf89d44592bd8920b41ebd69d81d5b9bc5cbaada6da2200d97391e26eeac23',
@@ -88,7 +90,7 @@ const RELEASE_T33_SHA = '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac1000
 const STAGES = ['base', 't33', 'A', 'B', 'C', 'original'];
 // The pinned Issue28Check.js (re-pinned deliberately 2026-11-25: fingerprint v2 -- Docs REST read with a field mask, canonical,
 // compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read; no retry loops, status). Before: ef08027f..., 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
-const CHECK_SHA = '857c11c2dd54767ca53374a8a73d66e17ae4b3524031c37b756f785e5851a62a';
+const CHECK_SHA = '9afd6ec1223c3e67ff0261cb77d2abe48794add267f532d436bf5f664ec806f8';
 
 /** Every reason why this script/document may not be written as `target` ([] when it may). Pure. */
 function identityRefusals(target, scriptId, project, file) {

@@ -23,6 +23,16 @@ const AHG_MEETING = { meetingId: 86178, expectType: 'adhoc', reportType: '6G', o
 // Its sessions as the meeting's own agendas give them (S4aP260098, S4aP260149: "Date | Start Time (CET/CEST) | End
 // Time"): the conference call of 22 Sep 2026 and the three-day call of 26-28 Oct 2026, 15:00-18:00 each day. The
 // offline meetings of 22 Sep and 5 Oct (S4aP260115) were not sessions of the call. Not taken from the document's tabs.
+// The AHG settings as Configure Meeting saved them from the Portal on 2026-11-25 14:14 UTC (job ahg-configure-ahg-
+// 20261125T141005), saved here through the report's own Save without the Portal: the Portal's TDoc list for 86178
+// served another meeting's list that day, and Meeting Control does not read the list.
+const AHG_CONFIG = {
+  meetingId: '86178', meetingType: 'adhoc', meetingName: 'SA4-e (AH) on FS_6G_MED', meetingDate: 'September 22, 2026',
+  ftpBase: 'https://ftp.3gpp.org/tsg_sa/WG4_CODEC/3GPP_SA4_AHOC_MTGs/SA4_Plenary/Docs/',
+  tdocUrl: 'https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId=86178', agendaTdoc: 'S4aP260149',
+  agendaCsvUrl: '', revisionsUrl: '', reportType: '6G', meetingFolder: '', meetingNumber: '', mailingList: '',
+  mailingListMode: 'derived', agendaSourceDocId: '', showPreview: false
+};
 const AHG_SESSIONS = [
   { id: '', label: 'Call 1', date: '2026-09-22', start: '15:00', end: '18:00' },
   { id: '', label: 'Call 2', date: '2026-10-26', endDate: '2026-10-28', start: '15:00', end: '18:00' }
@@ -60,7 +70,10 @@ const JOBS = {
     { do: 'closeReportCheck' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }],
   expect: ok(0, 1, 3, 7, 9).concat([{ step: 5, rule: 'manualKept' }, { step: 6, rule: 'closeBlocks' }, { step: 8, rule: 'closeInformation' }, { step: 11, rule: 'manualKept' }]) }),
   // Phase C on the AHG copy as it is: Meeting Control's time on the real document (281 s before the fix of 2026-11-25).
-  'mc-benchmark': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, AHG_MEETING), { do: 'meetingControl' }, { do: 'meetingControl' }], expect: ok(0, 1, 2) }),
+  // No Portal: the settings saved as they were resolved (AHG_CONFIG), the historical sessions, the Status mark only as
+  // the copy's own Status entries are; then Meeting Control twice (each the first step of its execution).
+  'mc-benchmark': () => ({ steps: [{ do: 'configure', config: Object.assign({}, AHG_CONFIG) }, { do: 'saveSessions', rows: AHG_SESSIONS.map((s) => Object.assign({}, s)) },
+    { do: 'markStatusDropdowns' }, { do: 'props' }, { do: 'meetingControl' }, { do: 'meetingControl' }], expect: ok(0, 1, 2, 3, 4, 5) }),
   // Phase C, main meeting: Meeting Control's data (plenary agenda and schedule sources) is read without errors.
   'meeting-control': () => ({ steps: [{ do: 'meetingControl' }], expect: ok(0) }),
   // Phase C, ad-hoc: Meeting Control; the reservation rule (only if its preview, with the clock check, passes on the live
@@ -147,4 +160,4 @@ const PLAN = {
     ['A', 'stage'], ['B', 'stage'], ['C', 'stage'], ['C', 'phase-c'], ['t33', 'stage'], ['t33', 'uninstall']]
 };
 
-module.exports = { JOBS, MANUAL_ROWS, MAIN_MEETING, AHG_MEETING, AHG_SESSIONS, PLAN, makeJob, evaluate, assemble };
+module.exports = { JOBS, MANUAL_ROWS, MAIN_MEETING, AHG_MEETING, AHG_CONFIG, AHG_SESSIONS, PLAN, makeJob, evaluate, assemble };

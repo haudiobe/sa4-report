@@ -914,7 +914,7 @@ function it28CompareResult_(a, b, d) {
 }
 
 /** Steps that change something: when one fails, the rest of the job is not run. */
-var IT28_CHANGING_STEPS_ = ['update', 'configureMeeting', 'saveSessions', 'setProps', 'expectRevision', 'resolveRevision', 'sessionRuleSet', 'carrySet', 'uninstall'];
+var IT28_CHANGING_STEPS_ = ['update', 'configure', 'configureMeeting', 'markStatusDropdowns', 'saveSessions', 'setProps', 'expectRevision', 'resolveRevision', 'sessionRuleSet', 'carrySet', 'uninstall'];
 
 /**
  * Removes what the tests left in this copy: every trigger of the project, every document property but the snapshot
