@@ -924,6 +924,22 @@ var IT28_CHANGING_STEPS_ = ['update', 'markSettled', 'configure', 'configureMeet
  * index (IT28_SNAP_*: the evidence), every script property. The copies had none of them before (preflight
  * 2026-11-25). Returns what is left, as the proof of the cleanup.
  */
+/**
+ * The update journal of the report (Phase A): its stage, times and cursors, read before the cleanup removes them.
+ * Only these keys: no credentials, no personal data. Never throws.
+ */
+function it28JournalEvidence_() {
+  const out = {};
+  try {
+    const all = PropertiesService.getDocumentProperties().getProperties();
+    ['UPDATE_RUN', 'UPDATE_INTERRUPTED', 'UPDATE_TDOC_CURSOR', 'UPDATE_REVISIONS_CURSOR'].forEach(function (k) {
+      if (all[k] === undefined) return;
+      try { out[k] = JSON.parse(all[k]); } catch (e) { out[k] = String(all[k]).slice(0, 2000); }
+    });
+  } catch (e) { out.error = e.message; }
+  return out;
+}
+
 function it28Cleanup_() {
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
   const docProps = PropertiesService.getDocumentProperties();
@@ -974,9 +990,10 @@ function it28RunStep_(step, state) {
       // that). A completed report is not a fixed point of its own release: its first update on a copy brings it to
       // the lists of today (found 2026-11-26 on the clean main copy). Kept with the snapshot index (evidence).
       const snaps = state.lastSnaps || [];
-      if (!snaps.length) throw new Error('no snapshot to mark as settled');
-      props.setProperty(IT28_SNAP_KEY_ + 'SETTLED', snaps[snaps.length - 1]);
-      out.settled = snaps[snaps.length - 1];
+      const label = step.label || snaps[snaps.length - 1];
+      if (!label || !props.getProperty(IT28_SNAP_KEY_ + label)) throw new Error('no snapshot to mark as settled (' + label + ')');
+      props.setProperty(IT28_SNAP_KEY_ + 'SETTLED', label);
+      out.settled = label;
     } else if (step.do === 'update') {
       // As continuousUpdate() does (its document lock, its core), but the core's result is read: continuousUpdate()
       // drops it, and a refused or failed update returns { success: false, notUpdated } without throwing (found
@@ -995,7 +1012,7 @@ function it28RunStep_(step, state) {
       // The update's own stage timings ([PERF] lines), so that a slow stage is seen without the execution log.
       out.perf = log.split('\n').filter(function (l) { return /\[PERF\]/.test(l) && !/^\s*$/.test(l); }).map(function (l) { return l.replace(/^.*?\[PERF\]\s*/, '').slice(0, 120); }).slice(-40);
       out.perfTotalMs = total ? Number(total[1]) : null;
-      out.result = r ? { success: r.success !== false, notUpdated: !!r.notUpdated, error: r.error ? String(r.error).slice(0, 600) : '', incomplete: r.incomplete || null } : null;
+      out.result = r ? { success: r.success !== false, notUpdated: !!r.notUpdated, error: r.error ? String(r.error).slice(0, 600) : '', incomplete: r.incomplete || null, interrupted: r.interrupted || null } : null;
       if (!r || r.success === false || r.notUpdated) throw new Error('the update did not run' + (r && r.notUpdated ? ' (nothing changed)' : '') + ': ' + ((r && r.error) || 'no result'));
     } else if (step.do === 'probe') {
       const timing = {};
@@ -1122,6 +1139,8 @@ function it28RunStep_(step, state) {
       if (step.on && !state.carryPreviewOk) { out.skipped = 'the preview refused carry-forward: not switched'; }
       else out.message = setAdhocCarryForward(!!step.on);
     } else if (step.do === 'uninstall') {
+      // The update journal before it is removed: the evidence of an update that was stopped (2026-11-26 it was lost).
+      out.journal = it28JournalEvidence_();
       Object.assign(out, it28Cleanup_());
       state.uninstalled = true;
       if (!out.clean) throw new Error('cleanup incomplete: ' + JSON.stringify({ triggers: out.triggersLeft, documentProperties: out.documentPropertiesLeft, scriptProperties: out.scriptPropertiesLeft }));
@@ -1173,7 +1192,7 @@ function it28RunnerTick() {
     }
     if (state.current.inProgress !== undefined && state.current.inProgress === state.current.next) {
       const lost = job.steps[state.current.next];
-      state.current.results.push({ do: lost.do, ok: false, error: 'the execution ended during this step (Apps Script limit of 6 minutes?); not run again', ms: Date.now() - state.current.inProgressAt });
+      state.current.results.push({ do: lost.do, ok: false, error: 'the execution ended during this step (Apps Script limit of 6 minutes?); not run again', ms: Date.now() - state.current.inProgressAt, journal: it28JournalEvidence_() });
       delete state.current.inProgress;
       state.current.next++;
       if (IT28_CHANGING_STEPS_.indexOf(lost.do) !== -1) { state.current.stoppedAt = state.current.next; state.current.next = job.steps.length; }

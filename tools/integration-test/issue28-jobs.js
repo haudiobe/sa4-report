@@ -76,6 +76,21 @@ const JOBS = {
   'baseline-diff': () => ({ steps: [{ do: 'compare', from: 's1', to: 's3' }, { do: 'compare', from: 's3', to: 's4' }, { do: 'compare', from: 's4', to: 's5' },
     { do: 'compare', from: 's1', to: 's5', all: true }],
   expect: ok(1, 3).concat([{ step: 0, rule: 'identical' }, { step: 2, rule: 'identical' }]) }),
+  // Read only: the copy as it is now against the settled T-2026.10.33 snapshot s5, every line (what an update that
+  // was stopped left in it, if anything).
+  inspect: () => ({ steps: [{ do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2, all: true }], expect: ok(0, 1) }),
+  // Phase A first, on the copy as inspect found it: an update that did not end is recorded (its own journal was lost
+  // with the test cleanup of 2026-11-26), the next A update finds it and repairs what it left; then the copy must be
+  // the settled s5 again, two further updates change nothing, and each update ends within 300 s. s5 stays the
+  // reference of the stages after it (a repaired document never is).
+  'a-validate': () => ({ steps: [
+    { do: 'setProps', props: { UPDATE_RUN: JSON.stringify({ startedAt: '2026-11-26T11:56:00.000Z', stage: 'unknown (the journal was removed by the test cleanup of 2026-11-26)' }) } },
+    { do: 'update' }, { do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2, all: true },
+    { do: 'update' }, { do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2, all: true },
+    { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
+    { do: 'markSettled', label: SETTLED_REFERENCE.main2 }],
+  expect: ok(0, 2, 5, 8, 10).concat([{ step: 1, rule: 'withinBudget' }, { step: 1, rule: 'interruptionFound' }, { step: 3, rule: 'protectedKept' },
+    { step: 4, rule: 'withinBudget' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'withinBudget' }, { step: 7, rule: 'complete' }, { step: 9, rule: 'identical' }]) }),
   // The rollback to T-2026.10.33: a stage whose updates are run again once when they end at the time limit, as the
   // report's own trigger would (T-2026.10.33 has no time budget). The candidates keep the strict stage.
   rollback: () => ({ steps: snapUpdateTwice().map((s) => (s.do === 'update' ? Object.assign({ retryOnLimit: 1 }, s) : s)),
@@ -161,6 +176,9 @@ function evaluate(job, result) {
       const links = /^(\d+) -> (\d+)$/.exec(String((c.counts || {}).links || ''));
       if (links && Number(links[2]) < Number(links[1])) failures.push(at + ': links lost (' + links[1] + ' -> ' + links[2] + ')');
     }
+    if (e.rule === 'withinBudget' && !(typeof r.updateMs === 'number' && r.updateMs <= 300000)) failures.push(at + ': the update took ' + Math.round((r.updateMs || 0) / 1000) + ' s (more than 300 s)');
+    if (e.rule === 'interruptionFound' && !(r.result && r.result.interrupted)) failures.push(at + ': the update that did not end was not found');
+    if (e.rule === 'complete' && r.result && r.result.incomplete && r.result.incomplete.length) failures.push(at + ': updated only in part: ' + r.result.incomplete.join('; '));
     if (e.rule === 'manualTextKept') {
       // Typed text and links of the manual rows kept, no TDoc table, tab or paragraph outside the tables removed; a
       // change of paragraph settings alone (the release's own formatting) is allowed here and shown in the result.
@@ -204,8 +222,8 @@ function assemble(id, files) {
 /** The agreed sequence for each copy: the stage pushed with each job. After the last job the original script goes back. */
 const PLAN = {
   // The clean copy of 2026-11-25 (the first main copy was changed by the killed updates and is kept as evidence).
-  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'settled-check'], ['base', 'baseline-diff'],
-    ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
+  main2: [['base', 'inventory'], ['base', 'inspect'], ['base', 'configure-main'],
+    ['A', 'a-validate'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
     ['t33', 'rollback'], ['t33', 'uninstall']],
   main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],

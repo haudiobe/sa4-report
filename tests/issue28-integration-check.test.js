@@ -394,6 +394,7 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   const updatesBefore = updates;
   S.it28RunnerTick();
   const kr = results[results.length - 1].r;
+  check('... and the step says where the stopped update was (its journal, read at once)', typeof kr.steps[0].journal, 'object');
   check('an execution ended during an update: a failed step (not run again), the job stops', [kr.job, kr.ok, kr.stoppedAt, /execution ended during this step/.test(kr.steps[0].error), kr.steps.length, updates === updatesBefore], [killed.id, false, 1, true, 1, true]);
   {
     // retryOnLimit (the rollback to T-2026.10.33): an update ended at the limit is run again once, then a second end stops.
@@ -516,6 +517,8 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   triggers.push({ getHandlerFunction: () => 'continuousUpdate', minutes: 60 });
   sprops.REVIEWER_API_TOKEN = 'x';
   store.DISPOSITION_CLASS_HEADINGS = 'heading2';
+  store.UPDATE_RUN = JSON.stringify({ startedAt: '2026-11-26T11:56:00.000Z', stage: 'network: Revisions fetch', elapsedMs: 190000, stages: [{ stage: 'network: Revisions fetch', ms: 190000 }] });
+  store.UPDATE_TDOC_CURSOR = JSON.stringify({ tdoc: 'S4-261001' });
   const snapKeys = Object.keys(store).filter((k) => k.indexOf('IT28_SNAP_') === 0);
   S.IT28_JOB_ = { id: 'main-uninstall-t9', steps: [{ do: 'uninstall' }] };
   S.it28RunnerTick();
@@ -523,6 +526,8 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   check('uninstall: all triggers (not only the runner\'s), all test settings and script properties removed; the snapshot index kept; proven in the result and an "uninstalled" record',
     [triggers.length, Object.keys(store).filter((k) => k.indexOf('IT28_SNAP_') !== 0), Object.keys(sprops), Object.keys(store).filter((k) => k.indexOf('IT28_SNAP_') === 0).length === snapKeys.length && snapKeys.length > 0, u[0].r.steps[0].clean, u[1].id, u[1].r.event, J.evaluate(J.makeJob('main', 'uninstall', 'x'), u[0].r)],
     [0, [], [], true, true, 'runner', 'uninstalled', []]);
+  check('uninstall: the update journal kept in its result before it is removed (stage, time, cursor; nothing else of the settings)', [u[0].r.steps[0].journal.UPDATE_RUN.stage, u[0].r.steps[0].journal.UPDATE_RUN.elapsedMs, u[0].r.steps[0].journal.UPDATE_TDOC_CURSOR.tdoc, Object.keys(u[0].r.steps[0].journal).sort(), store.UPDATE_RUN],
+    ['network: Revisions fetch', 190000, 'S4-261001', ['UPDATE_RUN', 'UPDATE_TDOC_CURSOR'], undefined]);
   S.it28InstallRunner();
   store.MEETING_TYPE = 'main';
   const st = JSON.parse(store.IT28_RUNNER); st.deadline = Date.now() - 1; store.IT28_RUNNER = JSON.stringify(st);
