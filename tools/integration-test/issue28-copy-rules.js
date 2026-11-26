@@ -80,9 +80,9 @@ const REFUSED_SCRIPT_DIGESTS = {
 // The code of each stage, by commit: a branch that moved is not pushed (its code must equal the pinned commit's).
 const STAGE_PINS = {
   t33: { commit: 'b7299c12d12befe089070379ba5f50541d5dd929', branch: null, label: 'T-2026.10.33 (production)' },
-  A: { commit: '03d7aa4222f64d197773b1bfc528f97d009214d6', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
-  B: { commit: '8e2d0f54ac41edd5143d9cf1fc19beb6b8cb4856', branch: 'feature/i28-b-provisional-revisions', label: 'phases A+B' },
-  C: { commit: '1ea0c06d2d263e610d38c2ea7980d282a5e377a8', branch: 'feature/i28-c-ahg-sessions-agenda', label: 'phases A+B+C' }
+  A: { commit: '5f2d7cb9841c3d48e87a74ce72555f13a3611ee1', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
+  B: { commit: '9ba407bf5ea4167c878f6af8e239d4dfd52dee94', branch: 'feature/i28-b-provisional-revisions', label: 'phases A+B' },
+  C: { commit: '82a98247c4d2e27648e5555e21fdf849ca652ec0', branch: 'feature/i28-c-ahg-sessions-agenda', label: 'phases A+B+C' }
 };
 const CODE_PATHS = { Code: 'Code.js', HyperLink: 'HyperLink.js', ReportCreator: 'template/ReportCreator.js' };
 // Release.js of T-2026.10.33 as the five production reports read it back on 2026-11-20 (= the main copy's original).
@@ -90,7 +90,7 @@ const RELEASE_T33_SHA = '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac1000
 const STAGES = ['base', 't33', 'A', 'B', 'C', 'original'];
 // The pinned Issue28Check.js (re-pinned deliberately 2026-11-25: fingerprint v2 -- Docs REST read with a field mask, canonical,
 // compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read; no retry loops, status). Before: ef08027f..., 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
-const CHECK_SHA = '1208d3eda960497ae67facba329ae98375085f26cb5af91171a116e0ef3ae7ec';
+const CHECK_SHA = 'e8ae8a450110ac83f856a8bc62d9610981ef24859de0fd1c025bd26e4cb9cd00';
 
 /** Every reason why this script/document may not be written as `target` ([] when it may). Pure. */
 function identityRefusals(target, scriptId, project, file) {
