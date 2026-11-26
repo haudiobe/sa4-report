@@ -58,6 +58,12 @@
  *     255 s. The revisions go on where the last update stopped them
  *     (UPDATE_REVISIONS_CURSOR). The journal keeps the time of its last
  *     stages, so an update that is stopped shows where.
+ *   - The revision pairs (after Run 5): the time is checked before every
+ *     pair and before its move, not only before the move; past it the
+ *     update stops at the next unprocessed pair (UPDATE_PAIRS_CURSOR) and
+ *     the next update goes on there. Whether a revision already sits below
+ *     its original comes from the update's Docs API read while that read
+ *     still shows the report's structure; else from the document.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -1513,6 +1519,8 @@ function continuousUpdateCore_(context) {
     try {
       // After T-2026.10.29: from the report snapshot; the repair runs only when it shows something to repair (GOES TO PLENARY section).
       structure = repairReportStructureIfNeeded_(body, agendaTitleOf);
+      // After issue 28 A: sections moved -- the positions of the update's read are no longer those of the report (ISSUE 28 A section).
+      if (structure && (structure.sectionsMoved || structure.emptyParagraphsRemoved)) updateStructureChanged_();
     } catch (e) {
       Logger.log('Structure: the structure of the report could not be checked: ' + e.message);
     }
@@ -1613,6 +1621,8 @@ function continuousUpdateCore_(context) {
     // section, so move every revision back under the document it revises and
     // fill the revised document's Disposition. Reuses the TDOC list already
     // downloaded above, so this costs no extra fetch.
+    // After issue 28 A: tables inserted earlier in this update -- the positions of the update's read are stale (ISSUE 28 A section).
+    if (newTdocsAdded || perfCounterValue_('structural: new revision-linked tables inserted (insertRevisedDocTablesAfter_)')) updateStructureChanged_();
     const rev = perfTimed_('revision ordering/rearrangement (rearrangeRevisionTables_)', () => rearrangeRevisionTables_(cfg, tdocGroups, tdocTableIndex, context));
     Logger.log(`Revisions: ${rev.moved} moved, ${rev.dispositions} disposition(s) filled`);
 
@@ -7720,21 +7730,24 @@ function rearrangeRevisionTables_(cfg, groups, index, context) {
     missingParent: 0
   };
 
-  orderRevisionChains_(map).forEach(parent => {
+  // After issue 28 A: every pair within the time; the rest from the next unprocessed pair in the next update (ISSUE 28 A section).
+  for (const parent of revisionPairsOrder_(orderRevisionChains_(map), map)) {
+    if (revisionPairsStop_(parent)) break;
     const child = map[parent];
 
     const parentTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, parent, index));
-    if (!parentTable) { stats.missingParent++; return; }
+    if (!parentTable) { stats.missingParent++; continue; }
 
     if (setDispositionRevisedTo_(parentTable, child)) stats.dispositions++;
 
     const childTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, child, index));
-    if (!childTable) { stats.missingChild++; return; }
+    if (!childTable) { stats.missingChild++; continue; }
 
-    // After issue 28 A: no move after the time budget; the rest in the next update (ISSUE 28 A section).
-    if (revisionMovesOverBudget_()) return;
+    if (revisionPairsStop_(parent)) break;
+    if (revisionPairInPlaceBySnapshot_(body, parent, child)) { stats.alreadyInPlace++; continue; }
     const movedTable = perfTimedAccum_('  rearrangeRevisionTables_: moveTableAfter_ (accumulated)', () => moveTableAfter_(body, childTable, parentTable));
     if (movedTable) {
+      revisionPairMoved_();
       if (index) {
         const parsedChild = parseExactSA4DocumentId_(child);
         if (parsedChild.isValid) index.set(parsedChild.raw, movedTable);
@@ -7744,7 +7757,8 @@ function rearrangeRevisionTables_(cfg, groups, index, context) {
     } else {
       stats.alreadyInPlace++;
     }
-  });
+  }
+  revisionPairsPassEnd_();
 
   Logger.log(`Revision re-arrangement: ${JSON.stringify(stats)}`);
   return stats;
@@ -30839,7 +30853,7 @@ let UPDATE_JOURNAL_ = null;
  * known (null when none). Never throws: without its properties the update runs as before, without a journal.
  */
 function updateJournalStart_(context) {
-  UPDATE_JOURNAL_ = { store: null, interrupted: null, stage: 'start', tdocsDeferred: false, movesDeferred: false, tdocsStartedAt: 0, movesStartedAt: 0,
+  UPDATE_JOURNAL_ = { store: null, interrupted: null, stage: 'start', tdocsDeferred: false, movesDeferred: false, tdocsStartedAt: null, movesStartedAt: null,
     budgetStartedAt: updateBudgetNow_(), startedAtIso: new Date().toISOString(), stages: [], revisionsDeferred: false, revisionsCompleted: false };
   try {
     const store = getReportStateStore_(context);
@@ -30921,6 +30935,8 @@ function repairAfterInterruptedUpdate_(body, context) {
   });
   j.interrupted.removed = removed;
   j.interrupted.differing = differing;
+  // Tables removed: the positions of the update's read are stale.
+  if (removed.length) updateStructureChanged_();
   // What this update read of the report before the repair (its snapshot) no longer matches it: the update says it is
   // in part, and the next update -- reading the repaired report -- completes it and closes the record.
   if (removed.length) deferReportUpdateStage_('the report after the repair of the interrupted update (the next update completes it)');
@@ -30954,7 +30970,7 @@ function tdocLoopOverBudget_(tdocNumber) {
   if (!j) return false;
   if (j.tdocsDeferred) return true;
   const now = updateBudgetNow_();
-  if (!j.tdocsStartedAt) j.tdocsStartedAt = now;
+  if (j.tdocsStartedAt === null) j.tdocsStartedAt = now;
   // Its own 100 s, and no TDoc started later than 170 s into the update (one clock for the whole update).
   if (now - j.tdocsStartedAt <= REPORT_UPDATE_TDOCS_LOOP_MS_ && updateElapsedMs_() <= UPDATE_TDOC_LOOP_LATEST_MS_) return false;
   j.tdocsDeferred = true;
@@ -30963,14 +30979,17 @@ function tdocLoopOverBudget_(tdocNumber) {
   return true;
 }
 
-/** The revision moves of the update: past their time budget (their own clock), the rest is left to the next update (said once). */
+/**
+ * The revision pairs of the update (rearrangeRevisionTables_(): the "Revised to" disposition, the in-place check, the
+ * move): past their time budget (their own clock, from the first pair), the rest is left to the next update (said once).
+ */
 function revisionMovesOverBudget_() {
   const j = UPDATE_JOURNAL_;
   if (!j) return false;
   if (j.movesDeferred) return true;
   const now = updateBudgetNow_();
-  if (!j.movesStartedAt) j.movesStartedAt = now;
-  // Their own 60 s, and no move started later than 200 s into the update.
+  if (j.movesStartedAt === null) j.movesStartedAt = now;
+  // Their own 60 s, and no pair started later than 200 s into the update.
   if (now - j.movesStartedAt <= REPORT_UPDATE_MOVES_MS_ && updateElapsedMs_() <= UPDATE_MOVES_LATEST_MS_) return false;
   j.movesDeferred = true;
   deferReportUpdateStage_('revision placement');
@@ -30988,9 +31007,11 @@ function updateJournalEnd_(result) {
   try {
     j.store.deleteProperty(UPDATE_RUN_KEY_);
     // A whole pass of the TDoc loop: the next one starts at the top again.
-    if (j.tdocsStartedAt && !j.tdocsDeferred) j.store.deleteProperty(UPDATE_TDOC_CURSOR_KEY_);
+    if (j.tdocsStartedAt !== null && !j.tdocsDeferred) j.store.deleteProperty(UPDATE_TDOC_CURSOR_KEY_);
     // A whole pass of the revisions: theirs too.
     if (j.revisionsCompleted && !j.revisionsDeferred) j.store.deleteProperty(UPDATE_REVISIONS_CURSOR_KEY_);
+    // A whole pass of the revision pairs: theirs too.
+    if (j.pairsCompleted && !j.movesDeferred) j.store.deleteProperty(UPDATE_PAIRS_CURSOR_KEY_);
     if (!j.interrupted) return;
     if (result) result.interrupted = { startedAt: j.interrupted.startedAt, stage: j.interrupted.stage, elapsedMs: j.interrupted.elapsedMs || 0, removed: j.interrupted.removed || [], differing: j.interrupted.differing || [] };
     const complete = !!result && result.success !== false && !(result.incomplete && result.incomplete.length) && !(j.interrupted.differing || []).length;
@@ -31086,6 +31107,96 @@ function revisionsLoopStopped_(tdoc) {
 /** The revisions of this update went through every TDoc: the cursor is removed at its end. */
 function revisionsLoopCompleted_() {
   if (UPDATE_JOURNAL_ && !UPDATE_JOURNAL_.revisionsDeferred) UPDATE_JOURNAL_.revisionsCompleted = true;
+}
+
+// --- The revision pairs (after Run 5, 2026-11-26: the third A update of the 140-TDoc main copy spent more than 200 s
+// in rearrangeRevisionTables_ and ran into the 6-minute limit; the budget stopped only the moves, and every pair's
+// disposition and position checks went on). Now the whole pair is within the time, the rest resumes at the next
+// unprocessed pair, and the in-place check comes from the update's Docs API read while that read still shows the
+// report's structure.
+const UPDATE_PAIRS_CURSOR_KEY_ = 'UPDATE_PAIRS_CURSOR';
+
+/**
+ * The order of the revision pairs of an update (their originals, orderRevisionChains_()): from the pair where the last
+ * update stopped, to the end, then from the start. Outside an update or without a cursor: unchanged.
+ */
+function revisionPairsOrder_(parents, map) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.store) return parents;
+  let cursor = null;
+  try { cursor = JSON.parse(j.store.getProperty(UPDATE_PAIRS_CURSOR_KEY_) || 'null'); } catch (e) { cursor = null; }
+  let at = cursor && cursor.parent ? parents.indexOf(cursor.parent) : -1;
+  // From the start of its chain (orderRevisionChains_(): A->B before B->C), so that a chain is never split.
+  while (map && at > 0 && map[parents[at - 1]] === parents[at]) at--;
+  if (at <= 0) return parents;
+  Logger.log('Update: the revision pairs go on at ' + parents[at] + ' (where the last update stopped them on its time).');
+  return parents.slice(at).concat(parents.slice(0, at));
+}
+
+/**
+ * Before a pair, and before its move: past the pairs' budget (revisionMovesOverBudget_()), the pair of `parent` is
+ * the next one to do -- kept as the cursor (the pairs before it were done), and the loop stops. True: stop.
+ */
+function revisionPairsStop_(parent) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !revisionMovesOverBudget_()) return false;
+  if (!j.pairsCursorKept) {
+    j.pairsCursorKept = true;
+    try { if (j.store) j.store.setProperty(UPDATE_PAIRS_CURSOR_KEY_, JSON.stringify({ parent: parent, at: new Date().toISOString() })); } catch (e) { /* the next update starts at the top */ }
+  }
+  return true;
+}
+
+/** The pairs of this update went through to the end (no stop): the cursor is removed at its end. */
+function revisionPairsPassEnd_() {
+  const j = UPDATE_JOURNAL_;
+  if (j && !j.movesDeferred) j.pairsCompleted = true;
+}
+
+/** The structure of the report changed in this update (a move, sections moved): its Docs API read no longer shows the positions. */
+function updateStructureChanged_() {
+  if (UPDATE_JOURNAL_) UPDATE_JOURNAL_.structureChanged = true;
+}
+
+/** A table was moved by the revision pairs: the positions of the read are stale from here on. */
+function revisionPairMoved_() {
+  updateStructureChanged_();
+}
+
+/**
+ * Whether the update's Docs API read shows the table of `child` directly below that of `parent` (only empty
+ * paragraphs between) -- the in-place check of moveTableAfter_() without asking the document for positions. Only
+ * while the read still is the report's structure: no move or section repair in this update, and as many body
+ * elements as the read has (an insertion or removal changes that). Otherwise, or with any doubt (a table twice, a
+ * section break between, a table not in the read): false, and moveTableAfter_() checks the document itself.
+ */
+function revisionPairInPlaceBySnapshot_(body, parent, child) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || j.structureChanged) return false;
+  const snap = reportRunSnapshot_();
+  if (!snap || !snap.byNumber || !snap.content) return false;
+  const p = parseExactSA4DocumentId_(String(parent || '').trim());
+  const c = parseExactSA4DocumentId_(String(child || '').trim());
+  if (!p.isValid || !c.isValid) return false;
+  const a = snap.byNumber[p.raw], b = snap.byNumber[c.raw];
+  if (!a || !b || (snap.duplicates && (snap.duplicates[p.raw] || snap.duplicates[c.raw]))) return false;
+  if (j.snapshotElements === undefined) {
+    j.snapshotElements = snap.content.filter(function (e) { return !e.sectionBreak; }).length;
+    try { j.bodyElements = body.getNumChildren(); } catch (e) { j.bodyElements = -1; }
+  }
+  if (j.snapshotElements !== j.bodyElements) return false;
+  if (b.index <= a.index) return false;
+  for (let i = a.index + 1; i < b.index; i++) {
+    // An empty paragraph as isEmptyBodyParagraph_() takes it: Normal text, not a list item, no text, no object.
+    const e = snap.content[i];
+    if (!e || !e.paragraph) return false;
+    const para = e.paragraph;
+    const style = (para.paragraphStyle && para.paragraphStyle.namedStyleType) || 'NORMAL_TEXT';
+    if (style !== 'NORMAL_TEXT' || para.bullet || (para.positionedObjectIds && para.positionedObjectIds.length)) return false;
+    const els = para.elements || [];
+    if (!els.every(function (x) { return x.textRun && /^\n?$/.test(String(x.textRun.content || '')); })) return false;
+  }
+  return true;
 }
 
 // =========================================================
