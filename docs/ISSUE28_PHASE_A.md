@@ -211,3 +211,31 @@ In Run 5 the third A update of the 140-TDoc main copy spent more than 200 s in `
 - **Tests.** `tests/i28a-update-journal.test.js`, part G: an update past the pairs' budget stops inside the third of three pairs, says so and keeps that pair; the next one starts there and goes round once; the report equals that of an update without budget (order, statuses, dispositions, typed Minutes and Disposition text), no table twice, "Revised to" once; a further update changes nothing; the in-place check reads no position of the document while the read holds, and asks the document after a section repair or when the body has another number of elements.
 - **Independent review (2026-11-26).** Three changes after it: (1) the read is not trusted for positions after any table was inserted (new TDocs, revision-linked tables) or removed (the repair of an interrupted update) earlier in the update, even when the number of elements happens to be the same; (2) only an empty paragraph as `isEmptyBodyParagraph_()` takes it counts as "between" — Normal text, no list item, no positioned object; (3) resuming starts at the beginning of the cursor pair's chain (A→B before B→C), so a chain is never split. Tests for each in part G.
 - **Known limitation.** The abstracts stage (`addAbstractsForTables_()`, off by default for automatic updates, not active on the test copies) asks the Reviewer API with its own requests, outside `safeFetch_()` and the update's clock.
+
+## Every stage on one timeline (added 2026-11-26, after Run 6; diagnostics only)
+
+Run 6: one update of the 140-TDoc main copy took 347 s, but its timed stages accounted for only about 95 s. The rest was spent in stages that had no timer, and the evidence could not say which ones.
+
+- **What is timed now.** Besides the stages timed before, each significant stage of `continuousUpdateCore_()` runs in `perfTimed_()`:
+  - the report body;
+  - the meeting-room availability and the check after an interrupted update;
+  - the structure check;
+  - the TDoc loop (new TDoc tables, statuses, upload completion);
+  - the Registration table links, the ad-hoc sessions and the Session column;
+  - the title sync;
+  - the revision relationships, Goes to Plenary, the Disposition Summary and Undisposed Documents;
+  - the status dropdowns (`finalizeStatusDropdowns_()`).
+- **The timeline.** `perfTimed_()` records each stage in `PERF_STAGES_`: its name, its start (ms from the start of the update), its length and its depth. Depth 0 is a stage of the update itself; a stage inside another has depth 1 or more, so nested time is never counted twice. At the end of the update, one `[PERF] stage timeline:` line gives:
+  - the time in the timed stages;
+  - the time outside them (total minus timed);
+  - the slowest stages.
+- **Evidence after a stop from outside.** The update journal (`UPDATE_RUN`) records the end of each stage, written with the journal's next stage (no write of its own). It keeps the last 40 stages instead of 12: up to about 5 KB with 80-character names and their ends, well below the 9 KB of a property. An update stopped at the limit therefore shows which stages ended, when, and the stage it was in.
+- **Nothing else changes.**
+  - The update does the same work in the same order, with the same budgets, cut-offs, network guard, cursors and rules.
+  - Each newly timed stage costs one more write of `UPDATE_RUN` at its start, about 15 per update, as the journal already does for the timed stages.
+  - The ledger (`tests/helpers/before-structure-fix.js`) undoes these changes first and gives the code of `e6d5a9a`. The byte comparison with T-2026.10.34 still holds.
+- **Tests.** `tests/i28a-update-journal.test.js`, part H:
+  - **Same report.** The same report and list are updated twice with the timing and twice without it (`perfTimed_` only calling its function). Both give the same report (the whole body, the order of the tables), the same report state and the same results.
+  - **Timeline.** Each stage of the update is on the timeline once, in order, without overlap. The summary counts nested stages once. After an error the depth is right again.
+  - **Stopped update.** An update stopped in its third stage leaves the first two with their ends. The next update records them.
+  - **Journal size.** The journal keeps 40 stages, well below 9 KB.
