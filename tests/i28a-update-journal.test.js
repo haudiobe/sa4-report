@@ -295,5 +295,139 @@ console.log('F. one clock for the whole update (after the second real-document r
   r.s.getTablesCounted_ = realTables;
 }
 
+console.log('G. the revision pairs within the time (after Run 5, 2026-11-26)');
+{
+  // Six TDocs; three of them revised after the build, their revisions filed under 4.4 so that each has to be moved
+  // below its original. Typed Minutes and a typed Disposition note in the originals.
+  const LIST = () => [
+    { id: 'S4aA269001', agenda: '4.3', status: 'available', uploaded: true },
+    { id: 'S4aA269002', agenda: '4.3', status: 'available', uploaded: true },
+    { id: 'S4aA269003', agenda: '4.3', status: 'available', uploaded: true },
+    { id: 'S4aA269004', agenda: '4.4', status: 'noted', uploaded: true },
+    { id: 'S4aA269005', agenda: '4.4', status: 'agreed', uploaded: true },
+    { id: 'S4aA269006', agenda: '4.4', status: 'noted', uploaded: true }];
+  const PAIRS = [['S4aA269001', 'S4aA269011'], ['S4aA269002', 'S4aA269012'], ['S4aA269003', 'S4aA269013']];
+  const setCell = (x, id, label, text) => x.exec(() => { const tb = x.table(id); for (let i = 0; i < tb.getNumRows(); i++) if (tb.getRow(i).getCell(0).getText() === label) tb.getRow(i).getCell(1).setText(text); });
+  const prepare = (x) => {
+    x.build();
+    setCell(x, 'S4aA269001', 'Minutes', 'Typed minutes of 001, kept.');
+    setCell(x, 'S4aA269002', 'Disposition', 'Discussed on Tuesday');
+    setCell(x, 'S4aA269005', 'Minutes', 'Typed minutes of 005, kept.');
+    PAIRS.forEach(([o, rv]) => {
+      const t0 = x.tdocs.find((d) => d.id === o); t0.status = 'revised'; t0.revisedTo = rv;
+      x.tdocs.push({ id: rv, agenda: '4.4', status: 'agreed', isRevisionOf: o, uploaded: true });
+    });
+    x.s.findParentRevisedToTable_ = () => null;
+  };
+  const content = (x) => x.order().map((n) => [n, x.field(n, 'Status'), x.field(n, 'Disposition'), x.field(n, 'Minutes')].join(' | '));
+  const control = templateReport({ tdocs: LIST() });
+  prepare(control); control.update(); control.update();
+  check('the control (no budget): every revision below its original, "Revised to" once, typed text kept', [
+    PAIRS.every(([o, rv]) => control.order().indexOf(rv) === control.order().indexOf(o) + 1),
+    control.field('S4aA269002', 'Disposition'), control.field('S4aA269001', 'Minutes')],
+    [true, 'Discussed on Tuesday — Revised to S4AA269012', 'Typed minutes of 001, kept.']);
+
+  // The same, each pair "costs" 25 s of its own clock (its disposition): the 60 s of the pairs end inside the third pair.
+  const r = templateReport({ tdocs: LIST() });
+  prepare(r);
+  let clock = 0;
+  r.s.updateBudgetNow_ = () => clock;
+  const seen = [];
+  const realDisposition = r.s.setDispositionRevisedTo_;
+  r.s.setDispositionRevisedTo_ = function (table, child) { seen.push(child); clock += 25000; return realDisposition.apply(this, arguments); };
+  const first = r.update();
+  const cursor = json(r, 'UPDATE_PAIRS_CURSOR');
+  check('past the budget: the update stops inside the third pair, says it is in part, keeps that pair as the next one (its move not made)', [
+    (first.incomplete || []).includes('revision placement'), cursor && cursor.parent, seen.slice(), r.order().indexOf('S4aA269013') === r.order().indexOf('S4aA269003') + 1, first.success],
+    [true, 'S4aA269003', ['S4aA269011', 'S4aA269012', 'S4aA269013'], false, true]);
+  check('... the pairs before it are done (moved, "Revised to"), typed text kept', [
+    r.order().indexOf('S4aA269011') === r.order().indexOf('S4aA269001') + 1, r.order().indexOf('S4aA269012') === r.order().indexOf('S4aA269002') + 1,
+    r.field('S4aA269002', 'Disposition'), r.field('S4aA269001', 'Minutes'), r.field('S4aA269005', 'Minutes')],
+    [true, true, 'Discussed on Tuesday — Revised to S4AA269012', 'Typed minutes of 001, kept.', 'Typed minutes of 005, kept.']);
+  // The next update, in time: it starts at that pair.
+  seen.length = 0;
+  r.s.setDispositionRevisedTo_ = function (table, child) { seen.push(child); return realDisposition.apply(this, arguments); };
+  clock = 0;
+  const second = r.update();
+  check('the next update starts at the kept pair and goes round once (no pair skipped); complete, no cursor left', [
+    seen.slice(), r.logs.some((l) => /the revision pairs go on at S4aA269003/.test(l)), (second.incomplete || []).filter((x) => /revision placement/.test(x)), prop(r, 'UPDATE_PAIRS_CURSOR')],
+    [['S4aA269013', 'S4aA269011', 'S4aA269012'], true, [], null]);
+  check('interrupted and uninterrupted give the same report (order, statuses, dispositions, typed minutes); no table twice, "Revised to" once', [
+    content(r), r.order().filter((n, i, a) => a.indexOf(n) !== i), PAIRS.map(([o]) => (r.field(o, 'Disposition').match(/Revised to/g) || []).length)],
+    [content(control), [], [1, 1, 1]]);
+  const again = r.update();
+  check('a further update changes nothing (idempotent)', [content(r), again.incomplete || [], prop(r, 'UPDATE_PAIRS_CURSOR')], [content(control), [], null]);
+  r.s.updateBudgetNow_ = () => Date.now();
+  r.s.setDispositionRevisedTo_ = realDisposition;
+}
+{
+  // The in-place check from the update's Docs API read: none of the document while the read is the report's
+  // structure; the document again after a move, or when the structure differs from the read.
+  const r = templateReport({ tdocs: TDOCS.concat([{ id: 'S4aA269005', agenda: '4.3', status: 'agreed', isRevisionOf: 'S4aA269001', uploaded: true }]) });
+  r.tdocs[0].status = 'revised'; r.tdocs[0].revisedTo = 'S4aA269005';
+  r.build();
+  r.update();
+  const below = r.order().indexOf('S4aA269005') === r.order().indexOf('S4aA269001') + 1;
+  let asked = 0;
+  const realBelow = r.s.isTableDirectlyBelow_;
+  r.s.isTableDirectlyBelow_ = function () { asked++; return realBelow.apply(this, arguments); };
+  r.update();
+  check('a revision already below its original: known from the update\'s read, the document is not asked for positions', [below, asked], [true, 0]);
+  // The structure changed in this update (as after a move or a section repair): the document is asked.
+  const realStruct = r.s.repairReportStructureIfNeeded_;
+  r.s.repairReportStructureIfNeeded_ = function () { realStruct.apply(this, arguments); return { sectionsMoved: 1, emptyParagraphsRemoved: 0 }; };
+  asked = 0;
+  r.update();
+  check('... after a section repair in the same update the read is not trusted: the document is asked', asked > 0, true);
+  r.s.repairReportStructureIfNeeded_ = realStruct;
+  // A body that differs from the read (an element more): the document is asked.
+  asked = 0;
+  r.exec(() => { const realCount = r.body.getNumChildren.bind(r.body); r.body.getNumChildren = () => realCount() + 1; });
+  r.update();
+  check('... a body with another number of elements than the read: the document is asked', asked > 0, true);
+  r.s.isTableDirectlyBelow_ = realBelow;
+}
+
+{
+  // Review of 2026-11-26: the read is trusted for positions only as isTableDirectlyBelow_() would answer, and never
+  // after a table was inserted or removed earlier in the update -- even when the counts happen to cancel out.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  const tbl = (n) => ({ table: {} });
+  const para = (o) => ({ paragraph: Object.assign({ elements: [{ textRun: { content: '\n' } }], paragraphStyle: { namedStyleType: 'NORMAL_TEXT' } }, o || {}) });
+  const ask = (between, extra) => r.exec(() => {
+    r.s.markReportUpdateStart_(); r.s.updateJournalStart_(null);
+    const content = [tbl(), between, tbl()];
+    const snap = { content: content, byNumber: { 'S4aA269001': { index: 0 }, 'S4aA269005': { index: 2 } }, duplicates: {} };
+    const realSnap = r.s.reportRunSnapshot_;
+    const realCount = r.body.getNumChildren;
+    r.s.reportRunSnapshot_ = () => snap;
+    r.body.getNumChildren = () => content.length;
+    try { if (extra) extra(); return r.s.revisionPairInPlaceBySnapshot_(r.body, 'S4aA269001', 'S4aA269005'); }
+    finally { r.s.reportRunSnapshot_ = realSnap; r.body.getNumChildren = realCount; r.s.updateJournalEnd_({ success: true }); r.s.endReportUpdate_(); }
+  });
+  check('in place from the read: only across empty Normal paragraphs -- not an empty heading, list item, or one with a positioned object', [
+    ask(para()), ask(para({ paragraphStyle: { namedStyleType: 'HEADING_3' } })), ask(para({ bullet: { listId: 'x' } })), ask(para({ positionedObjectIds: ['kix.1'] })), ask(para({ elements: [{ textRun: { content: 'x\n' } }] }))],
+    [true, false, false, false, false]);
+  check('... and not after a table was inserted or removed earlier in the update, even with the same number of elements', ask(para(), () => r.s.updateStructureChanged_()), false);
+  // The repair of an interrupted update removes a table: the structure changed.
+  const r2 = templateReport({ tdocs: TDOCS });
+  r2.build();
+  duplicate(r2, 'S4aA269002');
+  r2.docProps.setProperty('UPDATE_RUN', JSON.stringify({ startedAt: '2026-11-26T14:00:00.000Z', stage: 'x' }));
+  let flagged = false;
+  const realFlag = r2.s.updateStructureChanged_;
+  r2.s.updateStructureChanged_ = function () { flagged = true; return realFlag.apply(this, arguments); };
+  r2.update();
+  check('the repair that removed a table copy marks the structure as changed', flagged, true);
+  r2.s.updateStructureChanged_ = realFlag;
+  // Resuming never splits a chain: a cursor at B (of A->B->C) resumes at A.
+  const r3 = templateReport({ tdocs: TDOCS });
+  r3.build();
+  r3.docProps.setProperty('UPDATE_PAIRS_CURSOR', JSON.stringify({ parent: 'B' }));
+  const order = r3.exec(() => { r3.s.markReportUpdateStart_(); r3.s.updateJournalStart_(null); const o = r3.s.revisionPairsOrder_(['X', 'A', 'B', 'Z'], { X: 'Y', A: 'B', B: 'C', Z: 'W' }); r3.s.updateJournalEnd_({ success: true }); r3.s.endReportUpdate_(); return o; });
+  check('a cursor inside a chain (A->B, B->C): the pairs resume at the start of that chain', order, ['A', 'B', 'Z', 'X']);
+}
+
 if (failures) { console.log(`\n${failures} check(s) FAILED`); process.exit(1); }
 console.log('\nAll checks passed.');
