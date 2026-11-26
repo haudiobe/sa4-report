@@ -74,6 +74,8 @@ const JOBS = {
   // the copy's own Status entries are; then Meeting Control twice (each the first step of its execution).
   'mc-benchmark': () => ({ steps: [{ do: 'configure', config: Object.assign({}, AHG_CONFIG) }, { do: 'saveSessions', rows: AHG_SESSIONS.map((s) => Object.assign({}, s)) },
     { do: 'markStatusDropdowns' }, { do: 'props' }, { do: 'meetingControl' }, { do: 'meetingControl' }], expect: ok(0, 1, 2, 3, 4, 5) }),
+  // Read-only: the header rows of the tables that are not TDoc tables (why Meeting Control finds no registration).
+  'table-headers': () => ({ steps: [{ do: 'tableHeaders' }], expect: ok(0) }),
   // Phase C, main meeting: Meeting Control's data (plenary agenda and schedule sources) is read without errors.
   'meeting-control': () => ({ steps: [{ do: 'meetingControl' }], expect: ok(0) }),
   // Phase C, ad-hoc: Meeting Control; the reservation rule (only if its preview, with the clock check, passes on the live

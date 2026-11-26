@@ -1010,6 +1010,19 @@ function it28RunStep_(step, state) {
       out.marked = tables.length > 0 && dropdowns / tables.length >= 0.9;
       if (out.marked && !out.markedBefore) props.setProperty('STATUS_DROPDOWNS', '1');
       out.decision = out.marked ? 'Status dropdowns (' + dropdowns + '/' + tables.length + '): marked as the report is' : 'text statuses (' + dropdowns + '/' + tables.length + ' dropdowns): not marked';
+    } else if (step.do === 'tableHeaders') {
+      // Read-only: the header row, size and first data row of every table that is not a TDoc table, as the report's own
+      // Docs API reader sees them (e.g. why no Registration of Documents table is recognized). Nothing is written.
+      const snap = plenarySnapshot_(it28Document_().getId());
+      if (!snap) throw new Error('the report could not be read through the Docs API');
+      const all = plenaryDocsTables_(snap.content);
+      out.tables = all.length;
+      out.tdocTables = all.filter(function (x) { return x.number; }).length;
+      out.registrationHeader = REGISTRATION_TABLE_HEADER_.concat(['(' + ADHOC_SESSION_COLUMN_HEADER_ + ')']);
+      out.others = all.filter(function (x) { return !x.number; }).map(function (x) {
+        const second = ((x.rows[1] || {}).tableCells || []).map(function (cc) { return statusDocsCellText_(cc).trim().slice(0, 40); });
+        return { index: x.index, rows: x.rows.length, header: x.header.map(function (h) { return JSON.stringify(h).slice(0, 60); }), firstRow: second };
+      });
     } else if (step.do === 'props') {
       const all = props.getProperties();
       out.names = Object.keys(all).filter(function (k) { return k.indexOf('IT28_') !== 0; }).sort();
