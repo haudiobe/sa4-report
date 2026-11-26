@@ -11,6 +11,9 @@
 
 // Rows typed by hand in a TDoc table: an update or a code change must never change them.
 const MANUAL_ROWS = /^(discussion|decision|comments?|minutes|notes)$/i;
+// Rows a candidate update may not touch at all on the settled copy (any field: text, links, formatting): what was
+// typed, and the decisions.
+const PROTECTED_ROWS = /^(discussion|decision|comments?|minutes|notes|status|disposition)$/i;
 
 // The copies' meetings, from the 3GPP Portal (looked up 2026-11-25), never a meeting in progress:
 // main: SA4#138 Calgary (portal 60780, 2026-11-16..20), family 6G Media -- the meeting of the 6G Media report it copies.
@@ -58,7 +61,7 @@ const JOBS = {
   // (a completed report is not a fixed point of its own release: on 2026-11-26 the first T-2026.10.33 update of the
   // clean main copy added a TDoc registered after the meeting, dropped the meeting-room links the copy has no settings
   // for, and re-rendered the e-mail rows; the second changed nothing). The first update may not change typed text.
-  settle: () => ({ steps: [{ do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
+  settle: () => ({ steps: [{ do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous', all: true },
     { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }, { do: 'markSettled' }],
   expect: ok(0, 1, 2, 4, 5, 7).concat([{ step: 3, rule: 'manualTextKept' }, { step: 6, rule: 'identical' }]) }),
   // The clean main copy, settled by T-2026.10.33 on 2026-11-26 (run 1: s4 after its first update, s5 after a second
@@ -66,14 +69,21 @@ const JOBS = {
   // the reference is taken without one: the copy must still be identical to s5, then it is marked.
   'settled-check': () => ({ steps: [{ do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2 }, { do: 'markSettled' }],
     expect: ok(0, 2).concat([{ step: 1, rule: 'identical' }]) }),
+  // The record of the baseline finding (reads only): the untouched clean copy (s1) against the snapshot before the
+  // first T-2026.10.33 update (s3: the same), that update (s3 -> s4), the second (s4 -> s5: nothing), and the whole
+  // way from the untouched copy to the settled one (s1 -> s5), every line. A finding about T-2026.10.33, reported on
+  // its own; not taken as acceptable.
+  'baseline-diff': () => ({ steps: [{ do: 'compare', from: 's1', to: 's3' }, { do: 'compare', from: 's3', to: 's4' }, { do: 'compare', from: 's4', to: 's5' },
+    { do: 'compare', from: 's1', to: 's5', all: true }],
+  expect: ok(1, 3).concat([{ step: 0, rule: 'identical' }, { step: 2, rule: 'identical' }]) }),
   // The rollback to T-2026.10.33: a stage whose updates are run again once when they end at the time limit, as the
   // report's own trigger would (T-2026.10.33 has no time budget). The candidates keep the strict stage.
   rollback: () => ({ steps: snapUpdateTwice().map((s) => (s.do === 'update' ? Object.assign({ retryOnLimit: 1 }, s) : s)),
-    expect: ok(0, 1, 4).concat([{ step: 3, rule: 'manualKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'manualKept' }]) }),
+    expect: ok(0, 1, 4).concat([{ step: 3, rule: 'protectedKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'protectedKept' }]) }),
   // A stage (A, A+B, A+B+C), from the settled copy: update twice. The second update changes nothing; no update and
   // no stage changes a manual row or removes text, a TDoc table or a tab.
   stage: () => ({ steps: snapUpdateTwice(),
-    expect: ok(0, 1, 4).concat([{ step: 3, rule: 'manualKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'manualKept' }]) }),
+    expect: ok(0, 1, 4).concat([{ step: 3, rule: 'protectedKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'protectedKept' }]) }),
   // Phase A: Heading 2 class lines on, then off again: only the Disposition Summary changes.
   headings: () => ({ steps: [
     { do: 'snap' }, { do: 'setProps', props: { DISPOSITION_CLASS_HEADINGS: 'heading2' } }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
@@ -85,7 +95,7 @@ const JOBS = {
     { do: 'candidates' }, { do: 'expectRevision', decision: 'noted' }, { do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
     { do: 'closeReportCheck' }, { do: 'resolveRevision', outcome: 'not-submitted', reason: 'Integration test (issue #28): the successor was never registered.' },
     { do: 'closeReportCheck' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }],
-  expect: ok(0, 1, 3, 7, 9).concat([{ step: 5, rule: 'manualKept' }, { step: 6, rule: 'closeBlocks' }, { step: 8, rule: 'closeInformation' }, { step: 11, rule: 'manualKept' }]) }),
+  expect: ok(0, 1, 3, 7, 9).concat([{ step: 5, rule: 'manualKept' }, { step: 5, rule: 'linksKept' }, { step: 6, rule: 'closeBlocks' }, { step: 8, rule: 'closeInformation' }, { step: 11, rule: 'manualKept' }, { step: 11, rule: 'linksKept' }]) }),
   // Phase C on the AHG copy as it is: Meeting Control's time on the real document (281 s before the fix of 2026-11-25).
   // No Portal: the settings saved as they were resolved (AHG_CONFIG), the historical sessions, the Status mark only as
   // the copy's own Status entries are; then Meeting Control twice (each the first step of its execution).
@@ -137,6 +147,20 @@ function evaluate(job, result) {
       if (r.counters && r.counters.tdocsRemoved) failures.push(at + ': ' + r.counters.tdocsRemoved + ' TDoc table(s) removed');
       if (r.counters && r.counters.tabs && (r.counters.tabs.removed || r.counters.tabs.added)) failures.push(at + ': tabs added or removed');
     }
+    if (e.rule === 'protectedKept' || e.rule === 'linksKept') {
+      // protectedKept: no field of a typed or decision row changed, no TDoc table, tab or paragraph outside the tables
+      // removed, no link lost. linksKept: only the last (the number of links of the document does not go down).
+      const c = r.counters || {};
+      if (e.rule === 'protectedKept') {
+        const touched = Object.keys(c.rows || {}).filter((k) => PROTECTED_ROWS.test(k.split(' / ')[0]));
+        if (touched.length) failures.push(at + ': protected rows changed: ' + touched.map((k) => k + ' x' + c.rows[k]).join(', '));
+        if (c.other && c.other.removed) failures.push(at + ': ' + c.other.removed + ' paragraph(s) outside the TDoc tables removed');
+        if (c.tdocsRemoved) failures.push(at + ': ' + c.tdocsRemoved + ' TDoc table(s) removed');
+        if (c.tabs && (c.tabs.removed || c.tabs.added)) failures.push(at + ': tabs added or removed');
+      }
+      const links = /^(\d+) -> (\d+)$/.exec(String((c.counts || {}).links || ''));
+      if (links && Number(links[2]) < Number(links[1])) failures.push(at + ': links lost (' + links[1] + ' -> ' + links[2] + ')');
+    }
     if (e.rule === 'manualTextKept') {
       // Typed text and links of the manual rows kept, no TDoc table, tab or paragraph outside the tables removed; a
       // change of paragraph settings alone (the release's own formatting) is allowed here and shown in the result.
@@ -180,7 +204,7 @@ function assemble(id, files) {
 /** The agreed sequence for each copy: the stage pushed with each job. After the last job the original script goes back. */
 const PLAN = {
   // The clean copy of 2026-11-25 (the first main copy was changed by the killed updates and is kept as evidence).
-  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'settled-check'],
+  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'settled-check'], ['base', 'baseline-diff'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
     ['t33', 'rollback'], ['t33', 'uninstall']],
   main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
@@ -190,4 +214,4 @@ const PLAN = {
     ['A', 'stage'], ['B', 'stage'], ['C', 'stage'], ['C', 'phase-c'], ['t33', 'stage'], ['t33', 'uninstall']]
 };
 
-module.exports = { JOBS, MANUAL_ROWS, MAIN_MEETING, AHG_MEETING, AHG_CONFIG, AHG_SESSIONS, SETTLED_REFERENCE, PLAN, makeJob, evaluate, assemble };
+module.exports = { JOBS, MANUAL_ROWS, PROTECTED_ROWS, MAIN_MEETING, AHG_MEETING, AHG_CONFIG, AHG_SESSIONS, SETTLED_REFERENCE, PLAN, makeJob, evaluate, assemble };

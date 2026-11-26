@@ -965,7 +965,10 @@ function it28RunStep_(step, state) {
         : (step.from === 'previous' || !step.from) ? snaps[snaps.length - 2] : step.from;
       if (step.from === 'settled' && !a) throw new Error('no settled snapshot: run the settle job first');
       if (!a || !b) throw new Error('nothing to compare (' + a + ' -> ' + b + ')');
-      Object.assign(out, it28CompareResult_(a, b, it28DiffOf_(it28LoadSnapshot_(a), it28LoadSnapshot_(b))));
+      const d = it28DiffOf_(it28LoadSnapshot_(a), it28LoadSnapshot_(b));
+      Object.assign(out, it28CompareResult_(a, b, d));
+      // all: every line of the difference (each cut at 300 characters), for the record of a baseline finding.
+      if (step.all) out.all = it28DiffLines_(d).map(function (l) { return l.slice(0, 300); });
     } else if (step.do === 'markSettled') {
       // The reference of the stages: the last snapshot, taken after an update that changed nothing (the job checks
       // that). A completed report is not a fixed point of its own release: its first update on a copy brings it to

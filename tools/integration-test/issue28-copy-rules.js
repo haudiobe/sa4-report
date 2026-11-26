@@ -90,7 +90,7 @@ const RELEASE_T33_SHA = '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac1000
 const STAGES = ['base', 't33', 'A', 'B', 'C', 'original'];
 // The pinned Issue28Check.js (re-pinned deliberately 2026-11-25: fingerprint v2 -- Docs REST read with a field mask, canonical,
 // compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read; no retry loops, status). Before: ef08027f..., 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
-const CHECK_SHA = '63a8b78d45faa01780fcd20b999ea5413049eb3fbd4e63ec6f8b0889d630d1b1';
+const CHECK_SHA = '1208d3eda960497ae67facba329ae98375085f26cb5af91171a116e0ef3ae7ec';
 
 /** Every reason why this script/document may not be written as `target` ([] when it may). Pure. */
 function identityRefusals(target, scriptId, project, file) {
