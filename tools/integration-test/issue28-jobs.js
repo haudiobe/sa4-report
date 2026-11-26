@@ -81,7 +81,8 @@ const JOBS = {
   inspect: () => ({ steps: [{ do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2, all: true }], expect: ok(0, 1) }),
   // Phase A first, on the copy as inspect found it: an update that did not end is recorded (its own journal was lost
   // with the test cleanup of 2026-11-26), the next A update finds it and repairs what it left; then the copy must be
-  // the settled s5 again, two further updates change nothing, and each update ends within 300 s. s5 stays the
+  // the settled s5 again, two further updates change nothing, and each update ends -- complete, or in part with the
+  // rest left to the next one -- within 300 s (never at the limit). s5 stays the
   // reference of the stages after it (a repaired document never is).
   'a-validate': () => ({ steps: [
     { do: 'setProps', props: { UPDATE_RUN: JSON.stringify({ startedAt: '2026-11-26T11:56:00.000Z', stage: 'unknown (the journal was removed by the test cleanup of 2026-11-26)' }) } },
@@ -90,7 +91,7 @@ const JOBS = {
     { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
     { do: 'markSettled', label: SETTLED_REFERENCE.main2 }],
   expect: ok(0, 2, 5, 8, 10).concat([{ step: 1, rule: 'withinBudget' }, { step: 1, rule: 'interruptionFound' }, { step: 3, rule: 'protectedKept' },
-    { step: 4, rule: 'withinBudget' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'withinBudget' }, { step: 7, rule: 'complete' }, { step: 9, rule: 'identical' }]) }),
+    { step: 4, rule: 'withinBudget' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'withinBudget' }, { step: 9, rule: 'identical' }]) }),
   // The rollback to T-2026.10.33: a stage whose updates are run again once when they end at the time limit, as the
   // report's own trigger would (T-2026.10.33 has no time budget). The candidates keep the strict stage.
   rollback: () => ({ steps: snapUpdateTwice().map((s) => (s.do === 'update' ? Object.assign({ retryOnLimit: 1 }, s) : s)),

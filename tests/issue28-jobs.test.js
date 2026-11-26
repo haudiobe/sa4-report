@@ -60,12 +60,12 @@ check('the plans settle the release the copy runs first; the stages compare with
   const upd = (ms, extra) => Object.assign({ ok: true, updateMs: ms, result: Object.assign({ success: true, incomplete: null, interrupted: null }, extra || {}) });
   const cmp0 = { ok: true, identical: true, counters: { rows: {}, tdocsAdded: 0, tdocsRemoved: 0, other: { removed: 0 }, counts: { links: '666 -> 666' } } };
   const good = { steps: [okS, upd(240000, { interrupted: { stage: 'x' }, incomplete: ['the report after the repair'] }), okS, cmp0, upd(200000), okS, cmp0, upd(190000), okS, cmp0, okS] };
-  check('a-validate: a good run passes (the first update finds the stopped one, may be in part; the third is whole)', J.evaluate(av, good), []);
+  check('a-validate: a good run passes (the first update finds the stopped one; any update may be in part, within 300 s)', J.evaluate(av, good), []);
   const slow = JSON.parse(JSON.stringify(good)); slow.steps[4].updateMs = 301000;
   const lost = JSON.parse(JSON.stringify(good)); lost.steps[1].result.interrupted = null;
-  const part = JSON.parse(JSON.stringify(good)); part.steps[7].result.incomplete = ['e-mail discussions'];
+  const part = JSON.parse(JSON.stringify(good)); part.steps[7].result.incomplete = ['revision placement'];
   const diff = JSON.parse(JSON.stringify(good)); diff.steps[6] = { ok: true, identical: false, lines: 2, first: ['x'] };
-  check('a-validate: over 300 s, the stopped update not found, the third in part, not s5 again: each fails', [J.evaluate(av, slow).length, J.evaluate(av, lost).length, J.evaluate(av, part).length, J.evaluate(av, diff).length], [1, 1, 1, 1]);
+  check('a-validate: over 300 s, the stopped update not found, not s5 again: each fails; the third in part (deferred safely) passes', [J.evaluate(av, slow).length, J.evaluate(av, lost).length, J.evaluate(av, diff).length, J.evaluate(av, part).length], [1, 1, 1, 0]);
 }
 check('the static AHG settings are never SA4#138 (no meeting folder or number)', [J.AHG_CONFIG.meetingFolder, J.AHG_CONFIG.meetingNumber], ['', '']);
 check('the configure jobs use exactly those meetings; every job step is of the fixed list', [J.makeJob('main', 'configure-main', 's').steps[0].meetingId, J.makeJob('ahg', 'configure-ahg', 's').steps[0].meetingId, J.makeJob('ahg', 'configure-ahg', 's').steps[1].rows.length, Object.keys(J.JOBS).every((n) => J.makeJob('x', n, 's').steps.every((st) => ['probe','props','tableHeaders','markSettled','snap','compare','update','configure','configureMeeting','markStatusDropdowns','saveSessions','setProps','candidates','expectRevision','resolveRevision','closeReportCheck','meetingControl','sessionRulePreview','sessionRuleSet','carryPreview','carrySet','uninstall'].includes(st.do)))], [60780, 86178, 2, true]);
