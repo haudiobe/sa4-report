@@ -189,5 +189,111 @@ console.log('E. controlled fixtures: a move killed half-way, and an update that 
   check('... and a further update changes nothing; no cursor left', [content(r), prop(r, 'UPDATE_TDOC_CURSOR')], [content(control), null]);
 }
 
+console.log('F. one clock for the whole update (after the second real-document run, 2026-11-26)');
+{
+  // The real collector of Code.js (the helper replaces it with a stub): taken from the source into the sandbox.
+  const fs = require('fs');
+  const vm = require('vm');
+  const src = fs.readFileSync(require('path').join(__dirname, '..', 'Code.js'), 'utf8').split(String.fromCharCode(13)).join('');
+  const fnSource = (name) => { const i = src.indexOf('\nfunction ' + name + '('); const j = src.indexOf('\n}\n', i); if (i < 0 || j < 0) throw new Error('no function ' + name); return src.slice(i + 1, j + 3); };
+  const r = templateReport({ tdocs: TDOCS, });
+  r.build();
+  vm.runInContext(fnSource('collectorUpdate_'), r.s);
+  const mailBefore = TDOCS.map((x) => r.field(x.id, 'E-mail Discussion'));
+  // The clock of the budgets: the update starts at 0; the collectors begin 196 s into it.
+  let clock = 0;
+  r.s.updateBudgetNow_ = () => clock;
+  const realCfg = r.s.getCollectorConfig_;
+  r.s.getCollectorConfig_ = function () { clock = 196000; return realCfg.apply(this, arguments); };
+  const before = r.fetches.length;
+  const res = r.update();
+  const mailFetches = r.fetches.slice(before).filter((u) => /list\.etsi\.org|wa\.exe/i.test(u));
+  check('196 s into the update: no mail request is made; the e-mail discussions are left to the next update, not reported as a failure', [mailFetches.length, (res.incomplete || []).some((x) => /^e-mail discussions \(no network request 196 s into the update/.test(x)), res.collectorFailures], [0, true, undefined]);
+  check('... and no E-mail Discussion cell is touched (nothing written from a part of the messages)', TDOCS.map((x) => r.field(x.id, 'E-mail Discussion')), mailBefore);
+  const runLeft = json(r, 'UPDATE_RUN');
+  check('... the update ended (no journal left)', runLeft, null);
+  // Earlier (100 s): the request is made.
+  r.s.getCollectorConfig_ = function () { clock = 100000; return realCfg.apply(this, arguments); };
+  const before2 = r.fetches.length;
+  const res2 = r.update();
+  check('100 s into the update: the mail request is made, nothing left to the next update for it', [r.fetches.slice(before2).some((u) => /list\.etsi\.org|wa\.exe/i.test(u)), (res2.incomplete || []).some((x) => /^e-mail discussions/.test(x))], [true, false]);
+  r.s.getCollectorConfig_ = realCfg;
+  r.s.updateBudgetNow_ = () => Date.now();
+  check('outside an update: safeFetch_ is never held back by the budget', r.exec(() => { try { r.s.safeFetch_({}, 'https://list.etsi.org/scripts/wa.exe?RSS', {}, 'test'); return 'fetched'; } catch (e) { return e.message; } }), 'fetched');
+}
+{
+  // The stages the next update does again anyway: not started 256 s into the update; the status dropdowns still end it.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  let clock = 0;
+  r.s.updateBudgetNow_ = () => clock;
+  r.s.collectorUpdate_ = () => { clock = 256000; return { failures: [] }; };
+  let summaries = 0;
+  const realSummary = r.s.syncDispositionSummaryOnUpdate_;
+  r.s.syncDispositionSummaryOnUpdate_ = function () { summaries++; return realSummary.apply(this, arguments); };
+  const res = r.update();
+  check('256 s into the update: the Goes to Plenary data, the summary and Undisposed Documents left to the next update', [summaries, (res.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents'), res.success], [0, true, true]);
+  r.s.collectorUpdate_ = () => { clock = 200000; return { failures: [] }; };
+  const res2 = r.update();
+  check('200 s into the update: they run', [summaries, (res2.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents')], [1, false]);
+  r.s.updateBudgetNow_ = () => Date.now();
+}
+{
+  // The TDoc loop and the moves on the update's clock: no TDoc after 170 s, no move after 200 s, even within their own budgets.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  r.exec(() => { r.s.markReportUpdateStart_(); r.s.updateJournalStart_(null); });
+  let t0 = 1000000;
+  r.s.updateBudgetNow_ = () => t0;
+  r.exec(() => r.s.updateJournalStart_(null));
+  const at = (ms, fn) => { t0 = 1000000 + ms; return r.exec(fn); };
+  const loop = [at(160000, () => r.s.tdocLoopOverBudget_('S4aA269001')), at(171000, () => r.s.tdocLoopOverBudget_('S4aA269002'))];
+  const moves = [at(195000, () => r.s.revisionMovesOverBudget_()), at(201000, () => r.s.revisionMovesOverBudget_())];
+  check('the TDoc loop: a TDoc at 160 s, none at 171 s (its own clock had 11 s); the moves: one at 195 s, none at 201 s', [loop, moves, json(r, 'UPDATE_TDOC_CURSOR').tdoc], [[false, true], [false, true], 'S4aA269002']);
+  r.exec(() => { r.s.updateJournalEnd_({ success: true }); r.s.endReportUpdate_(); });
+  r.s.updateBudgetNow_ = () => Date.now();
+}
+{
+  // The revisions go on where the last update stopped them; a whole pass removes the cursor.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  const order = ['S4aA269001', 'S4aA269002', 'S4aA269003'];
+  const run = (fn) => r.exec(() => { r.s.markReportUpdateStart_(); r.s.updateJournalStart_(null); const v = fn(); r.s.updateJournalEnd_({ success: true }); r.s.endReportUpdate_(); return v; });
+  const first = run(() => { const o = r.s.revisionsLoopOrder_(order); r.s.revisionsLoopStopped_('S4aA269002'); return o; });
+  const second = run(() => { const o = r.s.revisionsLoopOrder_(order); r.s.revisionsLoopCompleted_(); return o; });
+  check('revisions stopped before S4aA269002: the next pass starts there and wraps; a whole pass removes the cursor', [first, second, prop(r, 'UPDATE_REVISIONS_CURSOR')], [order, ['S4aA269002', 'S4aA269003', 'S4aA269001'], null]);
+  const third = run(() => { r.s.revisionsLoopStopped_('S4aA269003'); r.s.revisionsLoopCompleted_(); return json(r, 'UPDATE_REVISIONS_CURSOR').tdoc; });
+  check('a pass that stopped is never taken as whole (the cursor stays)', [third, json(r, 'UPDATE_REVISIONS_CURSOR').tdoc], ['S4aA269003', 'S4aA269003']);
+  check('outside an update the order is the report order', r.exec(() => r.s.revisionsLoopOrder_(order)), order);
+}
+{
+  // The journal keeps where the time went; an update stopped from outside shows it to the next one.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  let clock = 0;
+  r.s.updateBudgetNow_ = () => clock;
+  r.exec(() => { r.s.markReportUpdateStart_(); r.s.updateJournalStart_(null);
+    clock = 85000; r.s.perfTimed_('TDoc-list fetch/download+parse (downloadAndGroupTdocs_)', () => 0);
+    clock = 190000; try { r.s.updateNetworkGuard_('Revisions fetch'); } catch (e) { /* not at 190 s */ } });
+  const run = json(r, 'UPDATE_RUN');
+  check('UPDATE_RUN: the stage, the time since the start and the last stages with theirs (the network requests among them)', [run.stage, run.elapsedMs, run.stages.map((x) => x.stage + '@' + x.ms)],
+    ['network: Revisions fetch', 190000, ['TDoc-list fetch/download+parse (downloadAndGroupTdocs_)@85000', 'network: Revisions fetch@190000']]);
+  r.exec(() => r.s.endReportUpdate_());
+  r.s.updateBudgetNow_ = () => Date.now();
+  const res = r.update();
+  check('the next update names the stopped one with its stage and its time', [res.interrupted.stage, res.interrupted.elapsedMs], ['network: Revisions fetch', 190000]);
+}
+{
+  // The reallocations of an update come from its one Docs API read (no table walk of their own), as before.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  const labels = [];
+  const realTables = r.s.getTablesCounted_;
+  r.s.getTablesCounted_ = function (body, label) { labels.push(label); return realTables.apply(this, arguments); };
+  r.update();
+  check('an update reads its reallocations from its Docs API read: getReallocationMap_ walks no table', labels.filter((l) => /getReallocationMap_/.test(String(l))), []);
+  r.s.getTablesCounted_ = realTables;
+}
+
 if (failures) { console.log(`\n${failures} check(s) FAILED`); process.exit(1); }
 console.log('\nAll checks passed.');

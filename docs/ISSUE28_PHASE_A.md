@@ -186,3 +186,16 @@ The first run on a disposable copy of the 6G Media report was killed at Apps Scr
 - **Tests.** `tests/i28a-update-journal.test.js`. Part E covers:
   - a move killed between its insert and its remove; after recovery the report equals one an uninterrupted update produces;
   - twelve new TDocs under the budget, converging across several updates to the document of a single unbudgeted update, after which a further update changes nothing.
+
+## One clock for the whole update (added 2026-11-26)
+
+On 2026-11-26 an A update of the clean 140-TDoc main copy took 212.6 s. The next one was ended by the 6-minute limit. The stage budgets above each have their own clock and only decide whether a stage starts; a stage that has started (the e-mail archive pages, the revisions listing) runs on, and a network request cannot be stopped once it runs.
+
+- **The update's clock.** It starts with the journal, on the same clock as the stage budgets. The target is 300 s; 45 s of it are kept for the end (the status dropdowns, the journal).
+- **Network requests.** `safeFetch_()` (the RSS feed, the archive pages, the revisions listing) starts no request later than 195 s into an update: a request may take up to a minute, and the end keeps its 45 s. A refused request throws an error marked `updateDeferral`. Its collector stops before it writes anything, so no E-mail Discussion or Revisions cell is rewritten from part of the messages or listings, and no link is lost. The collector is reported as left to the next update ("updated only in part"), not as a failure. The TDoc list (at the start of the update) is not affected.
+- **The TDoc loop and the moves** keep their own 100 s and 60 s, and also start no TDoc later than 170 s and no move later than 200 s into the update.
+- **The stages the next update does again anyway** (the revision relationships, the Goes to Plenary data, the Disposition Summary, Undisposed Documents) start no later than 255 s. The status dropdowns always end the update.
+- **Resuming.** The revisions go on where the last update stopped them (`UPDATE_REVISIONS_CURSOR`), as the TDoc loop does (`UPDATE_TDOC_CURSOR`); a whole pass removes the cursor. Every stage that is left to the next update is idempotent: it compares with the report and writes only what differs.
+- **Diagnostics.** `UPDATE_RUN` keeps the stage, the time since the start (`elapsedMs`) and the last 12 stages with their times, the network requests among them. An update stopped from outside is named by the next one with its stage and time (`UPDATE_INTERRUPTED`, `result.interrupted`).
+- **The reallocations.** `getReallocationMap_()` already reads from the update's one Docs API read (`reallocationMapFromSnapshot_()`); the 29 s under its timer in the real run were that read itself, which happens there first. A test proves that an update walks no table for it.
+- **Tests.** `tests/i28a-update-journal.test.js`, part F: no mail request 196 s into an update and no E-mail Discussion cell touched, while the same report makes the request at 100 s; the late stages left at 256 s and run at 200 s; the TDoc loop and the moves on the update's clock; the revisions cursor (resume, wrap, removal only after a whole pass); the journal's stages and times, named by the next update; the reallocations without a table walk.

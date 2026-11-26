@@ -34,6 +34,16 @@
  *     next TDoc loop goes on where the last one stopped (UPDATE_TDOC_CURSOR).
  *     An update that repaired the report says it is in part; the next one
  *     completes it.
+ *   - One clock for the whole update (after the second real-document run,
+ *     2026-11-26): no network request starts later than 195 s into the
+ *     update (a request may take up to a minute; 45 s are kept for the
+ *     end), and a refused one leaves its collector to the next update
+ *     before it writes anything. The TDoc loop starts no TDoc after 170 s,
+ *     the moves no move after 200 s; the Goes to Plenary data, the
+ *     Disposition Summary and Undisposed Documents start no later than
+ *     255 s. The revisions go on where the last update stopped them
+ *     (UPDATE_REVISIONS_CURSOR). The journal keeps the time of its last
+ *     stages, so an update that is stopped shows where.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -1623,7 +1633,8 @@ function continuousUpdateCore_(context) {
     // (no status dropdowns can be read there). Never fails the update.
     // After T-2026.10.17: for the TDocs the report has registered -- the
     // TDocs of the list read above among them.
-    if (!context) {
+    // After issue 28 A: not started late in the update; the next update does them (ISSUE 28 A section).
+    if (!context && updateLateStagesMayStart_()) {
       // After T-2026.10.29: the revision relationships (every report), and the Goes to Plenary data (GOES TO PLENARY section).
       syncTdocRevisionsOnUpdate_(allTdocs, tdocTableIndex);
       const plenary = syncPlenarySelectionOnUpdate_(body, allTdocs, tdocTableIndex);
@@ -5774,8 +5785,9 @@ function collectorUpdate_(context) {
   // other one; it is now also returned, so that a caller which wants to
   // (Update Report Now in a template report) can report it.
   const failures = [];
-  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg, context)); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); failures.push({ step: 'e-mail discussions', error: e.message }); }
-  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg, context)); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); failures.push({ step: 'TDoc revisions', error: e.message }); }
+  // After issue 28 A: a collector stopped for the time is left to the next update, not a failure (ISSUE 28 A section).
+  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg, context)); } catch (e) { if (!updateDeferralCaught_(e, 'e-mail discussions')) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); failures.push({ step: 'e-mail discussions', error: e.message }); } }
+  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg, context)); } catch (e) { if (!updateDeferralCaught_(e, 'TDoc revisions')) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); failures.push({ step: 'TDoc revisions', error: e.message }); } }
 
   log_(cfg, '=== COLLECTOR END ===');
   return { failures: failures };
@@ -7726,6 +7738,8 @@ function rearrangeRevisionTables_(cfg, groups, index, context) {
 // =========================================================
 
 function safeFetch_(cfg, url, opt, label) {
+  // After issue 28 A: no request an update could not finish in time; its collector waits (ISSUE 28 A section).
+  updateNetworkGuard_(label);
   try {
     // PERF-001: safeFetch_() is the shared choke point for RSS, A1
     // archive, and Revisions-folder fetches -- one counter/timer here
@@ -26249,13 +26263,16 @@ function updateRevisionsFast_(cfg, context, snap) {
   index.forEach(function (t, n) { if (order.indexOf(n) === -1) order.push(n); });
   const writes = {};
   const start = Date.now();
-  for (let k = 0; k < order.length; k++) {
+  // After issue 28 A: the revisions go on where the last update stopped them (ISSUE 28 A section).
+  const loopOrder = revisionsLoopOrder_(order);
+  for (let k = 0; k < loopOrder.length; k++) {
     if (reportUpdateElapsedMs_() > REPORT_UPDATE_REVISIONS_STOP_MS_) {
       deferReportUpdateStage_('TDoc revisions (' + (order.length - k) + ' of ' + order.length + ' TDocs)');
       out.deferred = true;
+      revisionsLoopStopped_(loopOrder[k]);
       break;
     }
-    const tdoc = order[k];
+    const tdoc = loopOrder[k];
     const storeKey = 'REVIS_' + tdoc;
     const before = all[storeKey] === undefined || all[storeKey] === null ? '' : String(all[storeKey]);
     const store = loadJsonObject_(before);
@@ -26297,6 +26314,8 @@ function updateRevisionsFast_(cfg, context, snap) {
     log_(cfg, 'Revisions updated', { tdoc: tdoc, total: ordered.length });
   }
   if (Object.keys(writes).length) props.setProperties(writes);
+  // After issue 28 A: a whole pass; the next one starts at the top (ISSUE 28 A section).
+  if (!out.deferred) revisionsLoopCompleted_();
   perfAddTime_('    revisions: per-TDoc comparison and writes (from the report snapshot)', Date.now() - start);
   Logger.log('Revisions: ' + out.compared + ' cell(s) compared with the report snapshot, ' + out.written + ' written, ' + out.stored + ' store(s) changed, ' + out.inserted + ' revision table(s) inserted' +
     (out.deferred ? ', NOT COMPLETED (left to the next update)' : '') + '.');
@@ -30797,7 +30816,8 @@ let UPDATE_JOURNAL_ = null;
  * known (null when none). Never throws: without its properties the update runs as before, without a journal.
  */
 function updateJournalStart_(context) {
-  UPDATE_JOURNAL_ = { store: null, interrupted: null, stage: 'start', tdocsDeferred: false, movesDeferred: false, tdocsStartedAt: 0, movesStartedAt: 0 };
+  UPDATE_JOURNAL_ = { store: null, interrupted: null, stage: 'start', tdocsDeferred: false, movesDeferred: false, tdocsStartedAt: 0, movesStartedAt: 0,
+    budgetStartedAt: updateBudgetNow_(), startedAtIso: new Date().toISOString(), stages: [], revisionsDeferred: false, revisionsCompleted: false };
   try {
     const store = getReportStateStore_(context);
     let interrupted = null;
@@ -30806,12 +30826,13 @@ function updateJournalStart_(context) {
     if (raw) {
       let previous = {};
       try { previous = JSON.parse(raw) || {}; } catch (e) { previous = {}; }
-      interrupted = { startedAt: String(previous.startedAt || ''), stage: String(previous.stage || ''), detectedAt: new Date().toISOString(), removed: [], differing: [] };
+      interrupted = { startedAt: String(previous.startedAt || ''), stage: String(previous.stage || ''), detectedAt: new Date().toISOString(), removed: [], differing: [],
+        elapsedMs: Number(previous.elapsedMs) || 0, stages: Array.isArray(previous.stages) ? previous.stages.slice(-UPDATE_JOURNAL_STAGES_KEPT_) : [] };
       store.setProperty(UPDATE_INTERRUPTED_KEY_, JSON.stringify(interrupted));
       Logger.log('Update journal: the update started ' + interrupted.startedAt + ' did not end (it was stopped during "' + interrupted.stage +
         '", e.g. at the 6-minute limit). This update checks the report for what it may have left.');
     }
-    store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: new Date().toISOString(), stage: 'start' }));
+    store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: UPDATE_JOURNAL_.startedAtIso, stage: 'start', elapsedMs: 0, stages: [] }));
     UPDATE_JOURNAL_.store = store;
     UPDATE_JOURNAL_.interrupted = interrupted;
   } catch (e) {
@@ -30820,12 +30841,20 @@ function updateJournalStart_(context) {
   return UPDATE_JOURNAL_.interrupted;
 }
 
-/** The stage the running update has reached (perfTimed_() labels); kept in UPDATE_RUN. Never throws. */
+/**
+ * The stage the running update has reached (perfTimed_() labels, the network requests); kept in UPDATE_RUN with the
+ * time since the start and the last stages with theirs -- an update stopped from outside shows where its time went.
+ * Never throws.
+ */
 function updateJournalStage_(stage) {
   const j = UPDATE_JOURNAL_;
-  if (!j || !j.store || j.stage === stage) return;
+  if (!j || j.stage === stage) return;
   j.stage = stage;
-  try { j.store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: (JSON.parse(j.store.getProperty(UPDATE_RUN_KEY_) || '{}') || {}).startedAt || '', stage: String(stage).slice(0, 120) })); } catch (e) { /* the journal is a help only */ }
+  const at = updateElapsedMs_();
+  j.stages.push({ stage: String(stage).slice(0, 80), ms: at });
+  if (j.stages.length > UPDATE_JOURNAL_STAGES_KEPT_) j.stages = j.stages.slice(-UPDATE_JOURNAL_STAGES_KEPT_);
+  if (!j.store) return;
+  try { j.store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: j.startedAtIso, stage: String(stage).slice(0, 120), elapsedMs: at, stages: j.stages })); } catch (e) { /* the journal is a help only */ }
 }
 
 /** Pure: the text of a table, row by row and cell by cell (two tables with the same key have the same content). */
@@ -30903,7 +30932,8 @@ function tdocLoopOverBudget_(tdocNumber) {
   if (j.tdocsDeferred) return true;
   const now = updateBudgetNow_();
   if (!j.tdocsStartedAt) j.tdocsStartedAt = now;
-  if (now - j.tdocsStartedAt <= REPORT_UPDATE_TDOCS_LOOP_MS_) return false;
+  // Its own 100 s, and no TDoc started later than 170 s into the update (one clock for the whole update).
+  if (now - j.tdocsStartedAt <= REPORT_UPDATE_TDOCS_LOOP_MS_ && updateElapsedMs_() <= UPDATE_TDOC_LOOP_LATEST_MS_) return false;
   j.tdocsDeferred = true;
   try { if (j.store) j.store.setProperty(UPDATE_TDOC_CURSOR_KEY_, JSON.stringify({ tdoc: tdocNumber, at: new Date().toISOString() })); } catch (e) { /* the next update starts at the top */ }
   deferReportUpdateStage_('TDoc tables from ' + tdocNumber + ' on (new TDocs and statuses)');
@@ -30917,7 +30947,8 @@ function revisionMovesOverBudget_() {
   if (j.movesDeferred) return true;
   const now = updateBudgetNow_();
   if (!j.movesStartedAt) j.movesStartedAt = now;
-  if (now - j.movesStartedAt <= REPORT_UPDATE_MOVES_MS_) return false;
+  // Their own 60 s, and no move started later than 200 s into the update.
+  if (now - j.movesStartedAt <= REPORT_UPDATE_MOVES_MS_ && updateElapsedMs_() <= UPDATE_MOVES_LATEST_MS_) return false;
   j.movesDeferred = true;
   deferReportUpdateStage_('revision placement');
   return true;
@@ -30935,8 +30966,10 @@ function updateJournalEnd_(result) {
     j.store.deleteProperty(UPDATE_RUN_KEY_);
     // A whole pass of the TDoc loop: the next one starts at the top again.
     if (j.tdocsStartedAt && !j.tdocsDeferred) j.store.deleteProperty(UPDATE_TDOC_CURSOR_KEY_);
+    // A whole pass of the revisions: theirs too.
+    if (j.revisionsCompleted && !j.revisionsDeferred) j.store.deleteProperty(UPDATE_REVISIONS_CURSOR_KEY_);
     if (!j.interrupted) return;
-    if (result) result.interrupted = { startedAt: j.interrupted.startedAt, stage: j.interrupted.stage, removed: j.interrupted.removed || [], differing: j.interrupted.differing || [] };
+    if (result) result.interrupted = { startedAt: j.interrupted.startedAt, stage: j.interrupted.stage, elapsedMs: j.interrupted.elapsedMs || 0, removed: j.interrupted.removed || [], differing: j.interrupted.differing || [] };
     const complete = !!result && result.success !== false && !(result.incomplete && result.incomplete.length) && !(j.interrupted.differing || []).length;
     if (complete) {
       j.store.deleteProperty(UPDATE_INTERRUPTED_KEY_);
@@ -30945,6 +30978,91 @@ function updateJournalEnd_(result) {
   } catch (e) {
     Logger.log('Update journal: ' + e.message);
   }
+}
+
+// --- One clock for the whole update (after the second real-document run, 2026-11-26: an update of the 140-TDoc
+// main copy took 212 s, the next one ran into the 6-minute limit). The stage budgets above each have their own clock;
+// these limits are on the update's clock (from its journal), so that the update ends -- complete, or in part with the
+// rest left to the next one -- by about 300 s, never at the limit. A network request cannot be stopped once it runs
+// (UrlFetchApp has no time-out of its own): one is not started when it could not end in time.
+const UPDATE_TOTAL_BUDGET_MS_ = 300000;
+const UPDATE_FETCH_RESERVE_MS_ = 60000;
+const UPDATE_FINISH_RESERVE_MS_ = 45000;
+const UPDATE_TDOC_LOOP_LATEST_MS_ = 170000;
+const UPDATE_MOVES_LATEST_MS_ = 200000;
+const UPDATE_LATE_STAGES_LATEST_MS_ = UPDATE_TOTAL_BUDGET_MS_ - UPDATE_FINISH_RESERVE_MS_;
+const UPDATE_JOURNAL_STAGES_KEPT_ = 12;
+const UPDATE_REVISIONS_CURSOR_KEY_ = 'UPDATE_REVISIONS_CURSOR';
+
+/** How long the update of this execution has run on the clock of its budgets, in ms (0 outside an update). */
+function updateElapsedMs_() {
+  const j = UPDATE_JOURNAL_;
+  return j && typeof j.budgetStartedAt === 'number' ? updateBudgetNow_() - j.budgetStartedAt : 0;
+}
+
+/**
+ * Before a network request of an update (safeFetch_()): it is recorded as the update's stage; past the time a
+ * request may still start (the budget less a request's minute and the end's reserve: 195 s), it is not made -- an
+ * error marked updateDeferral is thrown, so that the collector that asked for it stops before it writes anything
+ * (its cells are not rewritten from a part of the messages or listings) and is left to the next update.
+ * Outside an update: nothing.
+ */
+function updateNetworkGuard_(label) {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return;
+  updateJournalStage_('network: ' + String(label || 'request'));
+  const at = updateElapsedMs_();
+  if (at + UPDATE_FETCH_RESERVE_MS_ + UPDATE_FINISH_RESERVE_MS_ <= UPDATE_TOTAL_BUDGET_MS_) return;
+  const e = new Error('no network request ' + Math.round(at / 1000) + ' s into the update (' + (label || 'request') + ')');
+  e.updateDeferral = true;
+  throw e;
+}
+
+/** A collector stopped by updateNetworkGuard_(): its stage left to the next update (true); any other error: false. */
+function updateDeferralCaught_(e, stage) {
+  if (!e || !e.updateDeferral) return false;
+  deferReportUpdateStage_(stage + ' (' + e.message + ')');
+  return true;
+}
+
+/**
+ * The stages after the collectors that the next update does again anyway (the revision relationships, the Goes to
+ * Plenary data, the Disposition Summary, Undisposed Documents): not started later than 255 s into the update, so that
+ * the end (the status dropdowns, the journal) has its reserve. True when they may run.
+ */
+function updateLateStagesMayStart_() {
+  if (!UPDATE_JOURNAL_ || updateElapsedMs_() <= UPDATE_LATE_STAGES_LATEST_MS_) return true;
+  deferReportUpdateStage_('the Goes to Plenary data, the Disposition Summary and Undisposed Documents');
+  return false;
+}
+
+/**
+ * The order of the revisions of an update: from the TDoc where the last update stopped them, to the end, then from
+ * the start (as the TDoc loop, tdocLoopOrder_()): a pass cut by the time always at the same place would never reach
+ * the last TDocs. `order`: TDoc numbers. Outside an update or without a cursor: unchanged.
+ */
+function revisionsLoopOrder_(order) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.store) return order;
+  let cursor = null;
+  try { cursor = JSON.parse(j.store.getProperty(UPDATE_REVISIONS_CURSOR_KEY_) || 'null'); } catch (e) { cursor = null; }
+  const at = cursor && cursor.tdoc ? order.indexOf(cursor.tdoc) : -1;
+  if (at <= 0) return order;
+  Logger.log('Update: the revisions go on at ' + cursor.tdoc + ' (where the last update stopped them on its time).');
+  return order.slice(at).concat(order.slice(0, at));
+}
+
+/** The revisions of this update stopped by the time before `tdoc`: the next update starts there. */
+function revisionsLoopStopped_(tdoc) {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return;
+  j.revisionsDeferred = true;
+  try { if (j.store) j.store.setProperty(UPDATE_REVISIONS_CURSOR_KEY_, JSON.stringify({ tdoc: tdoc, at: new Date().toISOString() })); } catch (e) { /* the next update starts at the top */ }
+}
+
+/** The revisions of this update went through every TDoc: the cursor is removed at its end. */
+function revisionsLoopCompleted_() {
+  if (UPDATE_JOURNAL_ && !UPDATE_JOURNAL_.revisionsDeferred) UPDATE_JOURNAL_.revisionsCompleted = true;
 }
 
 // =========================================================
