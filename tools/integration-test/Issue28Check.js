@@ -461,7 +461,10 @@ function it28EntryChanges_(where, a, b) {
 /** Pure: what changed in one tab's content from a to b (P: the tab named before each place, '' in a document of one tab). */
 function it28TabDiff_(a, b, P) {
   const out = { identical: false, tdocsAdded: [], tdocsRemoved: [], duplicates: [], tdocOrder: null, titles: [], changes: [], headings: null, summary: null, other: null };
-  const byNumber = function (s) { const m = {}; s.tdocs.forEach(function (t) { (m[t.n] = m[t.n] || []).push(t); }); return m; };
+  // Paired by the TDoc number alone: a label after it ("(revision of ...)") that changes is a change of the row "TDoc",
+  // and every other row of the table is still compared (not a table removed and another added).
+  const idOf = function (n) { const m = /\b(S4[a-zA-Z]*-?\d{6}(?:-r\d+)?)\b/.exec(String(n)); return m ? m[1] : String(n); };
+  const byNumber = function (s) { const m = {}; s.tdocs.forEach(function (t) { const k = idOf(t.n); (m[k] = m[k] || []).push(t); }); return m; };
   const ma = byNumber(a), mb = byNumber(b);
   const numbers = Object.keys(ma).concat(Object.keys(mb).filter(function (n) { return !ma[n]; })).sort();
   numbers.forEach(function (n) {
@@ -484,7 +487,7 @@ function it28TabDiff_(a, b, P) {
       });
     }
   });
-  const order = function (s) { return s.tdocs.map(function (t) { return t.n; }).filter(function (n) { return ma[n] && mb[n]; }); };
+  const order = function (s) { return s.tdocs.map(function (t) { return idOf(t.n); }).filter(function (n) { return ma[n] && mb[n]; }); };
   const oa = order(a), ob = order(b);
   for (let i = 0; i < Math.max(oa.length, ob.length); i++) if (oa[i] !== ob[i]) { out.tdocOrder = { firstDifferenceAt: i + 1, was: oa[i] || '', now: ob[i] || '' }; if (P) out.tdocOrder.tab = P.replace(/: $/, ''); break; }
   const hd = it28SeqDiff_(a.headings, b.headings, function (h) { return h; });
@@ -914,7 +917,7 @@ function it28CompareResult_(a, b, d) {
 }
 
 /** Steps that change something: when one fails, the rest of the job is not run. */
-var IT28_CHANGING_STEPS_ = ['update', 'configure', 'configureMeeting', 'markStatusDropdowns', 'saveSessions', 'setProps', 'expectRevision', 'resolveRevision', 'sessionRuleSet', 'carrySet', 'uninstall'];
+var IT28_CHANGING_STEPS_ = ['update', 'markSettled', 'configure', 'configureMeeting', 'markStatusDropdowns', 'saveSessions', 'setProps', 'expectRevision', 'resolveRevision', 'sessionRuleSet', 'carrySet', 'uninstall'];
 
 /**
  * Removes what the tests left in this copy: every trigger of the project, every document property but the snapshot
@@ -958,9 +961,19 @@ function it28RunStep_(step, state) {
     } else if (step.do === 'compare') {
       const snaps = state.lastSnaps || [];
       const b = step.to || snaps[snaps.length - 1];
-      const a = step.from === 'baseline' ? it28SnapLabels_(props.getProperties())[0] : (step.from === 'previous' || !step.from) ? snaps[snaps.length - 2] : step.from;
+      const a = step.from === 'baseline' ? it28SnapLabels_(props.getProperties())[0] : step.from === 'settled' ? props.getProperty(IT28_SNAP_KEY_ + 'SETTLED')
+        : (step.from === 'previous' || !step.from) ? snaps[snaps.length - 2] : step.from;
+      if (step.from === 'settled' && !a) throw new Error('no settled snapshot: run the settle job first');
       if (!a || !b) throw new Error('nothing to compare (' + a + ' -> ' + b + ')');
       Object.assign(out, it28CompareResult_(a, b, it28DiffOf_(it28LoadSnapshot_(a), it28LoadSnapshot_(b))));
+    } else if (step.do === 'markSettled') {
+      // The reference of the stages: the last snapshot, taken after an update that changed nothing (the job checks
+      // that). A completed report is not a fixed point of its own release: its first update on a copy brings it to
+      // the lists of today (found 2026-11-26 on the clean main copy). Kept with the snapshot index (evidence).
+      const snaps = state.lastSnaps || [];
+      if (!snaps.length) throw new Error('no snapshot to mark as settled');
+      props.setProperty(IT28_SNAP_KEY_ + 'SETTLED', snaps[snaps.length - 1]);
+      out.settled = snaps[snaps.length - 1];
     } else if (step.do === 'update') {
       // As continuousUpdate() does (its document lock, its core), but the core's result is read: continuousUpdate()
       // drops it, and a refused or failed update returns { success: false, notUpdated } without throwing (found

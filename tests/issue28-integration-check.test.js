@@ -76,6 +76,17 @@ const splitRuns = (v) => {
 };
 const snapOf = (d) => S.it28SnapshotOf_(JSON.parse(JSON.stringify(d)));
 const diff = (a, b) => S.it28DiffOf_(snapOf(doc(a)), snapOf(doc(b)));
+{
+  // 2026-11-26, clean main copy: "S4-262018 (revision of S4aP260150)" became "S4-262018"; the compare took it for one
+  // table removed and another added, and would not have shown a lost Minutes text in it.
+  const labelled = { order: ['S4-261001 (revision of S4aP260150)', 'S4-261002'] };
+  const bare = { order: ['S4-261001', 'S4-261002'] };
+  const d1 = diff(labelled, bare);
+  const lines1 = S.it28DiffLines_(d1);
+  check('a label after the TDoc number that changes: the same table, its row "TDoc" changed (no table removed or added)', [d1.tdocsAdded.length, d1.tdocsRemoved.length, lines1.some((l) => /TDoc S4-261001, row "TDoc"/.test(l))], [0, 0, true]);
+  const d2 = diff(Object.assign({ t: { 'S4-261001 (revision of S4aP260150)': { minutes: 'Typed minutes.' } } }, labelled), Object.assign({ t: { 'S4-261001': { minutes: 'Other text.' } } }, bare));
+  check('... and a Minutes text changed in that table is still shown', S.it28DiffLines_(d2).some((l) => /TDoc S4-261001, row "Discussion" -- text/.test(l)), true);
+}
 const lines = (a, b) => S.it28DiffLines_(diff(a, b));
 
 console.log('fingerprint v2: repeated reads are identical');
@@ -357,6 +368,8 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.it28RunnerTick();
   check('a tick without a job: nothing happens', results.length, 2);
   const job = J.makeJob('main', 'stage', 't1');
+  // As the settle job leaves it: the settled snapshot is the first one the stage takes here (s1).
+  store.IT28_SNAP_SETTLED = 's1';
   S.IT28_JOB_ = { id: job.id, steps: job.steps };
   S.IT28_RUNNER_TICK_MS_ = -1;
   S.it28RunnerTick();
@@ -368,6 +381,7 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   const res = results[results.length - 1];
   check('... and finishes: one result for the job, every step ok, the update timed, the compares as the job asks', [res.id, res.r.ok, res.r.steps.map((s) => s.do + (s.ok ? '' : '!')).join(','), typeof res.r.steps[1].updateMs, res.r.steps[3].identical, res.r.steps[6].identical, res.r.release],
     [job.id, true, 'snap,update,snap,compare,update,snap,compare,compare', 'number', false, true, 'T-2026.10.33 / 2.27.1 @b7299c1']);
+  check('without a settle job first, a compare with the settled snapshot is refused (no silent baseline)', (() => { const keep = store.IT28_SNAP_SETTLED; delete store.IT28_SNAP_SETTLED; try { S.IT28_JOB_ = { id: 'main-cmp-t1', steps: [{ do: 'compare', from: 'settled', to: 's1' }] }; S.it28RunnerTick(); const r = results[results.length - 1].r; return [r.ok, /no settled snapshot/.test(r.steps[0].error || '')]; } finally { store.IT28_SNAP_SETTLED = keep; S.IT28_JOB_ = { id: job.id, steps: job.steps }; } })(), [false, true]);
   check('... the compare counters name the row and field, for the rules; the job checks pass', [res.r.steps[3].counters.rows, J.evaluate(job, res.r)], [{ 'Status / text (with its styles)': 1 }, []]);
   const n = results.length;
   S.it28RunnerTick();

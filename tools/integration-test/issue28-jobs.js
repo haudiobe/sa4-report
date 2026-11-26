@@ -40,7 +40,7 @@ const AHG_SESSIONS = [
 
 const snapUpdateTwice = () => [
   { do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
-  { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }, { do: 'compare', from: 'baseline' }
+  { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }, { do: 'compare', from: 'settled' }
 ];
 const ok = (...steps) => steps.map((s) => ({ step: s, rule: 'ok' }));
 
@@ -53,7 +53,14 @@ const JOBS = {
   // The copy's meeting, as Configure Meeting saves it (Resolve from the Portal, then Save), in the copy only.
   'configure-main': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, MAIN_MEETING), { do: 'markStatusDropdowns' }, { do: 'props' }], expect: ok(0, 1, 2) }),
   'configure-ahg': () => ({ steps: [Object.assign({ do: 'configureMeeting' }, AHG_MEETING), { do: 'saveSessions', rows: AHG_SESSIONS }, { do: 'props' }], expect: ok(0, 1, 2) }),
-  // A stage (T-2026.10.33, A, A+B, A+B+C, the rollback): update twice. The second update changes nothing; no update and
+  // The release the copy runs, updated until an update changes nothing; that snapshot is the reference of the stages
+  // (a completed report is not a fixed point of its own release: on 2026-11-26 the first T-2026.10.33 update of the
+  // clean main copy added a TDoc registered after the meeting, dropped the meeting-room links the copy has no settings
+  // for, and re-rendered the e-mail rows; the second changed nothing). The first update may not change typed text.
+  settle: () => ({ steps: [{ do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
+    { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }, { do: 'markSettled' }],
+  expect: ok(0, 1, 2, 4, 5, 7).concat([{ step: 3, rule: 'manualTextKept' }, { step: 6, rule: 'identical' }]) }),
+  // A stage (A, A+B, A+B+C, the rollback), from the settled copy: update twice. The second update changes nothing; no update and
   // no stage changes a manual row or removes text, a TDoc table or a tab.
   stage: () => ({ steps: snapUpdateTwice(),
     expect: ok(0, 1, 4).concat([{ step: 3, rule: 'manualKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'manualKept' }]) }),
@@ -120,6 +127,17 @@ function evaluate(job, result) {
       if (r.counters && r.counters.tdocsRemoved) failures.push(at + ': ' + r.counters.tdocsRemoved + ' TDoc table(s) removed');
       if (r.counters && r.counters.tabs && (r.counters.tabs.removed || r.counters.tabs.added)) failures.push(at + ': tabs added or removed');
     }
+    if (e.rule === 'manualTextKept') {
+      // Typed text and links of the manual rows kept, no TDoc table, tab or paragraph outside the tables removed; a
+      // change of paragraph settings alone (the release's own formatting) is allowed here and shown in the result.
+      const fields = (r.counters && r.counters.rows) || {};
+      const typed = Object.keys(fields).filter((k) => MANUAL_ROWS.test(k.split(' / ')[0]) && !/ \/ formatting$/.test(k));
+      if (typed.length) failures.push(at + ': manual rows changed: ' + typed.map((k) => k + ' x' + fields[k]).join(', '));
+      const other = r.counters && r.counters.other;
+      if (other && other.removed) failures.push(at + ': ' + other.removed + ' paragraph(s) outside the TDoc tables removed');
+      if (r.counters && r.counters.tdocsRemoved) failures.push(at + ': ' + r.counters.tdocsRemoved + ' TDoc table(s) removed');
+      if (r.counters && r.counters.tabs && (r.counters.tabs.removed || r.counters.tabs.added)) failures.push(at + ': tabs added or removed');
+    }
     if (e.rule === 'onlySummary' && r.counters) {
       const c = r.counters;
       const outside = Object.keys(c.rows || {}).length + c.tdocsAdded + c.tdocsRemoved + (c.other ? c.other.changed + c.other.added + c.other.removed : 0);
@@ -152,13 +170,13 @@ function assemble(id, files) {
 /** The agreed sequence for each copy: the stage pushed with each job. After the last job the original script goes back. */
 const PLAN = {
   // The clean copy of 2026-11-25 (the first main copy was changed by the killed updates and is kept as evidence).
-  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
+  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'settle'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
     ['t33', 'stage'], ['t33', 'uninstall']],
   main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
     ['t33', 'stage'], ['t33', 'uninstall']],
-  ahg: [['t33', 'inventory'], ['t33', 'determinism'], ['t33', 'configure-ahg'], ['t33', 'stage'],
+  ahg: [['t33', 'inventory'], ['t33', 'determinism'], ['t33', 'configure-ahg'], ['t33', 'settle'],
     ['A', 'stage'], ['B', 'stage'], ['C', 'stage'], ['C', 'phase-c'], ['t33', 'stage'], ['t33', 'uninstall']]
 };
 
