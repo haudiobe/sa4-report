@@ -395,6 +395,27 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.it28RunnerTick();
   const kr = results[results.length - 1].r;
   check('an execution ended during an update: a failed step (not run again), the job stops', [kr.job, kr.ok, kr.stoppedAt, /execution ended during this step/.test(kr.steps[0].error), kr.steps.length, updates === updatesBefore], [killed.id, false, 1, true, 1, true]);
+  {
+    // retryOnLimit (the rollback to T-2026.10.33): an update ended at the limit is run again once, then a second end stops.
+    const kill = (id) => { const st = JSON.parse(store.IT28_RUNNER); st.current.inProgress = st.current.next; st.current.inProgressAt = Date.now() - 360000; store.IT28_RUNNER = JSON.stringify(st); };
+    const retry = { id: 'main2-rollback-t1r', steps: [{ do: 'update', retryOnLimit: 1 }, { do: 'snap' }] };
+    S.IT28_JOB_ = retry;
+    const st1 = JSON.parse(store.IT28_RUNNER); st1.current = { id: retry.id, next: 0, results: [], startedAt: 'x', release: 'y', inProgress: 0, inProgressAt: Date.now() - 360000 }; store.IT28_RUNNER = JSON.stringify(st1);
+    const before = updates; const nRes = results.length;
+    S.it28RunnerTick();
+    const cur = JSON.parse(store.IT28_RUNNER).current;
+    const s1 = cur && cur.id === retry.id ? cur : { results: results[results.length - 1].r.steps };
+    check('retryOnLimit: an update ended at the limit is run again (once), the result says so', [updates - before, s1.results[0] && s1.results[0].ok, s1.results[0] && s1.results[0].endedAtLimitBefore, status.some((x) => /ended at the time limit; run again \(1 of 1\)/.test(x))], [1, true, 1, true]);
+    const retry2 = { id: 'main2-rollback-t2r', steps: [{ do: 'update', retryOnLimit: 1 }, { do: 'snap' }] };
+    S.IT28_JOB_ = retry2;
+    const st2 = JSON.parse(store.IT28_RUNNER); st2.current = { id: retry2.id, next: 0, results: [], startedAt: 'x', release: 'y', inProgress: 0, inProgressAt: Date.now() - 360000, killed: { 0: 1 } }; store.IT28_RUNNER = JSON.stringify(st2);
+    const before2 = updates;
+    S.it28RunnerTick();
+    const r2 = results[results.length - 1].r;
+    check('retryOnLimit: ended at the limit again after its retry: failed, the job stops, no third run', [r2.job, r2.ok, r2.stoppedAt, updates === before2], [retry2.id, false, 1, true]);
+    check('a candidate stage keeps the strict rule (no retry); the rollback retries its two updates once', [J.makeJob('main2', 'stage', 's').steps.some((s) => s.retryOnLimit), J.makeJob('main2', 'rollback', 's').steps.filter((s) => s.retryOnLimit === 1).length], [false, 2]);
+    void kill; void nRes;
+  }
   check('an update records the TDocs downloaded and its own total time (from its log)', [res.r.steps[1].tdocsDownloaded, res.r.steps[1].perfTotalMs, res.r.steps[1].result.success], [128, 41234, true]);
   refuse = 'Cannot build report yet. Open Configure Meeting to finish the setup.';
   S.IT28_JOB_ = { id: 'ahg-diagnose-t1b', steps: J.makeJob('ahg', 'diagnose', 'x').steps.concat([{ do: 'snap' }]) };

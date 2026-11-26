@@ -1156,7 +1156,18 @@ function it28RunnerTick() {
     if (!state.current || state.current.id !== job.id) state.current = { id: job.id, next: 0, results: [], startedAt: new Date().toISOString(), release: it28Release_() };
     const started = Date.now();
     // A step marked as started but never finished: the execution was ended (the 6-minute limit). It is recorded as
-    // failed and the job stops -- never run again (a retried update could run into the same limit for ever).
+    // failed and the job stops -- never run again (a retried update could run into the same limit for ever), except
+    // an update with retryOnLimit: run again that many times, as the report's own trigger would (T-2026.10.33 has no
+    // time budget; its update of the 6G copy took 187-316 s and once more than 360 s, 2026-11-26).
+    const killed = state.current.killed || (state.current.killed = {});
+    const lostAt = state.current.next;
+    if (state.current.inProgress !== undefined && state.current.inProgress === lostAt && job.steps[lostAt].do === 'update' &&
+        (killed[lostAt] || 0) < Number(job.steps[lostAt].retryOnLimit || 0)) {
+      killed[lostAt] = (killed[lostAt] || 0) + 1;
+      delete state.current.inProgress;
+      props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
+      it28Status_('job ' + job.id + ': step ' + (lostAt + 1) + ' (update) ended at the time limit; run again (' + killed[lostAt] + ' of ' + job.steps[lostAt].retryOnLimit + ')');
+    }
     if (state.current.inProgress !== undefined && state.current.inProgress === state.current.next) {
       const lost = job.steps[state.current.next];
       state.current.results.push({ do: lost.do, ok: false, error: 'the execution ended during this step (Apps Script limit of 6 minutes?); not run again', ms: Date.now() - state.current.inProgressAt });
@@ -1177,6 +1188,7 @@ function it28RunnerTick() {
       props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
       it28Status_('job ' + job.id + ': step ' + (state.current.next + 1) + '/' + job.steps.length + ' (' + step.do + ') started');
       const r = it28RunStep_(step, state);
+      if (killed[state.current.next]) r.endedAtLimitBefore = killed[state.current.next];
       ranThisTick++;
       delete state.current.inProgress;
       delete state.current.inProgressAt;

@@ -33,6 +33,7 @@ const AHG_CONFIG = {
   agendaCsvUrl: '', revisionsUrl: '', reportType: '6G', meetingFolder: '', meetingNumber: '', mailingList: '',
   mailingListMode: 'derived', agendaSourceDocId: '', showPreview: false
 };
+const SETTLED_REFERENCE = { main2: 's5' };
 const AHG_SESSIONS = [
   { id: '', label: 'Call 1', date: '2026-09-22', start: '15:00', end: '18:00' },
   { id: '', label: 'Call 2', date: '2026-10-26', endDate: '2026-10-28', start: '15:00', end: '18:00' }
@@ -60,7 +61,16 @@ const JOBS = {
   settle: () => ({ steps: [{ do: 'snap' }, { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' },
     { do: 'update' }, { do: 'snap' }, { do: 'compare', from: 'previous' }, { do: 'markSettled' }],
   expect: ok(0, 1, 2, 4, 5, 7).concat([{ step: 3, rule: 'manualTextKept' }, { step: 6, rule: 'identical' }]) }),
-  // A stage (A, A+B, A+B+C, the rollback), from the settled copy: update twice. The second update changes nothing; no update and
+  // The clean main copy, settled by T-2026.10.33 on 2026-11-26 (run 1: s4 after its first update, s5 after a second
+  // update that changed nothing; s6-s8 the same). A further T-2026.10.33 update of it ran into the 6-minute limit, so
+  // the reference is taken without one: the copy must still be identical to s5, then it is marked.
+  'settled-check': () => ({ steps: [{ do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2 }, { do: 'markSettled' }],
+    expect: ok(0, 2).concat([{ step: 1, rule: 'identical' }]) }),
+  // The rollback to T-2026.10.33: a stage whose updates are run again once when they end at the time limit, as the
+  // report's own trigger would (T-2026.10.33 has no time budget). The candidates keep the strict stage.
+  rollback: () => ({ steps: snapUpdateTwice().map((s) => (s.do === 'update' ? Object.assign({ retryOnLimit: 1 }, s) : s)),
+    expect: ok(0, 1, 4).concat([{ step: 3, rule: 'manualKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'manualKept' }]) }),
+  // A stage (A, A+B, A+B+C), from the settled copy: update twice. The second update changes nothing; no update and
   // no stage changes a manual row or removes text, a TDoc table or a tab.
   stage: () => ({ steps: snapUpdateTwice(),
     expect: ok(0, 1, 4).concat([{ step: 3, rule: 'manualKept' }, { step: 6, rule: 'identical' }, { step: 7, rule: 'manualKept' }]) }),
@@ -170,9 +180,9 @@ function assemble(id, files) {
 /** The agreed sequence for each copy: the stage pushed with each job. After the last job the original script goes back. */
 const PLAN = {
   // The clean copy of 2026-11-25 (the first main copy was changed by the killed updates and is kept as evidence).
-  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'settle'],
+  main2: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'settled-check'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
-    ['t33', 'stage'], ['t33', 'uninstall']],
+    ['t33', 'rollback'], ['t33', 'uninstall']],
   main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
     ['t33', 'stage'], ['t33', 'uninstall']],
@@ -180,4 +190,4 @@ const PLAN = {
     ['A', 'stage'], ['B', 'stage'], ['C', 'stage'], ['C', 'phase-c'], ['t33', 'stage'], ['t33', 'uninstall']]
 };
 
-module.exports = { JOBS, MANUAL_ROWS, MAIN_MEETING, AHG_MEETING, AHG_CONFIG, AHG_SESSIONS, PLAN, makeJob, evaluate, assemble };
+module.exports = { JOBS, MANUAL_ROWS, MAIN_MEETING, AHG_MEETING, AHG_CONFIG, AHG_SESSIONS, SETTLED_REFERENCE, PLAN, makeJob, evaluate, assemble };
