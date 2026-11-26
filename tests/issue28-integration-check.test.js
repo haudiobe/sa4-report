@@ -329,7 +329,8 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
 {
   const store = {};
   const sprops = {};
-  S.PropertiesService.getDocumentProperties = () => ({ getProperties: () => Object.assign({}, store), getProperty: (k) => (k in store ? store[k] : null), setProperty: (k, v) => { store[k] = String(v); }, deleteProperty: (k) => { delete store[k]; } });
+  S.PropertiesService.getDocumentProperties = () => ({ getProperties: () => Object.assign({}, store), getProperty: (k) => (k in store ? store[k] : null), setProperty: (k, v) => { store[k] = String(v); }, deleteProperty: (k) => { delete store[k]; },
+    setProperties: (o) => { Object.keys(o).forEach((k) => { if (String(o[k]).length > 9216) throw new Error('a property value over 9 KB: ' + k); store[k] = String(o[k]); }); } });
   S.PropertiesService.getScriptProperties = () => ({ getProperties: () => Object.assign({}, sprops), deleteProperty: (k) => { delete sprops[k]; } });
   let docName = 'DISPOSABLE Issue28 - test';
   S.DocumentApp.getActiveDocument = () => ({ getId: () => FAKE.own, getName: () => docName, getBody: () => ({ getTables: () => [] }) });
@@ -338,7 +339,9 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.it28PutFile_ = (name, text) => { const id = 'f' + (++fileNo); files[id] = { name, text }; return id; };
   S.it28GetFile_ = (id) => files[id].text;
   const results = [];
-  S.it28WriteResult_ = (id, r) => { if (!r.document) r.document = docName; results.push({ id: id, r: JSON.parse(JSON.stringify(r)) }); };
+  // The timelines of the updates (Run 7) are result files of their own: kept apart from the jobs' results.
+  const timings = [];
+  S.it28WriteResult_ = (id, r) => { if (!r.document) r.document = docName; (/ (timing|journal)-\d+$/.test(id) ? timings : results).push({ id: id, r: JSON.parse(JSON.stringify(r)) }); };
   const status = [];
   S.it28Status_ = (s) => status.push(s);
   let triggers = [];
@@ -395,6 +398,24 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   S.it28RunnerTick();
   const kr = results[results.length - 1].r;
   check('... and the step says where the stopped update was (its journal, read at once)', typeof kr.steps[0].journal, 'object');
+  {
+    // Review of 2026-11-26: the journal of a stopped update (40 stages) would not fit the runner's state (9 KB): whole
+    // as a record of its own, in the state only its summary.
+    const big = { startedAt: 'x', stage: 'status dropdowns (finalizeStatusDropdowns_)', elapsedMs: 355000,
+      stages: Array.from({ length: 40 }, (x, i) => ({ stage: ('network: a long label to fill eighty characters of the journal ' + i).slice(0, 80), ms: i * 9000, end: i * 9000 + 8000 })) };
+    store.UPDATE_RUN = JSON.stringify(big);
+    store.UPDATE_INTERRUPTED = JSON.stringify(Object.assign({ detectedAt: 'y', removed: [], differing: [] }, big));
+    const killed2 = { id: 'main-killed-t2c', steps: [{ do: 'update' }, { do: 'snap' }] };
+    S.IT28_JOB_ = killed2;
+    const stk = JSON.parse(store.IT28_RUNNER); stk.current = { id: killed2.id, next: 0, results: [], startedAt: 'x', release: 'y', inProgress: 0, inProgressAt: Date.now() - 360000 }; store.IT28_RUNNER = JSON.stringify(stk);
+    S.it28RunnerTick();
+    const k2 = results.filter((x) => x.id === killed2.id).pop().r.steps[0];
+    const rec = timings.filter((x) => x.id === killed2.id + ' journal-1').pop();
+    check('a stopped update with a full journal: in the state its summary (stage, time, last 6 stages with their ends), small; the whole journal as a record of its own',
+      [k2.journal.stage, k2.journal.elapsedMs, k2.journal.last.length, k2.journal.last[5][2], JSON.stringify(k2).length < 1500, k2.journalFile, rec && rec.r.UPDATE_RUN.stages.length, rec && rec.r.UPDATE_INTERRUPTED.stage],
+      ['status dropdowns (finalizeStatusDropdowns_)', 355000, 6, 359000, true, 'journal-1', 40, 'status dropdowns (finalizeStatusDropdowns_)']);
+    delete store.UPDATE_RUN; delete store.UPDATE_INTERRUPTED;
+  }
   check('an execution ended during an update: a failed step (not run again), the job stops', [kr.job, kr.ok, kr.stoppedAt, /execution ended during this step/.test(kr.steps[0].error), kr.steps.length, updates === updatesBefore], [killed.id, false, 1, true, 1, true]);
   {
     // retryOnLimit (the rollback to T-2026.10.33): an update ended at the limit is run again once, then a second end stops.
@@ -513,6 +534,64 @@ console.log('the runner: jobs pushed with a stage run by themselves in the copy 
   tickUntilDone();
   check('a copy that cannot be read: an error, nothing marked', [results[results.length - 1].r.steps[0].ok, /could not be read/.test(results[results.length - 1].r.steps[0].error)], [false, true]);
   delete store.STATUS_DROPDOWNS;
+  {
+    // Run 7 (2026-11-26): each update's whole timeline (Phase A's PERF_STAGES_, PERF_TIMINGS_) in a result file of its
+    // own, never cut; in the runner's state (one property, at most 9 KB) only its summary. Written to Drive by a later
+    // execution -- never by one that starts with an update -- and by the uninstall before its cleanup.
+    const long = 'a stage with a long name '.repeat(6);
+    S.PERF_STAGES_ = Array.from({ length: 120 }, (x, i) => ({ stage: long + i, start: i * 1000, ms: i === 7 ? 90000 : 900, depth: i % 3 === 2 ? 1 : 0 }));
+    S.PERF_TIMINGS_ = { 'TOTAL continuousUpdate': 347321, 'configuration/context (getReportConfig_)': 635 };
+    S.PERF_COUNTERS_ = { 'body.getTables() calls (total)': 3 };
+    const perfLine = '[PERF] status dropdowns (finalizeStatusDropdowns_): 180000 ms ' + 'x'.repeat(200);
+    const realLog = S.Logger.getLog;
+    S.Logger.getLog = () => 'Downloaded 138 TDOCs\n' + perfLine + '\n[PERF] timings summary (ms): {"TOTAL continuousUpdate":347321}\n[PERF] counters summary: {}';
+    // Spies: a flush must never come before an update in the same execution (the update's time is its own).
+    let flushedThisTick = false, flushCount = 0, updateAfterFlush = 0;
+    const realFlush = S.it28FlushTimings_, realStep = S.it28RunStep_, realTick = S.it28RunnerTick;
+    S.it28FlushTimings_ = function () { flushedThisTick = true; flushCount++; return realFlush.apply(this, arguments); };
+    S.it28RunStep_ = function (step) { if (step.do === 'update' && flushedThisTick) updateAfterFlush++; return realStep.apply(this, arguments); };
+    S.it28RunnerTick = function () { flushedThisTick = false; return realTick.apply(this, arguments); };
+    const job = { id: 'main2-a-validate-t7', steps: [{ do: 'update' }, { do: 'snap' }, { do: 'update' }, { do: 'snap' }] };
+    S.IT28_JOB_ = job;
+    tickUntilDone();
+    const main = results.filter((x) => x.id === job.id).pop().r;
+    const files = timings.filter((x) => /^main2-a-validate-t7 timing-/.test(x.id));
+    const u1 = main.steps[0];
+    check('an update: its summary in the step (total, time in and outside the timed stages, the slowest), not its [PERF] lines; small', [u1.perfTotalMs, u1.timing.totalMs, u1.timing.timedMs, u1.timing.untimedMs, u1.timing.slowest[0][1], u1.timing.file, u1.perf, JSON.stringify(u1).length < 900],
+      [347321, 347321, 80 * 900 - 900 + 90000, 347321 - (80 * 900 - 900 + 90000), 90000, 'timing-1', undefined, true]);
+    check('... its whole timeline in a result file of its own, per update ("<job> timing-<step>"), the [PERF] lines uncut, the summary lines left out (their content is whole in it)',
+      [files.map((x) => x.id), files[0].r.stages.length, files[0].r.stages[0].stage, files[0].r.perf, files[0].r.timings['TOTAL continuousUpdate'], files[0].r.counters['body.getTables() calls (total)']],
+      [['main2-a-validate-t7 timing-1', 'main2-a-validate-t7 timing-3'], 120, long + 0, [perfLine.replace('[PERF] ', '')], 347321, 3]);
+    check('... written to Drive at the end of an execution with time left, never before an update in the same execution; written before the job result; nothing kept left over',
+      [flushCount > 0, updateAfterFlush, files.length === 2 && results.indexOf(results.filter((x) => x.id === job.id).pop()) >= 0, Object.keys(store).filter((k) => /^IT28_TIMING_/.test(k))], [true, 0, true, []]);
+    // An execution that starts with an update and has used its tick (here: a tick of 0 ms): nothing written to Drive
+    // in it -- the timelines wait for the next execution.
+    S.it28KeepTiming_('main2-a-validate-t7 timing-9', { totalMs: 2 });
+    const tick = S.IT28_RUNNER_TICK_MS_;
+    S.IT28_RUNNER_TICK_MS_ = 0;
+    S.IT28_JOB_ = { id: 'main2-a-validate-t9', steps: [{ do: 'update' }] };
+    const flushedBefore = flushCount;
+    S.it28RunnerTick();
+    S.IT28_RUNNER_TICK_MS_ = tick;
+    const kept = [...new Set(Object.keys(store).filter((k) => /^IT28_TIMING_/.test(k)).map((k) => k.replace(/^IT28_TIMING_/, '').replace(/_\d+_\d+$/, '')))].sort();
+    check('... an execution that starts with an update and has used its time writes nothing to Drive; the timelines wait for the next one', [flushCount - flushedBefore, kept], [0, ['main2-a-validate-t7 timing-9', 'main2-a-validate-t9 timing-1']]);
+    realFlush();
+    check('... the file names are not the job\'s result (its assembly takes only "<job> <i>/<n>")', J.assemble(job.id, [{ name: 'IT28 result ' + job.id + ' timing-1 1/1.txt', description: '{}' }]), null);
+    // A timeline still kept when the uninstall runs: written before the cleanup.
+    S.it28KeepTiming_('main2-a-validate-t8 timing-2', { totalMs: 1 });
+    S.IT28_JOB_ = { id: 'main2-uninstall-t8', steps: [{ do: 'uninstall' }] };
+    S.it28RunnerTick();
+    const un = results.filter((x) => x.id === 'main2-uninstall-t8').pop();
+    check('the uninstall job: a timeline still kept is written (at the start of its execution), then nothing is left', [timings.some((x) => x.id === 'main2-a-validate-t8 timing-2' && x.r.totalMs === 1), Object.keys(store).filter((k) => /^IT28_TIMING_/.test(k)), un.r.steps[0].clean], [true, [], true]);
+    // The uninstall step itself writes what is still kept before its cleanup (as in a cleanup after a failure).
+    S.it28KeepTiming_('main2-a-validate-t8 timing-4', { totalMs: 4 });
+    const direct = realStep({ do: 'uninstall' }, {});
+    check('... and the uninstall step itself writes a kept timeline before its cleanup removes the settings', [direct.timingsWritten, timings.some((x) => x.id === 'main2-a-validate-t8 timing-4'), direct.clean], [1, true, true]);
+    S.it28InstallRunner();
+    S.it28FlushTimings_ = realFlush; S.it28RunStep_ = realStep; S.it28RunnerTick = realTick;
+    S.Logger.getLog = realLog;
+    delete S.PERF_STAGES_; delete S.PERF_TIMINGS_; delete S.PERF_COUNTERS_;
+  }
   // uninstall: every trigger, every document property but the snapshot index, every script property -- proven
   triggers.push({ getHandlerFunction: () => 'continuousUpdate', minutes: 60 });
   sprops.REVIEWER_API_TOKEN = 'x';

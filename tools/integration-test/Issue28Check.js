@@ -932,12 +932,92 @@ function it28JournalEvidence_() {
   const out = {};
   try {
     const all = PropertiesService.getDocumentProperties().getProperties();
-    ['UPDATE_RUN', 'UPDATE_INTERRUPTED', 'UPDATE_TDOC_CURSOR', 'UPDATE_REVISIONS_CURSOR'].forEach(function (k) {
+    ['UPDATE_RUN', 'UPDATE_INTERRUPTED', 'UPDATE_TDOC_CURSOR', 'UPDATE_REVISIONS_CURSOR', 'UPDATE_PAIRS_CURSOR'].forEach(function (k) {
       if (all[k] === undefined) return;
       try { out[k] = JSON.parse(all[k]); } catch (e) { out[k] = String(all[k]).slice(0, 2000); }
     });
   } catch (e) { out.error = e.message; }
   return out;
+}
+
+/**
+ * The timeline of the update that just ran in this execution (Phase A's PERF_STAGES_, PERF_TIMINGS_), never cut:
+ * { totalMs, summary (small, for the runner's state), detail (whole, for its own result file) }. Only stage names,
+ * counters and times -- no document text, no credentials. A release without the timeline: the [PERF] lines only.
+ */
+function it28UpdateTiming_(log, updateMs) {
+  const timings = typeof PERF_TIMINGS_ !== 'undefined' ? PERF_TIMINGS_ : {};
+  const counters = typeof PERF_COUNTERS_ !== 'undefined' ? PERF_COUNTERS_ : {};
+  const stages = typeof PERF_STAGES_ !== 'undefined' ? PERF_STAGES_.slice() : [];
+  const fromLog = /TOTAL continuousUpdate"?:?[^\d]*(\d+)/.exec(log);
+  const totalMs = typeof timings['TOTAL continuousUpdate'] === 'number' ? timings['TOTAL continuousUpdate'] : (fromLog ? Number(fromLog[1]) : null);
+  const top = stages.filter(function (s) { return s.depth === 0; });
+  const timedMs = top.reduce(function (a, s) { return a + s.ms; }, 0);
+  const summary = { totalMs: totalMs, timedMs: stages.length ? timedMs : null, untimedMs: stages.length && totalMs !== null ? totalMs - timedMs : null,
+    outsideUpdateMs: totalMs !== null ? updateMs - totalMs : null, stages: stages.length,
+    slowest: top.slice().sort(function (a, b) { return b.ms - a.ms; }).slice(0, 6).map(function (s) { return [String(s.stage).slice(0, 60), s.ms, s.start]; }) };
+  // Every [PERF] line, uncut, but the two summaries (they are the timings and counters below, whole).
+  const perf = log.split('\n').filter(function (l) { return /\[PERF\]/.test(l) && !/\[PERF\] (timings|counters) summary/.test(l); }).map(function (l) { return l.replace(/^.*?\[PERF\]\s*/, ''); });
+  return { totalMs: totalMs, summary: summary,
+    detail: { updateMs: updateMs, totalMs: totalMs, timedMs: summary.timedMs, untimedMs: summary.untimedMs, outsideUpdateMs: summary.outsideUpdateMs,
+      stages: stages, timings: JSON.parse(JSON.stringify(timings)), counters: JSON.parse(JSON.stringify(counters)), perf: perf } };
+}
+
+/** Pure: a small summary of the update journal (its stage, time, last stages, cursors) for the runner's state. */
+function it28JournalSummary_(journal) {
+  const run = journal.UPDATE_RUN || {};
+  const out = { stage: run.stage ? String(run.stage).slice(0, 100) : null, elapsedMs: run.elapsedMs === undefined ? null : run.elapsedMs,
+    last: (run.stages || []).slice(-6).map(function (s) { return [String(s.stage).slice(0, 60), s.ms, s.end === undefined ? null : s.end]; }) };
+  if (journal.UPDATE_INTERRUPTED) out.interrupted = String(journal.UPDATE_INTERRUPTED.stage || '').slice(0, 100);
+  ['UPDATE_TDOC_CURSOR', 'UPDATE_REVISIONS_CURSOR', 'UPDATE_PAIRS_CURSOR'].forEach(function (k) { if (journal[k]) out[k] = JSON.stringify(journal[k]).slice(0, 120); });
+  if (journal.error) out.error = String(journal.error).slice(0, 200);
+  return out;
+}
+
+/** The start of this execution (it28RunnerTick); a flush starts no Drive write past the tick's time from it. */
+var IT28_TICK_STARTED_ = 0;
+var IT28_TIMING_KEY_ = 'IT28_TIMING_';
+var IT28_TIMING_PART_ = 8000;
+
+/** A timeline kept in document properties (one write, no Drive call) until it28FlushTimings_() writes it to Drive. */
+function it28KeepTiming_(name, detail) {
+  const text = JSON.stringify(detail);
+  const n = Math.max(1, Math.ceil(text.length / IT28_TIMING_PART_));
+  const parts = {};
+  for (let i = 0; i < n; i++) parts[IT28_TIMING_KEY_ + name + '_' + i + '_' + n] = text.slice(i * IT28_TIMING_PART_, (i + 1) * IT28_TIMING_PART_);
+  PropertiesService.getDocumentProperties().setProperties(parts);
+}
+
+/** The timelines kept: written as result files ("IT28 result <job> timing-<step>"), then removed. Returns how many. Never throws. */
+function it28FlushTimings_() {
+  let written = 0;
+  try {
+    const props = PropertiesService.getDocumentProperties();
+    const all = props.getProperties();
+    const groups = {};
+    Object.keys(all).forEach(function (k) {
+      if (k.indexOf(IT28_TIMING_KEY_) !== 0) return;
+      const m = /^(.*)_(\d+)_(\d+)$/.exec(k.slice(IT28_TIMING_KEY_.length));
+      if (!m) return;
+      const g = groups[m[1]] || (groups[m[1]] = { n: Number(m[3]), parts: {}, keys: [] });
+      g.parts[Number(m[2])] = all[k];
+      g.keys.push(k);
+    });
+    const since = IT28_TICK_STARTED_ || Date.now();
+    Object.keys(groups).forEach(function (name) {
+      // Not past the tick's 4 minutes (2 minutes or less to the limit): what is left is written by a later execution.
+      if (Date.now() - since >= IT28_RUNNER_TICK_MS_) return;
+      const g = groups[name];
+      let text = '';
+      for (let i = 0; i < g.n; i++) text += g.parts[i] || '';
+      let detail;
+      try { detail = JSON.parse(text); } catch (e) { detail = { error: 'the kept timeline is incomplete', chars: text.length }; }
+      it28WriteResult_(name, detail);
+      g.keys.forEach(function (k) { props.deleteProperty(k); });
+      written++;
+    });
+  } catch (e) { /* evidence only; the cleanup removes what is left */ }
+  return written;
 }
 
 function it28Cleanup_() {
@@ -1007,11 +1087,15 @@ function it28RunStep_(step, state) {
       out.updateMs = Date.now() - t0;
       const log = String(Logger.getLog ? Logger.getLog() : '');
       const downloaded = /Downloaded (\d+) TDOCs/.exec(log);
-      const total = /TOTAL continuousUpdate[^\d]*(\d+) ?ms/.exec(log);
       out.tdocsDownloaded = downloaded ? Number(downloaded[1]) : null;
-      // The update's own stage timings ([PERF] lines), so that a slow stage is seen without the execution log.
-      out.perf = log.split('\n').filter(function (l) { return /\[PERF\]/.test(l) && !/^\s*$/.test(l); }).map(function (l) { return l.replace(/^.*?\[PERF\]\s*/, '').slice(0, 120); }).slice(-40);
-      out.perfTotalMs = total ? Number(total[1]) : null;
+      // The update's timeline (Run 7, 2026-11-26): whole, kept for a result file of its own (written by a later
+      // execution: no Drive call in the update's); here only its summary -- the runner's state is one document
+      // property of at most 9 KB, and Run 6 used 7.4 KB of it.
+      const timing = it28UpdateTiming_(log, out.updateMs);
+      out.perfTotalMs = timing.totalMs;
+      out.timing = timing.summary;
+      out.timing.file = 'timing-' + (state.current ? state.current.next + 1 : 0);
+      try { it28KeepTiming_((state.current ? state.current.id : 'job') + ' ' + out.timing.file, timing.detail); } catch (e) { out.timing.keepError = String(e.message || e).slice(0, 200); }
       out.result = r ? { success: r.success !== false, notUpdated: !!r.notUpdated, error: r.error ? String(r.error).slice(0, 600) : '', incomplete: r.incomplete || null, interrupted: r.interrupted || null } : null;
       if (!r || r.success === false || r.notUpdated) throw new Error('the update did not run' + (r && r.notUpdated ? ' (nothing changed)' : '') + ': ' + ((r && r.error) || 'no result'));
     } else if (step.do === 'probe') {
@@ -1141,6 +1225,8 @@ function it28RunStep_(step, state) {
     } else if (step.do === 'uninstall') {
       // The update journal before it is removed: the evidence of an update that was stopped (2026-11-26 it was lost).
       out.journal = it28JournalEvidence_();
+      // The timelines not written yet: to Drive before the cleanup removes them.
+      out.timingsWritten = it28FlushTimings_();
       Object.assign(out, it28Cleanup_());
       state.uninstalled = true;
       if (!out.clean) throw new Error('cleanup incomplete: ' + JSON.stringify({ triggers: out.triggersLeft, documentProperties: out.documentPropertiesLeft, scriptProperties: out.scriptPropertiesLeft }));
@@ -1172,6 +1258,7 @@ function it28RunnerTick() {
       it28WriteResult_('runner', { event: 'expired', at: new Date().toISOString(), cleanup: it28Cleanup_() });
       return;
     }
+    IT28_TICK_STARTED_ = Date.now();
     const job = typeof IT28_JOB_ !== 'undefined' ? IT28_JOB_ : null;
     if (!job || !job.id || state.done[job.id]) return;
     jobId = job.id;
@@ -1192,12 +1279,21 @@ function it28RunnerTick() {
     }
     if (state.current.inProgress !== undefined && state.current.inProgress === state.current.next) {
       const lost = job.steps[state.current.next];
-      state.current.results.push({ do: lost.do, ok: false, error: 'the execution ended during this step (Apps Script limit of 6 minutes?); not run again', ms: Date.now() - state.current.inProgressAt, journal: it28JournalEvidence_() });
+      // The journal of the stopped update (40 stages): whole as a record of its own (written to Drive later, like the
+      // timelines); in the runner's state (one property, at most 9 KB) only its summary (review of 2026-11-26).
+      const journal = it28JournalEvidence_();
+      const journalFile = 'journal-' + (state.current.next + 1);
+      try { it28KeepTiming_(job.id + ' ' + journalFile, journal); } catch (e) { /* the summary below remains */ }
+      state.current.results.push({ do: lost.do, ok: false, error: 'the execution ended during this step (Apps Script limit of 6 minutes?); not run again', ms: Date.now() - state.current.inProgressAt,
+        journal: it28JournalSummary_(journal), journalFile: journalFile });
       delete state.current.inProgress;
       state.current.next++;
       if (IT28_CHANGING_STEPS_.indexOf(lost.do) !== -1) { state.current.stoppedAt = state.current.next; state.current.next = job.steps.length; }
       props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
     }
+    // The timelines of earlier updates to Drive -- not in an execution that starts with an update (its time is the update's).
+    const first = job.steps[state.current.next];
+    if (first && IT28_FRESH_STEPS_.indexOf(first.do) === -1) it28FlushTimings_();
     let ranThisTick = 0;
     // At least one step per tick (progress), then more while the tick has time.
     while (state.current.next < job.steps.length) {
@@ -1221,6 +1317,9 @@ function it28RunnerTick() {
       if (state.uninstalled) break;
       props.setProperty(IT28_RUNNER_KEY_, JSON.stringify(state));
     }
+    // ... and at the end of an execution that still has time (within the tick's 4 minutes: 2 minutes to the limit), so
+    // that the timelines are written before the job's result.
+    if (!state.uninstalled && Date.now() - started < IT28_RUNNER_TICK_MS_) it28FlushTimings_();
     if (state.current.next < job.steps.length) { it28Status_('job ' + job.id + ': ' + state.current.next + '/' + job.steps.length + ' steps done, continues in the next tick'); return; }
     it28Status_('job ' + job.id + ': finished');
     const result = { job: job.id, release: state.current.release, startedAt: state.current.startedAt, finishedAt: new Date().toISOString(),

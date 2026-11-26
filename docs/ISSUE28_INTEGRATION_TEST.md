@@ -206,3 +206,18 @@ node tools/integration-test/push-issue28-copy.mjs --target main --script <id> --
 
 - The one-time `it28InstallRunner()` in each copy.
 - Interactive dialogs (Revision Expected, Meeting Control, Review Title Changes) as a person sees them. Their server functions can be run as `call` steps; the dialogs themselves cannot.
+
+## Run 7: the diagnosis of the update's time (2026-11-26)
+
+Run 6 measured one Phase A update at 347 s, of which only about 95 s were in timed stages. Run 7 measures the same update again, with every significant stage timed (Phase A `46fae8c`, diagnostics only).
+
+- **Plan.** `PLAN['main2:diagnosis']`: inventory, inspect (s5), configure-main, `a-validate` at stage A (the same job as in Run 6), uninstall; then the original script goes back. There is no B, no C, no rollback and no Meeting Control. Start it with `--plan --plan-variant diagnosis`.
+- **Evidence per update.**
+  - The step result holds a small summary (`timing`): the total, the time in the timed stages, the time outside them, the time outside the update, and the six slowest stages.
+  - The whole timeline goes to a result file of its own, `IT28 result <job> timing-<step>`, saved as `<job>.timing-<step>.json`. It holds every stage with start, length and depth, all timings and counters, and every `[PERF]` line uncut.
+  - The runner's state is one document property of at most 9 KB, so it keeps only the summary.
+- **When the timeline reaches Drive.**
+  - The update step keeps the timeline in document properties (`IT28_TIMING_*`, one write). It is written to Drive at the end of an execution that is still within the tick's 4 minutes, or at the start of one that does not begin with an update, never before an update in the same execution.
+  - A flush starts no further Drive write past the tick's 4 minutes.
+  - The uninstall writes whatever is still kept before its cleanup removes it.
+- **A stopped update.** Its whole journal (40 stages with their ends) is a record of its own (`<job> journal-<step>`); the step holds its summary.

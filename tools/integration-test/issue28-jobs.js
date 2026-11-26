@@ -229,6 +229,9 @@ const PLAN = {
   main: [['base', 'inventory'], ['base', 'determinism'], ['base', 'configure-main'], ['base', 'stage'],
     ['A', 'stage'], ['A', 'headings'], ['B', 'stage'], ['B', 'phase-b'], ['C', 'stage'], ['C', 'meeting-control'],
     ['t33', 'stage'], ['t33', 'uninstall']],
+  // Run 7 (2026-11-26), diagnosis only: Phase A's update with every stage timed, on the copy as Run 6 left it (s5);
+  // the same a-validate as Run 6, then the cleanup. No B, no C, no rollback, no Meeting Control.
+  'main2:diagnosis': [['base', 'inventory'], ['base', 'inspect'], ['base', 'configure-main'], ['A', 'a-validate'], ['A', 'uninstall']],
   ahg: [['t33', 'inventory'], ['t33', 'determinism'], ['t33', 'configure-ahg'], ['t33', 'settle'],
     ['A', 'stage'], ['B', 'stage'], ['C', 'stage'], ['C', 'phase-c'], ['t33', 'stage'], ['t33', 'uninstall']]
 };

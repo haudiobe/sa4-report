@@ -80,7 +80,8 @@ const REFUSED_SCRIPT_DIGESTS = {
 // The code of each stage, by commit: a branch that moved is not pushed (its code must equal the pinned commit's).
 const STAGE_PINS = {
   t33: { commit: 'b7299c12d12befe089070379ba5f50541d5dd929', branch: null, label: 'T-2026.10.33 (production)' },
-  A: { commit: 'e6d5a9a05ddbcce38f019b4a5e82a2d176854bf3', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
+  // Run 7 (2026-11-26): A moved deliberately to 46fae8c (every stage of the update timed; diagnostics only). B and C keep e6d5a9a.
+  A: { commit: '46fae8c88e0d6b54151d849e1ca8f8f1c2fe5857', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
   B: { commit: '57e304043356ca854e68ece4a183f6227dece1dd', branch: 'feature/i28-b-provisional-revisions', label: 'phases A+B' },
   C: { commit: '5fbe7ed055d79358c7c8cf23991190a4360e65bf', branch: 'feature/i28-c-ahg-sessions-agenda', label: 'phases A+B+C' }
 };
@@ -89,8 +90,8 @@ const CODE_PATHS = { Code: 'Code.js', HyperLink: 'HyperLink.js', ReportCreator: 
 const RELEASE_T33_SHA = '550bb7c5017613e30c8f5f02c59bf6fcbf425f7e7e7512403ac10006828e321b';
 const STAGES = ['base', 't33', 'A', 'B', 'C', 'original'];
 // The pinned Issue28Check.js (re-pinned deliberately 2026-11-25: fingerprint v2 -- Docs REST read with a field mask, canonical,
-// compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read; no retry loops, status). Before: ef08027f..., 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
-const CHECK_SHA = 'e8ae8a450110ac83f856a8bc62d9610981ef24859de0fd1c025bd26e4cb9cd00';
+// compared by TDoc number and row, snapshots in Drive and verified; review fixes; all tabs; the runner; fixed steps and cleanup; the update result read; no retry loops, status; Run 7: each update's whole timeline as its own record, the journal of a stopped step too). Before: e8ae8a45..., ef08027f..., 799c1c56..., 9389a540..., a6fe0b9d..., 7a5d4932..., 01016ee9..., 1b5e45cf..., 26f9a482... A different harness is refused.
+const CHECK_SHA = '446710d42d85baddada2c35d4ed6c79f567b531fd459e8fb3a2fac985d6c2e74';
 
 /** Every reason why this script/document may not be written as `target` ([] when it may). Pure. */
 function identityRefusals(target, scriptId, project, file) {

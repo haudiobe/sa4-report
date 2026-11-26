@@ -7,6 +7,7 @@
  *
  *   node tools/integration-test/run-issue28-validation.mjs --target main|ahg --script <id> --stage <stage> --job <job> [--write] [--minutes 45]
  *   node tools/integration-test/run-issue28-validation.mjs --target main|ahg --script <id> --plan [--write]     (the whole PLAN)
+ *   ... --target main2 --script <id> --plan --plan-variant diagnosis [--write]                                 (PLAN['main2:diagnosis'])
  *   node tools/integration-test/run-issue28-validation.mjs --wait <job id>                                       (read a result again)
  *
  * Without --write nothing is pushed (the push tool's dry run). Evidence: dist/integration-test/i28-copies/<target>/jobs/.
@@ -68,6 +69,16 @@ const runnerOf = async (documentName) => {
   return events[0] || null;
 };
 
+// Timelines written after their job's result (by a later execution or the uninstall): saved at the end of the run.
+const lateTimings = [];
+const saveLateTimings = async () => {
+  for (const l of lateTimings.splice(0)) {
+    const timing = J.assemble(l.name, await resultFiles('IT28 result ' + l.name));
+    console.log('Timeline ' + l.name + ': ' + (timing ? 'saved (' + l.file + ')' : 'not found in Drive'));
+    if (timing) fs.writeFileSync(path.join(l.dir, l.file), JSON.stringify(timing, null, 1));
+  }
+};
+
 async function waitFor(job, target) {
   const dir = path.join(ROOT, 'dist', 'integration-test', 'i28-copies', target || job.target || 'unknown', 'jobs');
   fs.mkdirSync(dir, { recursive: true });
@@ -89,6 +100,24 @@ async function waitFor(job, target) {
       result.steps.forEach((s, i) => console.log('  ' + (i + 1) + '. ' + s.do + (s.ok ? '' : ' ERROR ' + s.error) + (s.label ? ' ' + s.label + ' sha ' + s.contentSha + ' tabs ' + s.tabs + ' TDoc tables ' + s.tdocTables : '') +
         (s.compare ? ' ' + s.compare + (s.identical ? ' IDENTICAL' : ' ' + s.lines + ' line(s)') : '') + (s.updateMs !== undefined ? ' ' + (s.updateMs / 1000).toFixed(1) + ' s' : '') + ' [' + s.ms + ' ms]'));
       failures.forEach((f) => console.log('  ! ' + f));
+      // Each update's whole timeline (Phase A's stages), from its own result file, next to the job's result.
+      result.steps.forEach((s, i) => {
+        // A stopped update: its whole journal, a record of its own (the step has its summary).
+        if (s.journalFile) {
+          const journal = J.assemble(job.id + ' ' + s.journalFile, files);
+          const file = job.id + '.' + s.journalFile + '.json';
+          console.log('  journal of the stopped step ' + (i + 1) + ': ' + JSON.stringify(s.journal) + (journal ? '' : ' (its record is not written yet)'));
+          if (journal) fs.writeFileSync(path.join(dir, file), JSON.stringify(journal, null, 1));
+          else lateTimings.push({ dir, name: job.id + ' ' + s.journalFile, file });
+        }
+        if (!s.timing || !s.timing.file) return;
+        const timing = J.assemble(job.id + ' ' + s.timing.file, files);
+        const t = s.timing;
+        console.log('  timeline of step ' + (i + 1) + ': ' + t.timedMs + ' of ' + t.totalMs + ' ms in timed stages, ' + t.untimedMs + ' ms outside them, ' + t.outsideUpdateMs + ' ms outside the update; slowest: ' +
+          (t.slowest || []).map((x) => x[0] + ' ' + x[1] + ' ms').join('; ') + (timing ? '' : ' (its file is not written yet)'));
+        if (timing) fs.writeFileSync(path.join(dir, job.id + '.' + s.timing.file + '.json'), JSON.stringify(timing, null, 1));
+        else lateTimings.push({ dir, name: job.id + ' ' + s.timing.file, file: job.id + '.' + s.timing.file + '.json' });
+      });
       return { ok: !failures.length, result, failures };
     }
     if (Date.now() > until) { console.log('\nNo result within ' + limit + ' minutes (is the runner installed? see it28InstallRunner).'); return { ok: false, timeout: true }; }
@@ -120,7 +149,9 @@ if (arg('--wait')) {
 }
 const target = arg('--target');
 const script = arg('--script');
-if (!J.PLAN[target] || !script) { console.error('--target main|ahg and --script are required'); process.exit(2); }
+// --plan-variant <name>: PLAN['<target>:<name>'] instead of PLAN[target] (the same copy, another sequence).
+const planKey = arg('--plan-variant') ? target + ':' + arg('--plan-variant') : target;
+if (!J.PLAN[planKey] || !script) { console.error('--target main|ahg and --script are required (and a known --plan-variant)'); process.exit(2); }
 const plan = argv.includes('--plan');
 // Before a plan: the copy's TDoc list as the update will fetch it (read locally, public URL). On 2026-11-25 the Portal
 // list of 86178 turned for a while into the list of another meeting (S4aP260008..0043, without its agenda TDoc);
@@ -158,7 +189,7 @@ const precheck = async (t) => {
 };
 // --from <n>: resume the plan at its n-th job (1 = the first), after jobs that already passed.
 const from = Math.max(1, Number(arg('--from') || 1));
-const steps = plan ? J.PLAN[target].slice(from - 1) : [[arg('--stage'), arg('--job')]];
+const steps = plan ? J.PLAN[planKey].slice(from - 1) : [[arg('--stage'), arg('--job')]];
 const pushOriginal = () => {
   const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'integration-test', 'push-issue28-copy.mjs'), '--target', target, '--script', script, '--stage', 'original', '--write'], { encoding: 'utf8' });
   process.stdout.write((r.stdout || '') + (r.stderr || ''));
@@ -184,11 +215,13 @@ for (const [stage, name] of steps) {
     if (write && plan && !r.dryRun) {
       const at = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')).stage : stage;
       if (name !== 'uninstall') await cleanup(at);
+      await saveLateTimings();
     }
     process.exit(1);
   }
 }
 if (write && plan) {
+  await saveLateTimings();
   console.log('\n=== ' + target + ': the original script back (cleanup verified by the uninstall job)');
   if (!pushOriginal()) { console.log('The original was NOT pushed back.'); process.exit(1); }
 }
