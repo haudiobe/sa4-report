@@ -60,6 +60,15 @@
  *     before the summary leaves it to the next update and says it is
  *     updated in part; the summary is not changed. A report with Goes
  *     to Plenary writes its summary as before.
+ *   - The Disposition Summary of an update from the update's own Docs
+ *     API read of the report (after the final real-document run): no
+ *     TDoc table is read through DocumentApp; a summary that already
+ *     says this is not touched, one that changes is written as before.
+ *     What the update itself wrote (new TDocs, statuses and titles from
+ *     the list) is in the summary from the next update on, as in
+ *     Undisposed Documents. A TDoc in two tables whose Status dropdowns
+ *     differ is listed as conflicting. Reports without that read, the
+ *     menu item and Goes to Plenary: as before.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -23758,10 +23767,12 @@ function syncDispositionSummaryOnUpdate_(body) {
     // After T-2026.10.29: in a report with Goes to Plenary the summary is written at the very end, from the saved document (GOES TO PLENARY section).
     if (plenarySelectionEnabled_()) return { state: 'deferred' };
     // After T-2026.10.34: a report without the text of the summary heading has none, without a walk of the body (ISSUE 28 A section).
-    if (dispositionSummaryAbsentInBody_(body) || !findDispositionSummarySection_(body)) return { state: 'absent' };
+    // After issue 28 A: from the update's Docs API read when it has one -- no DocumentApp walk of the body (ISSUE 28 A section).
+    const run = dispositionSummaryRunRead_();
+    if (dispositionSummaryAbsentInBody_(body) || (run ? !run.section : !findDispositionSummarySection_(body))) return { state: 'absent' };
     // After issue 28 A: not started once the update has run long; the next update writes it (ISSUE 28 A section).
     if (dispositionSummaryLeftForTime_()) return { state: 'deferred' };
-    const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
+    const done = run ? writeDispositionSummaryFromRunRead_(body, run) : writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
     if (done.state === 'no-scope') Logger.log('Disposition Summary: not updated -- ' + done.error + '.');
     else if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
     else if (done.state === 'refused') Logger.log('Disposition Summary: not updated -- text was typed into it, above a part of it: ' + done.foreign.join(' | '));
@@ -31276,6 +31287,106 @@ function dispositionSummaryLeftForTime_() {
   if (!UPDATE_JOURNAL_ || updateElapsedMs_() <= UPDATE_DISPOSITION_SUMMARY_LATEST_MS_) return false;
   deferReportUpdateStage_('Disposition Summary');
   return true;
+}
+
+// --- The Disposition Summary from the update's Docs API read (after the final real-document run, 2026-11-27: the
+// summary read the 140 TDoc tables of the main copy cell by cell through DocumentApp, in 15 s to more than 223 s on the
+// same unchanged document; the second update ran into the 6-minute limit inside it). The update has read the report
+// once through the Docs API already (reportRunSnapshot_(), shared with Undisposed Documents): the scope, the statuses
+// and the summary as it stands are taken from that read, with the helpers of Goes to Plenary. The read is the saved
+// report as the update started: what this update wrote (new TDoc tables and registrations, statuses and titles from the
+// list) is in the summary from the next update on, as in Undisposed Documents (decision of 2026-11-27). A TDoc in two
+// tables is read from each table's own dropdown, so differing values are a conflict (DocumentApp cannot read a dropdown
+// and gave every table of a TDoc the value of its first). A summary that already says this is not touched (its class
+// lines restyled only where the read shows they need it); one that changes is written by renderDispositionSummary_(),
+// which finds the section in the body itself -- never at a position of the read. Without the read (text statuses, no
+// Docs API, a failed read): through DocumentApp as before. The menu item and Goes to Plenary do not come here.
+
+/** The update's Docs API read for the summary: { snap, section } (section null when the read has no summary), or null without a read. */
+function dispositionSummaryRunRead_() {
+  const snap = reportRunSnapshot_();
+  if (!snap || !snap.tables || !snap.content) return null;
+  return { snap: snap, section: plenarySummarySectionOfContent_(snap.content) };
+}
+
+/**
+ * Pure: the TDoc tables of a read (plenaryDocsTables_()) as the summary reads them through DocumentApp: the Status is
+ * the text typed in its cell when it has any, else the value selected in its dropdown (readTdocStatus_()); the link is
+ * the one on the TDoc number (tdocCellLinkUrl_()), not the first of the cell ("X (revision of Y)" links Y). Copies; the
+ * read itself is not changed (Undisposed Documents and Goes to Plenary read it as before).
+ */
+function dispositionSummaryTablesOfRead_(tables) {
+  return (tables || []).map(function (t) {
+    if (!t.number) return t;
+    const e = t.statusEntry;
+    // findCellText_() on the read: the row labelled "Status" (or "Status:"), its paragraphs joined by line ends.
+    const typed = statusPartOfCellText_(docsRowCellText_(t.rows, 'Status')).trim();
+    const status = typed || (e && e.kind === 'dropdown' ? String(e.displayValue || '').trim() : '');
+    const head = ((t.rows[0] || {}).tableCells || [])[1];
+    const values = Object.assign({}, t.values, { title: docsRowCellText_(t.rows, 'Title'), source: docsRowCellText_(t.rows, 'Source'), 'agenda item': docsRowCellText_(t.rows, 'Agenda Item') });
+    return Object.assign({}, t, { values: values, statusEntry: { kind: 'text', text: status }, link: docsCellLinkAtText_(head, t.number) });
+  });
+}
+
+/** Pure: findCellText_() on the rows of a read -- the second cell of the first row of two or more cells labelled `label` (or "label:"), its paragraphs joined by line ends as getText() joins them, trimmed; '' without one. */
+function docsRowCellText_(rows, label) {
+  const want = String(label).toLowerCase();
+  const textOf = function (cell) {
+    return ((cell && cell.content) || []).map(function (block) {
+      return ((block.paragraph && block.paragraph.elements) || []).map(function (el) { return el.textRun ? String(el.textRun.content || '') : ''; }).join('').replace(/\n$/, '');
+    }).join('\n');
+  };
+  for (let r = 0; r < (rows || []).length; r++) {
+    const cells = rows[r].tableCells || [];
+    if (cells.length < 2) continue;
+    const key = textOf(cells[0]).trim().toLowerCase();
+    if (key === want || key === want + ':') return textOf(cells[1]).trim();
+  }
+  return '';
+}
+
+/** Pure: the link at the first place of `text` in a Docs API cell (at its start when it is not there), or '' -- tdocCellLinkUrl_() on a read. */
+function docsCellLinkAtText_(cell, text) {
+  const runs = [];
+  let all = '';
+  ((cell && cell.content) || []).forEach(function (block, b) {
+    if (b > 0) all += '\n';
+    ((block.paragraph && block.paragraph.elements) || []).forEach(function (el) {
+      if (!el.textRun) return;
+      const content = String(el.textRun.content || '').replace(/\n$/, '');
+      runs.push({ from: all.length, to: all.length + content.length, url: (el.textRun.textStyle && el.textRun.textStyle.link && el.textRun.textStyle.link.url) || '' });
+      all += content;
+    });
+  });
+  const at = Math.max(0, all.indexOf(String(text || '')));
+  const run = runs.filter(function (r) { return at >= r.from && at < r.to; })[0];
+  return run ? run.url : '';
+}
+
+/** writeDispositionSummary_() from the update's read (`run` of dispositionSummaryRunRead_(), with a section): the same states, read and model. */
+function writeDispositionSummaryFromRunRead_(body, run) {
+  const snap = run.snap;
+  // The Status and the link as DocumentApp reads them (readTdocStatus_(), tdocCellLinkUrl_()).
+  const shared = undisposedReadOfContent_(dispositionSummaryTablesOfRead_(snap.tables), snap.content);
+  if (!shared) {
+    const scope = plenaryScopeOfTables_(snap.tables);
+    return { state: 'no-scope', error: scope.error || 'the TDocs of this meeting are not known', read: { entries: [], unreadable: [], otherMeetings: [] }, model: buildDispositionSummaryModel_([]), foreign: [] };
+  }
+  const read = shared.read;
+  // The same read gives the Undisposed Documents section of this update.
+  rememberDispositionReadForUndisposed_(shared.scope, read);
+  if (!read.entries.length && read.otherMeetings.length) {
+    return { state: 'no-scope', error: 'none of the ' + read.otherMeetings.length + ' TDocs of the report\'s TDoc tables is registered in this report (' +
+      Object.keys(shared.scope.numbers).length + ' TDocs in its Registration of Documents table): it does not describe these TDoc tables', read: read, model: buildDispositionSummaryModel_([]), foreign: [] };
+  }
+  const model = buildDispositionSummaryModel_(read.entries);
+  if (run.section.foreign.length) return { state: 'refused', read: read, model: model, foreign: run.section.foreign };
+  if (JSON.stringify(plenarySummaryContentOfContent_(snap.content, run.section)) === JSON.stringify(dispositionSummaryContent_(model))) {
+    const restyle = planDispositionClassHeadings_(snap.content, run.section, function (range) { return range; }).length > 0;
+    return { state: 'unchanged', read: read, model: model, foreign: [], restyled: restyle ? restyleDispositionClassLines_(body, findDispositionSummarySection_(body)) : 0 };
+  }
+  const rendered = renderDispositionSummary_(body, model);
+  return { state: rendered.state, read: read, model: model, foreign: rendered.foreign || [] };
 }
 
 // =========================================================

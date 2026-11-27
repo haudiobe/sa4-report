@@ -79,7 +79,7 @@ const bodyOf = (eml) => qpDecode(eml.split('\r\n\r\n').slice(1).join('\r\n\r\n')
 /** Everything a report holds: every cell of every table with its dropdown, the dropdown definitions, the stored properties. */
 function snapshot(r) {
   const tables = r.body.getTables().map((t) => { const rows = []; for (let i = 0; i < t.getNumRows(); i++) { const row = []; for (let c = 0; c < t.getRow(i).getNumCells(); c++) { const cell = t.getRow(i).getCell(c); row.push([cell._t, cell._dropdown, cell._links]); } rows.push(row); } return rows; });
-  return JSON.stringify({ tables: tables, children: r.body.getNumChildren(), definitions: r.api.definitions, props: r.docProps._store, scriptProps: r.scriptProps._store, dirty: r.body._state.dirty });
+  return JSON.stringify({ tables: tables, children: r.body.getNumChildren(), definitions: r.api.definitions, props: r.docProps._store, scriptProps: r.scriptProps._store, dirty: r.lastExecDirty });
 }
 
 // ================================================================ 1. the renderer
@@ -207,7 +207,7 @@ console.log('5. Generate (the dialog RPC), and what it leaves alone');
   check('the dropdowns still show what they showed', TDOCS.map(([id]) => g.shown(id)), ['dropdown:agreed', 'dropdown:withdrawn', 'dropdown:noted', 'dropdown:available', 'text:not treated', 'dropdown:revised']);
   const during = g.api.calls.slice(calls);
   check('the Docs API was read once and never written', [during.map((c) => c.call), g.api.calls.filter((c, i) => i >= calls && c.call === 'batchUpdate').length], [['get'], 0]);
-  check('the document was not saved, the TDoc list was not looked at, nothing was fetched', [g.saves - saves, g.sheetOpens - sheetOpens, g.fetches.length - fetches, g.body._state.dirty, g.body._state.closed], [0, 0, 0, false, false]);
+  check('the document was not saved, the TDoc list was not looked at, nothing was fetched', [g.saves - saves, g.sheetOpens - sheetOpens, g.fetches.length - fetches, g.lastExecDirty, g.body._state.closed], [0, 0, 0, false, false]);
 
   g.files.length = 0;
   const again = g.generate(['S4aA269003', 'S4aA269004']);
