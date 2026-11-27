@@ -249,3 +249,17 @@ Run 7 explained the time of the update: a one-off identity check on a copy witho
   - The update stopped inside the summary. Its journal shows the summary still reading, and on unchanged content the summary writes nothing. So the document is very probably unchanged, but this is not verified.
   - By decision of 2026-11-27, no runner is installed only for this comparison.
   - Any later run on this copy starts with `inspect` against s5, which settles it. Until then the copy is not taken as an exact s5 baseline.
+
+## The next run (prepared 2026-11-27, after the final run)
+
+- **The code under test.** Phase A `416875b`: the Disposition Summary of an update comes from the update's Docs API read; no DocumentApp read of the TDoc tables. B (`6e77a47`) and C (`9f90e23`) have it merged; the stage pins point at these commits.
+- **Plan.** `PLAN.main2`, unchanged:
+  1. inventory, inspect (against s5), configure-main;
+  2. A: `a-validate`, `headings`;
+  3. B: `stage`, `phase-b`;
+  4. C: `stage`, `meeting-control`;
+  5. `rollback`, `uninstall`; the original script goes back.
+- **inspect first.** It settles the open question of the copy after the stopped update of the final run.
+  - Any difference from s5 stops the run before anything is written: inspect itself only reads, and the plan stops at its first failure.
+  - It is then reported; nothing is repaired without a decision.
+- **What it measures for the first time.** phase-b changes a Status, so the summary is rewritten by an update: the cost of the DocumentApp write path.
