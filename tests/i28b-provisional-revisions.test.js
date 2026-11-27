@@ -334,12 +334,12 @@ console.log('H. the ledger');
   const git = (spec) => { try { return execFileSync('git', ['show', spec], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); } catch (e) { return null; } };
   const view = ledger.codeWithoutIssue28B(RAW);
   check('every change of the layer is in Code.js exactly once', view.problems, []);
-  // Phase A pinned by its commit (e6d5a9a: the revision pairs within the time, 2026-11-26); the branch names only as a fallback.
-  const a = git('e6d5a9a:Code.js') || git('feature/i28-a-titles-headings-perf:Code.js') || git('origin/feature/i28-a-titles-headings-perf:Code.js');
+  // Phase A pinned by its commit (211a677: the Disposition Summary within the update's time, after Run 7, 2026-11-27); the branch names only as a fallback.
+  const a = git('211a677:Code.js') || git('feature/i28-a-titles-headings-perf:Code.js') || git('origin/feature/i28-a-titles-headings-perf:Code.js');
   if (a === null) console.log('  note: the phase A branch is not available; the byte comparison is skipped.');
   else check('without it, Code.js is that of phase A, byte for byte', view.code === a, true);
   const creator = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
-  const ca = git('e6d5a9a:template/ReportCreator.js') || git('feature/i28-a-titles-headings-perf:template/ReportCreator.js') || git('origin/feature/i28-a-titles-headings-perf:template/ReportCreator.js');
+  const ca = git('211a677:template/ReportCreator.js') || git('feature/i28-a-titles-headings-perf:template/ReportCreator.js') || git('origin/feature/i28-a-titles-headings-perf:template/ReportCreator.js');
   check('ReportCreator.js: one menu item; without it, that of phase A', [ledger.creatorWithoutIssue28B(creator).problems, ca === null || ledger.creatorWithoutIssue28B(creator).code === ca], [[], true]);
   check('the version is 2.29.0', (RAW.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.29.0');
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((x) => x.slice(9, -1));
