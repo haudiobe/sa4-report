@@ -198,5 +198,76 @@ function plainIdsIn(text) {
   return out;
 }
 
+// --- The runner's records (after the final run of 2026-11-27). A record longer than one Drive description (the
+// uninstall record with the journal of a stopped update) is written in parts, "IT28 result runner <i>/<n>.txt", one
+// after the other. The parts are put together before a record is read; parts that do not give one complete record
+// are never taken as a removal.
+const RUNNER_RECORD_PART_ = /^IT28 result runner (\d+)\/(\d+)\.txt$/;
+const RUNNER_RECORD_PART_GAP_MS_ = 120000;
+
+/**
+ * Pure: the runner records among Drive files [{ name, description, createdTime }], newest first: { at, record } for a
+ * complete record (its parts 1..n in order, each within RUNNER_RECORD_PART_GAP_MS_ of the one before, the joined
+ * descriptions one JSON object), { at, error } for parts that do not give one.
+ */
+function runnerRecords(files) {
+  const parts = (files || []).map((f) => {
+    const m = RUNNER_RECORD_PART_.exec(String(f.name || ''));
+    return m ? { i: Number(m[1]), n: Number(m[2]), at: Date.parse(f.createdTime), text: String(f.description || '') } : null;
+  }).filter(Boolean).sort((a, b) => a.at - b.at);
+  const out = [];
+  let open = null;
+  const drop = (why) => { if (open) out.push({ at: open.at, error: why }); open = null; };
+  parts.forEach((p) => {
+    if (!(p.n >= 1 && p.i >= 1 && p.i <= p.n) || isNaN(p.at)) { drop('incomplete: a later part is missing'); out.push({ at: p.at || 0, error: 'a part with an invalid name or time' }); return; }
+    if (p.i === 1) {
+      drop('incomplete: part ' + (open && open.texts.length + 1) + ' of ' + (open && open.n) + ' is missing');
+      open = { n: p.n, at: p.at, last: p.at, texts: [p.text] };
+    } else if (open && p.n === open.n && p.i === open.texts.length + 1 && p.at - open.last <= RUNNER_RECORD_PART_GAP_MS_) {
+      open.texts.push(p.text);
+      open.last = p.at;
+    } else {
+      drop('incomplete: part ' + p.i + ' of ' + p.n + ' does not follow it');
+      out.push({ at: p.at, error: 'part ' + p.i + ' of ' + p.n + ' without the parts before it' });
+      return;
+    }
+    if (open.texts.length === open.n) {
+      let record = null;
+      try { record = JSON.parse(open.texts.join('')); } catch (e) { record = null; }
+      out.push(record && typeof record === 'object' && !Array.isArray(record) ? { at: open.at, record } : { at: open.at, error: 'its ' + open.n + ' part(s) do not give one record' });
+      open = null;
+    }
+  });
+  drop('incomplete: part ' + (open && open.texts.length + 1) + ' of ' + (open && open.n) + ' is missing');
+  return out.sort((a, b) => b.at - a.at);
+}
+
+/**
+ * Pure: why the original may not go back yet ('' when it may): the newest record of this copy's runner (`document`, the
+ * copy's verified name) must be 'expired', or 'uninstalled' by an uninstall job of `target` with a verified clean
+ * cleanup (clean, no trigger, no document or script property left). A record newer than it that cannot be put together
+ * or read may be this copy's own: refused. No record of this copy: nothing was installed.
+ */
+function runnerRemovalRefusal(files, document, target) {
+  const records = runnerRecords(files);
+  for (const r of records) {
+    const when = new Date(r.at || 0).toISOString();
+    if (r.error) return 'a runner record of ' + when + ' cannot be verified (' + r.error + '): the runner of this copy is not verifiably removed';
+    const rec = r.record;
+    if (rec.document !== document) continue;
+    if (rec.event === 'expired') return rec.cleanup && rec.cleanup.clean === false ? 'the cleanup of this copy was incomplete: ' + JSON.stringify(rec.cleanup).slice(0, 300) : '';
+    if (rec.event !== 'uninstalled') return 'the runner of this copy is not verifiably removed (last: ' + rec.event + ', ' + rec.at + '): run its uninstall job first';
+    const c = rec.cleanup || {};
+    const problems = [];
+    if (!String(rec.job || '').startsWith(target + '-uninstall-')) problems.push('the record is of job "' + rec.job + '", not an uninstall job of ' + target);
+    if (c.clean !== true) problems.push('cleanup not clean');
+    if (c.triggersLeft !== 0) problems.push('triggers left: ' + JSON.stringify(c.triggersLeft));
+    if (!Array.isArray(c.documentPropertiesLeft) || c.documentPropertiesLeft.length) problems.push('document properties left: ' + JSON.stringify(c.documentPropertiesLeft));
+    if (!Array.isArray(c.scriptPropertiesLeft) || c.scriptPropertiesLeft.length) problems.push('script properties left: ' + JSON.stringify(c.scriptPropertiesLeft));
+    return problems.length ? 'the removal of this copy\'s runner (' + rec.at + ') is not verified: ' + problems.join('; ') : '';
+  }
+  return '';
+}
+
 module.exports = { CHECK_SHA, plainIdsIn, canonicalJson, TARGETS, REFUSED_DOCUMENT_DIGESTS, REFUSED_SCRIPT_DIGESTS, STAGE_PINS, STAGES, RELEASE_T33_SHA, CODE_PATHS,
-  idDigest, sourceSha, identityRefusals, shaMap, originalShaMap, drift, stageFiles, pinRefusal };
+  idDigest, sourceSha, identityRefusals, shaMap, originalShaMap, drift, stageFiles, pinRefusal, runnerRecords, runnerRemovalRefusal };

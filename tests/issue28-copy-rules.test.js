@@ -99,6 +99,42 @@ let branchesHere = true;
 try { ['A', 'B', 'C'].forEach((s) => git('rev-parse', '--verify', '--quiet', R.STAGE_PINS[s].branch)); } catch (e) { branchesHere = false; }
 if (branchesHere) check('the three phase branches are at their pinned code', ['A', 'B', 'C'].map((s) => R.pinRefusal(s, realAt)), ['', '', '']);
 
+console.log('the runner removed before the original goes back (records in parts, after the final run of 2026-11-27)');
+{
+  const NAME = 'DISPOSABLE test copy';
+  const rec = (o) => Object.assign({ document: NAME }, o);
+  const clean = { clean: true, triggersLeft: 0, documentPropertiesLeft: [], scriptPropertiesLeft: [], journal: { UPDATE_RUN: { stages: Array.from({ length: 40 }, (x, i) => ({ stage: 'a stage of the stopped update, number ' + i, ms: i, end: i + 1 })) } } };
+  // Written as the runner writes it: 3000 characters per description, the parts one after the other.
+  const write = (name, record, at, gap) => {
+    const text = JSON.stringify(record);
+    const n = Math.max(1, Math.ceil(text.length / 3000));
+    return Array.from({ length: n }, (x, i) => ({ name: 'IT28 result ' + name + ' ' + (i + 1) + '/' + n + '.txt', description: text.slice(i * 3000, (i + 1) * 3000), createdTime: new Date(Date.parse(at) + i * (gap || 1200)).toISOString() }));
+  };
+  const installed = write('runner', rec({ event: 'installed', at: '2026-11-27T07:27:44.864Z' }), '2026-11-27T07:27:45.570Z');
+  const uninstalled = write('runner', rec({ event: 'uninstalled', at: '2026-11-27T08:14:54.224Z', job: 'test-uninstall-20261127T081021', cleanup: clean }), '2026-11-27T08:14:57.839Z');
+  const shuffled = (list) => list.slice().reverse();
+  check('(the uninstall record with a stopped update\'s journal is written in parts)', uninstalled.length > 1, true);
+  check('the uninstall record in parts, put together: the original may go back', R.runnerRemovalRefusal(shuffled(installed.concat(uninstalled)), NAME, 'test'), '');
+  check('... the parts are read as one record (event, job, cleanup)', (() => { const r = R.runnerRecords(installed.concat(uninstalled))[0].record; return [r.event, r.job, r.cleanup.clean]; })(), ['uninstalled', 'test-uninstall-20261127T081021', true]);
+  check('a part missing: refused (never the older "installed" taken instead, never the parts skipped)', /cannot be verified \(incomplete/.test(R.runnerRemovalRefusal(installed.concat(uninstalled.slice(0, -1)), NAME, 'test')), true);
+  check('... the first part missing: refused', /cannot be verified \(part \d+ of \d+ without the parts before it\)/.test(R.runnerRemovalRefusal(installed.concat(uninstalled.slice(1)), NAME, 'test')), true);
+  check('parts written far apart (not one record): refused', /cannot be verified/.test(R.runnerRemovalRefusal(installed.concat(write('runner', rec({ event: 'uninstalled', at: '2026-11-27T08:14:54.224Z', job: 'test-uninstall-20261127T081021', cleanup: clean }), '2026-11-27T08:14:57.839Z', 600000)), NAME, 'test')), true);
+  check('parts that do not give one record: refused', /do not give one record/.test(R.runnerRemovalRefusal(installed.concat(uninstalled.map((f, i) => (i === 0 ? Object.assign({}, f, { description: f.description.slice(1) }) : f))), NAME, 'test')), true);
+  const variant = (o, c) => installed.concat(write('runner', rec(Object.assign({ event: 'uninstalled', at: 'x', job: 'test-uninstall-1', cleanup: Object.assign({}, clean, c || {}) }, o)), '2026-11-27T08:14:57.839Z'));
+  check('not clean, a trigger left, a property left: each refused', [{ clean: false }, { triggersLeft: 1 }, { documentPropertiesLeft: ['IT28_RUNNER'] }, { scriptPropertiesLeft: ['X'] }, { triggersLeft: undefined }]
+    .map((c) => /is not verified: /.test(R.runnerRemovalRefusal(variant({}, c), NAME, 'test'))), [true, true, true, true, true]);
+  check('an uninstall record without its cleanup, or of another job: refused', [variant({ cleanup: undefined }), variant({ job: 'test-a-validate-1' }), variant({ job: 'main2-uninstall-1' })]
+    .map((f) => /is not verified: /.test(R.runnerRemovalRefusal(f, NAME, 'test'))), [true, true, true]);
+  check('the newest record "installed" (no uninstall after it): refused as before', /not verifiably removed \(last: installed/.test(R.runnerRemovalRefusal(write('runner', rec({ event: 'uninstalled', at: 'old', job: 'test-uninstall-0', cleanup: clean }), '2026-11-27T05:06:01.010Z').concat(installed), NAME, 'test')), true);
+  check('"uninstall incomplete": refused', /last: uninstall incomplete/.test(R.runnerRemovalRefusal(installed.concat(write('runner', rec({ event: 'uninstall incomplete', at: 'x', job: 'test-uninstall-1', cleanup: Object.assign({}, clean, { clean: false }) }), '2026-11-27T08:14:57.839Z')), NAME, 'test')), true);
+  check('the records of another copy are not this copy\'s: its uninstall does not count, its install does not refuse', [
+    R.runnerRemovalRefusal(installed.concat(write('runner', { document: 'another copy', event: 'uninstalled', at: 'x', job: 'test-uninstall-1', cleanup: clean }, '2026-11-27T08:14:57.839Z')), NAME, 'test') !== '',
+    R.runnerRemovalRefusal(uninstalled.concat(write('runner', { document: 'another copy', event: 'installed', at: 'x' }, '2026-11-27T09:00:00.000Z')), NAME, 'test')], [true, '']);
+  check('a newer record that cannot be read (it may be this copy\'s): refused', /cannot be verified/.test(R.runnerRemovalRefusal(uninstalled.concat([{ name: 'IT28 result runner 1/1.txt', description: '{not json', createdTime: '2026-11-27T09:00:00.000Z' }]), NAME, 'test')), true);
+  check('expired as before; no record of this copy: nothing installed', [R.runnerRemovalRefusal(write('runner', rec({ event: 'expired', at: 'x' }), '2026-11-27T09:00:00.000Z'), NAME, 'test'), R.runnerRemovalRefusal([], NAME, 'test')], ['', '']);
+  check('results of jobs (not the runner\'s) are not runner records', R.runnerRecords(write('test-a-validate-1', { document: NAME, event: 'installed' }, '2026-11-27T09:00:00.000Z')).length, 0);
+}
+
 console.log('public repository');
 const kit = ['tools/integration-test/push-issue28-copy.mjs', 'tools/integration-test/issue28-copy-rules.js', 'tools/integration-test/Issue28Check.js', 'tests/issue28-copy-rules.test.js',
   'tests/issue28-integration-check.test.js', 'docs/ISSUE28_INTEGRATION_TEST.md'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
