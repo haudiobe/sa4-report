@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.29.0 (2026-11-23)
+ * Version: 2.30.0 (2026-11-23)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,30 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.30.0 (2026-11-23)
+ *   (Issue #28 phase C, candidate on 2.29.0.)
+ *   - Ad-hoc sessions, opt-in per report (ADHOC_SESSION_RULE=reservation-6h):
+ *     a TDoc belongs to the first session whose end + 6 hours (meeting zone,
+ *     instants) is not before its reservation; before the first session the
+ *     first; after the last cut-off, no time or an ambiguous date: none,
+ *     with the reason. Manual assignments stay authoritative. The date
+ *     order of the list's text column (dd/mm or m/d) is told from the
+ *     column; its times are UTC (checked on four SA4 lists). The switch
+ *     needs a preview, which refuses when a TDoc of the list was uploaded
+ *     before its reservation as read (the clocks would disagree).
+ *   - Carry-forward, its own switch (ADHOC_CARRY_FORWARD_MODE=on, after a
+ *     preview): a TDoc not disposed when a later session starts is
+ *     carried into it ("A01 → A02"), recorded with the time; never a second
+ *     registration; a disposed TDoc is carried no further.
+ *   - Report > Meeting Control…: one searchable view (new, titles, revisions
+ *     expected, changed allocations, carry-forward, not disposed, plenary);
+ *     the newest "Tdoc allocation revN" of the plenary Agenda folder compared
+ *     with the report (accept to Document Reallocations); AHG telcos of the
+ *     agenda as candidates with a confidence (sessions created only on
+ *     confirmation); the Schedule folder as a hint. Read-only sources, cached.
+ *     The report is read once through the Docs API (not three walks of the
+ *     document: 281 s on a 115-TDoc ad-hoc copy); an ad-hoc report does not
+ *     read the plenary Agenda/Schedule folders; each part's time is logged.
  * 2.29.0 (2026-11-23)
  *   (Issue #28 phase B, candidate on 2.28.0.)
  *   - Revision expected: Report > Revision Expected… records what the
@@ -1632,6 +1656,8 @@ function continuousUpdateCore_(context) {
     // sessions. With it, a report that HAS the Session column gets the
     // column brought up to date; a four-column report stays four-column.
     const tdocSessions = perfTimed_('ad-hoc sessions (makeAdhocTdocSessionResolverSafely_)', () => makeAdhocTdocSessionResolverSafely_(context));
+    // After issue 28 B: TDocs not disposed are carried into the sessions that started since (ISSUE 28 C section).
+    syncAdhocCarryForwardOnUpdate_(tdocSessions, allTdocs, tdocTableIndex, context);
     if (newTdocsAdded > 0) {
       perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, tdocSessions));
     }
@@ -13483,6 +13509,8 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot, use) {
     // Ad-hoc sessions (stage B): the upload time of each TDoc. null, and
     // nothing read, unless this is an ad-hoc report with sessions.
     const uploadTimes = readTdocUploadTimesForSessions_(spreadsheet, sheet, headers, data, context);
+    // After issue 28 B: the reservation times, for a report with the reservation rule (ISSUE 28 C section).
+    const reservationTimes = readTdocReservationTimesForSessions_(spreadsheet, sheet, headers, data, context);
 
     // SA4-IMPL-005: agenda selection now goes through MeetingContext's
     // agendaSelector (SA4-IMPL-004) instead of a direct
@@ -13535,6 +13563,7 @@ function downloadAndGroupTdocs_(cfg, context, reallocationsSnapshot, use) {
         isRevisionOfCol: tdocListColumnMatching_(headers, /^is\s*revision\s*of$/i)
       });
       if (uploadTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].uploaded = uploadTimes[i];
+      if (reservationTimes) groups[agendaItem].tdocs[groups[agendaItem].tdocs.length - 1].reserved = reservationTimes[i];
     }
 
     Logger.log(`Grouped TDOCs: ${Object.keys(groups).length} agenda items`);
@@ -19861,11 +19890,12 @@ function makeAdhocTdocSessionResolver_(context) {
   const uploaded = function (td) { return onSessionClock(td.uploaded); };
   const automatic = function (td) { return assignAdhocSession_(uploaded(td), sessions); };
   const effective = function (td) { return effectiveAdhocTdocSessions_(automatic(td).sessionId, model.tdocs[tdocNumberOf_(td)], sessions); };
-  return {
+  return issue28SessionResolver_({
     sessions: sessions, zone: sessionZone, status: stored.status, error: stored.error, clock: model.clock, overrides: model.tdocs,
     uploaded: uploaded, automatic: automatic, effective: effective,
     cell: function (td) { return adhocTdocSessionCellText_(effective(td), sessions); }
-  };
+  // After issue 28 B: the reservation rule and the carry-forward, for every caller (ISSUE 28 C section).
+  }, context);
 }
 
 /** The resolver for a build or an update: null, and a log line, when it cannot be made. Never throws. */
@@ -20046,7 +20076,8 @@ function buildAdhocTdocSessionsDialogModel_(resolver, tdocGroups, registrationCo
       title: String(td.titleCol >= 0 ? td.row[td.titleCol] || '' : '').replace(/\s+/g, ' ').trim().slice(0, 90),
       uploaded: adhocUploadedDisplayText_(upload, withYear, !!(upload && upload.at && cutoffMinutes[upload.at.slice(0, 16)])),
       auto: auto.sessionId || '',
-      why: auto.sessionId ? '' : (REASONS[auto.reason] || ''),
+      // After issue 28 B: the reason of the reservation rule, when it is set (ISSUE 28 C section).
+      why: auto.sessionId ? '' : (resolver.rule === 'reservation-6h' ? adhocReservationReasonText_(auto.detail || auto.reason) : (REASONS[auto.reason] || '')),
       mode: manual ? manual.mode : 'auto',
       sessions: manual ? manual.sessions.slice() : []
     };
@@ -32009,4 +32040,1091 @@ function appendProvisionalRevisionInformation_(result) {
 
 // =========================================================
 // END OF ISSUE 28 B
+// =========================================================
+
+// =========================================================
+// ISSUE 28 C: AHG SESSIONS, AGENDA UPDATES AND MEETING CONTROL (after issue 28 B)
+// =========================================================
+//
+// Issue #28, phase C (docs/ISSUE28_PHASE_C.md).
+//
+// 1. RESERVATION RULE (opt-in per report: ADHOC_SESSION_RULE = 'reservation-6h').
+//    A TDoc belongs to the first session whose cut-off is not before its
+//    reservation time; the cut-off of a session is its end (end time on its
+//    last day, else the end of that day) in the meeting's IANA zone PLUS SIX
+//    HOURS, as instants (a DST change in between counts as real time). On the
+//    cut-off exactly: that session; one second later: the next. Before the
+//    first session: the first. After the last cut-off, no reservation time, a
+//    date without a time that two sessions share, or a date that cannot be
+//    read unambiguously (05/10/2026 without AM/PM, in a column that does not
+//    show its order elsewhere): no session, and the reason
+//    is shown -- never a guess. Manual overrides (ADHOC_TDOC_SESSIONS) stay
+//    authoritative. Without the setting the upload rule of stage B is unchanged.
+// 2. CARRY-FORWARD (its own switch, ADHOC_CARRY_FORWARD_MODE = 'on', independent
+//    of the session rule; off by default, so an existing ad-hoc report does not
+//    change by itself). A TDoc that is not disposed when a later session starts is
+//    carried into it ("A01 → A02"): recorded by the update with the time
+//    (ADHOC_CARRY_FORWARD, provenance kept), never a second registration row.
+//    A disposed TDoc is carried no further; its carried sessions stay as they
+//    were. A TDoc with a "set" override is never carried. Taking a disposed
+//    TDoc up again is a manual "add" override.
+// 3. AGENDA AND SCHEDULE SOURCES (read-only). The plenary Agenda folder of the
+//    meeting (…/Inbox/Drafts/Plenary/Agenda/, "Tdoc allocation revN.docx") and
+//    Schedule folder: the newest allocation by its revN (the listing time is
+//    not trusted: SA4#138 rev3-rev9 share one), its TDoc allocations compared
+//    with the report's Agenda Item column, and the AHG telcos of its "Telcos"
+//    part as candidates with a confidence. Nothing is applied by itself: a
+//    reallocation is accepted in Meeting Control (Document Reallocations table,
+//    as the dialog writes it); a session is created from a candidate only on
+//    confirmation, in an ad-hoc report. Listings and documents are cached
+//    (CacheService, 30 minutes) and each source fails on its own.
+// 4. MEETING CONTROL (Report > Meeting Control…): one searchable view of new,
+//    title changes, revisions expected, changed allocations, carry-forward,
+//    not disposed, plenary -- with guarded bulk actions.
+
+/** Report state: the session rule ('upload' as stage B, or 'reservation-6h'). */
+const ADHOC_SESSION_RULE_KEY_ = 'ADHOC_SESSION_RULE';
+/** The grace after the end of a session in which a reservation still counts for it. */
+const ADHOC_RESERVATION_GRACE_MS_ = 6 * 3600 * 1000;
+/** Report state: TDocs carried into later sessions ({ v: 1, tdocs: { tdoc: [{ s, at }] } }). */
+const ADHOC_CARRY_KEY_ = 'ADHOC_CARRY_FORWARD';
+/** Report state: 'on' switches carry-forward on (independent of the session rule); anything else off. */
+const ADHOC_CARRY_MODE_KEY_ = 'ADHOC_CARRY_FORWARD_MODE';
+/** The reservation and upload clocks agree when no TDoc is uploaded more than this before its reservation as read. */
+const RESERVATION_CLOCK_TOLERANCE_MS_ = 2 * 60000;
+/** The clock check needs this many TDocs with both times (fewer: nothing can be told, so nothing is switched). */
+const RESERVATION_CLOCK_MIN_CHECKED_ = 20;
+/** On one clock the shortest reservation-to-upload time is about a minute (four SA4 lists); longer than this: a lagging clock. */
+const RESERVATION_CLOCK_MAX_MIN_GAP_MINUTES_ = 30;
+/** Report state: the last update found the reservation clock not agreeing with the upload clock (text and time). */
+const ADHOC_RESERVATION_CLOCK_ALERT_KEY_ = 'ADHOC_RESERVATION_CLOCK_ALERT';
+/** Report state: the plenary Agenda / Schedule folders, when they are not those derived from FTP_BASE. */
+const PLENARY_AGENDA_DIR_KEY_ = 'PLENARY_AGENDA_DIR_URL';
+const PLENARY_SCHEDULE_DIR_KEY_ = 'PLENARY_SCHEDULE_DIR_URL';
+/** Cache of the listings and the allocation document (seconds). */
+const MEETING_SOURCE_CACHE_SECONDS_ = 1800;
+
+/** The rule of this report's sessions. */
+function adhocSessionRule_(store) {
+  let v = '';
+  try { v = String((store || getReportStateStore_(null)).getProperty(ADHOC_SESSION_RULE_KEY_) || '').trim().toLowerCase(); } catch (e) { v = ''; }
+  return v === 'reservation-6h' ? 'reservation-6h' : 'upload';
+}
+
+/** Whether carry-forward is on in this report (its own setting, independent of the session rule). */
+function adhocCarryForwardOn_(store) {
+  try { return String((store || getReportStateStore_(null)).getProperty(ADHOC_CARRY_MODE_KEY_) || '').trim().toLowerCase() === 'on'; } catch (e) { return false; }
+}
+
+/**
+ * Pure: a date-time cell of the TDoc list as { at ('yyyy-MM-ddTHH:mm:ss'),
+ * dateOnly, unreadable, ambiguous }. Read: ISO text, a Date value (`formatDate`),
+ * or "M/D/YYYY h:mm[:ss] AM|PM" (the Portal's US form), or "DD/MM/YYYY HH:mm:ss" (the
+ * form of the SA4#138 list of 2026-11-23). `order` ('dmy' | 'mdy' | '') is the order of
+ * the column (tdocListDateOrder_()); without it, "05/10/2026 10:05" without AM/PM and
+ * with day and month both <= 12 is ambiguous: not read.
+ */
+function parseTdocListDateTime_(display, raw, formatDate, order) {
+  const iso = normalizeTdocUploadValue_(display, raw, formatDate);
+  if (!iso.unreadable) return { at: iso.at, dateOnly: iso.dateOnly, unreadable: false, ambiguous: false };
+  const text = String(display === null || display === undefined || String(display).trim() === '' ? (raw === null || raw === undefined ? '' : raw) : display).trim();
+  const m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+  if (!m) return { at: null, dateOnly: null, unreadable: true, ambiguous: false };
+  let month = +m[1];
+  let day = +m[2];
+  const ampm = m[7] ? m[7].toUpperCase() : '';
+  if (!ampm && (order === 'dmy' || order === 'mdy')) {
+    if (order === 'dmy') { const x = month; month = day; day = x; }
+  } else if (!ampm) {
+    if (month > 12 && day <= 12) { const x = month; month = day; day = x; }
+    else if (month <= 12 && day <= 12 && month !== day) return { at: null, dateOnly: null, unreadable: true, ambiguous: true };
+  }
+  const pad = function (n) { return ('0' + n).slice(-2); };
+  const date = m[3] + '-' + pad(month) + '-' + pad(day);
+  if (!isValidAdhocSessionDate_(date)) return { at: null, dateOnly: null, unreadable: true, ambiguous: false };
+  if (m[4] === undefined) return { at: null, dateOnly: date, unreadable: false, ambiguous: false };
+  let hour = +m[4];
+  if (ampm) { if (hour < 1 || hour > 12) return { at: null, dateOnly: null, unreadable: true, ambiguous: false }; hour = hour % 12 + (ampm === 'PM' ? 12 : 0); }
+  if (hour > 23 || +m[5] > 59 || +(m[6] || '0') > 59) return { at: null, dateOnly: null, unreadable: true, ambiguous: false };
+  return { at: date + 'T' + pad(hour) + ':' + m[5] + ':' + (m[6] || '00'), dateOnly: null, unreadable: false, ambiguous: false };
+}
+
+/**
+ * Pure: the date order of a text column of the TDoc list: 'dmy' when a value has a first
+ * field above 12 and none has AM/PM or a second field above 12; 'mdy' when a value has
+ * AM/PM or a second field above 12 and none a first field above 12; '' otherwise (no
+ * evidence, or the column contradicts itself: each value is then read on its own).
+ */
+function tdocListDateOrder_(texts) {
+  let dmy = false;
+  let mdy = false;
+  (texts || []).forEach(function (t) {
+    const m = String(t === null || t === undefined ? '' : t).trim().match(/^(\d{1,2})\/(\d{1,2})\/\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(AM|PM)?)?$/i);
+    if (!m) return;
+    if (m[3] || +m[2] > 12) mdy = true;
+    else if (+m[1] > 12) dmy = true;
+  });
+  return dmy && !mdy ? 'dmy' : mdy && !dmy ? 'mdy' : '';
+}
+
+/**
+ * Pure: do the reservation and upload times of the list agree on one clock? Both are read as
+ * given ('yyyy-MM-ddTHH:mm:ss'); a TDoc uploaded more than RESERVATION_CLOCK_TOLERANCE_MS_
+ * before its reservation is impossible on one clock. Returns { checked, inversions: [tdoc],
+ * minGapMinutes } (minGapMinutes the shortest reservation-to-upload time, null when none).
+ */
+function reservationClockCheck_(tdocs) {
+  const ms = function (at) { const m = String(at || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : NaN; };
+  let checked = 0;
+  let min = null;
+  const inversions = [];
+  (tdocs || []).forEach(function (td) {
+    const r = td && td.reserved && td.reserved.at ? ms(td.reserved.at) : NaN;
+    const u = td && td.uploaded && td.uploaded.at ? ms(td.uploaded.at) : NaN;
+    if (isNaN(r) || isNaN(u)) return;
+    checked++;
+    const gap = u - r;
+    if (gap < -RESERVATION_CLOCK_TOLERANCE_MS_) inversions.push(tdocNumberOf_(td));
+    else if (gap >= 0 && (min === null || gap < min)) min = gap;
+  });
+  return { checked: checked, inversions: inversions, minGapMinutes: min === null ? null : Math.round(min / 6000) / 10 };
+}
+
+/**
+ * Pure: the verdict of a clock check: '' when the two clocks agree, else why not. Too few TDocs with both times
+ * cannot tell; a reservation after its upload means a clock ahead; a shortest gap above the bound a clock behind.
+ */
+function reservationClockProblem_(clock) {
+  if (clock.inversions.length) return clock.inversions.length + ' TDoc(s) of the list (' + clock.inversions.slice(0, 5).join(', ') + (clock.inversions.length > 5 ? ', …' : '') +
+    ') were uploaded before their reservation time as read: the reservation clock does not agree with the upload clock (UTC)';
+  if (clock.checked < RESERVATION_CLOCK_MIN_CHECKED_) return 'only ' + clock.checked + ' TDoc(s) of the list have both a reservation and an upload time; at least ' + RESERVATION_CLOCK_MIN_CHECKED_ +
+    ' are needed to check the reservation clock -- try again when more are uploaded';
+  if (clock.minGapMinutes === null || clock.minGapMinutes > RESERVATION_CLOCK_MAX_MIN_GAP_MINUTES_) return 'no TDoc was uploaded within ' + RESERVATION_CLOCK_MAX_MIN_GAP_MINUTES_ +
+    ' minutes of its reservation (the shortest: ' + clock.minGapMinutes + ' min): the reservation clock may be behind the upload clock (UTC)';
+  return '';
+}
+
+/** The reservation times of the TDoc list, as the upload times are read (null unless an ad-hoc report with the reservation rule). */
+/** The preview of the rule reads the reservation times before the rule is set. */
+var ISSUE28_FORCE_RESERVATION_READ_ = false;
+
+function readTdocReservationTimesForSessions_(spreadsheet, sheet, headers, data, context) {
+  try {
+    if (!adhocSessionsEnabled_(context) || (adhocSessionRule_(getReportStateStore_(context)) !== 'reservation-6h' && !ISSUE28_FORCE_RESERVATION_READ_)) return null;
+    const col = headers.indexOf('Reservation date');
+    if (col === -1) { Logger.log('TDoc sessions: the TDoc list has no "Reservation date" column; no session is assigned by the reservation rule.'); return null; }
+    let shown = null;
+    try { shown = sheet.getRange(1, col + 1, data.length, 1).getDisplayValues(); } catch (e) { shown = null; }
+    let zone = '';
+    try { zone = spreadsheet.getSpreadsheetTimeZone() || ''; } catch (e) { zone = ''; }
+    const formatDate = function (date) { return zone ? Utilities.formatDate(date, zone, "yyyy-MM-dd'T'HH:mm:ss") : ''; };
+    const texts = data.map(function (row, i) { const d = shown && shown[i] ? shown[i][0] : ''; return String(d === null || d === undefined || String(d).trim() === '' ? (row[col] === null || row[col] === undefined ? '' : row[col]) : d); });
+    // The order of a text column (dd/mm or m/d), from the whole column: the SA4#138 list of 2026-11-23 writes 13/10/2026 12:34:06.
+    const order = tdocListDateOrder_(texts);
+    return data.map(function (row, i) { return parseTdocListDateTime_(shown && shown[i] ? shown[i][0] : '', row[col], formatDate, order); });
+  } catch (e) {
+    Logger.log('TDoc sessions: the reservation times of the TDoc list could not be read: ' + e.message);
+    return null;
+  }
+}
+
+/** The wall clock ('yyyy-MM-ddTHH:mm:ss') of an instant in `zone` (the meeting's IANA zone, else the script's). */
+function sessionZoneWallOfInstant_(zone, instant) {
+  if (zone && isAllowedMeetingTimeZoneId_(zone)) return String(meetingZoneWallClockOfInstant_(zone, instant));
+  return Utilities.formatDate(new Date(instant), zone || Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+}
+
+/** The instant of a wall clock in `zone` (fixed point of the zone's offset; in a gap, the instant after it); NaN when the zone's offset cannot be told. Memoised. */
+function sessionZoneInstantOfWall_(zone, wall) {
+  const memo = sessionZoneInstantOfWall_.memo || (sessionZoneInstantOfWall_.memo = {});
+  const key = String(zone) + '|' + String(wall);
+  if (Object.prototype.hasOwnProperty.call(memo, key)) return memo[key];
+  const m = String(wall || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return NaN;
+  const asUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  const wallMs = function (text) { const x = String(text).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/); return x ? Date.UTC(+x[1], +x[2] - 1, +x[3], +x[4], +x[5], +x[6]) : NaN; };
+  let guess = asUtc;
+  let result = NaN;
+  for (let i = 0; i < 3; i++) {
+    let diff;
+    try { diff = wallMs(sessionZoneWallOfInstant_(zone, guess)) - asUtc; } catch (e) { diff = NaN; }
+    if (isNaN(diff)) { result = NaN; break; }
+    if (!diff) { result = guess; break; }
+    guess -= diff;
+    result = guess;
+  }
+  memo[key] = result;
+  return result;
+}
+
+/** Pure (given `toInstant`): the cut-off instant of a session -- its end in the meeting zone plus six hours. */
+function adhocReservationCutoff_(session, toInstant) {
+  return toInstant(adhocSessionLastDay_(session) + 'T' + (session.end ? session.end + ':00' : '23:59:59')) + ADHOC_RESERVATION_GRACE_MS_;
+}
+
+/**
+ * Pure (given `toInstant`): the session of a reservation. `reservation` as
+ * parseTdocListDateTime_() gives it; `clock` 'utc' (the list's times are UTC, as
+ * the uploads) or 'session' (already on the session clock). Returns { sessionId,
+ * reason, cutoff }; reasons: 'assigned', 'before-first' (assigned to the first),
+ * 'after-last', 'not-reserved', 'unreadable', 'ambiguous', 'date-only'.
+ */
+function assignAdhocSessionByReservation_(reservation, sessions, toInstant, clock) {
+  if (!reservation || (!reservation.at && !reservation.dateOnly && !reservation.unreadable)) return { sessionId: null, reason: 'not-reserved' };
+  if (reservation.ambiguous) return { sessionId: null, reason: 'ambiguous' };
+  if (reservation.unreadable) return { sessionId: null, reason: 'unreadable' };
+  const ordered = sortAdhocSessions_(sessions);
+  if (!ordered.length) return { sessionId: null, reason: 'after-last' };
+  const instantOf = function (wall) {
+    if (clock === 'session') return toInstant(wall);
+    const m = wall.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  };
+  const firstFor = function (at) {
+    // A cut-off that cannot be computed (an unknown zone) assigns nothing: no guess.
+    for (let i = 0; i < ordered.length; i++) { const cut = adhocReservationCutoff_(ordered[i], toInstant); if (isNaN(cut) || isNaN(at)) return null; if (at <= cut) return { id: ordered[i].id, cutoff: cut, index: i }; }
+    return null;
+  };
+  if (reservation.at) {
+    const at = instantOf(reservation.at);
+    const hit = firstFor(at);
+    if (!hit) return { sessionId: null, reason: 'after-last' };
+    const startOfFirst = toInstant(ordered[0].date + 'T' + (ordered[0].start ? ordered[0].start + ':00' : '00:00:00'));
+    return { sessionId: hit.id, reason: hit.index === 0 && at < startOfFirst ? 'before-first' : 'assigned', cutoff: hit.cutoff };
+  }
+  const morning = firstFor(instantOf(reservation.dateOnly + 'T00:00:00'));
+  const night = firstFor(instantOf(reservation.dateOnly + 'T23:59:59'));
+  if (!morning || !night || morning.id !== night.id) return { sessionId: null, reason: morning || night ? 'date-only' : 'after-last' };
+  return { sessionId: morning.id, reason: 'assigned', cutoff: morning.cutoff };
+}
+
+/** Pure: the text of a reason, for the dialogs. */
+function adhocReservationReasonText_(reason) {
+  return { assigned: 'reserved before the cut-off', 'before-first': 'reserved before the first session', 'after-last': 'reserved after the last cut-off (end + 6 h)',
+    'not-reserved': 'no reservation time in the TDoc list', unreadable: 'the reservation time cannot be read', ambiguous: 'the reservation date is ambiguous (day/month)',
+    'date-only': 'only a date, shared by two sessions' }[reason] || reason;
+}
+
+/** The carried sessions of the report state: { tdoc: [{ s, at }] } (stored compactly: v 2, "s2@<epoch minute>,…"; v 1 read as well). */
+function readAdhocCarry_(store) {
+  try {
+    const v = JSON.parse(store.getProperty(ADHOC_CARRY_KEY_) || '{}');
+    if (v && v.v === 1 && v.tdocs) return v.tdocs;
+    if (!v || v.v !== 2 || !v.tdocs) return {};
+    const out = {};
+    Object.keys(v.tdocs).forEach(function (n) {
+      out[n] = String(v.tdocs[n]).split(',').filter(Boolean).map(function (x) { const p = x.split('@'); return { s: p[0], at: p[1] ? new Date(+p[1] * 60000).toISOString() : '' }; });
+    });
+    return out;
+  } catch (e) {
+    return {};
+  }
+}
+
+/** Pure: the carried sessions as stored (v 2). */
+function adhocCarryText_(carry) {
+  const tdocs = {};
+  Object.keys(carry).sort().forEach(function (n) {
+    if (!carry[n] || !carry[n].length) return;
+    tdocs[n] = carry[n].map(function (c) { const ms = Date.parse(c.at); return c.s + '@' + (isNaN(ms) ? '' : Math.floor(ms / 60000)); }).join(',');
+  });
+  return JSON.stringify({ v: 2, tdocs: tdocs });
+}
+
+/**
+ * Pure (given `startOf`): the sessions a TDoc is carried into after this update.
+ * `registered` its sessions without carrying (automatic and overrides, ordered),
+ * `carried` [{ s, at }] so far, `undisposed` its state now, `nowMs`. A session
+ * after its last registered one that has started is added while it is
+ * undisposed; a disposed TDoc keeps what it has. A "set" override: nothing.
+ */
+function decideAdhocCarry_(registered, carried, sessions, undisposed, nowMs, startOf, override, nowText) {
+  if (override && override.mode === 'set') return [];
+  const list = (carried || []).slice();
+  if (!undisposed || !registered.length) return list;
+  const ordered = sortAdhocSessions_(sessions);
+  const last = ordered.map(function (s) { return s.id; }).reduce(function (k, id, i) { return registered.indexOf(id) !== -1 ? i : k; }, -1);
+  for (let i = last + 1; i < ordered.length; i++) {
+    const s = ordered[i];
+    if (startOf(s) > nowMs) break;
+    if (registered.indexOf(s.id) === -1 && !list.some(function (c) { return c.s === s.id; })) list.push({ s: s.id, at: nowText });
+  }
+  return list;
+}
+
+/**
+ * The stage B resolver with this phase: the reservation rule (when set), the
+ * sessions a TDoc is carried into, and their text ("A01 → A02, A03"). Every
+ * caller of makeAdhocTdocSessionResolver_() gets it.
+ */
+function issue28SessionResolver_(resolver, context) {
+  const store = getReportStateStore_(context);
+  const rule = adhocSessionRule_(store);
+  const carryOn = adhocCarryForwardOn_(store);
+  let self = null;
+  const sessions = resolver.sessions;
+  const zone = resolver.zone;
+  const toInstant = function (wall) { return sessionZoneInstantOfWall_(zone, wall); };
+  const reservationAutomatic = function (td) {
+    const r = assignAdhocSessionByReservation_(td.reserved, sessions, toInstant, resolver.clock === 'session' ? 'session' : 'utc');
+    return { sessionId: r.sessionId, reason: r.reason === 'before-first' ? 'assigned' : r.reason, detail: r.reason };
+  };
+  const automatic = rule === 'reservation-6h' ? reservationAutomatic : resolver.automatic;
+  const registered = function (td) { return effectiveAdhocTdocSessions_(automatic(td).sessionId, resolver.overrides[tdocNumberOf_(td)], sessions); };
+  // Carried sessions only with carry-forward on, and only those after the last session it is registered in.
+  const carriedOf = function (td) {
+    if (!carryOn) return [];
+    const n = tdocNumberOf_(td);
+    const override = resolver.overrides[n];
+    if (override && override.mode === 'set') return [];
+    const order = sortAdhocSessions_(sessions).map(function (s) { return s.id; });
+    const reg = registered(td);
+    const last = order.reduce(function (k, id, i) { return reg.indexOf(id) !== -1 ? i : k; }, -1);
+    if (last === -1) return [];
+    return ((self.carry || {})[n] || []).map(function (c) { return c.s; }).filter(function (id) { return order.indexOf(id) > last; });
+  };
+  const out = Object.assign({}, resolver, {
+    rule: rule, carryOn: carryOn, carry: readAdhocCarry_(store), toInstant: toInstant,
+    automatic: automatic,
+    registered: registered,
+    carried: carriedOf,
+    effective: function (td) { const reg = registered(td); const c = carriedOf(td).filter(function (id) { return reg.indexOf(id) === -1; }); return sortAdhocSessions_(sessions).map(function (s) { return s.id; }).filter(function (id) { return reg.indexOf(id) !== -1 || c.indexOf(id) !== -1; }); },
+    cell: function (td) {
+      const reg = registered(td);
+      const c = carriedOf(td).filter(function (id) { return reg.indexOf(id) === -1; });
+      const text = adhocTdocSessionCellText_(reg, sessions);
+      return c.length ? text + ' → ' + adhocTdocSessionCellText_(c, sessions) : text;
+    }
+  });
+  self = out;
+  return out;
+}
+
+/**
+ * The update: the TDocs not disposed are carried into the sessions that have
+ * started since. Statuses from the report snapshot, else the TDoc tables
+ * (an ad-hoc report is small). Returns the number of new carries. Never throws.
+ */
+function syncAdhocCarryForwardOnUpdate_(resolver, allTdocs, index, context) {
+  // While the reservation rule is on, every update checks the clock of the list again (a list can be regenerated differently).
+  if (resolver && resolver.rule === 'reservation-6h') recheckReservationClockOnUpdate_(allTdocs, context);
+  try {
+    if (!resolver || !resolver.registered || !resolver.carryOn) return 0;
+    const store = getReportStateStore_(context);
+    const plan = adhocCarryPlan_(resolver, allTdocs, index, readAdhocCarry_(store));
+    const carry = plan.carry;
+    const added = plan.added;
+    if (added) {
+      const text = adhocCarryText_(carry);
+      if (text.length > 8500) {
+        // Said where the rapporteur looks (Meeting Control), not only in the log.
+        store.setProperty(ADHOC_CARRY_KEY_ + '_FULL', new Date().toISOString());
+        Logger.log('TDoc sessions: the carried sessions do not fit one property any more; not stored (' + text.length + ' characters).');
+        return 0;
+      }
+      store.setProperty(ADHOC_CARRY_KEY_, text);
+      resolver.carry = carry;
+      Logger.log('TDoc sessions: ' + added + ' carry-forward(s) of TDocs not disposed into a later session.');
+    }
+    return added;
+  } catch (e) {
+    Logger.log('TDoc sessions: carry-forward not updated (' + e.message + ').');
+    return 0;
+  }
+}
+
+/**
+ * The update, with the reservation rule on: the clock check of the list again. A problem is kept in the report state
+ * (ADHOC_RESERVATION_CLOCK_ALERT, shown in Meeting Control) and logged; it is cleared when the list agrees again. Too
+ * few TDocs with both times is no problem here (the rule was verified when switched on). Never throws.
+ */
+function recheckReservationClockOnUpdate_(allTdocs, context) {
+  try {
+    const store = getReportStateStore_(context);
+    const clock = reservationClockCheck_(allTdocs);
+    const problem = clock.checked < RESERVATION_CLOCK_MIN_CHECKED_ && !clock.inversions.length ? '' : reservationClockProblem_(clock);
+    const had = store.getProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_);
+    if (problem) {
+      const text = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC: ' + problem + '. The sessions by reservation may be wrong: check the list, or switch back to the upload rule.';
+      if (!had || had.slice(22) !== text.slice(22)) store.setProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_, text);
+      Logger.log('TDoc sessions: ' + text);
+    } else if (had) {
+      store.deleteProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_);
+    }
+    return problem;
+  } catch (e) {
+    Logger.log('TDoc sessions: the reservation clock was not checked (' + e.message + ').');
+    return '';
+  }
+}
+
+/**
+ * The carries of now, not stored: { carry (the whole new state), added, changes: [{ tdoc, sessions }] }.
+ * `carry` the stored state (copied, not changed). Statuses from the report snapshot, else the TDoc tables.
+ */
+function adhocCarryPlan_(resolver, allTdocs, index, stored) {
+    const carry = Object.assign({}, stored || {});
+    const changes = [];
+    const snap = reportRunSnapshot_();
+    const statusOf = function (n) {
+      const t = snap && snap.byNumber ? snap.byNumber[n] : null;
+      if (t) return statusDropdownLabel_(t.statusEntry ? (statusPartOfCellText_(t.statusEntry.text || '').trim() || (t.statusEntry.displayValue || '')) : (t.values.status || t.values['tdoc status'] || ''));
+      const table = index ? lookupTdocTableInIndex_(index, n) : null;
+      return table ? provisionalStatusOfTable_(table) : null;
+    };
+    const nowMs = Date.now();
+    const nowText = new Date(nowMs).toISOString();
+    const startOf = function (s) { return resolver.toInstant(s.date + 'T' + (s.start ? s.start + ':00' : '00:00:00')); };
+    let added = 0;
+    const seen = {};
+    (allTdocs || []).forEach(function (td) {
+      const n = tdocNumberOf_(td);
+      if (!n || seen[n]) return;
+      seen[n] = true;
+      const label = statusOf(n);
+      if (label === null) return;
+      const undisposed = UNDISPOSED_STATUSES_.indexOf(label) !== -1 || label === '';
+      const before = carry[n] || [];
+      const next = decideAdhocCarry_(resolver.registered(td), before, resolver.sessions, undisposed, nowMs, startOf, resolver.overrides[n], nowText);
+      if (next.length !== before.length) {
+        added += next.length - before.length;
+        changes.push({ tdoc: n, sessions: next.slice(before.length).map(function (c) { return c.s; }) });
+        if (next.length) carry[n] = next; else delete carry[n];
+      }
+    });
+    return { carry: carry, added: added, changes: changes };
+}
+
+// --- the plenary Agenda and Schedule folders (read-only) ---
+
+/** The plenary Agenda and Schedule folders of the meeting: from the setting, else derived from FTP_BASE (…/<meeting>/Docs/). */
+function plenarySourceFolders_(cfg, store) {
+  const st = store || getReportStateStore_(null);
+  const own = function (k) { try { return String(st.getProperty(k) || '').trim(); } catch (e) { return ''; } };
+  const base = String((cfg && cfg.FTP_BASE) || '').trim();
+  const m = base.match(/^(https?:\/\/[^?#]*?\/)Docs\/?$/i);
+  const root = m ? m[1] : '';
+  return { agenda: own(PLENARY_AGENDA_DIR_KEY_) || (root ? root + 'Inbox/Drafts/Plenary/Agenda/' : ''), schedule: own(PLENARY_SCHEDULE_DIR_KEY_) || (root ? root + 'Inbox/Drafts/Plenary/Schedule/' : '') };
+}
+
+/**
+ * Pure: the files of a 3GPP FTP folder listing (HTML): [{ name, url, listedAt }]
+ * -- the links of the folder itself (not its parents, not the sort links), each
+ * with the date of its row when the listing shows one ('YYYY/MM/DD HH:MM').
+ */
+function parseFtpFolderListing_(html, folderUrl) {
+  const out = [];
+  const text = String(html || '');
+  const folder = String(folderUrl || '');
+  const rows = text.split(/<tr[\s>]/i);
+  rows.forEach(function (row) {
+    const a = row.match(/<a\s[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!a) return;
+    let url = a[1];
+    if (/^\?/.test(url)) return;
+    if (!/^https?:/i.test(url)) url = folder.replace(/[^/]*$/, '') + url;
+    if (folder && url.indexOf(folder) !== 0) return;
+    let name = url.slice(url.lastIndexOf('/') + 1);
+    try { name = decodeURIComponent(name); } catch (e) { /* a malformed escape: the name as it is */ }
+    if (!name || /\/$/.test(url)) return;
+    const d = row.match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{1,2}):(\d{2})/);
+    out.push({ name: name, url: url, listedAt: d ? d[1] + '-' + d[2] + '-' + d[3] + 'T' + ('0' + d[4]).slice(-2) + ':' + d[5] : '' });
+  });
+  return out;
+}
+
+/** Pure: the newest TDoc allocation of a listing: the highest revN of "… Tdoc allocation revN.docx" (the listing time only breaks ties); null without one. */
+function newestAllocationFile_(files) {
+  const found = (files || []).map(function (f) { const m = String(f.name).match(/tdoc\s*allocation\s*rev\s*(\d+)\.docx$/i); return m ? Object.assign({ rev: +m[1] }, f) : null; }).filter(Boolean);
+  found.sort(function (a, b) { return b.rev - a.rev || String(b.listedAt).localeCompare(String(a.listedAt)); });
+  return found[0] || null;
+}
+
+/** Pure: the schedule files of a listing (newest listed first); their order of versions is not known, so each is a low-confidence hint. */
+function scheduleFiles_(files) {
+  return (files || []).filter(function (f) { return /\.(xlsx|xls|docx|pdf)$/i.test(f.name); }).sort(function (a, b) { return String(b.listedAt).localeCompare(String(a.listedAt)); });
+}
+
+/** Pure: the text of the table cells and paragraphs of a Word document.xml: { rows: [[cell text]], paragraphs: [text] }. */
+function wordDocumentText_(xml) {
+  const decode = function (s) { return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, function (x, n) { return String.fromCharCode(+n); }).replace(/&amp;/g, '&'); };
+  const paraText = function (p) { const parts = []; p.replace(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:tab\/>/g, function (x, t) { parts.push(t === undefined ? '\t' : decode(t)); return x; }); return parts.join(''); };
+  const paras = function (s) { return (s.match(/<w:p[\s>][\s\S]*?<\/w:p>/g) || []).map(paraText); };
+  const text = String(xml || '');
+  const rows = (text.match(/<w:tr[\s>][\s\S]*?<\/w:tr>/g) || []).map(function (r) { return (r.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).map(function (c) { return paras(c).join('\n'); }); });
+  return { rows: rows, paragraphs: paras(text) };
+}
+
+/**
+ * Pure: the allocations of a TDoc allocation document: { byTdoc: { tdoc: [ai, …] } }
+ * for the TDocs of `numbers` (the report's TDoc numbers): a row whose first cell
+ * is an agenda number lists, in its third cell, short numbers (2229app,
+ * 1859->2253->2260app); a short number is a TDoc of the report whose number
+ * ends with it. Numbers of no TDoc of the report (a year, a TDoc of another
+ * meeting) are left out.
+ */
+function parseTdocAllocations_(doc, numbers) {
+  const byShort = {};
+  (numbers || []).forEach(function (n) { const m = String(n).match(/(\d{4})$/); if (m) (byShort[m[1]] = byShort[m[1]] || []).push(n); });
+  const byTdoc = {};
+  (doc.rows || []).forEach(function (cells) {
+    const ai = String(cells[0] || '').trim();
+    if (!/^\d+(\.\d+)*$/.test(ai) || cells.length < 3) return;
+    // A remark in parentheses ("(was 1697 pp)") and a date ("22-26 Feb. 2027", "Dec 17, 2026", "2026-11-16") hold no allocation.
+    const months = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?';
+    const cleaned = String(cells[2] || '').replace(/\([^)]*\)/g, ' ')
+      .replace(new RegExp('\\b' + months + '\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s*\\d{4}', 'gi'), ' ')
+      .replace(new RegExp('\\b\\d{1,2}(?:st|nd|rd|th)?(?:\\s*[-–]\\s*\\d{1,2})?\\s+' + months + ',?\\s*\\d{4}', 'gi'), ' ')
+      .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
+      .replace(new RegExp(months + '\\s+(?:20\\d{2})\\b', 'gi'), ' ');
+    const shorts = cleaned.match(/(?:^|[^\d])(\d{4})(?=\D|$)/g) || [];
+    shorts.forEach(function (s) {
+      const short = s.replace(/\D/g, '');
+      (byShort[short] && byShort[short].length === 1 ? byShort[short] : []).forEach(function (n) { const list = byTdoc[n] = byTdoc[n] || []; if (list.indexOf(ai) === -1) list.push(ai); });
+    });
+  });
+  return { byTdoc: byTdoc };
+}
+
+/**
+ * Pure: the proposed reallocations. Only allocations within the report's own
+ * part of the agenda count (the top-level numbers of its Agenda Items: "8" for
+ * an MBS report), so a plenary-level row (14, 15.4, the future meetings of 20)
+ * never moves a TDoc out of it. A TDoc with one such allocation that differs
+ * from its Agenda Item is proposed; listed under two of the report's items:
+ * 'ambiguous'; with a reallocation of its own to another item: 'manual'
+ * (shown, never proposed: the rapporteur's row is not replaced). [{ tdoc, from, to, kind, replaces }].
+ */
+function proposedReallocations_(allocations, reportAgenda, reallocated) {
+  const out = [];
+  const top = function (ai) { return String(ai || '').split('.')[0]; };
+  const tops = {};
+  Object.keys(reportAgenda).forEach(function (n) { const t = top(reportAgenda[n]); if (t) tops[t] = true; });
+  Object.keys(allocations.byTdoc).sort().forEach(function (n) {
+    const from = reportAgenda[n];
+    if (from === undefined) return;
+    const ais = allocations.byTdoc[n].filter(function (ai) { return tops[top(ai)]; });
+    if (!ais.length) return;
+    if (ais.length > 1) { out.push({ tdoc: n, from: from, to: ais.join(', '), kind: 'ambiguous' }); return; }
+    const to = ais[0];
+    const own = reallocated[n] || '';
+    if (to === from || own === to) return;
+    if (own) { out.push({ tdoc: n, from: from, to: to, kind: 'manual', replaces: own }); return; }
+    out.push({ tdoc: n, from: from, to: to, kind: 'proposed' });
+  });
+  return out;
+}
+
+/**
+ * Pure: the AHG telcos and meetings of the allocation document ("Telcos" part
+ * and the lines after it) as candidates: [{ text, group, date, start, end, zone,
+ * confidence ('high' | 'medium' | 'low'), why }]. `year` the meeting's year (for
+ * a date without one). A zone that does not fit the season (CEST in December)
+ * or an unreadable time lowers the confidence; nothing is ever created from it.
+ */
+function parseAhgCandidates_(doc, year) {
+  const months = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  const paras = doc.paragraphs || [];
+  const startAt = paras.findIndex(function (p) { return /^\s*Telcos\s*$/i.test(p); });
+  if (startAt === -1) return [];
+  const pad = function (n) { return ('0' + n).slice(-2); };
+  const out = [];
+  const seen = {};
+  for (let i = startAt + 1; i < paras.length; i++) {
+    let text = String(paras[i]).replace(/\s+/g, ' ').trim();
+    if (/^Future SA4 meeting/i.test(text)) break;
+    if (!/(telco|AH\b|AHG|ad[ -]?hoc|meeting)/i.test(text) || /\(Date, time, Host\)/i.test(text) || /^Submission deadline/i.test(text)) continue;
+    const hasDate = function (s) { return /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}|\b\d{1,2}(?:st|nd|rd|th)?[\s\u00a0]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(s); };
+    let full = text;
+    for (let k = 1, taken = 0; taken < 3 && !hasDate(full) && i + k < paras.length; k++) {
+      const next = String(paras[i + k]).replace(/\s+/g, ' ').trim();
+      if (!next) continue;
+      taken++;
+      if (/(telco|AHG)/i.test(next) || /^Submission deadline/i.test(next)) break;
+      full += ' ' + next;
+    }
+    text = full;
+    // Every date of the line, in order: "Dec 17, 2026" and "8th December 2026" (a day is never the first digits of a year).
+    const dates = [];
+    text.replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?!\d)(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?/gi, function (x, mo, d, yy, at) { dates.push({ at: at, month: months[mo.slice(0, 3).toLowerCase()], day: +d, y: yy ? +yy : 0 }); return x; });
+    text.replace(/\b(\d{1,2})(?!\d)(?:st|nd|rd|th)?[\s\u00a0]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?(?:,?\s*(\d{4}))?/gi, function (x, d, mo, yy, at) { dates.push({ at: at, month: months[mo.slice(0, 3).toLowerCase()], day: +d, y: yy ? +yy : 0 }); return x; });
+    dates.sort(function (a, b) { return a.at - b.at; });
+    const distinct = dates.filter(function (d, k) { return !dates.slice(0, k).some(function (e) { return Math.abs(e.at - d.at) < 4; }); });
+    let month = 0, day = 0, y = 0;
+    if (distinct.length) { month = distinct[0].month; day = distinct[0].day; y = distinct[0].y || (distinct[1] && distinct[1].y) || 0; }
+    const why = [];
+    let endDate = '';
+    if (!y && month) { y = year && month < 7 ? year + 1 : year; why.push('year taken from the meeting'); }
+    const t = (distinct.length > 1 ? null : text.match(/(\d{1,2}):?(\d{2})\s*[-–]\s*(\d{1,2}):?(\d{2})/)) || text.match(/\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(CET|CEST|UTC)/i);
+    let start = '', end = '';
+    if (t && t[4] !== undefined && t.length > 4 && /:|\d{3,4}/.test(t[0])) { start = pad(+t[1]) + ':' + t[2]; end = (+t[3] === 24 ? '23' : pad(+t[3])) + ':' + (+t[3] === 24 ? '59' : t[4]); }
+    else if (t) { start = pad(+t[1]) + ':00'; end = pad(+t[2]) + ':00'; }
+    const zm = text.match(/\b(CET|CEST|UTC|GMT|EST|EDT|PST|PDT|KST|JST)\b/);
+    const zone = zm ? zm[1] : '';
+    const group = (text.match(/\b(MBS|RTC|Audio|Video|6G)\b/i) || [])[1] || (text.match(/Telco on ([A-Za-z0-9_-]+)/i) || [])[1] || '';
+    const date = month && day && y ? y + '-' + pad(month) + '-' + pad(day) : '';
+    if (date && distinct.length > 1) {
+      const e = distinct[1];
+      const ey = e.y || y;
+      endDate = ey + '-' + pad(e.month) + '-' + pad(e.day);
+      if (endDate <= date) endDate = '';
+    }
+    let confidence = 'high';
+    if (endDate) why.push('several days (until ' + endDate + ')');
+    if (!date) { confidence = 'low'; why.push('no date'); }
+    if (!start || !/^\d{2}:\d{2}$/.test(start) || +start.slice(0, 2) > 23 || +end.slice(0, 2) > 23) { confidence = confidence === 'high' ? 'medium' : confidence; why.push('time not read'); start = /^\d{2}:\d{2}$/.test(start) && +start.slice(0, 2) <= 23 ? start : ''; end = /^\d{2}:\d{2}$/.test(end) && +end.slice(0, 2) <= 23 ? end : ''; }
+    if (!zone) { if (confidence === 'high') confidence = 'medium'; why.push('no time zone'); }
+    if (zone && month) {
+      const summer = month >= 4 && month <= 10;
+      if ((zone === 'CEST' && !summer) || (zone === 'CET' && summer)) { if (confidence === 'high') confidence = 'medium'; why.push(zone + ' does not fit the date'); }
+    }
+    if (/pending|TBD|tentative/i.test(text)) { if (confidence === 'high') confidence = 'medium'; why.push('marked pending'); }
+    const key = [group, date, start, end].join('|');
+    if (date && seen[key]) continue;
+    seen[key] = true;
+    if (endDate && confidence === 'high') confidence = 'medium';
+    out.push({ text: text.slice(0, 200), group: group, date: date, endDate: endDate, start: start, end: end, zone: zone, confidence: confidence, why: why.join('; ') });
+  }
+  return out;
+}
+
+/** A cache key for a URL: its SHA-256 (no two URLs share one), else its whole base64 when the digest is not available. */
+function meetingSourceCacheKey_(url) {
+  try {
+    const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(url), Utilities.Charset.UTF_8);
+    return Utilities.base64EncodeWebSafe(bytes);
+  } catch (e) {
+    return Utilities.base64EncodeWebSafe(String(url));
+  }
+}
+
+/** UrlFetch with a CacheService cache (text, at most ~90 KB) and a check of the answer; { ok, text, from, error }. */
+function fetchMeetingSourceCached_(url, check) {
+  const key = 'I28SRC_' + meetingSourceCacheKey_(url);
+  let cache = null;
+  try { cache = CacheService.getDocumentCache() || CacheService.getScriptCache(); } catch (e) { cache = null; }
+  try { const hit = cache ? cache.get(key) : null; if (hit) return { ok: true, text: hit, from: 'cache' }; } catch (e) { /* no cache */ }
+  try {
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) return { ok: false, error: 'HTTP ' + res.getResponseCode() };
+    const text = res.getContentText();
+    if (check && !check(text)) return { ok: false, error: 'not the expected kind of page' };
+    try { if (cache && text.length < 90000) cache.put(key, text, MEETING_SOURCE_CACHE_SECONDS_); } catch (e) { /* too large to cache */ }
+    return { ok: true, text: text, from: 'fetched' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** The allocation document's text (document.xml of the .docx), cached as its parsed rows/paragraphs. { ok, doc, error, from }. */
+function fetchAllocationDocument_(url) {
+  const key = 'I28ALLOC_' + meetingSourceCacheKey_(url);
+  let cache = null;
+  try { cache = CacheService.getDocumentCache() || CacheService.getScriptCache(); } catch (e) { cache = null; }
+  try { const hit = cache ? cache.get(key) : null; if (hit) return { ok: true, doc: JSON.parse(hit), from: 'cache' }; } catch (e) { /* no cache */ }
+  try {
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) return { ok: false, error: 'HTTP ' + res.getResponseCode() };
+    const parts = Utilities.unzip(res.getBlob().setContentType('application/zip'));
+    const xml = parts.filter(function (b) { return b.getName() === 'word/document.xml'; })[0];
+    if (!xml) return { ok: false, error: 'not a Word document (no word/document.xml)' };
+    const doc = wordDocumentText_(xml.getDataAsString('UTF-8'));
+    try { const text = JSON.stringify(doc); if (cache && text.length < 90000) cache.put(key, text, MEETING_SOURCE_CACHE_SECONDS_); } catch (e) { /* not cached */ }
+    return { ok: true, doc: doc, from: 'fetched' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * The agenda and schedule sources of the meeting, each on its own: { agenda:
+ * { ok, folder, file, rev, listedAt, from, error, allocations }, schedule: { ok,
+ * folder, files, error }, candidates, observedAt }. Read-only; never throws.
+ */
+function readPlenarySources_(cfg, reportNumbers) {
+  const folders = plenarySourceFolders_(cfg);
+  const out = { observedAt: new Date().toISOString(), agenda: { ok: false, folder: folders.agenda }, schedule: { ok: false, folder: folders.schedule }, candidates: [] };
+  const isListing = function (t) { return /Index of|<a\s[^>]*href=/i.test(t); };
+  try {
+    if (!folders.agenda) throw new Error('no plenary Agenda folder (FTP_BASE is not a …/Docs/ folder; set PLENARY_AGENDA_DIR_URL)');
+    const listing = fetchMeetingSourceCached_(folders.agenda, isListing);
+    if (!listing.ok) throw new Error('the Agenda folder could not be read: ' + listing.error);
+    const newest = newestAllocationFile_(parseFtpFolderListing_(listing.text, folders.agenda));
+    if (!newest) throw new Error('no "Tdoc allocation revN.docx" in the Agenda folder');
+    const doc = fetchAllocationDocument_(newest.url);
+    if (!doc.ok) throw new Error(newest.name + ' could not be read: ' + doc.error);
+    let year = 0;
+    try { year = new Date(cfg.MEETING_DATE).getFullYear() || 0; } catch (e) { year = 0; }
+    Object.assign(out.agenda, { ok: true, file: newest.name, url: newest.url, rev: newest.rev, listedAt: newest.listedAt, from: doc.from, allocations: parseTdocAllocations_(doc.doc, reportNumbers) });
+    out.candidates = parseAhgCandidates_(doc.doc, year);
+  } catch (e) {
+    out.agenda.error = e.message;
+  }
+  try {
+    if (!folders.schedule) throw new Error('no plenary Schedule folder');
+    const listing = fetchMeetingSourceCached_(folders.schedule, isListing);
+    if (!listing.ok) throw new Error('the Schedule folder could not be read: ' + listing.error);
+    out.schedule = { ok: true, folder: folders.schedule, files: scheduleFiles_(parseFtpFolderListing_(listing.text, folders.schedule)).slice(0, 8) };
+  } catch (e) {
+    out.schedule.error = e.message;
+  }
+  return out;
+}
+
+// --- Meeting Control ---
+
+/** Report > Meeting Control…: the view opens at once and loads its data (progress shown). */
+function openMeetingControl() {
+  assertNotTemplateMaster_();
+  const html = HtmlService.createHtmlOutput(meetingControlHtml_()).setWidth(980).setHeight(680);
+  DocumentApp.getUi().showModalDialog(html, 'Meeting Control');
+}
+
+/** The registration rows of the report: [{ tdoc, title, agenda }] (one read of its Registration of Documents table). */
+function registrationRowsOfReport_(body) {
+  const out = [];
+  body.getTables().forEach(function (t) {
+    if (!registrationTableColumns_(t)) return;
+    for (let r = 1; r < t.getNumRows(); r++) {
+      const row = t.getRow(r);
+      const n = row.getCell(0).getText().trim();
+      if (isRegisteredTdocNumber_(n)) out.push({ tdoc: n, title: row.getCell(1).getText().trim(), agenda: row.getNumCells() > 3 ? row.getCell(3).getText().trim() : '' });
+    }
+  });
+  return out;
+}
+
+/**
+ * Pure: the registration rows from the tables of ONE Docs API read (plenaryDocsTables_()), as
+ * registrationRowsOfReport_() gives them from DocumentApp: [{ tdoc, title, agenda }]. The registration table is the one
+ * whose header is the Registration of Documents header (with or without the ad-hoc Session column).
+ */
+function registrationRowsOfDocsTables_(tables) {
+  const out = [];
+  (tables || []).forEach(function (t) {
+    const h = t.header || [];
+    const registration = (h.length === 4 || h.length === 5) && REGISTRATION_TABLE_HEADER_.every(function (x, i) { return h[i] === x; }) && (h.length === 4 || h[4] === ADHOC_SESSION_COLUMN_HEADER_);
+    if (!registration) return;
+    (t.rows || []).slice(1).forEach(function (row) {
+      const cells = row.tableCells || [];
+      const n = statusDocsCellText_(cells[0] || {}).trim();
+      if (isRegisteredTdocNumber_(n)) out.push({ tdoc: n, title: statusDocsCellText_(cells[1] || {}).trim(), agenda: cells.length > 3 ? statusDocsCellText_(cells[3]).trim() : '' });
+    });
+  });
+  return out;
+}
+
+/**
+ * The data of Meeting Control (the dialog asks for it): { rows: [{ tdoc, title, agenda,
+ * status, plenary, tags: [..], notes: [..] }], sources, sessions, titles, revisions,
+ * proposals, errors }. Each part is read on its own; a part that fails is named
+ * in `errors` and the rest is shown.
+ */
+function meetingControlData() {
+  const errors = [];
+  // The time of each part (logged, and returned for the page and the tests): Meeting Control took 281 s on a 115-TDoc
+  // ad-hoc copy (2026-11-25), three walks of the document through DocumentApp.
+  const timing = {};
+  const started = Date.now();
+  const timed = function (part, fn) { const t0 = Date.now(); try { return fn(); } finally { timing[part] = Date.now() - t0; } };
+  const store = getReportStateStore_(null);
+  // An update that did not end (phase A's journal) is said here until an update completes.
+  try {
+    const stopped = JSON.parse(store.getProperty(UPDATE_INTERRUPTED_KEY_) || 'null');
+    if (stopped) errors.push('Update interrupted: the update started ' + stopped.startedAt + ' did not end (stopped during "' + stopped.stage + '"); ' +
+      ((stopped.removed || []).length ? 'TDoc tables that were there twice with the same content, one removed: ' + stopped.removed.join(', ') + '; ' : '') +
+      ((stopped.differing || []).length ? 'TDoc tables more than once with DIFFERENT content -- check them: ' + stopped.differing.join(', ') + '; ' : '') +
+      'the record closes when an update completes.');
+  } catch (e) { /* the notice is a help only */ }
+  const body = currentReportDocument_().getBody();
+  const cfg = getReportConfig_();
+  const byTdoc = {};
+  const row = function (n) { return byTdoc[n] = byTdoc[n] || { tdoc: n, title: '', agenda: '', status: '', plenary: '', tags: [], notes: [] }; };
+  // ONE read of the report through the Docs API, when the service is there; the registration, the scope and the
+  // statuses come from it. Without it (or when it cannot be read) each is read through DocumentApp, as before.
+  const snap = timed('read', function () { try { return statusDropdownsAvailable_() ? plenarySnapshot_(currentReportDocument_().getId()) : null; } catch (e) { return null; } });
+  const docsTables = snap ? timed('tables', function () { return plenaryDocsTables_(snap.content); }) : null;
+  timing.via = docsTables ? 'docs-api' : 'documentapp';
+  let registration = [];
+  try { registration = timed('registration', function () { return docsTables ? registrationRowsOfDocsTables_(docsTables) : registrationRowsOfReport_(body); }); registration.forEach(function (r) { Object.assign(row(r.tdoc), { title: r.title, agenda: r.agenda }); }); } catch (e) { errors.push('Registration of Documents: ' + e.message); }
+  try {
+    const scope = timed('scope', function () { return docsTables ? plenaryScopeOfTables_(docsTables) : reportTdocScope_(body); });
+    if (scope && scope.ok) {
+      let entries = [];
+      if (docsTables) {
+        entries = timed('statuses', function () { return readPlenaryDispositionsOfTables_(docsTables, scope, {}, PropertiesService.getDocumentProperties().getProperties() || {}).entries; });
+      } else if (plenarySelectionEnabled_()) {
+        entries = [];
+      } else {
+        entries = timed('statuses', function () { return readReportDispositions_(body, { scope: scope }).entries; });
+      }
+      entries.forEach(function (e) {
+        const r = row(e.tdoc);
+        r.status = e.label || '';
+        r.plenary = e.plenary ? 'Yes' : '';
+        if (e.plenary) r.tags.push('plenary');
+        if (e.disposition === 'UNRESOLVED') r.tags.push('unresolved');
+        if (e.label === 'reserved') r.tags.push('new');
+      });
+    }
+  } catch (e) { errors.push('Statuses: ' + e.message); }
+  let titles = {};
+  try { titles = JSON.parse(store.getProperty(TITLE_SYNC_PENDING_KEY_) || '{}') || {}; Object.keys(titles).forEach(function (n) { if (n === '__more') return; row(n).tags.push('title'); row(n).notes.push('Title in 3GU: ' + titles[n].list); }); } catch (e) { errors.push('Titles: ' + e.message); }
+  let revisions = {};
+  try { revisions = readProvisionalRecords_(store); Object.keys(revisions).forEach(function (n) { const r = revisions[n]; if (['pending', 'conflict', 'undo'].indexOf(r.state) === -1 && !(r.state === 'transferred' && r.plenaryDone === 'manual')) return; row(n).tags.push('revision'); row(n).notes.push('Revision expected: ' + r.decision + ' (' + r.state + (r.reason ? ': ' + r.reason : '') + ')'); }); } catch (e) { errors.push('Revisions expected: ' + e.message); }
+  let sessions = null;
+  try {
+    const resolver = makeAdhocTdocSessionResolverSafely_(null);
+    if (resolver) {
+      if (resolver.rule === 'reservation-6h' && store.getProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_)) errors.push('Reservation clock: ' + store.getProperty(ADHOC_RESERVATION_CLOCK_ALERT_KEY_));
+      if (store.getProperty(ADHOC_CARRY_KEY_ + '_FULL')) errors.push('Carry-forward: the carried sessions no longer fit the report state since ' + store.getProperty(ADHOC_CARRY_KEY_ + '_FULL') + '; new carries are not recorded.');
+      const carry = resolver.carryOn ? resolver.carry || {} : {};
+      Object.keys(carry).forEach(function (n) { if (!carry[n].length) return; row(n).tags.push('carried'); row(n).notes.push('Carried into ' + carry[n].map(function (c) { return adhocSessionCodes_(resolver.sessions)[c.s] || c.s; }).join(', ')); });
+      sessions = { rule: resolver.rule, carryOn: !!resolver.carryOn, count: resolver.sessions.length, codes: adhocSessionCodes_(resolver.sessions) };
+    }
+  } catch (e) { errors.push('Sessions: ' + e.message); }
+  let sources = null;
+  let proposals = [];
+  const adhoc = isAdhocReportForMeetingControl_();
+  try {
+    // The plenary Agenda and Schedule folders are those of a main meeting: an ad-hoc report does not read them (they do
+    // not exist for it: HTTP 403 on the 86178 copy, 2026-11-25).
+    sources = adhoc ? { skipped: 'An ad-hoc meeting: the plenary Agenda and Schedule folders of a main meeting are not read.' }
+      : timed('sources', function () { return readPlenarySources_(cfg, registration.map(function (r) { return r.tdoc; })); });
+    if (sources.agenda && sources.agenda.ok) {
+      const reportAgenda = {}; registration.forEach(function (r) { reportAgenda[r.tdoc] = r.agenda; });
+      const reallocated = {}; const map = getReallocationMap_(); Object.keys(map || {}).forEach(function (n) { reallocated[n] = String(map[n].new || '').trim(); });
+      proposals = proposedReallocations_(sources.agenda.allocations, reportAgenda, reallocated);
+      proposals.forEach(function (p) { const r = row(p.tdoc); r.tags.push('allocation'); r.notes.push((p.kind === 'ambiguous' ? 'Listed under ' : 'Allocation ' + sources.agenda.file + ': ') + p.to + ' (report: ' + p.from + (p.kind === 'manual' ? '; reallocated by hand to ' + p.replaces + ', kept' : '') + ')'); });
+      delete sources.agenda.allocations;
+    }
+  } catch (e) { errors.push('Agenda sources: ' + e.message); }
+  const rows = Object.keys(byTdoc).sort().map(function (n) { return byTdoc[n]; }).filter(function (r) { return r.tags.length; });
+  timing.total = Date.now() - started;
+  Logger.log('[PERF] Meeting Control: ' + JSON.stringify(timing));
+  return { rows: rows, titles: titles, proposals: proposals, sources: sources, sessions: sessions, errors: errors, at: new Date().toISOString(), isAdhoc: adhoc, timing: timing };
+}
+
+/**
+ * Meeting Control: accepts proposed reallocations -- only those still proposed
+ * now (the sources and the report read again inside the lock: a stale page
+ * writes nothing it does not show). Returns what was done.
+ */
+function acceptProposedReallocations(items) {
+  assertNotTemplateMaster_();
+  return withDispositionLock_('Meeting Control', function () {
+    const body = currentReportDocument_().getBody();
+    const registration = registrationRowsOfReport_(body);
+    const sources = readPlenarySources_(getReportConfig_(), registration.map(function (r) { return r.tdoc; }));
+    if (!sources.agenda.ok) throw new Error('the allocation could not be read again: ' + sources.agenda.error);
+    const reportAgenda = {}; registration.forEach(function (r) { reportAgenda[r.tdoc] = r.agenda; });
+    const reallocated = {}; const map = getReallocationMap_(); Object.keys(map || {}).forEach(function (n) { reallocated[n] = String(map[n].new || '').trim(); });
+    const now = proposedReallocations_(sources.agenda.allocations, reportAgenda, reallocated).filter(function (p) { return p.kind === 'proposed'; });
+    const done = [];
+    const skipped = [];
+    (items || []).forEach(function (p) {
+      const still = now.filter(function (x) { return x.tdoc === p.tdoc && x.to === String(p.to) && x.from === String(p.from); })[0];
+      if (!still) { skipped.push(String(p.tdoc)); return; }
+      saveReallocation(still.tdoc, still.from, still.to, 'TDoc allocation ' + sources.agenda.file + ' (accepted in Meeting Control ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC)');
+      done.push(still.tdoc + ' → ' + still.to);
+    });
+    return (done.length ? 'Added to Document Reallocations: ' + done.join(', ') + '. Run Apply Reallocations to Report… (or the next build) to move the TDoc tables.' : 'Nothing was accepted.') +
+      (skipped.length ? ' Not proposed any more (left out): ' + skipped.join(', ') + '.' : '');
+  });
+}
+
+/**
+ * Meeting Control (ad-hoc report): what the reservation rule would change, from
+ * the TDoc list now: { ok, error, column, moves: [{ tdoc, upload, reservation, why }],
+ * same, count }. Read-only.
+ */
+function previewAdhocSessionRule() {
+  assertNotTemplateMaster_();
+  if (!isAdhocReportForMeetingControl_()) throw new Error('the session rule is a setting of an ad-hoc report');
+  ISSUE28_FORCE_RESERVATION_READ_ = true;
+  try {
+    const cfg = getReportConfig_();
+    const groups = downloadAndGroupTdocs_(cfg, null);
+    const all = flattenTdocGroups_(groups);
+    const resolver = makeAdhocTdocSessionResolverSafely_(null);
+    if (!resolver) return { ok: false, error: 'no sessions are configured' };
+    const column = all.some(function (td) { return td.reserved !== undefined; });
+    if (!column) return { ok: false, column: false, error: 'the TDoc list has no "Reservation date" column: the rule would assign no TDoc' };
+    // The clock of the reservation times (UTC, as the uploads; issue #28 evidence of 2026-11-23), checked on THIS list.
+    const clock = reservationClockCheck_(all);
+    const problem = reservationClockProblem_(clock);
+    if (problem) {
+      // A refused preview takes back an earlier one: the rule cannot be switched on from a preview of before.
+      getReportStateStore_(null).deleteProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW');
+      return { ok: false, column: true, clock: clock, error: problem + '. The rule is not switched (issue #28).' };
+    }
+    const toInstant = resolver.toInstant;
+    const codes = adhocSessionCodes_(resolver.sessions);
+    const name = function (id) { return id ? codes[id] || id : '–'; };
+    const moves = [];
+    let same = 0;
+    all.forEach(function (td) {
+      // The rule is not switched yet: the resolver's automatic session is the upload rule's.
+      const up = resolver.automatic(td);
+      const re = assignAdhocSessionByReservation_(td.reserved, resolver.sessions, toInstant, resolver.clock === 'session' ? 'session' : 'utc');
+      if (up.sessionId === re.sessionId) { same++; return; }
+      moves.push({ tdoc: tdocNumberOf_(td), upload: name(up.sessionId), reservation: name(re.sessionId), why: adhocReservationReasonText_(re.reason) });
+    });
+    const stamp = new Date().toISOString();
+    getReportStateStore_(null).setProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW', stamp);
+    return { ok: true, column: true, moves: moves, same: same, count: all.length, at: stamp, clock: clock };
+  } finally {
+    ISSUE28_FORCE_RESERVATION_READ_ = false;
+  }
+}
+
+/** Meeting Control (ad-hoc report): the session rule; the reservation rule only after a preview of the last 30 minutes. */
+function setAdhocSessionRule(rule) {
+  assertNotTemplateMaster_();
+  return withDispositionLock_('Meeting Control', function () {
+    if (!isAdhocReportForMeetingControl_()) throw new Error('the session rule is a setting of an ad-hoc report');
+    const store = getReportStateStore_(null);
+    const value = rule === 'reservation-6h' ? 'reservation-6h' : 'upload';
+    if (value === 'reservation-6h') {
+      const at = Date.parse(store.getProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW') || '');
+      if (isNaN(at) || Date.now() - at > 30 * 60000) throw new Error('show what the rule changes first (Preview) -- then switch');
+      store.deleteProperty(ADHOC_SESSION_RULE_KEY_ + '_PREVIEW');
+    }
+    store.setProperty(ADHOC_SESSION_RULE_KEY_, value);
+    return 'Session rule: ' + (value === 'upload' ? 'by upload time (as before)' : 'by reservation time, cut-off at the end of a session + 6 hours') + '. The next update writes the Session column.';
+  });
+}
+
+/**
+ * Meeting Control (ad-hoc report): what carry-forward would record now, from the TDoc list and the report's
+ * statuses: { ok, error, changes: [{ tdoc, into }], count, at }. Read-only (it stores the time of the preview).
+ */
+function previewAdhocCarryForward() {
+  assertNotTemplateMaster_();
+  if (!isAdhocReportForMeetingControl_()) throw new Error('carry-forward is a setting of an ad-hoc report');
+  const cfg = getReportConfig_();
+  const all = flattenTdocGroups_(downloadAndGroupTdocs_(cfg, null));
+  const resolver = makeAdhocTdocSessionResolverSafely_(null);
+  if (!resolver) return { ok: false, error: 'no sessions are configured' };
+  const store = getReportStateStore_(null);
+  const index = buildTdocTableIndex_(currentReportDocument_().getBody().getTables());
+  const stored = readAdhocCarry_(store);
+  const plan = adhocCarryPlan_(resolver, all, index, stored);
+  const codes = adhocSessionCodes_(resolver.sessions);
+  const stamp = new Date().toISOString();
+  store.setProperty(ADHOC_CARRY_MODE_KEY_ + '_PREVIEW', stamp);
+  const names = function (ids) { return ids.map(function (id) { return codes[id] || id; }).join(', '); };
+  // Carries recorded before (carry-forward on earlier) are shown again when it is switched on: listed too.
+  const kept = Object.keys(stored).sort().filter(function (n) { return stored[n] && stored[n].length; }).map(function (n) { return { tdoc: n, into: names(stored[n].map(function (c) { return c.s; })) }; });
+  return { ok: true, changes: plan.changes.map(function (c) { return { tdoc: c.tdoc, into: names(c.sessions) }; }), kept: kept, count: all.length, at: stamp };
+}
+
+/** Meeting Control (ad-hoc report): carry-forward on (after a preview of the last 30 minutes) or off. */
+function setAdhocCarryForward(on) {
+  assertNotTemplateMaster_();
+  return withDispositionLock_('Meeting Control', function () {
+    if (!isAdhocReportForMeetingControl_()) throw new Error('carry-forward is a setting of an ad-hoc report');
+    const store = getReportStateStore_(null);
+    if (on) {
+      const at = Date.parse(store.getProperty(ADHOC_CARRY_MODE_KEY_ + '_PREVIEW') || '');
+      if (isNaN(at) || Date.now() - at > 30 * 60000) throw new Error('show what carry-forward records first (Preview) -- then switch');
+      store.deleteProperty(ADHOC_CARRY_MODE_KEY_ + '_PREVIEW');
+      store.setProperty(ADHOC_CARRY_MODE_KEY_, 'on');
+      return 'Carry-forward on: the next update carries the TDocs not disposed into the sessions that have started ("A01 → A02").';
+    }
+    store.setProperty(ADHOC_CARRY_MODE_KEY_, 'off');
+    return 'Carry-forward off: the next update shows the registered sessions only; the carries recorded so far are kept, not shown.';
+  });
+}
+
+/** Meeting Control (ad-hoc report): creates sessions from confirmed candidates (they are validated as Configure Sessions does). */
+function createSessionsFromCandidates(candidates) {
+  assertNotTemplateMaster_();
+  // saveAdhocSessionsConfiguration() is the writer of Configure Sessions, with its own checks.
+  return (function () {
+    if (!isAdhocReportForMeetingControl_()) throw new Error('sessions are created in an ad-hoc report only');
+    const store = getReportStateStore_(null);
+    const parsed = parseAdhocSessionsProperty_(store.getProperty(ADHOC_SESSIONS_KEY_));
+    const existing = parsed.status === 'ok' ? parsed.config.sessions : [];
+    const rows = existing.map(function (s) { return { id: s.id, label: s.label, date: s.date, endDate: s.endDate || '', start: s.start, end: s.end }; });
+    const meetingZone = meetingSessionTimeZone_(null) || Session.getScriptTimeZone();
+    const refused = [];
+    (candidates || []).forEach(function (c) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) { refused.push(String(c.text || c.group || '?').slice(0, 40) + ' (no date)'); return; }
+      const conv = convertCandidateToMeetingZone_(c, meetingZone);
+      if (!conv) { refused.push(String(c.group || '?') + ' ' + c.date + ' (its time zone "' + c.zone + '" is not known: enter it in Configure Sessions)'); return; }
+      rows.push({ id: '', label: String(c.group || 'AHG').slice(0, 16), date: conv.date, endDate: /^\d{4}-\d{2}-\d{2}$/.test(String(c.endDate || '')) ? c.endDate : '', start: conv.start, end: conv.end });
+    });
+    if (refused.length && rows.length === existing.length) return 'Nothing created: ' + refused.join('; ') + '.';
+    const saved = saveAdhocSessionsConfiguration(rows);
+    return saved && saved.ok === false ? 'Not created: ' + (saved.errors || []).join(' ') : 'Sessions saved. Check their times in Configure Sessions…: the agenda gives times in its own zone, the sessions use the meeting zone.';
+  })();
+}
+
+/**
+ * Pure (given the zone functions): a candidate's date and times in the meeting
+ * zone: its quoted zone (the abbreviations of the agenda: UTC/GMT 0, CET +1,
+ * CEST +2) to instants, then to the meeting zone's wall clock. No time: the date
+ * as it is. An unknown zone with a time: null.
+ */
+function convertCandidateToMeetingZone_(c, meetingZone) {
+  const offsets = { UTC: 0, GMT: 0, CET: 60, CEST: 120 };
+  if (!c.start) return { date: c.date, start: '', end: '' };
+  if (!Object.prototype.hasOwnProperty.call(offsets, String(c.zone || ''))) return null;
+  const toMeeting = function (hhmm) {
+    const m = c.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const instant = Date.UTC(+m[1], +m[2] - 1, +m[3], +hhmm.slice(0, 2), +hhmm.slice(3, 5)) - offsets[c.zone] * 60000;
+    return sessionZoneWallOfInstant_(meetingZone, instant);
+  };
+  const s = toMeeting(c.start);
+  const e = c.end ? toMeeting(c.end) : '';
+  return { date: s.slice(0, 10), start: s.slice(11, 16), end: e && e.slice(0, 10) === s.slice(0, 10) ? e.slice(11, 16) : '' };
+}
+
+/** Whether this report is an ad-hoc one (in any runtime; the menu's own test lives in ReportCreator.js). */
+function isAdhocReportForMeetingControl_() {
+  try { return String(getReportStateStore_(null).getProperty('MEETING_TYPE') || '').trim().toLowerCase() === 'adhoc'; } catch (e) { return false; }
+}
+
+/** Pure: the Meeting Control page. */
+function meetingControlHtml_() {
+  return '<style>body{font:13px Arial,sans-serif;margin:8px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:3px 5px;text-align:left;vertical-align:top}th{background:#f1f3f4}' +
+    '.chip{display:inline-block;border:1px solid #888;border-radius:10px;padding:1px 8px;margin:2px;cursor:pointer}.chip.on{background:#1a73e8;color:#fff;border-color:#1a73e8}.tag{font-size:11px;background:#eee;border-radius:3px;padding:0 4px;margin-right:3px}' +
+    '.err{color:#b00020}.note{color:#555}#load{font-weight:bold}.high{color:#137333}.medium{color:#b06000}.low{color:#b00020}section{margin:10px 0}</style>' +
+    '<div id="load">Reading the report and the meeting\'s sources…</div><div id="app" style="display:none">' +
+    '<div><input id="q" placeholder="Search TDoc, title, note…" size="40" oninput="draw()"> <span id="chips"></span></div><div id="errs" class="err"></div>' +
+    '<section><table id="t"></table></section>' +
+    '<section id="alloc"></section><section id="src"></section><section id="ses"></section><div id="msg" style="font-weight:bold"></div></div>' +
+    '<script>var D=null,ON={};var TAGS=["new","title","revision","allocation","carried","unresolved","plenary"];' +
+    'function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];});}' +
+    'function chips(){document.getElementById("chips").innerHTML=TAGS.map(function(t){var n=D.rows.filter(function(r){return r.tags.indexOf(t)!==-1;}).length;return "<span class=\\"chip"+(ON[t]?" on":"")+"\\" onclick=\\"ON[\'"+t+"\']=!ON[\'"+t+"\'];draw()\\">"+t+" ("+n+")</span>";}).join("");}' +
+    'function draw(){chips();var q=document.getElementById("q").value.toLowerCase();var act=TAGS.filter(function(t){return ON[t];});' +
+    'var rows=D.rows.filter(function(r){return(!act.length||act.some(function(t){return r.tags.indexOf(t)!==-1;}))&&(!q||(r.tdoc+" "+r.title+" "+r.notes.join(" ")).toLowerCase().indexOf(q)!==-1);});' +
+    'document.getElementById("t").innerHTML="<tr><th>TDoc</th><th>Title</th><th>A.I.</th><th>Status</th><th>Plenary</th><th>What</th></tr>"+rows.map(function(r){return "<tr><td>"+esc(r.tdoc)+"</td><td>"+esc(r.title)+"</td><td>"+esc(r.agenda)+"</td><td>"+esc(r.status)+"</td><td>"+esc(r.plenary)+"</td><td>"+r.tags.map(function(t){return "<span class=tag>"+esc(t)+"</span>";}).join("")+"<br>"+r.notes.map(esc).join("<br>")+"</td></tr>";}).join("")+(rows.length?"":"<tr><td colspan=6>Nothing to show.</td></tr>");}' +
+    'function alloc(){var p=D.proposals.filter(function(x){return x.kind==="proposed";});var s=D.sources&&D.sources.agenda;var h="<h4>Changed allocations</h4>";' +
+    'if(!s||!s.ok){h+="<div class=err>"+esc(s?s.error:"not read")+"</div>";}else{h+="<div class=note>Source: <a target=_blank href=\\""+esc(s.url)+"\\">"+esc(s.file)+"</a> (rev "+esc(s.rev)+", listed "+esc(s.listedAt||"?")+", "+esc(s.from)+", observed "+esc(D.sources.observedAt.slice(0,16).replace("T"," "))+" UTC). Nothing is applied until you accept it.</div>";' +
+    'h+=p.length?"<table><tr><th></th><th>TDoc</th><th>Report A.I.</th><th>Allocation</th></tr>"+p.map(function(x,i){return "<tr><td><input type=checkbox class=ap value="+i+"></td><td>"+esc(x.tdoc)+"</td><td>"+esc(x.from)+"</td><td>"+esc(x.to)+"</td></tr>";}).join("")+"</table><button onclick=\\"acc()\\">Preview and accept selected…</button>":"<p>No changed allocation.</p>";' +
+    'var a=D.proposals.filter(function(x){return x.kind==="ambiguous";});if(a.length)h+="<p class=note>Listed under several items (not proposed): "+a.map(function(x){return esc(x.tdoc+" ("+x.to+")");}).join(", ")+"</p>";' +
+    'var mm=D.proposals.filter(function(x){return x.kind==="manual";});if(mm.length)h+="<p class=note>Reallocated by hand to another item (kept, not proposed): "+mm.map(function(x){return esc(x.tdoc+" (yours: "+x.replaces+", allocation: "+x.to+")");}).join(", ")+"</p>";}document.getElementById("alloc").innerHTML=h;}' +
+    'function acc(){var p=D.proposals.filter(function(x){return x.kind==="proposed";});var pick=[].slice.call(document.querySelectorAll(".ap:checked")).map(function(c){var x=p[+c.value];return{tdoc:x.tdoc,from:x.from,to:x.to,source:D.sources.agenda.file};});if(!pick.length){msg("Choose at least one.");return;}' +
+    'if(!confirm("Add to Document Reallocations:\\n"+pick.map(function(x){return x.tdoc+": "+x.from+" -> "+x.to;}).join("\\n")+"\\n\\nThe TDoc tables move when the reallocations are applied."))return;msg("Working…");google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).acceptProposedReallocations(pick);}' +
+    'function src(){if(D.sources&&D.sources.skipped){document.getElementById("src").innerHTML="<div class=\\"note\\">"+esc(D.sources.skipped)+"</div>";return;}var c=(D.sources&&D.sources.candidates)||[];var sc=D.sources&&D.sources.schedule;var h="<h4>AHG sessions in the agenda (candidates)</h4>";' +
+    'h+=c.length?"<table><tr><th></th><th>Group</th><th>Date</th><th>Time</th><th>Zone</th><th>Confidence</th><th>Text</th></tr>"+c.map(function(x,i){return "<tr><td>"+(D.isAdhoc?"<input type=checkbox class=cc value="+i+">":"")+"</td><td>"+esc(x.group)+"</td><td>"+esc(x.date)+"</td><td>"+esc(x.start)+(x.end?"–"+esc(x.end):"")+"</td><td>"+esc(x.zone)+"</td><td class="+esc(x.confidence)+">"+esc(x.confidence)+(x.why?"<br><small>"+esc(x.why)+"</small>":"")+"</td><td><small>"+esc(x.text)+"</small></td></tr>";}).join("")+"</table>"+(D.isAdhoc?"<button onclick=\\"mk()\\">Create sessions from selected…</button>":"<p class=note>Sessions are created in an ad-hoc report.</p>"):"<p>None found.</p>";' +
+    'h+="<h4>Schedule</h4>"+(sc&&sc.ok?(sc.files.length?"<ul>"+sc.files.map(function(f){return "<li><a target=_blank href=\\""+esc(f.url)+"\\">"+esc(f.name)+"</a> ("+esc(f.listedAt)+")</li>";}).join("")+"</ul><p class=note>The version order of these files is not known: a hint only.</p>":"<p>No file.</p>"):"<div class=err>"+esc(sc?sc.error:"not read")+"</div>");document.getElementById("src").innerHTML=h;}' +
+    'function mk(){var c=D.sources.candidates;var pick=[].slice.call(document.querySelectorAll(".cc:checked")).map(function(x){return c[+x.value];});if(!pick.length){msg("Choose at least one.");return;}' +
+    'if(!confirm("Create "+pick.length+" session(s):\\n"+pick.map(function(x){return x.group+" "+x.date+" "+x.start+"-"+x.end+" "+x.zone+" ("+x.confidence+")";}).join("\\n")+"\\n\\nCheck the times afterwards in Configure Sessions."))return;msg("Working…");google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).createSessionsFromCandidates(pick);}' +
+    'function ses(){if(!D.sessions){document.getElementById("ses").innerHTML="";return;}var r=D.sessions.rule;document.getElementById("ses").innerHTML="<h4>Session rule</h4><p>"+(r==="upload"?"By upload time (as before).":"By reservation time; cut-off: the end of a session + 6 hours.")+" <button onclick=\\"rule(\'"+(r==="upload"?"reservation-6h":"upload")+"\')\\">Switch to "+(r==="upload"?"reservation + 6 h":"upload time")+"…</button></p><p class=note>Switching to the reservation rule first shows which TDocs change their session and checks that the reservation and upload times of the list agree (UTC); manual assignments stay.</p>"+"<h4>Carry-forward</h4><p>"+(D.sessions.carryOn?"On: TDocs not disposed are carried into the sessions that have started.":"Off.")+" <button onclick=\\"carry("+(D.sessions.carryOn?"false":"true")+")\\">"+(D.sessions.carryOn?"Switch off…":"Switch on…")+"</button></p>";}' +
+    'function carry(on){if(!on){if(!confirm("Switch carry-forward off? The carries recorded so far are kept, not shown."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocCarryForward(false);return;}' +
+    'msg("Reading the TDoc list for the preview…");google.script.run.withSuccessHandler(function(p){if(!p.ok){msg("Not switched: "+p.error);return;}var t=(p.changes.length?p.changes.map(function(x){return x.tdoc+" -> "+x.into;}).join("\\n"):"Nothing new would be carried now.")+(p.kept.length?"\\n\\nShown again (recorded before):\\n"+p.kept.map(function(x){return x.tdoc+" -> "+x.into;}).join("\\n"):"");' +
+    'if(!confirm("Carry-forward would record now ("+p.count+" TDocs in the list):\\n"+t+"\\n\\nSwitch on?"))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocCarryForward(true);}).withFailureHandler(function(e){msg("Preview failed: "+e.message);}).previewAdhocCarryForward();}' +
+    'function rule(v){if(v==="upload"){if(!confirm("Back to the upload rule? The next update rewrites the Session column; manual assignments stay."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocSessionRule(v);return;}' +
+    'msg("Reading the TDoc list for the preview…");google.script.run.withSuccessHandler(function(p){if(!p.ok){msg("Not switched: "+p.error);return;}var t=p.moves.length?p.moves.map(function(x){return x.tdoc+": "+x.upload+" -> "+x.reservation+(x.reservation==="–"?" ("+x.why+")":"");}).join("\\n"):"No TDoc changes its session.";' +
+    'if(!confirm("With the reservation rule ("+p.count+" TDocs, "+p.same+" unchanged; clock check: "+p.clock.checked+" TDocs with both times, none uploaded before its reservation, shortest gap "+p.clock.minGapMinutes+" min):\\n"+t+"\\n\\nSwitch? Manual assignments stay."))return;google.script.run.withSuccessHandler(msg).withFailureHandler(function(e){msg("Failed: "+e.message);}).setAdhocSessionRule(v);}).withFailureHandler(function(e){msg("Preview failed: "+e.message);}).previewAdhocSessionRule();}' +
+    'function msg(t){document.getElementById("msg").textContent=t;}' +
+    'google.script.run.withSuccessHandler(function(d){D=d;document.getElementById("load").style.display="none";document.getElementById("app").style.display="";document.getElementById("errs").innerHTML=d.errors.map(esc).join("<br>");draw();alloc();src();ses();})' +
+    '.withFailureHandler(function(e){document.getElementById("load").textContent="Could not read: "+e.message;}).meetingControlData();</script>';
+}
+
+// =========================================================
+// END OF ISSUE 28 C
 // =========================================================

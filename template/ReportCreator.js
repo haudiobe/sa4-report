@@ -758,6 +758,8 @@ function buildTemplateReportMenu_(ui) {
     .addItem('Review Title Changes…', 'reviewTitleChanges')
     // Issue #28 B: the decision of a revision recorded before 3GU registers it.
     .addItem('Revision Expected…', 'manageExpectedRevisions')
+    // Issue #28 C: one view of what needs a decision, with the agenda's allocations and AHG sessions.
+    .addItem('Meeting Control…', 'openMeetingControl')
     .addSeparator()
     // After T-2026.10.15: the Disposition Summary at the end of the report, and the checks before it is closed.
     .addItem('Update Disposition Summary', 'updateDispositionSummary')

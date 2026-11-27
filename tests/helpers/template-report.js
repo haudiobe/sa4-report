@@ -107,12 +107,14 @@ function templateReport(options) {
   const header = HEADER.concat(o.columns || []);
   s.SpreadsheetApp = { open: () => {
     const listed = r.tdocs.concat(r.listAgenda && !r.tdoc(r.listAgenda) ? [{ id: r.listAgenda, agenda: '', status: 'available', type: 'agenda' }] : []);
-    const values = [header].concat(listed.map((t) => [t.id, t.title || 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', t.type || 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', '', '', t.isRevisionOf || '', t.revisedTo || '']
+    // Issue #28 C (addition): a TDoc can give its `reservedAt` and `uploadedAt` (the cells as the list shows them).
+    const values = [header].concat(listed.map((t) => [t.id, t.title || 'Synthetic title of ' + t.id, 'ExampleCorp', 'Sam Rivera', t.type || 'discussion', 'Agreement', t.agenda, 'Synthetic item', t.status || '', t.reservedAt || '', t.uploadedAt || '', t.isRevisionOf || '', t.revisedTo || '']
       .concat((o.columns || []).map((name) => (t[name] === undefined ? '' : t[name])))));
     const noLink = { getLinkUrl: () => null };
     const rich = [header.map(() => noLink)].concat(listed.map((t) => header.map((h, col) => (col === 0 && t.uploaded ? { getLinkUrl: () => zip(t.id) } : noLink))));
     const sheet = { getDataRange: () => ({ getValues: () => values, getRichTextValues: () => rich }),
-      getRange: (row, col, rows) => ({ getDisplayValues: () => [['Uploaded']].concat(listed.map(() => [''])).slice(row - 1, row - 1 + rows) }) };
+      // Issue #28 C (addition): the display values of the column asked for (before: the Uploaded header and empty cells, which it still is for Uploaded).
+      getRange: (row, col, rows) => ({ getDisplayValues: () => values.map((v) => [String(v[col - 1] === undefined ? '' : v[col - 1])]).slice(row - 1, row - 1 + rows) }) };
     return { getSheets: () => [sheet], getSpreadsheetTimeZone: () => 'UTC' };
   } };
 
