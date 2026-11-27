@@ -75,7 +75,7 @@ function attempt(r, fn) {
   let thrown = null;
   let value;
   try { value = r.exec(fn); } catch (e) { thrown = e.message; }
-  return { value: value, thrown: thrown, changed: snapshot(r) !== before, touched: r.body._state.dirty, fetches: r.fetches.slice(), sa4136: r.fetches.some((u) => SA4_136.test(u)), alerts: r.ui.alerts.map((a) => a.join(' | ')) };
+  return { value: value, thrown: thrown, changed: snapshot(r) !== before, touched: r.lastExecDirty, fetches: r.fetches.slice(), sa4136: r.fetches.some((u) => SA4_136.test(u)), alerts: r.ui.alerts.map((a) => a.join(' | ')) };
 }
 
 // ====================================================================== A

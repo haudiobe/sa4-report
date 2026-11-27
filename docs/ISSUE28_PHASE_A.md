@@ -269,3 +269,39 @@ The change:
   - Two late updates in a row, then one in time: written.
   - Typed Minutes and Disposition, the Status dropdowns and the links stay.
   - Goes to Plenary and outside an update: nothing left by the new limit.
+
+## The Disposition Summary from the update's Docs API read (added 2026-11-27, after the final run)
+
+In the final run the second update stopped at the 6-minute limit inside the Disposition Summary. The summary had started at 135.7 s, under the 170 s limit, and ran more than 223 s. On the same unchanged document it had taken 15, 49, 53 and 109 s before. The limit can stop the summary from starting late, but it cannot bound how long its DocumentApp reads take: 140 TDoc tables, cell by cell.
+
+The change:
+
+- **One read for everything.** The update reads the report once through the Docs API (`reportRunSnapshot_()`, shared with Undisposed Documents). The summary of an update now takes from that read:
+  - the scope (`plenaryScopeOfTables_`);
+  - the statuses, titles, sources and links (`readPlenaryDispositionsOfTables_` through `undisposedReadOfContent_`);
+  - the summary as it stands, with any text typed into it (`plenarySummarySectionOfContent_`, `plenarySummaryContentOfContent_`).
+- **Read as DocumentApp reads it** (`dispositionSummaryTablesOfRead_`):
+  - The Status is the text typed in its cell when it has any, else the value selected in its dropdown, as `readTdocStatus_` reads it.
+  - The link is the one on the TDoc number (`tdocCellLinkUrl_`), not the first link of the cell. "X (revision of Y)" links Y.
+  - Title, Source, Agenda Item and a typed Status come from the row labelled as `findCellText_` finds it ("Status" or "Status:"). The cell's paragraphs are joined by line ends, as `getText()` joins them.
+  - These are copies; Undisposed Documents and Goes to Plenary read the read as before.
+- **Writing.**
+  - A summary that already says this is not touched. Nothing is read through DocumentApp; the class lines are restyled only where the read shows they need it.
+  - A summary that changes is written by `renderDispositionSummary_` as before. It finds the section in the body itself, never at a position of the read.
+- **The one-update delay (decision of 2026-11-27).** The read is the saved report as the update started. What this update writes itself (new TDoc tables and registrations, statuses and titles from the TDoc list) is in the summary from the next update on, as in Undisposed Documents. The next update catches up, and the one after it changes nothing.
+- **Conflicts (decision of 2026-11-27).** A TDoc in two tables is read from each table's own dropdown, so differing values are listed as conflicting. DocumentApp cannot read a dropdown and gave every table of a TDoc the value of its first.
+- **Unchanged.**
+  - Without the read (text statuses, no Docs API, a failed read): through DocumentApp as before.
+  - The 170 s limit, the menu item "Update Disposition Summary" and Goes to Plenary.
+  - The read is made again by every update; it is never kept from one execution to the next, and outside an update there is none.
+- **Tests.**
+  - `tests/disposition-summary-close-report.test.js` part Y: twins of the same report, one through the update's read and one through DocumentApp, with the same steps:
+    - unchanged, with no DocumentApp read in the summary;
+    - a changed decision; text typed into the summary (refused, then written);
+    - Heading 2 on and off; a TDoc reallocated to Removed and a pasted table of another meeting;
+    - a TDoc added by the update: one update later, then identical and idempotent;
+    - a decision plus a new table before the summary in one update: written where the summary is;
+    - a conflict; no Docs API (as before); the menu (as before).
+  - Pure checks of the Status and the link.
+  - The delay is written into the tests of new TDocs and new titles.
+  - The test report now saves the document at the end of each execution, as Apps Script does. Before, the Docs API of the fake kept showing the document of an earlier execution.

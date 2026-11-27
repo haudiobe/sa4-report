@@ -513,7 +513,11 @@ console.log('F. where the summary stands; the agenda, the close and the Attendan
     ['# 5 Close of the meeting', id(3), '# ' + ATTENDANCE, '# ' + SUMMARY, '[summary 1]', '[summary 2]']);
   // New TDocs: of the closing item, of an item the report has no heading for, of an item before.
   r.tdocs.push(t(4, '5'), t(5, '4.6'), t(6, '4.3'));
-  check('an update with three new TDocs completes and rewrites the summary', r.update(), { success: true, error: null, dispositionSummary: 'replaced' });
+  // Issue #28 A (2026-11-27): the update's summary is read from the report as the update started (its Docs API read), so
+  // the TDocs this update adds are in the summary from the next update on (as in Undisposed Documents).
+  check('an update with three new TDocs completes; its summary is the one of the report as it started (unchanged)', r.update(), { success: true, error: null, dispositionSummary: 'unchanged' });
+  check('... the new TDocs are not in it yet', summaryOf(r.body).map((c) => c[0]), [TITLES[0] + ' (1)', TITLES[1] + ' (2)', TITLES[2] + ' (0)']);
+  check('the next update completes and rewrites the summary', r.update(), { success: true, error: null, dispositionSummary: 'replaced' });
   check('the TDoc of the closing item is before the Attendance; the new item 4.6 before the close; nothing after the summary but the summary', [tail(r.body), afterSummary(r.body)],
     [['# 5 Close of the meeting', id(3), id(4), '# ' + ATTENDANCE, '# ' + SUMMARY, '[summary 1]', '[summary 2]', '[summary 3]'], []]);
   check('4.6 got its heading in the order of the agenda', outline(r.body).filter((x) => /^# 4\./.test(x)), ['# 4.3 Performance requirements', '# 4.4 Design constraints', '# 4.5 Other topics', '# 4.6 Synthetic item']);
@@ -532,6 +536,7 @@ console.log('F. where the summary stands; the agenda, the close and the Attendan
     [['# 5 Close of the meeting', id(2), '# ' + ATTENDANCE, '# ' + SUMMARY, '[summary 1]', '[summary 1]'], []]);
   n.tdocs.push(t(3, '5'));
   n.update();
+  n.update(); // the summary has the new TDoc from the next update on
   check('... and a new TDoc of the closing item before both', [tail(n.body), afterSummary(n.body)], [['# 5 Close of the meeting', id(2), id(3), '# ' + ATTENDANCE, '# ' + SUMMARY, '[summary 1]', '[summary 1]', '[summary 1]'], []]);
 
   // A report without a close and without Attendance: the summary ends the agenda part. (A build always writes the close
@@ -543,6 +548,7 @@ console.log('F. where the summary stands; the agenda, the close and the Attendan
   check('no close, no Attendance: the summary at the end', outline(nc.body).slice(-5), ['# 4.5 Other topics', id(2), '# ' + SUMMARY, '[summary 1]', '[summary 1]']);
   nc.tdocs.push(t(3, '4.5'), t(4, '4.6'), t(5, '7'));
   nc.update();
+  nc.update(); // the summary has the new TDocs from the next update on
   check('new TDocs of the last item, of a new item and of a later item all go before the summary', [outline(nc.body).slice(outline(nc.body).indexOf('# 4.5 Other topics')), afterSummary(nc.body)],
     [['# 4.5 Other topics', id(2), id(3), '# 4.6 Synthetic item', id(4), '# 7 Synthetic item', id(5), '# ' + SUMMARY, '[summary 1]', '[summary 1]', '[summary 3]'], []]);
   nc.exec(() => nc.s.renderAdhocAttendanceSection_(nc.body, [{ statistics: [['Meeting', 'M']], attendees: [{ name: 'Kim Doe', company: 'ExampleCorp', email: 'kim.doe@example.com' }] }]));
@@ -1048,7 +1054,11 @@ console.log('M. the TDocs the report has registered (after T-2026.10.17): a cont
   // report registered it.
   r.tdocs.push(t(10, '4.5'));
   r.tdocs = r.tdocs.filter((x) => x.id !== id(3));
-  check('the next update: 10 registered and added; 03 kept', [r.update().dispositionSummary, summaryOf(r.body).reduce((a, c) => a.concat(c[1] === 'None.' ? [] : c[1].map((x) => x[0])), []).sort()],
+  const listedNow = () => summaryOf(r.body).reduce((a, c) => a.concat(c[1] === 'None.' ? [] : c[1].map((x) => x[0])), []).sort();
+  // Issue #28 A (2026-11-27): registered by this update, in the summary from the next update on (its read of the report as it started).
+  check('the next update registers 10; its summary is the one of the report as it started (10 not in it yet, 03 kept)', [r.update().dispositionSummary, listedNow()],
+    ['unchanged', [1, 2, 3, 4, 5, 6, 7, 8, 21, 22, 23, 24, 25, 26].map(id)]);
+  check('the update after it: 10 added; 03 kept', [r.update().dispositionSummary, listedNow()],
     ['replaced', [1, 2, 3, 4, 5, 6, 7, 8, 10, 21, 22, 23, 24, 25, 26].map(id)]);
 
   // The TDoc list cannot be read, or has no TDoc: the summary is the report's all the same; Close Report is not ready.
@@ -1591,6 +1601,166 @@ console.log('X. issue #28 A, after the seventh real-document run (2026-11-27): t
   check('Goes to Plenary, 200 s into the update: returns before the new limit, as before ("deferred" to its own place at the end), nothing left', [out.plenary, out.deferredPlenary], [{ state: 'deferred' }, []]);
   check('... the same report without Goes to Plenary has no summary: "absent", nothing left either', [out.plain, out.deferredPlain], [{ state: 'absent' }, []]);
   r.s.updateBudgetNow_ = () => Date.now();
+}
+
+// ====================================================================== Y
+console.log('Y. issue #28 A, after the final real-document run (2026-11-27): the summary from the update\'s Docs API read, against DocumentApp');
+{
+  // Twins: the same report twice; `slow` reads through DocumentApp as before (no use of the update's read), `fast` as now.
+  const twins = (tdocs, picks, options) => {
+    const fast = built(tdocs, picks, options);
+    const slow = built(tdocs, picks, options);
+    slow.s.dispositionSummaryRunRead_ = () => null;
+    return [fast, slow];
+  };
+  // The heading of each class line of the summary ('H2' or 'NORMAL').
+  const summaryHeadingsOf = (r) => r.body._children.filter((c) => c.getType() === 'PARAGRAPH' && TITLES.some((x) => c.getText().indexOf(x + ' (') === 0)).map((c) => c.getHeading());
+{
+  // What the summary of an update reads through DocumentApp (counted only while the summary runs).
+  const spy = (r) => {
+    const counts = { tables: 0, scope: 0, section: 0, content: 0 };
+    let inside = false;
+    const wrap = (name, key) => { const real = r.s[name]; r.s[name] = function () { if (inside) counts[key]++; return real.apply(this, arguments); }; };
+    wrap('detectTdocTablesInDocument_', 'tables'); wrap('reportTdocScope_', 'scope'); wrap('findDispositionSummarySection_', 'section'); wrap('readDispositionSummaryContent_', 'content');
+    const real = r.s.syncDispositionSummaryOnUpdate_;
+    r.s.syncDispositionSummaryOnUpdate_ = function () { inside = true; try { return real.apply(this, arguments); } finally { inside = false; } };
+    return () => { const out = Object.assign({}, counts); Object.keys(counts).forEach((k) => { counts[k] = 0; }); return out; };
+  };
+  const both = (pair, fn) => pair.map((r) => fn(r));
+  const same = (pair) => snapshot(pair[0].body) === snapshot(pair[1].body);
+  const tdocs = [t(1, '4.3'), t(2, '4.3'), t(3, '4.4'), t(4, '4.5'), t(5, '5')];
+  const pair = twins(tdocs, { 1: 'agreed', 2: 'noted', 3: 'parked', 5: 'endorsed' });
+  const [fast, slow] = pair;
+  both(pair, (r) => r.user(() => { const tb = r.table(id(2)); for (let i = 0; i < tb.getNumRows(); i++) if (tb.getRow(i).getCell(0).getText() === 'Minutes') tb.getRow(i).getCell(1).setText('Typed minutes, kept.'); }));
+  both(pair, updateSummary);
+  const reads = spy(fast);
+  const states = () => both(pair, (r) => r.update().dispositionSummary);
+
+  check('unchanged: both "unchanged", the same document', [states(), same(pair)], [['unchanged', 'unchanged'], true]);
+  check('... the update\'s read only: no TDoc table, no scope, no section and no summary content read through DocumentApp', reads(), { tables: 0, scope: 0, section: 0, content: 0 });
+  check('... a second update the same', [states(), same(pair), reads()], [['unchanged', 'unchanged'], true, { tables: 0, scope: 0, section: 0, content: 0 }]);
+  const docsReads = () => fast.api.calls.filter((c) => c.call === 'get').length;
+  const before = docsReads();
+  fast.update();
+  check('the read is made again by every update (never kept from an execution to the next); outside an update there is none',
+    [docsReads() > before, fast.exec(() => fast.s.reportRunSnapshot_())], [true, null]);
+  reads();
+
+  // A decision changed by hand before the update: both write it, the same summary (DocumentApp writes, as before).
+  both(pair, (r) => decide(r, { 3: 'agreed' }));
+  check('a changed decision: both "replaced", the same document', [states(), same(pair)], [['replaced', 'replaced'], true]);
+  check('... written by DocumentApp: the section found in the body, nothing of the TDoc tables read', (({ tables, scope, section }) => [tables, scope, section > 0])(reads()), [0, 0, true]);
+  check('... then idempotent', [states(), same(pair)], [['unchanged', 'unchanged'], true]);
+  check('typed Minutes kept', both(pair, (r) => r.field(id(2), 'Minutes')), ['Typed minutes, kept.', 'Typed minutes, kept.']);
+
+  // Text typed into the summary: both refuse, nothing written; text kept.
+  both(pair, (r) => r.user(() => { const at = r.body._children.findIndex((c) => isHeading(c) && c.getText() === SUMMARY); r.body.insertParagraph(at + 2, 'Note of the chair.'); }));
+  both(pair, (r) => decide(r, { 4: 'noted' }));
+  check('text typed into the summary: both "refused", the same document, the text kept', [states(), same(pair), fast.body._children.some((c) => c.getText && c.getText() === 'Note of the chair.')], [['refused', 'refused'], true, true]);
+  both(pair, (r) => r.user(() => { const p = r.body._children.filter((c) => c.getType() === 'PARAGRAPH' && c.getText() === 'Note of the chair.')[0]; p.removeFromParent(); }));
+  check('... moved out: both write it again', [states(), same(pair)], [['replaced', 'replaced'], true]);
+
+  // Heading 2 on and off: both restyle the class lines only, the same document.
+  both(pair, (r) => r.user(() => r.docProps.setProperty('DISPOSITION_CLASS_HEADINGS', 'heading2')));
+  reads();
+  check('Heading 2 on: both "unchanged" (the class lines restyled), the same document, class lines Heading 2', [states(), same(pair), summaryHeadingsOf(fast)], [['unchanged', 'unchanged'], true, ['H2', 'H2', 'H2']]);
+  check('... the section found in the body only because the read shows the class lines need it', reads().section > 0, true);
+  check('... then nothing more: no DocumentApp read at all', [states(), reads()], [['unchanged', 'unchanged'], { tables: 0, scope: 0, section: 0, content: 0 }]);
+  both(pair, (r) => r.user(() => r.docProps.deleteProperty('DISPOSITION_CLASS_HEADINGS')));
+  check('Heading 2 off again: both restyle back, the same document', [states(), same(pair), summaryHeadingsOf(fast)], [['unchanged', 'unchanged'], true, ['NORMAL', 'NORMAL', 'NORMAL']]);
+
+  // The scope: a TDoc reallocated to Removed and a pasted table of another meeting are left out by both.
+  both(pair, (r) => r.user(() => { r.body.insertParagraph(r.body.getChildIndex(r.body._children.find((c) => isHeading(c) && c.getText() === SUMMARY)), 'Document Reallocations'); }));
+  both(pair, (r) => r.user(() => {
+    const at = r.body.getChildIndex(r.body._children.find((c) => c.getType() === 'PARAGRAPH' && c.getText() === 'Document Reallocations')) + 1;
+    r.body.insertTable(at, [['TDoc', 'Original Agenda', 'New Agenda', 'Reason'], [id(4), '4.5', 'Removed', 'Synthetic: removed for the test']]);
+    const copy = r.table(id(1)).copy(); copy.getRow(0).getCell(1).setText(id(31)); r.body.insertTable(at + 1, copy);
+  }));
+  check('a TDoc reallocated to Removed and a pasted table of another meeting: both leave them out, the same document', [states(), same(pair), summaryOf(fast.body).reduce((a, c) => a.concat(c[1] === 'None.' ? [] : c[1].map((x) => x[0])), []).sort()],
+    [['replaced', 'replaced'], true, [1, 2, 3, 5].map(id)]);
+
+  // The one-update delay (decision of 2026-11-27): a TDoc this update adds is in the summary from the next update on.
+  both(pair, (r) => r.tdocs.push(t(6, '4.4')));
+  check('a TDoc added by the update: DocumentApp has it at once ("replaced"), the update\'s read from the next update on ("unchanged")', states(), ['unchanged', 'replaced']);
+  check('the next update catches up: "replaced" and "unchanged", the same document', [states(), same(pair)], [['replaced', 'unchanged'], true]);
+  check('... then idempotent', [states(), same(pair)], [['unchanged', 'unchanged'], true]);
+
+  // A decision by hand and a new TDoc table inserted BEFORE the summary in the same update: the summary is written where
+  // it is in the body (found there), not at a position of the read; one summary, the TDoc tables before it.
+  both(pair, (r) => decide(r, { 6: 'agreed' }));
+  both(pair, (r) => r.tdocs.push(t(7, '4.3')));
+  const moved = states();
+  check('a decision and a new table before the summary in one update: both write the summary', moved, ['replaced', 'replaced']);
+  check('... one summary, at the end, every TDoc table before it, nothing after it but the summary', [summaryHeadings(fast.body), afterSummary(fast.body), fast.order().indexOf(id(7)) !== -1], [1, [], true]);
+  check('... the next update catches up (07 in the summary): the same document as DocumentApp\'s, then idempotent', [states(), same(pair), states(), same(pair)], [['replaced', 'unchanged'], true, ['unchanged', 'unchanged'], true]);
+  check('no Status changed by any of it (only the picks of the test)', shownAll(fast), shownAll(slow));
+
+  // The menu item does not use the update's read.
+  let menuReads = 0;
+  const realRun = fast.s.dispositionSummaryRunRead_;
+  fast.s.dispositionSummaryRunRead_ = function () { menuReads++; return realRun.apply(this, arguments); };
+  updateSummary(fast);
+  check('Update Disposition Summary (the menu) as before: not from the update\'s read', menuReads, 0);
+  fast.s.dispositionSummaryRunRead_ = realRun;
+}
+{
+  // A TDoc in two tables whose Status dropdowns differ: a conflict (decision of 2026-11-27), never one value silently.
+  const pair = twins([t(1, '4.3'), t(2, '4.3'), t(3, '4.4')], { 1: 'agreed', 3: 'noted' });
+  pair.forEach((r) => r.user(() => { const tb = r.table(id(3)); r.body.insertTable(r.body.getChildIndex(tb) + 1, tb.copy()); }));
+  // The first table's dropdown changed by hand; the copy keeps "noted".
+  pair.forEach((r) => decide(r, { 3: 'agreed' }));
+  pair.forEach(updateSummary);
+  pair.forEach((r) => r.update());
+  const row = (r) => summaryOf(r.body).reduce((a, c) => a.concat(c[1] === 'None.' ? [] : c[1]), []).filter((x) => x[0] === id(3)).map((x) => x[3]);
+  check('a TDoc in two tables, its dropdowns "agreed" and "noted": the update\'s read lists it once, as conflicting', row(pair[0]), ['conflicting: agreed / noted']);
+  check('... (DocumentApp cannot read the second dropdown and gave both tables the first value)', row(pair[1]), ['agreed']);
+}
+{
+  // Cells as DocumentApp reads them (the review of 2026-11-27): a Title of two paragraphs, a Status typed over two
+  // paragraphs in a row labelled "Status:", the link of a "X (revision of Y)" cell -- the same summary both ways.
+  const pair = twins([t(1, '4.3'), t(2, '4.3'), t(3, '4.4')], { 1: 'agreed', 3: 'noted' });
+  const setRow = (r, n, label, text, newLabel) => r.user(() => { const tb = r.table(id(n)); for (let i = 0; i < tb.getNumRows(); i++) if (tb.getRow(i).getCell(0).getText() === label) { tb.getRow(i).getCell(1).setText(text); if (newLabel) tb.getRow(i).getCell(0).setText(newLabel); } });
+  pair.forEach((r) => {
+    setRow(r, 1, 'Title', 'First line of the title\nSecond line');
+    setRow(r, 2, 'Status', 'agreed\n(with changes)', 'Status:');
+  });
+  pair.forEach(updateSummary);
+  const states = pair.map((r) => r.update().dispositionSummary);
+  check('a Title of two paragraphs, a Status typed over two paragraphs under "Status:": both "unchanged" after the menu wrote it, the same document',
+    [states, snapshot(pair[0].body) === snapshot(pair[1].body)], [['unchanged', 'unchanged'], true]);
+  const cells = summaryOf(pair[0].body).reduce((a, c) => a.concat(c[1] === 'None.' ? [] : c[1]), []);
+  check('... read as getText() reads them (line ends, then one line in the summary)', [cells.filter((x) => x[0] === id(1)).map((x) => x[1]), cells.filter((x) => x[0] === id(2)).map((x) => x[3])],
+    [['First line of the title Second line'], ['agreed (with changes) (not a known status)']]);
+}
+{
+  // Without the update's read -- text statuses, no Docs API -- the summary is read through DocumentApp as before.
+  const r = withDialogs(templateReport({ tdocs: [t(1, '4.3'), t(2, '4.3'), t(3, '4.4')], tableSeparators: true, release: false, docs: false }));
+  r.build(); r.update();
+  updateSummary(r);
+  const count = (() => { let n = 0; const real = r.s.detectTdocTablesInDocument_; r.s.detectTdocTablesInDocument_ = function () { n++; return real.apply(this, arguments); }; return () => n; })();
+  const res = r.update();
+  check('no Docs API (text statuses): no read of the update, the summary through DocumentApp as before ("unchanged")', [r.exec(() => r.s.dispositionSummaryRunRead_()), res.dispositionSummary, count() > 0], [null, 'unchanged', true]);
+}
+{
+  // The pure parts: the Status and the link as DocumentApp reads them.
+  const { sandbox: s } = loadCode();
+  const run = (text, url) => ({ textRun: { content: text, textStyle: url ? { link: { url: url } } : {} } });
+  const cell = (...els) => ({ content: [{ paragraph: { elements: els.concat([{ textRun: { content: '\n' } }]) } }] });
+  check('the link on the TDoc number, not the first link of the cell ("X (revision of Y)" links Y only)', [
+    s.docsCellLinkAtText_(cell(run('S4aA269107'), run(' (revision of '), run('S4aA269106', 'https://example.org/106'), run(')')), 'S4aA269107'),
+    s.docsCellLinkAtText_(cell(run('S4aA269107', 'https://example.org/107'), run(' (revision of '), run('S4aA269106', 'https://example.org/106'), run(')')), 'S4aA269107'),
+    s.docsCellLinkAtText_(cell(run('S4AA269107', 'https://example.org/x')), 'S4aA269107')], ['', 'https://example.org/107', 'https://example.org/x']);
+  const table = (statusEntry, statusText) => ({ number: id(1), rows: [{ tableCells: [cell(run('TDoc')), cell(run(id(1)))] }, { tableCells: [cell(run('Status')), cell(run(statusText || ''))] }], values: {}, statusEntry: statusEntry, link: 'first-link' });
+  const status = (t0) => s.dispositionSummaryTablesOfRead_([t0])[0].statusEntry;
+  check('the Status: text typed in the cell first, else the dropdown\'s value, else nothing (readTdocStatus_())', [
+    status(table({ kind: 'dropdown', displayValue: 'available', text: 'partially agreed' }, 'partially agreed')),
+    status(table({ kind: 'dropdown', displayValue: 'agreed', text: '' }, '')),
+    status(table({ kind: 'text', text: 'noted' }, 'noted')),
+    status(table(null, ''))], [{ kind: 'text', text: 'partially agreed' }, { kind: 'text', text: 'agreed' }, { kind: 'text', text: 'noted' }, { kind: 'text', text: '' }]);
+  const original = table({ kind: 'dropdown', displayValue: 'agreed', text: '' }, '');
+  s.dispositionSummaryTablesOfRead_([original]);
+  check('... copies: the read itself is not changed (Undisposed Documents and Goes to Plenary read it as before)', [original.statusEntry.kind, original.link], ['dropdown', 'first-link']);
+}
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll disposition-summary and close-report checks passed.');

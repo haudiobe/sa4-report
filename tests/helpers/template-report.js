@@ -132,8 +132,13 @@ function templateReport(options) {
   store.setProperty = (k, v) => { if (/^REVIEWER_NO_SUMMARY_CACHE_/.test(k)) r.cacheWrites.push('set ' + k); return realSet(k, v); };
   store.deleteProperty = (k) => { if (/^REVIEWER_NO_SUMMARY_CACHE_/.test(k)) r.cacheWrites.push('delete ' + k); return realDelete(k); };
 
-  /** One execution, as Apps Script starts it: the document open, nothing remembered. */
-  r.exec = (fn) => { body._state.closed = false; s.resetStatusDropdownRun_(); s.resetReviewerTokenRunState_(); return fn(); };
+  /**
+   * One execution, as Apps Script starts it: the document open, nothing remembered. Issue #28 A (2026-11-27): and as it
+   * ends it -- what DocumentApp changed is saved (the Docs API reads it from the next execution on), also after an error.
+   */
+  r.exec = (fn) => { body._state.closed = false; s.resetStatusDropdownRun_(); s.resetReviewerTokenRunState_(); try { return fn(); } finally { r.lastExecDirty = body._state.dirty; body._state.dirty = false; } };
+  /** Whether the last execution changed the document through DocumentApp (before it was saved at its end). */
+  r.lastExecDirty = false;
   /** Somebody edits the document by hand, between two executions; the edit is saved. */
   r.user = (fn) => { body._state.closed = false; const out = fn(); body._state.dirty = false; return out; };
   r.build = () => r.exec(() => s.runFullReportBuildCore_());
