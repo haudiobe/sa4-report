@@ -221,3 +221,16 @@ Run 6 measured one Phase A update at 347 s, of which only about 95 s were in tim
   - A flush starts no further Drive write past the tick's 4 minutes.
   - The uninstall writes whatever is still kept before its cleanup removes it.
 - **A stopped update.** Its whole journal (40 stages with their ends) is a record of its own (`<job> journal-<step>`); the step holds its summary.
+
+## The final run (prepared 2026-11-27, after Run 7)
+
+Run 7 explained the time of the update: a one-off identity check on a copy without a saved TDoc-list anchor (about 166 s; Google does not copy document properties, and the cleanup removes them) and a Disposition Summary without a limit (109 s). Phase A `211a677` leaves the summary to the next update past 170 s. B (`fded9ba`) and C (`480de59`) have it merged; the stage pins point at these commits.
+
+- **Plan.** `PLAN.main2`, unchanged since Run 6:
+  1. inventory, inspect (against s5, reads only), configure-main;
+  2. A: `a-validate` (three updates, each within 300 s, the copy identical to s5), then `headings`;
+  3. B: `stage`, then `phase-b`;
+  4. C: `stage`, then `meeting-control`;
+  5. T-2026.10.33: `rollback`, then `uninstall`; the original script goes back.
+- **On a failure** the orchestrator stops, runs the uninstall at the stage it stopped at, and pushes the original script back. So B runs only after A has passed, and C only after B.
+- **The anchor.** The first update of the copy still pays the one-off identity check, as a report's first update after Configure Meeting would. No workaround in the code; the test keeps the stricter case.

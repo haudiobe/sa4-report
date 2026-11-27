@@ -80,10 +80,10 @@ const REFUSED_SCRIPT_DIGESTS = {
 // The code of each stage, by commit: a branch that moved is not pushed (its code must equal the pinned commit's).
 const STAGE_PINS = {
   t33: { commit: 'b7299c12d12befe089070379ba5f50541d5dd929', branch: null, label: 'T-2026.10.33 (production)' },
-  // Run 7 (2026-11-26): A moved deliberately to 46fae8c (every stage of the update timed; diagnostics only). B and C keep e6d5a9a.
-  A: { commit: '46fae8c88e0d6b54151d849e1ca8f8f1c2fe5857', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
-  B: { commit: '57e304043356ca854e68ece4a183f6227dece1dd', branch: 'feature/i28-b-provisional-revisions', label: 'phases A+B' },
-  C: { commit: '5fbe7ed055d79358c7c8cf23991190a4360e65bf', branch: 'feature/i28-c-ahg-sessions-agenda', label: 'phases A+B+C' }
+  // Final run (2026-11-27): all three moved deliberately after Run 7 -- A 211a677 (every stage timed; the Disposition Summary within the update's time), B fded9ba and C 480de59 (A merged).
+  A: { commit: '211a677875fdc7a58d0b80ea898158f80c524227', branch: 'feature/i28-a-titles-headings-perf', label: 'phase A' },
+  B: { commit: 'fded9ba3eaf811adafee29df0292770348db1813', branch: 'feature/i28-b-provisional-revisions', label: 'phases A+B' },
+  C: { commit: '480de5958dda37959b31696dbd855501f5be8ca2', branch: 'feature/i28-c-ahg-sessions-agenda', label: 'phases A+B+C' }
 };
 const CODE_PATHS = { Code: 'Code.js', HyperLink: 'HyperLink.js', ReportCreator: 'template/ReportCreator.js' };
 // Release.js of T-2026.10.33 as the five production reports read it back on 2026-11-20 (= the main copy's original).
