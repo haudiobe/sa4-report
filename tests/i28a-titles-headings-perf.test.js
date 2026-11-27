@@ -139,11 +139,16 @@ console.log('C. a title changed after the reservation: written, link and look ke
     ['Contribution 003: the final title in 3GU', 'Contribution 003: the final title in 3GU', '1 written, 0 to review, 0 changed in the report, 0 from an older list']);
   check('the link over the whole title is on the whole new title', [r.cell('S4-264003', 'Title').editAsText().getLinkUrl(0), r.cell('S4-264003', 'Title').editAsText().getLinkUrl(39)], ['https://example.org/t3', 'https://example.org/t3']);
   check('Minutes and Disposition typed by hand are as they were', [r.cell('S4-264003', 'Minutes').getText(), r.cell('S4-264003', 'Disposition').getText()], ['Presented. Agreed with changes.', 'Revised wording agreed.']);
-  check('the Disposition Summary shows the new title (it copies the TDoc table)', r.summaryTitles().indexOf('S4-264003=Contribution 003: the final title in 3GU') !== -1, true);
+  // Issue #28 A (2026-11-27): the update's summary is read from the report as the update started -- the title it wrote is
+  // in the summary from the next update on (as in Undisposed Documents).
+  const shownInSummary = () => r.summaryTitles().indexOf('S4-264003=Contribution 003: the final title in 3GU') !== -1;
+  const inFirst = shownInSummary();
+  r.update();
+  check('the Disposition Summary shows the new title from the next update on (it copies the TDoc table)', [inFirst, shownInSummary()], [false, true]);
   check('the audit log: old, new, when, by the update', [r.log()[0].t, r.log()[0].a, r.log()[0].o, r.log()[0].n, r.log()[0].by, /^2\d{3}-/.test(r.log()[0].at)], ['S4-264003', 'applied', 'Contribution 003', 'Contribution 003: the final title in 3GU', 'update', true]);
   const doc = r.doc(); const props = r.propsText();
   const u2 = r.update();
-  check('the next update writes nothing: the same document, no state written, no "titles" in the result', [r.doc() === doc, r.propsText() === props, u2.titles], [true, true, undefined]);
+  check('the update after it writes nothing: the same document, no state written, no "titles" in the result', [r.doc() === doc, r.propsText() === props, u2.titles], [true, true, undefined]);
   // The same TDoc changes again: the newer title is written too (the record follows).
   r.tdoc('S4-264003').title = 'Contribution 003: corrected again';
   r.update();
