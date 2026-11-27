@@ -44,6 +44,8 @@ const CACHE = (id) => 'REVIEWER_NO_SUMMARY_CACHE_' + id;
  *   docs      false: no Google Docs API service
  *   agenda    another agenda
  *   code      another Code.js to run (its source text; without a Drive only), e.g. a released one
+ *   sameDocumentAs  another report of this helper: this one runs its code over THAT document -- its body, Docs API,
+ *             document properties and TDoc list (a code rollback or upgrade of one report)
  *   drive     a fake Drive of tests/helpers/fake-drive-files.js: the Drive of the user the report runs as
  *   tableSeparators  true: the document keeps a paragraph between two tables and its last paragraph, as Google Docs does
  *   columns   after T-2026.10.29: more columns of the TDoc list (e.g. ['Release', 'Related WIs']); a TDoc gives its value by
@@ -57,11 +59,13 @@ function templateReport(options) {
   // With a Drive (the personal settings of the user) the report is a whole template bundle: Code.js and ReportCreator.js.
   const loaded = (o.drive ? loadTemplateRuntime : loadCode)({ documentProperties: props, scriptProperties: o.token === false ? {} : { REVIEWER_API_TOKEN: 'synthetic-test-token' }, code: o.code });
   const s = loaded.sandbox;
-  const body = makeFakeDocumentBody(s, { tableSeparators: !!o.tableSeparators, endParagraph: !!o.endParagraph });
-  const api = makeFakeDocsApi({ body: body, reportId: REPORT_ID });
-  api.addSource(TEMPLATE_ID, [STATUS_DEFINITION]);
-  const r = { s: s, body: body, api: api, docProps: loaded.docProps, scriptProps: loaded.scriptProps, logs: [], requests: [], fetches: [], reviewer: Object.assign({}, o.reviewer || {}),
-    tdocs: (o.tdocs || []).map((t) => Object.assign({}, t)),
+  const same = o.sameDocumentAs || null;
+  const body = same ? same.body : makeFakeDocumentBody(s, { tableSeparators: !!o.tableSeparators, endParagraph: !!o.endParagraph });
+  const api = same ? same.api : makeFakeDocsApi({ body: body, reportId: REPORT_ID });
+  if (!same) api.addSource(TEMPLATE_ID, [STATUS_DEFINITION]);
+  if (same) { s.PropertiesService.getDocumentProperties = () => same.docProps; s.PropertiesService.getScriptProperties = () => same.scriptProps; }
+  const r = { s: s, body: body, api: api, docProps: same ? same.docProps : loaded.docProps, scriptProps: same ? same.scriptProps : loaded.scriptProps, logs: [], requests: [], fetches: [], reviewer: Object.assign({}, o.reviewer || {}),
+    tdocs: same ? same.tdocs : (o.tdocs || []).map((t) => Object.assign({}, t)),
     // The agenda TDoc of the meeting, as every real list has it (after T-2026.10.16 a list without it is refused). It is under
     // no agenda item, so no report places it; null: a list without it (the list of another meeting).
     listAgenda: props.AGENDA_TDOC || null };
@@ -120,14 +124,19 @@ function templateReport(options) {
   });
   // The "no summary" cache: every write and every removal.
   r.cacheWrites = [];
-  const store = loaded.docProps;
+  const store = same ? { setProperty: same.docProps.setProperty, deleteProperty: same.docProps.deleteProperty } : loaded.docProps;
   const realSet = store.setProperty;
   const realDelete = store.deleteProperty;
   store.setProperty = (k, v) => { if (/^REVIEWER_NO_SUMMARY_CACHE_/.test(k)) r.cacheWrites.push('set ' + k); return realSet(k, v); };
   store.deleteProperty = (k) => { if (/^REVIEWER_NO_SUMMARY_CACHE_/.test(k)) r.cacheWrites.push('delete ' + k); return realDelete(k); };
 
-  /** One execution, as Apps Script starts it: the document open, nothing remembered. */
-  r.exec = (fn) => { body._state.closed = false; s.resetStatusDropdownRun_(); s.resetReviewerTokenRunState_(); return fn(); };
+  /**
+   * One execution, as Apps Script starts it: the document open, nothing remembered. Issue #28 A (2026-11-27): and as it
+   * ends it -- what DocumentApp changed is saved (the Docs API reads it from the next execution on), also after an error.
+   */
+  r.exec = (fn) => { body._state.closed = false; s.resetStatusDropdownRun_(); s.resetReviewerTokenRunState_(); try { return fn(); } finally { r.lastExecDirty = body._state.dirty; body._state.dirty = false; } };
+  /** Whether the last execution changed the document through DocumentApp (before it was saved at its end). */
+  r.lastExecDirty = false;
   /** Somebody edits the document by hand, between two executions; the edit is saved. */
   r.user = (fn) => { body._state.closed = false; const out = fn(); body._state.dirty = false; return out; };
   r.build = () => r.exec(() => s.runFullReportBuildCore_());

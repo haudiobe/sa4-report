@@ -79,7 +79,7 @@ const bodyOf = (eml) => qpDecode(eml.split('\r\n\r\n').slice(1).join('\r\n\r\n')
 /** Everything a report holds: every cell of every table with its dropdown, the dropdown definitions, the stored properties. */
 function snapshot(r) {
   const tables = r.body.getTables().map((t) => { const rows = []; for (let i = 0; i < t.getNumRows(); i++) { const row = []; for (let c = 0; c < t.getRow(i).getNumCells(); c++) { const cell = t.getRow(i).getCell(c); row.push([cell._t, cell._dropdown, cell._links]); } rows.push(row); } return rows; });
-  return JSON.stringify({ tables: tables, children: r.body.getNumChildren(), definitions: r.api.definitions, props: r.docProps._store, scriptProps: r.scriptProps._store, dirty: r.body._state.dirty });
+  return JSON.stringify({ tables: tables, children: r.body.getNumChildren(), definitions: r.api.definitions, props: r.docProps._store, scriptProps: r.scriptProps._store, dirty: r.lastExecDirty });
 }
 
 // ================================================================ 1. the renderer
@@ -207,7 +207,7 @@ console.log('5. Generate (the dialog RPC), and what it leaves alone');
   check('the dropdowns still show what they showed', TDOCS.map(([id]) => g.shown(id)), ['dropdown:agreed', 'dropdown:withdrawn', 'dropdown:noted', 'dropdown:available', 'text:not treated', 'dropdown:revised']);
   const during = g.api.calls.slice(calls);
   check('the Docs API was read once and never written', [during.map((c) => c.call), g.api.calls.filter((c, i) => i >= calls && c.call === 'batchUpdate').length], [['get'], 0]);
-  check('the document was not saved, the TDoc list was not looked at, nothing was fetched', [g.saves - saves, g.sheetOpens - sheetOpens, g.fetches.length - fetches, g.body._state.dirty, g.body._state.closed], [0, 0, 0, false, false]);
+  check('the document was not saved, the TDoc list was not looked at, nothing was fetched', [g.saves - saves, g.sheetOpens - sheetOpens, g.fetches.length - fetches, g.lastExecDirty, g.body._state.closed], [0, 0, 0, false, false]);
 
   g.files.length = 0;
   const again = g.generate(['S4aA269003', 'S4aA269004']);
@@ -233,7 +233,7 @@ console.log('6. the code');
   const code = fn.replace(/^\s*\/\/.*$/gm, '');
   check('docTableToHtml_() reads a dropdown through readTdocStatus_(), once, and escapes what it reads', [(code.match(/readTdocStatus_\(table, cellText\)/g) || []).length, /escapeHtmlForEmailExport_\(selected\)/.test(code)], [1, true]);
   check('it has no way of its own to read a dropdown, and writes nothing', /Docs\.|statusDropdownIndex_|statusDropdownEntryOfTable_|displayValue|setText|batchUpdate|saveAndClose|setProperty/.test(code), false);
-  check('Code.js is version 2.27.2 (2.27.2 a TDoc handed to the plenary as T-2026.10.34; 2.27.1 the Close Report validation as T-2026.10.33; 2.27.0 the Undisposed Documents and the local document availability as T-2026.10.32; 2.26.15 the concurrent-edit hotfix as T-2026.10.31; 2.26.14 released Goes to Plenary as T-2026.10.30; 2.26.13 the Revisions-cell cleanup and the overnight pause as T-2026.10.29; 2.26.12 the local listing agent as T-2026.10.28; 2.26.11 all before it as T-2026.10.27; 2.21.1 brought the dropdown status of a discussion e-mail; 2.22.0 the shared minutes; 2.23.0 the report structure and the configuration guard; 2.24.0 the 4-hour Reviewer cache, 2.25.0 the Attendance rendering fix, 2.26.0 the Disposition Summary and Close Report, 2.26.1 their meeting scope and the TDoc list identity, 2.26.2 the report-local Disposition Summary, 2.26.3 the Portal-page fallback of Close Report, 2.26.4 the agenda Word conversion, 2.26.5 the agenda readers, 2.26.6 the TDoc-list download fallback, 2.26.7 the large-build checkpoints)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.27.2');
+  check('Code.js is version 2.28.0 (2.28.0 issue #28 phase A, a candidate; 2.27.2 a TDoc handed to the plenary as T-2026.10.34; 2.27.1 the Close Report validation as T-2026.10.33; 2.27.0 the Undisposed Documents and the local document availability as T-2026.10.32; 2.26.15 the concurrent-edit hotfix as T-2026.10.31; 2.26.14 released Goes to Plenary as T-2026.10.30; 2.26.13 the Revisions-cell cleanup and the overnight pause as T-2026.10.29; 2.26.12 the local listing agent as T-2026.10.28; 2.26.11 all before it as T-2026.10.27; 2.21.1 brought the dropdown status of a discussion e-mail; 2.22.0 the shared minutes; 2.23.0 the report structure and the configuration guard; 2.24.0 the 4-hour Reviewer cache, 2.25.0 the Attendance rendering fix, 2.26.0 the Disposition Summary and Close Report, 2.26.1 their meeting scope and the TDoc list identity, 2.26.2 the report-local Disposition Summary, 2.26.3 the Portal-page fallback of Close Report, 2.26.4 the agenda Word conversion, 2.26.5 the agenda readers, 2.26.6 the TDoc-list download fallback, 2.26.7 the large-build checkpoints)', (CODE.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.28.0');
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll e-mail status dropdown checks passed.');

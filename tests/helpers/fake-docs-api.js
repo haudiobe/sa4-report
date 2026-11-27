@@ -186,7 +186,9 @@ function makeFakeDocsApi(options) {
         content.push(element);
       } else {
         const text = child.getText();
-        content.push({ startIndex: i, endIndex: i + text.length + 1, _child: child, paragraph: { paragraphStyle: { namedStyleType: child.getHeading && child.getHeading() !== 'NORMAL' ? 'HEADING_1' : 'NORMAL_TEXT' },
+        // Issue #28 A (addition): the named style of the heading as Google Docs has it (Heading 2 is HEADING_2; any other heading HEADING_1 as before).
+        const named = child.getHeading && child.getHeading() !== 'NORMAL' ? ({ H2: 'HEADING_2', H3: 'HEADING_3' }[child.getHeading()] || 'HEADING_1') : 'NORMAL_TEXT';
+        content.push({ startIndex: i, endIndex: i + text.length + 1, _child: child, paragraph: { paragraphStyle: { namedStyleType: named },
           elements: [{ startIndex: i, endIndex: i + text.length + 1, textRun: { content: text + '\n', textStyle: { bold: !!child._bold } } }] } });
         i += text.length + 1;
       }
@@ -399,6 +401,9 @@ function makeFakeDocsApi(options) {
     }
     if (kind === 'updateTextStyle') {
       checkTab((r.range || {}).tabId);
+      // Issue #28 A (addition): bold on a body paragraph (a class line of the summary).
+      const bodyParagraph = render().content.filter((x) => x.paragraph && x._child && (r.range || {}).startIndex >= x.startIndex && (r.range || {}).endIndex < x.endIndex)[0];
+      if (bodyParagraph) { if (/(^|,)\s*bold\s*(,|$)/.test(String(r.fields || ''))) bodyParagraph._child._bold = !!r.textStyle.bold; return {}; }
       const hit = cellOfRange(r.range || {});
       const fields = String(r.fields || '');
       if (/(^|,)\s*bold\s*(,|$)/.test(fields)) hit.cell._bold = !!r.textStyle.bold;
@@ -410,6 +415,13 @@ function makeFakeDocsApi(options) {
     }
     if (kind === 'updateParagraphStyle') {
       checkTab((r.range || {}).tabId);
+      // Issue #28 A (addition): the named style of a body paragraph (the class lines of the Disposition Summary).
+      if (r.paragraphStyle && r.paragraphStyle.namedStyleType) {
+        const p = render().content.filter((x) => x.paragraph && x._child && x.startIndex === (r.range || {}).startIndex)[0];
+        if (!p) throw bad('FAKE DOCS API: a named style is set on a body paragraph only.');
+        p._child.setHeading({ HEADING_1: 'H1', HEADING_2: 'H2', HEADING_3: 'H3', NORMAL_TEXT: 'NORMAL' }[r.paragraphStyle.namedStyleType] || 'NORMAL');
+        return {};
+      }
       const hit = cellOfRange(r.range || {});
       hit.cell._spacing = [r.paragraphStyle.spaceAbove.magnitude, r.paragraphStyle.spaceBelow.magnitude];
       return {};

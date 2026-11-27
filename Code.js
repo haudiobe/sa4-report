@@ -1,6 +1,6 @@
 /*******************************
  * SA4 Report Generator + Email/Revisions Collector
- * Version: 2.27.2 (2026-11-20)
+ * Version: 2.28.0 (2026-11-23)
  * - NO global name collisions
  * - RSS/A1 + Revisions restored
  * - Agenda Item rows preserved/merged
@@ -8,6 +8,67 @@
  *   scheduler, document context/state abstraction, live-verified
  *
  * CHANGELOG
+ * 2.28.0 (2026-11-23)
+ *   (Issue #28 phase A, candidate on T-2026.10.34 / 2.27.2.)
+ *   - Titles: a title changed in the TDoc list after the reservation is
+ *     written into the TDoc table and the Registration of Documents table
+ *     where the report still shows the title before; a title typed by hand,
+ *     a list going back to an older title or an unknown difference is listed
+ *     for Report > Review Title Changes… and never written. Audit log kept.
+ *   - Disposition Summary: class lines in Heading 2 (in the outline) are
+ *     read as part of the summary. They are written only with the report
+ *     setting DISPOSITION_CLASS_HEADINGS=heading2; by default the class
+ *     lines stay bold Normal text, as before (a rollback to older code
+ *     needs no preparation). A summary written before is restyled to the
+ *     look of the setting at the next update, unrewritten.
+ *   - Update costs: one read of each table in the existing-TDoc scan, the
+ *     Status row found with fewer calls, no walk of the body for a summary
+ *     the report does not have. Same results.
+ *   - An update stopped from outside (the 6-minute limit) is no longer
+ *     silent: the update keeps a journal (UPDATE_RUN: start and stage); the
+ *     next update finds it, records UPDATE_INTERRUPTED, removes a TDoc table
+ *     left twice with identical content (a killed move) and names any with
+ *     different content; the record is closed by an update that completes.
+ *     The TDoc loop may take 100 s and the revision moves 60 s: the rest is
+ *     left to the next update ("updated only in part"), not killed; the
+ *     next TDoc loop goes on where the last one stopped (UPDATE_TDOC_CURSOR).
+ *     An update that repaired the report says it is in part; the next one
+ *     completes it.
+ *   - One clock for the whole update (after the second real-document run,
+ *     2026-11-26): no network request starts later than 195 s into the
+ *     update (a request may take up to a minute; 45 s are kept for the
+ *     end), and a refused one leaves its collector to the next update
+ *     before it writes anything. The TDoc loop starts no TDoc after 170 s,
+ *     the moves no move after 200 s; the Goes to Plenary data, the
+ *     Disposition Summary and Undisposed Documents start no later than
+ *     255 s. The revisions go on where the last update stopped them
+ *     (UPDATE_REVISIONS_CURSOR). The journal keeps the time of its last
+ *     stages, so an update that is stopped shows where.
+ *   - The revision pairs (after Run 5): the time is checked before every
+ *     pair and before its move, not only before the move; past it the
+ *     update stops at the next unprocessed pair (UPDATE_PAIRS_CURSOR) and
+ *     the next update goes on there. Whether a revision already sits below
+ *     its original comes from the update's Docs API read while that read
+ *     still shows the report's structure; else from the document.
+ *   - Diagnostics (after the sixth real-document run): every significant
+ *     stage of an update is timed; one [PERF] line sums up the timeline
+ *     (time in timed stages, time outside them, the slowest stages), and
+ *     the update journal keeps the end of each stage (40 stages). Nothing
+ *     the update does, its budgets or the report change.
+ *   - The Disposition Summary within the time (after the seventh
+ *     real-document run): an update that has run more than 170 s
+ *     before the summary leaves it to the next update and says it is
+ *     updated in part; the summary is not changed. A report with Goes
+ *     to Plenary writes its summary as before.
+ *   - The Disposition Summary of an update from the update's own Docs
+ *     API read of the report (after the final real-document run): no
+ *     TDoc table is read through DocumentApp; a summary that already
+ *     says this is not touched, one that changes is written as before.
+ *     What the update itself wrote (new TDocs, statuses and titles from
+ *     the list) is in the summary from the next update on, as in
+ *     Undisposed Documents. A TDoc in two tables whose Status dropdowns
+ *     differ is listed as conflicting. Reports without that read, the
+ *     menu item and Goes to Plenary: as before.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -1263,11 +1324,16 @@ function perfCounterValue_(label) {
  */
 function perfTimed_(label, fn) {
   const start = Date.now();
+  // After issue 28 A: the stage of a running update, for its journal (ISSUE 28 A section).
+  updateJournalStage_(label);
+  // After issue 28 A: the stage on the update's timeline, a nested stage marked as such (ISSUE 28 A section).
+  const depth = perfStageEnter_();
   try {
     return fn();
   } finally {
     const ms = Date.now() - start;
     perfAddTime_(label, ms);
+    perfStageLeave_(label, start, ms, depth);
     Logger.log('[PERF] ' + label + ': ' + ms + ' ms');
   }
 }
@@ -1398,8 +1464,11 @@ function continuousUpdateCore_(context) {
   const perfTotalStart = Date.now();
   // After T-2026.10.29: what can wait is left to the next update when this one runs long (GOES TO PLENARY section).
   markReportUpdateStart_();
+  // After issue 28 A: the journal of this update; one that did not end before is found and recorded (ISSUE 28 A section).
+  updateJournalStart_(context);
   const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_(context));
-  const body = getReportBody_(context);
+  // After issue 28 A: every significant stage of the update timed, for its timeline (ISSUE 28 A section).
+  const body = perfTimed_('report body (getReportBody_)', () => getReportBody_(context));
   perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
   perfCount_('getActiveDocument().getBody() call site: continuousUpdate:initial');
 
@@ -1438,7 +1507,9 @@ function continuousUpdateCore_(context) {
       throw e;
     }
     // After T-2026.10.31: a TDoc the meeting-room server has is no longer taken as reserved (UNDISPOSED DOCUMENTS section).
-    applyLocalDocsAvailabilitySafely_(tdocGroups, context);
+    perfTimed_('meeting-room availability (applyLocalDocsAvailabilitySafely_)', () => applyLocalDocsAvailabilitySafely_(tdocGroups, context));
+    // After issue 28 A: what an interrupted update may have left, before the report is scanned (ISSUE 28 A section).
+    perfTimed_('interrupted-update check (repairAfterInterruptedUpdate_)', () => repairAfterInterruptedUpdate_(body, context));
     const allTdocs = [];
     Object.keys(tdocGroups).forEach(key => {
       tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
@@ -1456,7 +1527,9 @@ function continuousUpdateCore_(context) {
     let structure = { sectionsMoved: 0, emptyParagraphsRemoved: 0 };
     try {
       // After T-2026.10.29: from the report snapshot; the repair runs only when it shows something to repair (GOES TO PLENARY section).
-      structure = repairReportStructureIfNeeded_(body, agendaTitleOf);
+      structure = perfTimed_('structure check (repairReportStructureIfNeeded_)', () => repairReportStructureIfNeeded_(body, agendaTitleOf));
+      // After issue 28 A: sections moved -- the positions of the update's read are no longer those of the report (ISSUE 28 A section).
+      if (structure && (structure.sectionsMoved || structure.emptyParagraphsRemoved)) updateStructureChanged_();
     } catch (e) {
       Logger.log('Structure: the structure of the report could not be checked: ' + e.message);
     }
@@ -1476,12 +1549,8 @@ function continuousUpdateCore_(context) {
         return;
       }
       const tables = getTablesCounted_(body, 'continuousUpdate:existingTdocScan');
-      tables.forEach(t => {
-        if (!isTDocTable_(t)) return;
-        const tdoc = safeCellText_(t, 0, 1).trim();
-        if (tdoc) existingTdocs.add(tdoc);
-      });
-      tdocTableIndex = buildTdocTableIndex_(tables);
+      // After T-2026.10.34: the numbers and the index from one read of each table (ISSUE 28 A section).
+      tdocTableIndex = existingTdocScanOfTables_(tables, existingTdocs);
     });
 
     Logger.log(`Found ${existingTdocs.size} existing TDOCs`);
@@ -1497,10 +1566,13 @@ function continuousUpdateCore_(context) {
     // upload; the abstract sweep below does not ask for them again.
     const abstractAskedThisRun = {};
 
-    allTdocs.forEach(tdocData => {
+    // After issue 28 A: the loop goes on where the last update left it (its time budget); the rest of the update keeps the list order (ISSUE 28 A section).
+    perfTimed_('TDoc loop (new TDoc tables, statuses, upload completion)', () => tdocLoopOrder_(allTdocs).forEach(tdocData => {
       const row = tdocData.row;
       const tdocNumber = String(row[tdocData.tdocCol] || '').trim();
       perfCount_('TDocs processed (loop iterations)');
+      // After issue 28 A: the TDoc tables within the time budget; the rest in the next update (ISSUE 28 A section).
+      if (tdocLoopOverBudget_(tdocNumber)) return;
 
       if (!existingTdocs.has(tdocNumber)) {
         // The title of its agenda item, for a heading the report does not have yet.
@@ -1534,27 +1606,32 @@ function continuousUpdateCore_(context) {
           abstractAskedThisRun[tdocNumber] = true;
         }
       }
-    });
+    }));
 
     Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);
     // After T-2026.10.29: only when the report snapshot shows a row without its link (GOES TO PLENARY section).
-    const registrationLinksAdded = refreshRegistrationTableLinksIfNeeded_(body, allTdocs);
+    const registrationLinksAdded = perfTimed_('registration-table links (refreshRegistrationTableLinksIfNeeded_)', () => refreshRegistrationTableLinksIfNeeded_(body, allTdocs));
     Logger.log(`Upload completion: ${linksAdded} TDoc link(s) added, ${uploadAbstractAttempts} abstract attempt(s), ${registrationLinksAdded} registration-table link(s) added`);
 
     // Update summary table
     // Ad-hoc sessions (stage B): null unless this is an ad-hoc report with
     // sessions. With it, a report that HAS the Session column gets the
     // column brought up to date; a four-column report stays four-column.
-    const tdocSessions = makeAdhocTdocSessionResolverSafely_(context);
+    const tdocSessions = perfTimed_('ad-hoc sessions (makeAdhocTdocSessionResolverSafely_)', () => makeAdhocTdocSessionResolverSafely_(context));
     if (newTdocsAdded > 0) {
       perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, tdocSessions));
     }
-    const sessionColumnFailure = refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions);
+    const sessionColumnFailure = perfTimed_('registration Session column (refreshRegistrationSessionColumnSafely_)', () => refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions));
+    // After T-2026.10.34: a title changed in the TDoc list after the reservation (ISSUE 28 A section).
+    const titles = perfTimed_('title sync (syncTdocTitlesOnUpdate_)', () => syncTdocTitlesOnUpdate_(body, allTdocs, tdocTableIndex, context));
+    if (titles.applied) result.titles = titles.summary;
 
     // Revision placement: new TDOCs are appended at the end of their agenda
     // section, so move every revision back under the document it revises and
     // fill the revised document's Disposition. Reuses the TDOC list already
     // downloaded above, so this costs no extra fetch.
+    // After issue 28 A: tables inserted earlier in this update -- the positions of the update's read are stale (ISSUE 28 A section).
+    if (newTdocsAdded || perfCounterValue_('structural: new revision-linked tables inserted (insertRevisedDocTablesAfter_)')) updateStructureChanged_();
     const rev = perfTimed_('revision ordering/rearrangement (rearrangeRevisionTables_)', () => rearrangeRevisionTables_(cfg, tdocGroups, tdocTableIndex, context));
     Logger.log(`Revisions: ${rev.moved} moved, ${rev.dispositions} disposition(s) filled`);
 
@@ -1589,15 +1666,16 @@ function continuousUpdateCore_(context) {
     // (no status dropdowns can be read there). Never fails the update.
     // After T-2026.10.17: for the TDocs the report has registered -- the
     // TDocs of the list read above among them.
-    if (!context) {
+    // After issue 28 A: not started late in the update; the next update does them (ISSUE 28 A section).
+    if (!context && updateLateStagesMayStart_()) {
       // After T-2026.10.29: the revision relationships (every report), and the Goes to Plenary data (GOES TO PLENARY section).
-      syncTdocRevisionsOnUpdate_(allTdocs, tdocTableIndex);
-      const plenary = syncPlenarySelectionOnUpdate_(body, allTdocs, tdocTableIndex);
+      perfTimed_('revision relationships (syncTdocRevisionsOnUpdate_)', () => syncTdocRevisionsOnUpdate_(allTdocs, tdocTableIndex));
+      const plenary = perfTimed_('Goes to Plenary (syncPlenarySelectionOnUpdate_)', () => syncPlenarySelectionOnUpdate_(body, allTdocs, tdocTableIndex));
       if (plenary.state !== 'off') result.goesToPlenary = plenary.state;
-      const summary = syncDispositionSummaryOnUpdate_(body);
+      const summary = perfTimed_('summary of the dispositions (syncDispositionSummaryOnUpdate_)', () => syncDispositionSummaryOnUpdate_(body));
       if (summary.state !== 'absent') result.dispositionSummary = summary.state;
       // After T-2026.10.31: the Undisposed Documents section of a main report (UNDISPOSED DOCUMENTS section).
-      syncUndisposedDocumentsOnUpdate_(body);
+      perfTimed_('Undisposed Documents (syncUndisposedDocumentsOnUpdate_)', () => syncUndisposedDocumentsOnUpdate_(body));
     }
 
     // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
@@ -1636,7 +1714,7 @@ function continuousUpdateCore_(context) {
     // dropdowns the status sync moved on. Not in a background run: it has no active document to save.
     if (!context) {
       const unmapped = statusDropdownRun_().unmapped.slice();
-      const finalized = finalizeStatusDropdowns_('update');
+      const finalized = perfTimed_('status dropdowns (finalizeStatusDropdowns_)', () => finalizeStatusDropdowns_('update'));
       // After T-2026.10.29: the summary of a report with Goes to Plenary is written there (GOES TO PLENARY section).
       if (finalized && finalized.plenary && finalized.plenary.summary) result.dispositionSummary = finalized.plenary.summary;
       if (unmapped.length) result.statusNotes = unmapped;
@@ -1666,7 +1744,11 @@ function continuousUpdateCore_(context) {
     // this end-of-run summary -- for a genuine timeout, those per-stage
     // lines (as far as they got) are the only available evidence.
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
+    // After issue 28 A: the timeline of this update, summed up in one line (ISSUE 28 A section).
+    perfStageTimelineLog_();
     // After T-2026.10.29: what follows in this execution is no update (GOES TO PLENARY section).
+    // After issue 28 A: the journal of this update ends (ISSUE 28 A section).
+    updateJournalEnd_(result);
     endReportUpdate_();
     perfLogSummary_();
   }
@@ -5715,16 +5797,8 @@ function findStatusInSheet_(sheet) {
 }
 
 function findStatusInDocTable_(table) {
-  for (var r = 0; r < table.getNumRows(); r++) {
-    var row = table.getRow(r);
-    if (row.getNumCells() < 2) continue;
-    var k = row.getCell(0).getText().trim().toLowerCase();
-    if (k === 'tdoc status' || k === 'status') {
-      // After T-2026.10.29: the status part of a compact Status row (GOES TO PLENARY section).
-      return { cell: row.getCell(1), value: statusPartOfCellText_(row.getCell(1).getText()).trim() };
-    }
-  }
-  return null;
+  // After T-2026.10.34: the same row, with fewer DocumentApp calls (ISSUE 28 A section).
+  return findStatusRowOfTable_(table);
 }
 
 function normalizeStatus_(s) {
@@ -5746,8 +5820,9 @@ function collectorUpdate_(context) {
   // other one; it is now also returned, so that a caller which wants to
   // (Update Report Now in a template report) can report it.
   const failures = [];
-  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg, context)); } catch (e) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); failures.push({ step: 'e-mail discussions', error: e.message }); }
-  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg, context)); } catch (e) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); failures.push({ step: 'TDoc revisions', error: e.message }); }
+  // After issue 28 A: a collector stopped for the time is left to the next update, not a failure (ISSUE 28 A section).
+  try { perfTimed_('  collector: RSS/mail (checkRSSFeed_)', () => checkRSSFeed_(cfg, context)); } catch (e) { if (!updateDeferralCaught_(e, 'e-mail discussions')) { warn_(cfg, 'checkRSSFeed_ failed: ' + e.message); failures.push({ step: 'e-mail discussions', error: e.message }); } }
+  try { perfTimed_('  collector: revisions (updateRevisions_)', () => updateRevisions_(cfg, context)); } catch (e) { if (!updateDeferralCaught_(e, 'TDoc revisions')) { warn_(cfg, 'updateRevisions_ failed: ' + e.message); failures.push({ step: 'TDoc revisions', error: e.message }); } }
 
   log_(cfg, '=== COLLECTOR END ===');
   return { failures: failures };
@@ -7663,19 +7738,24 @@ function rearrangeRevisionTables_(cfg, groups, index, context) {
     missingParent: 0
   };
 
-  orderRevisionChains_(map).forEach(parent => {
+  // After issue 28 A: every pair within the time; the rest from the next unprocessed pair in the next update (ISSUE 28 A section).
+  for (const parent of revisionPairsOrder_(orderRevisionChains_(map), map)) {
+    if (revisionPairsStop_(parent)) break;
     const child = map[parent];
 
     const parentTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, parent, index));
-    if (!parentTable) { stats.missingParent++; return; }
+    if (!parentTable) { stats.missingParent++; continue; }
 
     if (setDispositionRevisedTo_(parentTable, child)) stats.dispositions++;
 
     const childTable = perfTimedAccum_('  rearrangeRevisionTables_: findTdocTable_ (accumulated)', () => findTdocTable_(body, child, index));
-    if (!childTable) { stats.missingChild++; return; }
+    if (!childTable) { stats.missingChild++; continue; }
 
+    if (revisionPairsStop_(parent)) break;
+    if (revisionPairInPlaceBySnapshot_(body, parent, child)) { stats.alreadyInPlace++; continue; }
     const movedTable = perfTimedAccum_('  rearrangeRevisionTables_: moveTableAfter_ (accumulated)', () => moveTableAfter_(body, childTable, parentTable));
     if (movedTable) {
+      revisionPairMoved_();
       if (index) {
         const parsedChild = parseExactSA4DocumentId_(child);
         if (parsedChild.isValid) index.set(parsedChild.raw, movedTable);
@@ -7685,7 +7765,8 @@ function rearrangeRevisionTables_(cfg, groups, index, context) {
     } else {
       stats.alreadyInPlace++;
     }
-  });
+  }
+  revisionPairsPassEnd_();
 
   Logger.log(`Revision re-arrangement: ${JSON.stringify(stats)}`);
   return stats;
@@ -7696,6 +7777,8 @@ function rearrangeRevisionTables_(cfg, groups, index, context) {
 // =========================================================
 
 function safeFetch_(cfg, url, opt, label) {
+  // After issue 28 A: no request an update could not finish in time; its collector waits (ISSUE 28 A section).
+  updateNetworkGuard_(label);
   try {
     // PERF-001: safeFetch_() is the shared choke point for RSS, A1
     // archive, and Revisions-folder fetches -- one counter/timer here
@@ -23506,8 +23589,9 @@ function findDispositionSummarySection_(body) {
     if (child.getType() === TABLE) return isDispositionSummaryTable_(child.asTable()) ? 'table' : '';
     if (child.getType() !== PARAGRAPH) return '';
     const p = child.asParagraph();
-    if (p.getHeading() !== NORMAL) return 'heading';
     const text = p.getText();
+    // After T-2026.10.34: a class line is Heading 2 and part of the summary (ISSUE 28 A section).
+    if (p.getHeading() !== NORMAL && !isDispositionClassLineText_(text)) return 'heading';
     if (text === DISPOSITION_SUMMARY_NONE_) return 'none';
     if (isLastDispositionClassLine_(text)) return 'last';
     return isDispositionSummaryParagraphText_(text) ? 'part' : '';
@@ -23604,7 +23688,8 @@ function renderDispositionSummary_(body, model) {
   const wanted = dispositionSummaryContent_(model);
   const section = findDispositionSummarySection_(body);
   if (section && section.foreign.length) return { state: 'refused', foreign: section.foreign };
-  if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged' };
+  // After T-2026.10.34: the same content; only the look of its class lines, where it is not that of now (ISSUE 28 A section).
+  if (section && JSON.stringify(readDispositionSummaryContent_(body, section)) === JSON.stringify(wanted)) return { state: 'unchanged', restyled: restyleDispositionClassLines_(body, section) };
 
   let at;
   if (section) {
@@ -23617,9 +23702,8 @@ function renderDispositionSummary_(body, model) {
   wanted.forEach(function (item, k) {
     if (item[0] === 'p') {
       const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
-      p.setHeading(NORMAL);
-      // The line of a class is bold; the note and "None." are not.
-      p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);
+      // After T-2026.10.34: the line of a class is Heading 2 (ISSUE 28 A section).
+      setDispositionSummaryParagraphLook_(p, item[1], k);
       at++;
       return;
     }
@@ -23682,8 +23766,13 @@ function syncDispositionSummaryOnUpdate_(body) {
   try {
     // After T-2026.10.29: in a report with Goes to Plenary the summary is written at the very end, from the saved document (GOES TO PLENARY section).
     if (plenarySelectionEnabled_()) return { state: 'deferred' };
-    if (!findDispositionSummarySection_(body)) return { state: 'absent' };
-    const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
+    // After T-2026.10.34: a report without the text of the summary heading has none, without a walk of the body (ISSUE 28 A section).
+    // After issue 28 A: from the update's Docs API read when it has one -- no DocumentApp walk of the body (ISSUE 28 A section).
+    const run = dispositionSummaryRunRead_();
+    if (dispositionSummaryAbsentInBody_(body) || (run ? !run.section : !findDispositionSummarySection_(body))) return { state: 'absent' };
+    // After issue 28 A: not started once the update has run long; the next update writes it (ISSUE 28 A section).
+    if (dispositionSummaryLeftForTime_()) return { state: 'deferred' };
+    const done = run ? writeDispositionSummaryFromRunRead_(body, run) : writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
     if (done.state === 'no-scope') Logger.log('Disposition Summary: not updated -- ' + done.error + '.');
     else if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
     else if (done.state === 'refused') Logger.log('Disposition Summary: not updated -- text was typed into it, above a part of it: ' + done.foreign.join(' | '));
@@ -25165,7 +25254,8 @@ function nextPlenaryLandscapeStep_(content) {
     return text === DISPOSITION_SUMMARY_NONE_ || isDispositionSummaryParagraphText_(text);
   };
   let last = h;
-  for (let i = h + 1; i < list.length && !isHeading(list[i]); i++) if (owned(list[i])) last = i;
+  // After T-2026.10.34: a class line of the summary is Heading 2 and does not end it (ISSUE 28 A section).
+  for (let i = h + 1; i < list.length && !(isHeading(list[i]) && !isDispositionClassHeadingOfContent_(list[i])); i++) if (owned(list[i])) last = i;
   let after = -1;
   for (let i = last + 1; i < list.length; i++) {
     const e = list[i];
@@ -25429,7 +25519,8 @@ function plenarySummarySectionOfContent_(content) {
     if (e.sectionBreak) return 'skip';
     if (e.table) return plenaryDocsIsSummaryTable_(e) ? 'table' : '';
     if (!e.paragraph) return '';
-    if (plenaryDocsIsHeading_(e)) return 'heading';
+    // After T-2026.10.34: a class line is Heading 2 and part of the summary (ISSUE 28 A section).
+    if (plenaryDocsIsHeading_(e) && !isDispositionClassHeadingOfContent_(e)) return 'heading';
     const text = plenaryDocsParagraphText_(e);
     if (text === '') return 'skip';
     if (text === DISPOSITION_SUMMARY_NONE_) return 'none';
@@ -25546,9 +25637,8 @@ function writePlenaryDispositionSummary_(body, options) {
       if (item[0] === 'p') {
         const p = at >= body.getNumChildren() ? body.appendParagraph(item[1]) : body.insertParagraph(at, item[1]);
         added.push(p);
-        p.setHeading(NORMAL);
-        // The line of a class is bold; the note and "None." are not.
-        p.editAsText().setBold(k > 0 && item[1] !== DISPOSITION_SUMMARY_NONE_);
+        // After T-2026.10.34: the line of a class is Heading 2 (ISSUE 28 A section).
+        setDispositionSummaryParagraphLook_(p, item[1], k);
         at++;
         return;
       }
@@ -25698,6 +25788,8 @@ function planPlenarySummaryFormat_(snapshot) {
       if (range) requests.push({ updateTextStyle: { range: { startIndex: range.startIndex, endIndex: range.startIndex + number.length, tabId: range.tabId }, textStyle: { link: { url: url } }, fields: 'link' } });
     });
   }
+  // After T-2026.10.34: the class lines Heading 2, where they are not yet (ISSUE 28 A section).
+  Array.prototype.push.apply(requests, planDispositionClassHeadings_(content, section, withTab));
   return requests.map(function (q) { const k = Object.keys(q)[0]; if (q[k].range && q[k].range.tabId === undefined) delete q[k].range.tabId; return q; });
 }
 
@@ -26214,13 +26306,16 @@ function updateRevisionsFast_(cfg, context, snap) {
   index.forEach(function (t, n) { if (order.indexOf(n) === -1) order.push(n); });
   const writes = {};
   const start = Date.now();
-  for (let k = 0; k < order.length; k++) {
+  // After issue 28 A: the revisions go on where the last update stopped them (ISSUE 28 A section).
+  const loopOrder = revisionsLoopOrder_(order);
+  for (let k = 0; k < loopOrder.length; k++) {
     if (reportUpdateElapsedMs_() > REPORT_UPDATE_REVISIONS_STOP_MS_) {
       deferReportUpdateStage_('TDoc revisions (' + (order.length - k) + ' of ' + order.length + ' TDocs)');
       out.deferred = true;
+      revisionsLoopStopped_(loopOrder[k]);
       break;
     }
-    const tdoc = order[k];
+    const tdoc = loopOrder[k];
     const storeKey = 'REVIS_' + tdoc;
     const before = all[storeKey] === undefined || all[storeKey] === null ? '' : String(all[storeKey]);
     const store = loadJsonObject_(before);
@@ -26262,6 +26357,8 @@ function updateRevisionsFast_(cfg, context, snap) {
     log_(cfg, 'Revisions updated', { tdoc: tdoc, total: ordered.length });
   }
   if (Object.keys(writes).length) props.setProperties(writes);
+  // After issue 28 A: a whole pass; the next one starts at the top (ISSUE 28 A section).
+  if (!out.deferred) revisionsLoopCompleted_();
   perfAddTime_('    revisions: per-TDoc comparison and writes (from the report snapshot)', Date.now() - start);
   Logger.log('Revisions: ' + out.compared + ' cell(s) compared with the report snapshot, ' + out.written + ' written, ' + out.stored + ' store(s) changed, ' + out.inserted + ' revision table(s) inserted' +
     (out.deferred ? ', NOT COMPLETED (left to the next update)' : '') + '.');
@@ -30077,3 +30174,1221 @@ function generateTdocDiscussionEmails(selections, globalText) {
     return { ok: false, files: [], error: e.message, zip: null, zipError: null };
   }
 }
+
+// =========================================================
+// ISSUE 28 A: TITLES, DISPOSITION HEADINGS AND UPDATE COSTS (after T-2026.10.34)
+// =========================================================
+//
+// Three changes of issue #28, phase A (docs/ISSUE28_PHASE_A.md):
+//
+// 1. TITLE SYNC. The TDoc number is the identity of a TDoc; its title can
+//    change in 3GU after the reservation. Every update compares the title of
+//    the TDoc list with the Title row of the TDoc table and, where the change
+//    is the list's, writes it there and in the Registration of Documents
+//    table. The Disposition Summary, the four plenary tables and the
+//    Undisposed Documents section copy the title of the TDoc table, so they
+//    follow when they are next written. A title is written only where the
+//    report still shows the title the list had before (a record per TDoc,
+//    TDOC_TITLE_SEEN_<tdoc>, holds short hashes of the titles seen): a title
+//    typed by hand, a list that goes back to an older title, or a title that
+//    differs without a record is never written -- it is listed for review
+//    (Report > Review Title Changes…). Minutes, Disposition, e-mail text and
+//    every other row are never touched; the link and the look of the title
+//    are kept. Setting TITLE_SYNC_MODE: 'auto' (default), 'review' (nothing
+//    written by an update, everything listed), 'off'.
+// 2. DISPOSITION HEADINGS. The lines of the classes in the Disposition
+//    Summary (three, or four with Goes to Plenary) can be Heading 2, under the
+//    Heading 1 "Disposition Summary": they appear in the outline. Opt-in per
+//    report (DISPOSITION_CLASS_HEADINGS = 'heading2'); by default they stay
+//    bold Normal text. Heading 2 class lines are read as part of the summary
+//    in either case. The tables,
+//    their header cells and the note are unchanged. A summary written before
+//    gets the look of the setting at the next update, without a rewrite
+//    ('normal' or no setting: bold Normal lines, as before).
+// 3. UPDATE COSTS. The existing-TDoc scan reads each table once (it read it
+//    twice); the Status row is found without counting the rows and cells of
+//    every row again; a report without the text of the summary heading has
+//    no summary, known from one search instead of a walk of the body. The
+//    results are the same.
+
+/** Document property: how titles are synchronised ('auto', 'review', 'off'). */
+const TITLE_SYNC_MODE_KEY_ = 'TITLE_SYNC_MODE';
+/** Report state, per TDoc: what was seen of its title (titleSyncRecordOf_()). */
+const TITLE_SYNC_RECORD_PREFIX_ = 'TDOC_TITLE_SEEN_';
+/** Report state: the titles that differ and are not written ({ tdoc: { cell, list, kind, at } }). */
+const TITLE_SYNC_PENDING_KEY_ = 'TITLE_SYNC_PENDING';
+/** Report state: the audit log, newest first ([{ t, a, o, n, at, by }]). */
+const TITLE_SYNC_LOG_KEY_ = 'TITLE_SYNC_LOG';
+/** At most this many Title rows are read through DocumentApp in one update (a report without its snapshot); the rest the next update. */
+const TITLE_SYNC_READS_PER_UPDATE_ = 60;
+/** The kept JSON of the pending list and of the log stays below one property value. */
+const TITLE_SYNC_MAX_JSON_ = 8500;
+/** Previous titles kept per TDoc, to tell a stale list. */
+const TITLE_SYNC_PREVIOUS_KEPT_ = 3;
+/** Report state: 'heading2' makes the class lines of the Disposition Summary Heading 2; anything else (the default) bold Normal text. */
+const DISPOSITION_CLASS_HEADINGS_KEY_ = 'DISPOSITION_CLASS_HEADINGS';
+
+/** Pure: a title as it is compared -- white space collapsed, trimmed. */
+function titleSyncNorm_(text) {
+  return String(text === null || text === undefined ? '' : text).replace(/\s+/g, ' ').trim();
+}
+
+/** Pure: a short, stable hash of a normalised title (FNV-1a, 32 bits, 8 hex digits). */
+function titleSyncHash_(text) {
+  const s = titleSyncNorm_(text);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return ('0000000' + h.toString(16)).slice(-8);
+}
+
+/**
+ * Pure: a record as stored ('v1|<cur>|<prev,prev>|<ack>|<pend>') as { cur, prev: [], ack, pend }; an empty or
+ * unknown value is no record. `pend` ('review:<hash>', 'manual:<hash>', 'stale:<hash>') says that the TDoc is
+ * listed, and for which list title: it is not read again until the list title changes.
+ */
+function titleSyncRecordOf_(value) {
+  const parts = String(value || '').split('|');
+  if (parts[0] !== 'v1' || (parts.length !== 4 && parts.length !== 5)) return { cur: '', prev: [], ack: '', pend: '' };
+  return { cur: parts[1] || '', prev: parts[2] ? parts[2].split(',').filter(Boolean) : [], ack: parts[3] || '', pend: parts[4] || '' };
+}
+
+/** Pure: a record as stored. */
+function titleSyncRecordText_(record) {
+  return ['v1', record.cur || '', (record.prev || []).slice(0, TITLE_SYNC_PREVIOUS_KEPT_).join(','), record.ack || '', record.pend || ''].join('|');
+}
+
+/**
+ * Pure: what to do with the title of one TDoc. `cellText` the Title row of its
+ * TDoc table (as read), `listTitle` the title of the TDoc list, `record`
+ * (titleSyncRecordOf_()), `mode` ('auto' | 'review'). Returns { action, record }
+ * -- `record` the record to keep afterwards, or null to keep it as it is:
+ *   'skip'     the list has no title, or the cell holds more than one line
+ *   'in-sync'  the same title
+ *   'record'   the same title; the record is written (first seen, or changed)
+ *   'apply'    the list changed and the report shows the title before: write it
+ *   'review'   it differs and it is not known whose change it is (no record, both
+ *              changed, or mode 'review'): listed, not written
+ *   'manual'   the report's title was changed by hand; the list is unchanged: kept
+ *   'kept'     the rapporteur chose to keep the report's title against this list title
+ *   'stale'    the list shows a title it had before: an older list, never written
+ */
+function decideTitleSync_(cellText, listTitle, record, mode) {
+  const rec = record || { cur: '', prev: [], ack: '' };
+  const list = titleSyncNorm_(listTitle);
+  if (!list) return { action: 'skip', record: null };
+  if (/\n/.test(String(cellText || '').replace(/\s+$/, ''))) return { action: 'skip', record: null };
+  const cell = titleSyncNorm_(cellText);
+  const hList = titleSyncHash_(list);
+  const hCell = titleSyncHash_(cell);
+  if (cell === list) {
+    if (rec.cur === hList && !rec.ack) return { action: 'in-sync', record: null };
+    return { action: 'record', record: { cur: hList, prev: rec.cur && rec.cur !== hList ? [rec.cur].concat(rec.prev) : rec.prev.slice(), ack: '' } };
+  }
+  if (rec.ack && rec.ack === hList) return { action: 'kept', record: null };
+  if (rec.cur && rec.prev.indexOf(hList) !== -1) return { action: 'stale', record: null };
+  if (rec.cur && rec.cur === hCell) {
+    if (mode === 'review') return { action: 'review', record: null };
+    return { action: 'apply', record: { cur: hList, prev: [hCell].concat(rec.prev.filter(function (h) { return h !== hCell; })), ack: '' } };
+  }
+  if (rec.cur && rec.cur === hList) return { action: 'manual', record: null };
+  return { action: 'review', record: null };
+}
+
+/** The setting: 'auto' (default), 'review' or 'off'; from the report state of `store` (a background run never reads document properties). */
+function titleSyncMode_(store) {
+  let v = '';
+  try { v = String((store || getReportStateStore_(null)).getProperty(TITLE_SYNC_MODE_KEY_) || '').trim().toLowerCase(); } catch (e) { v = ''; }
+  return v === 'off' || v === 'review' ? v : 'auto';
+}
+
+/** The Title row of a TDoc table: its cell, or null. Reads the number of rows once. */
+function titleCellOfTdocTable_(table) {
+  const n = table.getNumRows();
+  for (let r = 0; r < n; r++) {
+    const row = table.getRow(r);
+    let label = '';
+    try { label = row.getCell(0).getText().trim().toLowerCase(); } catch (e) { continue; }
+    if (label !== 'title' && label !== 'title:') continue;
+    if (row.getNumCells() < 2) continue;
+    return row.getCell(1);
+  }
+  return null;
+}
+
+/**
+ * Replaces the title of a cell with `title`, keeping its look: only its first
+ * paragraph is edited (a cell with text in more than one paragraph is refused:
+ * false); the new text is inserted after the old one (it takes the look of its
+ * last character) and the old one deleted. A link over the whole old title is
+ * put on the new one; a link over a part of it is not carried to the whole.
+ */
+function replaceTitleCellText_(cell, title) {
+  const wanted = String(title);
+  if (!wanted) return false;
+  let text = null;
+  try {
+    const n = typeof cell.getNumChildren === 'function' ? cell.getNumChildren() : 1;
+    let first = null;
+    for (let i = 0; i < n; i++) {
+      const child = cell.getChild(i);
+      if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) return false;
+      const p = child.asParagraph();
+      if (first === null) { first = p; continue; }
+      if (String(p.getText()).trim()) return false;
+    }
+    text = first ? first.editAsText() : cell.editAsText();
+  } catch (e) {
+    text = cell.editAsText();
+  }
+  const old = String(text.getText());
+  if (!old.length) {
+    text.insertText(0, wanted);
+    return true;
+  }
+  let link = null;
+  let whole = false;
+  let tailLinked = false;
+  try {
+    link = text.getLinkUrl(0) || null;
+    whole = !!link && text.getLinkUrl(old.length - 1) === link;
+    tailLinked = !!text.getLinkUrl(old.length - 1);
+  } catch (e) {
+    link = null;
+  }
+  text.insertText(old.length, wanted);
+  text.deleteText(0, old.length - 1);
+  if (whole) text.setLinkUrl(0, wanted.length - 1, link);
+  else if (tailLinked) text.setLinkUrl(0, wanted.length - 1, null);
+  return true;
+}
+
+/** Pure: the Title row of a TDoc table of a Docs API read, its paragraphs joined by line breaks; null without one. */
+function titleTextOfDocsTable_(table) {
+  const rows = (table && table.rows) || [];
+  for (let r = 0; r < rows.length; r++) {
+    const cells = rows[r].tableCells || [];
+    if (cells.length !== 2) continue;
+    const label = statusDocsCellText_(cells[0]).replace(/\s+/g, ' ').trim().toLowerCase();
+    if (label === 'title' || label === 'title:') return docsCellFullText_(cells[1]);
+  }
+  return null;
+}
+
+/** Pure: the title of the TDoc list of one row of the update ('' without a Title column). */
+function titleOfListRow_(tdocData) {
+  if (!tdocData || !tdocData.row || typeof tdocData.titleCol !== 'number' || tdocData.titleCol < 0) return '';
+  return titleSyncNorm_(tdocData.row[tdocData.titleCol]);
+}
+
+/** The records of the report state, by TDoc: { tdoc: record }, from one read. */
+function readTitleSyncRecords_(store) {
+  const out = {};
+  let all = null;
+  try { all = typeof store.getProperties === 'function' ? store.getProperties() : null; } catch (e) { all = null; }
+  if (all) {
+    Object.keys(all).forEach(function (k) { if (k.indexOf(TITLE_SYNC_RECORD_PREFIX_) === 0) out[k.slice(TITLE_SYNC_RECORD_PREFIX_.length)] = titleSyncRecordOf_(all[k]); });
+    out.__all = all;
+  }
+  return out;
+}
+
+/** Writes several keys of the report state at once where it can (one call), else one by one. */
+function writeTitleSyncState_(store, writes) {
+  const keys = Object.keys(writes);
+  if (!keys.length) return 0;
+  if (typeof store.setProperties === 'function') store.setProperties(writes);
+  else keys.forEach(function (k) { store.setProperty(k, writes[k]); });
+  return keys.length;
+}
+
+/**
+ * Pure: JSON of `value` within one property value: an array cut from its end
+ * (the oldest); an object -- the pending list, shown by the dialog -- kept in
+ * the order of its TDoc numbers, cut from the end, so the same TDocs stay from
+ * one update to the next (`__more` counts the ones left out).
+ */
+function titleSyncBoundedJson_(value) {
+  if (Array.isArray(value)) {
+    const list = value.slice();
+    let text = JSON.stringify(list);
+    while (text.length > TITLE_SYNC_MAX_JSON_ && list.length) { list.pop(); text = JSON.stringify(list); }
+    return text;
+  }
+  const keys = Object.keys(value || {}).filter(function (k) { return k !== '__more'; }).sort();
+  const out = {};
+  keys.forEach(function (k) { out[k] = value[k]; });
+  let text = JSON.stringify(out);
+  let more = 0;
+  while (text.length > TITLE_SYNC_MAX_JSON_ - 40 && keys.length) { delete out[keys.pop()]; more++; text = JSON.stringify(out); }
+  if (more) { out.__more = more; text = JSON.stringify(out); }
+  return text;
+}
+
+/**
+ * Pure: the audit log (newest first) within one property value. When it must be
+ * cut, the oldest entries that only list a TDoc for review go first; an entry
+ * that records a write or a choice ("applied", "kept") goes only when nothing
+ * else is left to cut.
+ */
+function titleSyncBoundedLog_(entries) {
+  const list = (entries || []).slice();
+  let text = JSON.stringify(list);
+  const durable = function (e) { return e && (e.a === 'applied' || e.a === 'kept'); };
+  for (let i = list.length - 1; text.length > TITLE_SYNC_MAX_JSON_ && i >= 0; i--) {
+    if (durable(list[i])) continue;
+    list.splice(i, 1);
+    text = JSON.stringify(list);
+  }
+  while (text.length > TITLE_SYNC_MAX_JSON_ && list.length) { list.pop(); text = JSON.stringify(list); }
+  return text;
+}
+
+/** Pure: a title shortened for the log. */
+function titleSyncShort_(text) {
+  const s = titleSyncNorm_(text);
+  return s.length > 160 ? s.slice(0, 157) + '…' : s;
+}
+
+/**
+ * The registration rows of `changes` ({ tdoc: { from, to } }): a row whose
+ * Title is the title before gets the new one; another is left as it is and
+ * returned. One scan of the tables, only when there is a change.
+ */
+function applyTitlesToRegistrationTables_(body, changes) {
+  const out = { written: 0, kept: [] };
+  if (!Object.keys(changes).length) return out;
+  const tables = body.getTables();
+  tables.forEach(function (table) {
+    if (!registrationTableColumns_(table)) return;
+    const n = table.getNumRows();
+    for (let r = 1; r < n; r++) {
+      const row = table.getRow(r);
+      if (row.getNumCells() < 2) continue;
+      const number = row.getCell(0).getText().trim();
+      const change = Object.prototype.hasOwnProperty.call(changes, number) ? changes[number] : null;
+      if (!change) continue;
+      const cell = row.getCell(1);
+      const now = titleSyncNorm_(cell.getText());
+      if (now === titleSyncNorm_(change.to)) continue;
+      if (now !== titleSyncNorm_(change.from)) { out.kept.push(number); continue; }
+      replaceTitleCellText_(cell, change.to);
+      out.written++;
+    }
+  });
+  return out;
+}
+
+/**
+ * The update: the titles of the TDoc tables against the TDoc list of this
+ * run (decideTitleSync_()). Returns { applied, recorded, review, manual,
+ * stale, kept, deferred, registration, summary }. Never throws; nothing is
+ * written in mode 'off', and in mode 'review' only records and the list.
+ * A TDoc is read only when its list title is not the one it was last decided
+ * for (recorded, kept against, or listed); without the report snapshot at
+ * most TITLE_SYNC_READS_PER_UPDATE_ such reads, list changes of recorded TDocs
+ * first. Being listed is part of the TDoc's record, so the shown list (one
+ * property, cut when long) never makes a TDoc "new" again.
+ */
+function syncTdocTitlesOnUpdate_(body, allTdocs, index, context) {
+  const out = { applied: 0, recorded: 0, review: 0, manual: 0, stale: 0, kept: 0, deferred: 0, registration: 0, summary: '' };
+  try {
+    const store = getReportStateStore_(context);
+    const mode = titleSyncMode_(store);
+    if (mode === 'off') { out.summary = 'off'; return out; }
+    const records = readTitleSyncRecords_(store);
+    const all = records.__all || null;
+    const recordOf = function (tdoc) {
+      if (Object.prototype.hasOwnProperty.call(records, tdoc)) return records[tdoc];
+      if (all) return { cur: '', prev: [], ack: '', pend: '' };
+      return titleSyncRecordOf_(store.getProperty(TITLE_SYNC_RECORD_PREFIX_ + tdoc));
+    };
+    let pending = {};
+    try { pending = JSON.parse((all ? all[TITLE_SYNC_PENDING_KEY_] : store.getProperty(TITLE_SYNC_PENDING_KEY_)) || '{}') || {}; } catch (e) { pending = {}; }
+    delete pending.__more;
+    const pendingBefore = titleSyncBoundedJson_(pending);
+    const logged = [];
+    const snap = reportRunSnapshot_();
+    const writes = {};
+    const changes = {};
+    const now = new Date().toISOString();
+    const seen = {};
+    const candidates = [];
+    (allTdocs || []).forEach(function (td) {
+      const tdoc = String(td.row[td.tdocCol] || '').trim();
+      const parsed = parseExactSA4DocumentId_(tdoc);
+      if (!parsed.isValid || seen[parsed.raw]) return;
+      seen[parsed.raw] = true;
+      const listTitle = titleOfListRow_(td);
+      if (!listTitle) return;
+      const record = recordOf(parsed.raw);
+      const hList = titleSyncHash_(listTitle);
+      const fromSnap = snap && snap.byNumber && snap.byNumber[parsed.raw] && !snap.duplicates[parsed.raw] ? snap.byNumber[parsed.raw] : null;
+      // Decided for this list title already: in sync, kept against it, or listed for it.
+      const decided = (record.cur === hList && !record.ack) || record.ack === hList || (record.pend && record.pend.split(':')[1] === hList);
+      if (decided && !fromSnap) return;
+      candidates.push({ number: parsed.raw, listTitle: listTitle, record: record, hList: hList, fromSnap: fromSnap, decided: decided });
+    });
+    // Without the snapshot the reads are bounded: a recorded TDoc whose list title changed comes first.
+    candidates.sort(function (a, b) { return (a.fromSnap ? 0 : a.record.cur ? 1 : 2) - (b.fromSnap ? 0 : b.record.cur ? 1 : 2); });
+    let reads = 0;
+    candidates.forEach(function (c) {
+      let cellText = null;
+      let table = null;
+      if (c.fromSnap) {
+        cellText = titleTextOfDocsTable_(c.fromSnap);
+        if (cellText === null) return;
+      } else {
+        if (reads >= TITLE_SYNC_READS_PER_UPDATE_) { out.deferred++; return; }
+        reads++;
+        table = index ? lookupTdocTableInIndex_(index, c.number) : null;
+        if (!table) return;
+        const cell = titleCellOfTdocTable_(table);
+        if (!cell) return;
+        cellText = cell.getText();
+      }
+      const decision = decideTitleSync_(cellText, c.listTitle, c.record, mode);
+      const key = TITLE_SYNC_RECORD_PREFIX_ + c.number;
+      const record = c.record;
+      if (decision.action === 'in-sync' || decision.action === 'record' || decision.action === 'skip') {
+        if (pending[c.number]) delete pending[c.number];
+        if (decision.action === 'record' || record.pend) {
+          const next = decision.record || { cur: record.cur, prev: record.prev, ack: record.ack };
+          next.pend = '';
+          writes[key] = titleSyncRecordText_(next);
+          if (decision.action === 'record') out.recorded++;
+        }
+        return;
+      }
+      if (decision.action === 'kept') { out.kept++; return; }
+      if (decision.action === 'apply') {
+        if (!table) table = index ? lookupTdocTableInIndex_(index, c.number) : null;
+        const cell = table ? titleCellOfTdocTable_(table) : null;
+        // The read of the snapshot is from the start of this run: the cell is read again before it is written.
+        if (!cell || titleSyncNorm_(cell.getText()) !== titleSyncNorm_(cellText)) return;
+        if (!replaceTitleCellText_(cell, c.listTitle)) return;
+        decision.record.pend = '';
+        writes[key] = titleSyncRecordText_(decision.record);
+        changes[c.number] = { from: titleSyncNorm_(cellText), to: c.listTitle };
+        if (pending[c.number]) delete pending[c.number];
+        logged.push({ t: c.number, a: 'applied', o: titleSyncShort_(cellText), n: titleSyncShort_(c.listTitle), at: now, by: 'update' });
+        Logger.log('Title of ' + c.number + ' changed in the TDoc list: "' + titleSyncShort_(cellText) + '" -> "' + titleSyncShort_(c.listTitle) + '" (written).');
+        out.applied++;
+        return;
+      }
+      out[decision.action]++;
+      const pend = decision.action + ':' + c.hList;
+      pending[c.number] = { cell: titleSyncShort_(cellText), list: titleSyncShort_(c.listTitle), kind: decision.action, at: pending[c.number] && record.pend === pend ? pending[c.number].at : now };
+      if (record.pend !== pend) {
+        writes[key] = titleSyncRecordText_({ cur: record.cur, prev: record.prev, ack: record.ack, pend: pend });
+        if (decision.action !== 'manual') logged.push({ t: c.number, a: decision.action, o: titleSyncShort_(cellText), n: titleSyncShort_(c.listTitle), at: now, by: 'update' });
+      }
+    });
+    if (Object.keys(changes).length) {
+      const reg = applyTitlesToRegistrationTables_(body, changes);
+      out.registration = reg.written;
+      if (reg.kept.length) Logger.log('Title sync: the Registration of Documents row of ' + reg.kept.join(', ') + ' has another title than the TDoc table had; left as it is.');
+    }
+    const pendingText = titleSyncBoundedJson_(pending);
+    if (pendingText !== pendingBefore) writes[TITLE_SYNC_PENDING_KEY_] = pendingText;
+    if (logged.length) {
+      let log = [];
+      try { log = JSON.parse((all ? all[TITLE_SYNC_LOG_KEY_] : store.getProperty(TITLE_SYNC_LOG_KEY_)) || '[]') || []; } catch (e) { log = []; }
+      writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedLog_(logged.concat(log));
+    }
+    writeTitleSyncState_(store, writes);
+    out.summary = out.applied + ' written, ' + out.review + ' to review, ' + out.manual + ' changed in the report, ' + out.stale + ' from an older list' + (out.deferred ? ', ' + out.deferred + ' left to the next update' : '');
+    if (out.applied || logged.length || out.deferred) Logger.log('Titles: ' + out.summary + '.');
+  } catch (e) {
+    Logger.log('Titles: not compared (' + e.message + '); the next update tries again.');
+    out.summary = 'failed: ' + e.message;
+  }
+  return out;
+}
+
+/** Report > Review Title Changes…: the titles that differ, and the log. */
+function reviewTitleChanges() {
+  const ui = DocumentApp.getUi();
+  const store = getReportStateStore_(null);
+  let pending = {};
+  let log = [];
+  try { pending = JSON.parse(store.getProperty(TITLE_SYNC_PENDING_KEY_) || '{}') || {}; } catch (e) { pending = {}; }
+  try { log = JSON.parse(store.getProperty(TITLE_SYNC_LOG_KEY_) || '[]') || []; } catch (e) { log = []; }
+  const html = HtmlService.createHtmlOutput(titleReviewHtml_(pending, log, titleSyncMode_(store))).setWidth(760).setHeight(560);
+  ui.showModalDialog(html, 'Review Title Changes');
+}
+
+/** Pure: the dialog. */
+function titleReviewHtml_(pending, log, mode) {
+  const esc = function (s) { return String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  const why = { review: 'Not known whose change it is', manual: 'Typed by hand in the report', stale: 'An older list (the report has the newer title)' };
+  const more = (pending && pending.__more) || 0;
+  const numbers = Object.keys(pending || {}).filter(function (k) { return k !== '__more'; }).sort();
+  const rows = numbers.map(function (n) {
+    const p = pending[n];
+    return '<tr><td><input type="checkbox" class="pick" value="' + esc(n) + '"></td><td>' + esc(n) + '</td><td>' + esc(p.cell) + '</td><td>' + esc(p.list) + '</td><td>' + esc(why[p.kind] || p.kind) + '</td></tr>';
+  }).join('');
+  const logRows = (log || []).slice(0, 40).map(function (e) {
+    return '<tr><td>' + esc(String(e.at || '').replace('T', ' ').slice(0, 16)) + '</td><td>' + esc(e.t) + '</td><td>' + esc(e.a) + '</td><td>' + esc(e.o) + '</td><td>' + esc(e.n) + '</td></tr>';
+  }).join('');
+  return '<style>body{font:13px Arial,sans-serif;margin:8px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:3px 5px;text-align:left;vertical-align:top}' +
+    'th{background:#f1f3f4}.note{color:#555;margin:4px 0 8px}button{margin:8px 6px 0 0}#msg{margin-top:8px;font-weight:bold}</style>' +
+    '<div class="note">Titles of the TDoc list that differ from the report and were not written by the update (setting: ' + esc(mode) + '). ' +
+    'Nothing is written until you choose. "Use the list title" writes it into the TDoc table and the Registration of Documents table; ' +
+    '"Keep the report title" stops this list title from being offered again.</div>' +
+    (numbers.length ? '<table><tr><th></th><th>TDoc</th><th>In the report</th><th>In the TDoc list</th><th>Why it is listed</th></tr>' + rows + '</table>' +
+      '<button onclick="go(\'apply\')">Use the list title</button><button onclick="go(\'keep\')">Keep the report title</button><button onclick="google.script.host.close()">Close</button>'
+      : '<p>No title differs.</p><button onclick="google.script.host.close()">Close</button>') +
+    (more ? '<p class="note">' + more + ' more TDoc(s) differ and are not shown here (the list is kept within one property); they appear once these are resolved.</p>' : '') +
+    '<div id="msg"></div><h4>Log</h4>' + (logRows ? '<table><tr><th>When (UTC)</th><th>TDoc</th><th>What</th><th>Before</th><th>After</th></tr>' + logRows + '</table>' : '<p>Empty.</p>') +
+    '<script>function go(action){var picked=[].slice.call(document.querySelectorAll(".pick:checked")).map(function(x){return x.value;});' +
+    'if(!picked.length){document.getElementById("msg").textContent="Choose at least one TDoc.";return;}document.getElementById("msg").textContent="Working…";' +
+    'google.script.run.withSuccessHandler(function(r){document.getElementById("msg").textContent=r;}).withFailureHandler(function(e){document.getElementById("msg").textContent="Failed: "+e.message;}).applyTitleReviewDecisions(action,picked);}</script>';
+}
+
+/**
+ * The dialog's choice for `numbers`: 'apply' writes the list title shown in
+ * the dialog, only where the report still shows the title the dialog showed;
+ * 'keep' records that the report keeps its title against that list title.
+ * Returns what was done, as text.
+ */
+function applyTitleReviewDecisions(action, numbers) {
+  assertNotTemplateMaster_();
+  return withDispositionLock_('Review Title Changes', function () {
+    const store = getReportStateStore_(null);
+    let pending = {};
+    try { pending = JSON.parse(store.getProperty(TITLE_SYNC_PENDING_KEY_) || '{}') || {}; } catch (e) { pending = {}; }
+    let log = [];
+    try { log = JSON.parse(store.getProperty(TITLE_SYNC_LOG_KEY_) || '[]') || []; } catch (e) { log = []; }
+    const body = currentReportDocument_().getBody();
+    const index = buildTdocTableIndex_(body.getTables());
+    const writes = {};
+    const changes = {};
+    const done = [];
+    const skipped = [];
+    const now = new Date().toISOString();
+    (numbers || []).forEach(function (n) {
+      const p = pending[n];
+      if (!p) { skipped.push(n + ' (no longer listed)'); return; }
+      const key = TITLE_SYNC_RECORD_PREFIX_ + n;
+      const record = titleSyncRecordOf_(store.getProperty(key));
+      if (action === 'keep') {
+        record.ack = titleSyncHash_(p.list);
+        record.pend = '';
+        writes[key] = titleSyncRecordText_(record);
+        delete pending[n];
+        log.unshift({ t: n, a: 'kept', o: p.cell, n: p.list, at: now, by: 'dialog' });
+        done.push(n);
+        return;
+      }
+      const table = lookupTdocTableInIndex_(index, n);
+      const cell = table ? titleCellOfTdocTable_(table) : null;
+      if (!cell) { skipped.push(n + ' (no TDoc table)'); return; }
+      const before = cell.getText();
+      if (titleSyncShort_(before) !== p.cell) { skipped.push(n + ' (its title changed since the update)'); return; }
+      if (/…$/.test(p.list)) { skipped.push(n + ' (the list title is too long to be taken from here; it is written by the next update)'); return; }
+      replaceTitleCellText_(cell, p.list);
+      changes[n] = { from: titleSyncNorm_(before), to: p.list };
+      writes[key] = titleSyncRecordText_({ cur: titleSyncHash_(p.list), prev: [titleSyncHash_(before)].concat(record.prev), ack: '', pend: '' });
+      delete pending[n];
+      log.unshift({ t: n, a: 'applied', o: p.cell, n: p.list, at: now, by: 'dialog' });
+      done.push(n);
+    });
+    const reg = applyTitlesToRegistrationTables_(body, changes);
+    writes[TITLE_SYNC_PENDING_KEY_] = titleSyncBoundedJson_(pending);
+    writes[TITLE_SYNC_LOG_KEY_] = titleSyncBoundedLog_(log);
+    writeTitleSyncState_(store, writes);
+    return (action === 'keep' ? 'Kept the report title of ' : 'Wrote the list title of ') + (done.length ? done.join(', ') : 'none') +
+      (action === 'apply' ? ' (' + reg.written + ' registration row(s))' : '') + (skipped.length ? '. Not done: ' + skipped.join('; ') : '') +
+      '. The summary tables follow at the next update.';
+  });
+}
+
+/**
+ * Whether the class lines of the summary are Heading 2 ('heading2', opt-in) or bold Normal text (the default, as in
+ * T-2026.10.34, so that older code reads the summary this release writes); from the report state.
+ */
+function dispositionClassHeadingsWanted_() {
+  try { return /^(heading ?2|h2)$/.test(String(getReportStateStore_(null).getProperty(DISPOSITION_CLASS_HEADINGS_KEY_) || '').trim().toLowerCase()); } catch (e) { return false; }
+}
+
+/** A heading's text takes the look of its named style: bold is cleared, not set to false (DocumentApp). */
+function clearDispositionHeadingBold_(p) {
+  try {
+    const attributes = {};
+    attributes[DocumentApp.Attribute.BOLD] = null;
+    p.setAttributes(attributes);
+  } catch (e) {
+    p.editAsText().setBold(false);
+  }
+}
+
+/** Pure: the line of a class of either form, or one an earlier candidate wrote: "<title> (N)". */
+function isDispositionClassLineText_(text) {
+  const t = String(text === null || text === undefined ? '' : text);
+  const titles = DISPOSITION_CLASSES_.map(function (c) { return c.title; }).concat(DISPOSITION_SUMMARY_EARLIER_TITLES_, PLENARY_DISPOSITION_CLASSES_.map(function (c) { return c.title; }));
+  return titles.some(function (title) { return t.length > title.length && t.slice(0, title.length) === title && /^ \(\d+\)$/.test(t.slice(title.length)); });
+}
+
+/** The look of a paragraph the summary writes (`k` its place; 0 the note): a class line Heading 2, the rest Normal, not bold. */
+function setDispositionSummaryParagraphLook_(p, text, k) {
+  const classLine = k > 0 && text !== DISPOSITION_SUMMARY_NONE_;
+  if (classLine && dispositionClassHeadingsWanted_()) {
+    p.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    clearDispositionHeadingBold_(p);
+    return;
+  }
+  p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
+  // The line of a class is bold; the note and "None." are not.
+  p.editAsText().setBold(classLine);
+}
+
+/** A summary written before (DocumentApp): its class lines get the look of now, nothing else. Returns how many were changed. */
+function restyleDispositionClassLines_(body, section) {
+  if (!section) return 0;
+  const want = dispositionClassHeadingsWanted_() ? DocumentApp.ParagraphHeading.HEADING2 : DocumentApp.ParagraphHeading.NORMAL;
+  let changed = 0;
+  for (let i = section.start + 1; i < section.contentEnd; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+    const p = child.asParagraph();
+    if (!isDispositionClassLineText_(p.getText()) || p.getHeading() === want) continue;
+    p.setHeading(want);
+    if (want === DocumentApp.ParagraphHeading.NORMAL) p.editAsText().setBold(true); else clearDispositionHeadingBold_(p);
+    changed++;
+  }
+  return changed;
+}
+
+/** Pure: the requests that give the class lines of the summary in a read the look of now (Docs API); none when they have it. */
+function planDispositionClassHeadings_(content, section, withTab) {
+  const want = dispositionClassHeadingsWanted_() ? 'HEADING_2' : 'NORMAL_TEXT';
+  const out = [];
+  for (let i = section.start + 1; i < section.contentEnd; i++) {
+    const e = content[i];
+    if (!e || !e.paragraph) continue;
+    if (!isDispositionClassLineText_(plenaryDocsParagraphText_(e))) continue;
+    const style = (e.paragraph.paragraphStyle || {}).namedStyleType || 'NORMAL_TEXT';
+    if (style === want) continue;
+    out.push({ updateParagraphStyle: { range: withTab({ startIndex: e.startIndex, endIndex: e.endIndex }), paragraphStyle: { namedStyleType: want }, fields: 'namedStyleType' } });
+    const elements = e.paragraph.elements || [];
+    const end = elements.length ? elements[elements.length - 1].endIndex - 1 : e.endIndex - 1;
+    // A heading takes bold from its named style (the field cleared); a Normal class line is bold, as before.
+    if (end > e.startIndex) out.push({ updateTextStyle: { range: withTab({ startIndex: e.startIndex, endIndex: end }), textStyle: want === 'NORMAL_TEXT' ? { bold: true } : {}, fields: 'bold' } });
+  }
+  return out;
+}
+
+/** Pure: a heading of a read that is a class line of the summary (it does not end the summary). */
+function isDispositionClassHeadingOfContent_(e) {
+  return !!(e && e.paragraph) && isDispositionClassLineText_(plenaryDocsParagraphText_(e));
+}
+
+/**
+ * The update: true when the report has no paragraph or cell with the text of
+ * the summary heading -- then it has no summary, and no walk of the body is
+ * needed to know it (one DocumentApp call). False when it cannot be told.
+ */
+function dispositionSummaryAbsentInBody_(body) {
+  try {
+    return typeof body.findText === 'function' && body.findText(DISPOSITION_SUMMARY_HEADING_) === null;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** The existing-TDoc scan of an update without its snapshot: the numbers into `existing` and the index, from ONE read of each table. */
+function existingTdocScanOfTables_(tables, existing) {
+  const index = new Map();
+  tables.forEach(function (t) {
+    if (!isTDocTable_(t)) return;
+    const raw = String(safeCellText_(t, 0, 1) || '').trim();
+    if (raw) existing.add(raw);
+    const parsed = parseExactSA4DocumentId_(raw);
+    if (parsed.isValid) index.set(parsed.raw, t);
+  });
+  return index;
+}
+
+/** findStatusInDocTable_(): the number of rows read once; the cells of a row counted only for the label sought. The same result. */
+function findStatusRowOfTable_(table) {
+  const n = table.getNumRows();
+  for (let r = 0; r < n; r++) {
+    const row = table.getRow(r);
+    let k = '';
+    try { k = row.getCell(0).getText().trim().toLowerCase(); } catch (e) { continue; }
+    if (k !== 'tdoc status' && k !== 'status') continue;
+    if (row.getNumCells() < 2) continue;
+    const cell = row.getCell(1);
+    // After T-2026.10.29: the status part of a compact Status row (GOES TO PLENARY section).
+    return { cell: cell, value: statusPartOfCellText_(cell.getText()).trim() };
+  }
+  return null;
+}
+
+// ---- After the first real-document run (2026-11-25): an update killed at the 6-minute limit left no trace, and one
+// killed inside a revision move left the moved TDoc table twice (moveTableAfter_ inserts the copy, then removes the
+// original). The journal makes such an update visible to the next one, which repairs what can be repaired safely.
+
+/** Report state: the update that runs now ({ startedAt, stage }); removed at its end. Found at the start of the next update: that one did not end. */
+const UPDATE_RUN_KEY_ = 'UPDATE_RUN';
+/** Report state: an update that did not end, until an update completes: { startedAt, stage, detectedAt, removed, differing }. */
+/** Report state: the TDoc where the last update's TDoc loop stopped on its budget ({ tdoc, at }); the next starts there. */
+const UPDATE_TDOC_CURSOR_KEY_ = 'UPDATE_TDOC_CURSOR';
+const UPDATE_INTERRUPTED_KEY_ = 'UPDATE_INTERRUPTED';
+/**
+ * The time the TDoc loop (new TDoc tables, statuses) and the revision moves may take in one update, each on its own
+ * clock: with the TDoc list (up to about a minute) the update is past them by about 220 s, and the stages after them
+ * keep their own budgets on the update's clock (collectors 150 s, revisions 215 s, formatting 240 s, summary 285 s).
+ */
+const REPORT_UPDATE_TDOCS_LOOP_MS_ = 100000;
+const REPORT_UPDATE_MOVES_MS_ = 60000;
+
+/** The clock of these stage budgets (replaced in the tests). */
+function updateBudgetNow_() {
+  return Date.now();
+}
+/** The journal of the update that runs in this execution, or null. */
+let UPDATE_JOURNAL_ = null;
+
+/**
+ * The start of an update (before anything in the document is changed): an UPDATE_RUN left by an update that did not
+ * end is recorded as UPDATE_INTERRUPTED (and logged); then this update's own UPDATE_RUN. Returns the interruption
+ * known (null when none). Never throws: without its properties the update runs as before, without a journal.
+ */
+function updateJournalStart_(context) {
+  perfStagesStart_();
+  UPDATE_JOURNAL_ = { store: null, interrupted: null, stage: 'start', tdocsDeferred: false, movesDeferred: false, tdocsStartedAt: null, movesStartedAt: null,
+    budgetStartedAt: updateBudgetNow_(), startedAtIso: new Date().toISOString(), stages: [], revisionsDeferred: false, revisionsCompleted: false };
+  try {
+    const store = getReportStateStore_(context);
+    let interrupted = null;
+    try { interrupted = JSON.parse(store.getProperty(UPDATE_INTERRUPTED_KEY_) || 'null'); } catch (e) { interrupted = null; }
+    const raw = store.getProperty(UPDATE_RUN_KEY_);
+    if (raw) {
+      let previous = {};
+      try { previous = JSON.parse(raw) || {}; } catch (e) { previous = {}; }
+      interrupted = { startedAt: String(previous.startedAt || ''), stage: String(previous.stage || ''), detectedAt: new Date().toISOString(), removed: [], differing: [],
+        elapsedMs: Number(previous.elapsedMs) || 0, stages: Array.isArray(previous.stages) ? previous.stages.slice(-UPDATE_JOURNAL_STAGES_KEPT_) : [] };
+      store.setProperty(UPDATE_INTERRUPTED_KEY_, JSON.stringify(interrupted));
+      Logger.log('Update journal: the update started ' + interrupted.startedAt + ' did not end (it was stopped during "' + interrupted.stage +
+        '", e.g. at the 6-minute limit). This update checks the report for what it may have left.');
+    }
+    store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: UPDATE_JOURNAL_.startedAtIso, stage: 'start', elapsedMs: 0, stages: [] }));
+    UPDATE_JOURNAL_.store = store;
+    UPDATE_JOURNAL_.interrupted = interrupted;
+  } catch (e) {
+    Logger.log('Update journal: not kept (' + e.message + ').');
+  }
+  return UPDATE_JOURNAL_.interrupted;
+}
+
+/**
+ * The stage the running update has reached (perfTimed_() labels, the network requests); kept in UPDATE_RUN with the
+ * time since the start and the last stages with theirs -- an update stopped from outside shows where its time went.
+ * Never throws.
+ */
+function updateJournalStage_(stage) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || j.stage === stage) return;
+  j.stage = stage;
+  const at = updateElapsedMs_();
+  j.stages.push({ stage: String(stage).slice(0, 80), ms: at });
+  if (j.stages.length > UPDATE_JOURNAL_STAGES_KEPT_) j.stages = j.stages.slice(-UPDATE_JOURNAL_STAGES_KEPT_);
+  if (!j.store) return;
+  try { j.store.setProperty(UPDATE_RUN_KEY_, JSON.stringify({ startedAt: j.startedAtIso, stage: String(stage).slice(0, 120), elapsedMs: at, stages: j.stages })); } catch (e) { /* the journal is a help only */ }
+}
+
+/** Pure: the text of a table, row by row and cell by cell (two tables with the same key have the same content). */
+function tdocTableContentKey_(table) {
+  const rows = [];
+  for (let r = 0; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    const cells = [];
+    for (let c = 0; c < row.getNumCells(); c++) cells.push(row.getCell(c).getText());
+    rows.push(cells.join('\u241F'));
+  }
+  return rows.join('\u241E');
+}
+
+/**
+ * After an interrupted update only: a TDoc table that is in the report more than once with IDENTICAL content keeps
+ * one (the first); one with different content is not touched and is named (someone may have typed in either). The
+ * result is kept in UPDATE_INTERRUPTED and logged. A move interrupted by the time limit leaves exactly such a copy.
+ */
+function repairAfterInterruptedUpdate_(body, context) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.interrupted) return null;
+  const groups = {};
+  body.getTables().forEach(function (t) {
+    if (!isTDocTable_(t)) return;
+    const parsed = parseExactSA4DocumentId_(safeCellText_(t, 0, 1));
+    if (parsed.isValid) (groups[parsed.raw] = groups[parsed.raw] || []).push(t);
+  });
+  const removed = [];
+  const differing = [];
+  Object.keys(groups).sort().forEach(function (n) {
+    const tables = groups[n];
+    if (tables.length < 2) return;
+    const first = tdocTableContentKey_(tables[0]);
+    if (tables.slice(1).every(function (t) { return tdocTableContentKey_(t) === first; })) {
+      tables.slice(1).forEach(function (t) { removeTableWithItsSeparator_(body, t); });
+      removed.push(n + (tables.length > 2 ? ' (' + (tables.length - 1) + ' copies)' : ''));
+    } else {
+      differing.push(n);
+    }
+  });
+  j.interrupted.removed = removed;
+  j.interrupted.differing = differing;
+  // Tables removed: the positions of the update's read are stale.
+  if (removed.length) updateStructureChanged_();
+  // What this update read of the report before the repair (its snapshot) no longer matches it: the update says it is
+  // in part, and the next update -- reading the repaired report -- completes it and closes the record.
+  if (removed.length) deferReportUpdateStage_('the report after the repair of the interrupted update (the next update completes it)');
+  try { if (j.store) j.store.setProperty(UPDATE_INTERRUPTED_KEY_, JSON.stringify(j.interrupted)); } catch (e) { /* logged below anyway */ }
+  Logger.log('Update journal: after the interrupted update, ' + (removed.length ? 'TDoc tables that were there twice with the same content, one removed: ' + removed.join(', ') : 'no TDoc table twice with the same content') +
+    (differing.length ? '; TDoc tables more than once with DIFFERENT content, not changed -- check them: ' + differing.join(', ') : '') + '.');
+  return { removed: removed, differing: differing };
+}
+
+/**
+ * The order of the TDoc loop: from the TDoc where the last update stopped on its budget, to the end, then from the
+ * start -- so that every TDoc is reached even when one update cannot do them all (a loop that always started at the
+ * top would never reach the last ones). New TDocs keep their order: those before the cursor were inserted already.
+ * Only the loop's order: the list itself, used by the stages after it, is not changed.
+ */
+function tdocLoopOrder_(allTdocs) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.store) return allTdocs;
+  let cursor = null;
+  try { cursor = JSON.parse(j.store.getProperty(UPDATE_TDOC_CURSOR_KEY_) || 'null'); } catch (e) { cursor = null; }
+  if (!cursor || !cursor.tdoc) return allTdocs;
+  const at = allTdocs.findIndex(function (t) { return String(t.row[t.tdocCol] || '').trim() === cursor.tdoc; });
+  if (at <= 0) return allTdocs;
+  Logger.log('Update: the TDoc loop goes on at ' + cursor.tdoc + ' (where the last update stopped on its time budget).');
+  return allTdocs.slice(at).concat(allTdocs.slice(0, at));
+}
+
+/** The TDoc loop of the update: past its time budget (its own clock), the rest is left to the next update (said once). */
+function tdocLoopOverBudget_(tdocNumber) {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return false;
+  if (j.tdocsDeferred) return true;
+  const now = updateBudgetNow_();
+  if (j.tdocsStartedAt === null) j.tdocsStartedAt = now;
+  // Its own 100 s, and no TDoc started later than 170 s into the update (one clock for the whole update).
+  if (now - j.tdocsStartedAt <= REPORT_UPDATE_TDOCS_LOOP_MS_ && updateElapsedMs_() <= UPDATE_TDOC_LOOP_LATEST_MS_) return false;
+  j.tdocsDeferred = true;
+  try { if (j.store) j.store.setProperty(UPDATE_TDOC_CURSOR_KEY_, JSON.stringify({ tdoc: tdocNumber, at: new Date().toISOString() })); } catch (e) { /* the next update starts at the top */ }
+  deferReportUpdateStage_('TDoc tables from ' + tdocNumber + ' on (new TDocs and statuses)');
+  return true;
+}
+
+/**
+ * The revision pairs of the update (rearrangeRevisionTables_(): the "Revised to" disposition, the in-place check, the
+ * move): past their time budget (their own clock, from the first pair), the rest is left to the next update (said once).
+ */
+function revisionMovesOverBudget_() {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return false;
+  if (j.movesDeferred) return true;
+  const now = updateBudgetNow_();
+  if (j.movesStartedAt === null) j.movesStartedAt = now;
+  // Their own 60 s, and no pair started later than 200 s into the update.
+  if (now - j.movesStartedAt <= REPORT_UPDATE_MOVES_MS_ && updateElapsedMs_() <= UPDATE_MOVES_LATEST_MS_) return false;
+  j.movesDeferred = true;
+  deferReportUpdateStage_('revision placement');
+  return true;
+}
+
+/**
+ * The end of an update (its finally): UPDATE_RUN removed; an interruption is named in the result, and closed when this
+ * update completed (not in part, no TDoc table left with different copies). Never throws.
+ */
+function updateJournalEnd_(result) {
+  const j = UPDATE_JOURNAL_;
+  UPDATE_JOURNAL_ = null;
+  if (!j || !j.store) return;
+  try {
+    j.store.deleteProperty(UPDATE_RUN_KEY_);
+    // A whole pass of the TDoc loop: the next one starts at the top again.
+    if (j.tdocsStartedAt !== null && !j.tdocsDeferred) j.store.deleteProperty(UPDATE_TDOC_CURSOR_KEY_);
+    // A whole pass of the revisions: theirs too.
+    if (j.revisionsCompleted && !j.revisionsDeferred) j.store.deleteProperty(UPDATE_REVISIONS_CURSOR_KEY_);
+    // A whole pass of the revision pairs: theirs too.
+    if (j.pairsCompleted && !j.movesDeferred) j.store.deleteProperty(UPDATE_PAIRS_CURSOR_KEY_);
+    if (!j.interrupted) return;
+    if (result) result.interrupted = { startedAt: j.interrupted.startedAt, stage: j.interrupted.stage, elapsedMs: j.interrupted.elapsedMs || 0, removed: j.interrupted.removed || [], differing: j.interrupted.differing || [] };
+    const complete = !!result && result.success !== false && !(result.incomplete && result.incomplete.length) && !(j.interrupted.differing || []).length;
+    if (complete) {
+      j.store.deleteProperty(UPDATE_INTERRUPTED_KEY_);
+      Logger.log('Update journal: this update completed; the interrupted update of ' + j.interrupted.startedAt + ' is closed.');
+    }
+  } catch (e) {
+    Logger.log('Update journal: ' + e.message);
+  }
+}
+
+// --- One clock for the whole update (after the second real-document run, 2026-11-26: an update of the 140-TDoc
+// main copy took 212 s, the next one ran into the 6-minute limit). The stage budgets above each have their own clock;
+// these limits are on the update's clock (from its journal), so that the update ends -- complete, or in part with the
+// rest left to the next one -- by about 300 s, never at the limit. A network request cannot be stopped once it runs
+// (UrlFetchApp has no time-out of its own): one is not started when it could not end in time.
+const UPDATE_TOTAL_BUDGET_MS_ = 300000;
+const UPDATE_FETCH_RESERVE_MS_ = 60000;
+const UPDATE_FINISH_RESERVE_MS_ = 45000;
+const UPDATE_TDOC_LOOP_LATEST_MS_ = 170000;
+const UPDATE_MOVES_LATEST_MS_ = 200000;
+const UPDATE_LATE_STAGES_LATEST_MS_ = UPDATE_TOTAL_BUDGET_MS_ - UPDATE_FINISH_RESERVE_MS_;
+const UPDATE_JOURNAL_STAGES_KEPT_ = 40;
+const UPDATE_REVISIONS_CURSOR_KEY_ = 'UPDATE_REVISIONS_CURSOR';
+
+/** How long the update of this execution has run on the clock of its budgets, in ms (0 outside an update). */
+function updateElapsedMs_() {
+  const j = UPDATE_JOURNAL_;
+  return j && typeof j.budgetStartedAt === 'number' ? updateBudgetNow_() - j.budgetStartedAt : 0;
+}
+
+/**
+ * Before a network request of an update (safeFetch_()): it is recorded as the update's stage; past the time a
+ * request may still start (the budget less a request's minute and the end's reserve: 195 s), it is not made -- an
+ * error marked updateDeferral is thrown, so that the collector that asked for it stops before it writes anything
+ * (its cells are not rewritten from a part of the messages or listings) and is left to the next update.
+ * Outside an update: nothing.
+ */
+function updateNetworkGuard_(label) {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return;
+  updateJournalStage_('network: ' + String(label || 'request'));
+  const at = updateElapsedMs_();
+  if (at + UPDATE_FETCH_RESERVE_MS_ + UPDATE_FINISH_RESERVE_MS_ <= UPDATE_TOTAL_BUDGET_MS_) return;
+  const e = new Error('no network request ' + Math.round(at / 1000) + ' s into the update (' + (label || 'request') + ')');
+  e.updateDeferral = true;
+  throw e;
+}
+
+/** A collector stopped by updateNetworkGuard_(): its stage left to the next update (true); any other error: false. */
+function updateDeferralCaught_(e, stage) {
+  if (!e || !e.updateDeferral) return false;
+  deferReportUpdateStage_(stage + ' (' + e.message + ')');
+  return true;
+}
+
+/**
+ * The stages after the collectors that the next update does again anyway (the revision relationships, the Goes to
+ * Plenary data, the Disposition Summary, Undisposed Documents): not started later than 255 s into the update, so that
+ * the end (the status dropdowns, the journal) has its reserve. True when they may run.
+ */
+function updateLateStagesMayStart_() {
+  if (!UPDATE_JOURNAL_ || updateElapsedMs_() <= UPDATE_LATE_STAGES_LATEST_MS_) return true;
+  deferReportUpdateStage_('the Goes to Plenary data, the Disposition Summary and Undisposed Documents');
+  return false;
+}
+
+/**
+ * The order of the revisions of an update: from the TDoc where the last update stopped them, to the end, then from
+ * the start (as the TDoc loop, tdocLoopOrder_()): a pass cut by the time always at the same place would never reach
+ * the last TDocs. `order`: TDoc numbers. Outside an update or without a cursor: unchanged.
+ */
+function revisionsLoopOrder_(order) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.store) return order;
+  let cursor = null;
+  try { cursor = JSON.parse(j.store.getProperty(UPDATE_REVISIONS_CURSOR_KEY_) || 'null'); } catch (e) { cursor = null; }
+  const at = cursor && cursor.tdoc ? order.indexOf(cursor.tdoc) : -1;
+  if (at <= 0) return order;
+  Logger.log('Update: the revisions go on at ' + cursor.tdoc + ' (where the last update stopped them on its time).');
+  return order.slice(at).concat(order.slice(0, at));
+}
+
+/** The revisions of this update stopped by the time before `tdoc`: the next update starts there. */
+function revisionsLoopStopped_(tdoc) {
+  const j = UPDATE_JOURNAL_;
+  if (!j) return;
+  j.revisionsDeferred = true;
+  try { if (j.store) j.store.setProperty(UPDATE_REVISIONS_CURSOR_KEY_, JSON.stringify({ tdoc: tdoc, at: new Date().toISOString() })); } catch (e) { /* the next update starts at the top */ }
+}
+
+/** The revisions of this update went through every TDoc: the cursor is removed at its end. */
+function revisionsLoopCompleted_() {
+  if (UPDATE_JOURNAL_ && !UPDATE_JOURNAL_.revisionsDeferred) UPDATE_JOURNAL_.revisionsCompleted = true;
+}
+
+// --- The revision pairs (after Run 5, 2026-11-26: the third A update of the 140-TDoc main copy spent more than 200 s
+// in rearrangeRevisionTables_ and ran into the 6-minute limit; the budget stopped only the moves, and every pair's
+// disposition and position checks went on). Now the whole pair is within the time, the rest resumes at the next
+// unprocessed pair, and the in-place check comes from the update's Docs API read while that read still shows the
+// report's structure.
+const UPDATE_PAIRS_CURSOR_KEY_ = 'UPDATE_PAIRS_CURSOR';
+
+/**
+ * The order of the revision pairs of an update (their originals, orderRevisionChains_()): from the pair where the last
+ * update stopped, to the end, then from the start. Outside an update or without a cursor: unchanged.
+ */
+function revisionPairsOrder_(parents, map) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !j.store) return parents;
+  let cursor = null;
+  try { cursor = JSON.parse(j.store.getProperty(UPDATE_PAIRS_CURSOR_KEY_) || 'null'); } catch (e) { cursor = null; }
+  let at = cursor && cursor.parent ? parents.indexOf(cursor.parent) : -1;
+  // From the start of its chain (orderRevisionChains_(): A->B before B->C), so that a chain is never split.
+  while (map && at > 0 && map[parents[at - 1]] === parents[at]) at--;
+  if (at <= 0) return parents;
+  Logger.log('Update: the revision pairs go on at ' + parents[at] + ' (where the last update stopped them on its time).');
+  return parents.slice(at).concat(parents.slice(0, at));
+}
+
+/**
+ * Before a pair, and before its move: past the pairs' budget (revisionMovesOverBudget_()), the pair of `parent` is
+ * the next one to do -- kept as the cursor (the pairs before it were done), and the loop stops. True: stop.
+ */
+function revisionPairsStop_(parent) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || !revisionMovesOverBudget_()) return false;
+  if (!j.pairsCursorKept) {
+    j.pairsCursorKept = true;
+    try { if (j.store) j.store.setProperty(UPDATE_PAIRS_CURSOR_KEY_, JSON.stringify({ parent: parent, at: new Date().toISOString() })); } catch (e) { /* the next update starts at the top */ }
+  }
+  return true;
+}
+
+/** The pairs of this update went through to the end (no stop): the cursor is removed at its end. */
+function revisionPairsPassEnd_() {
+  const j = UPDATE_JOURNAL_;
+  if (j && !j.movesDeferred) j.pairsCompleted = true;
+}
+
+/** The structure of the report changed in this update (a move, sections moved): its Docs API read no longer shows the positions. */
+function updateStructureChanged_() {
+  if (UPDATE_JOURNAL_) UPDATE_JOURNAL_.structureChanged = true;
+}
+
+/** A table was moved by the revision pairs: the positions of the read are stale from here on. */
+function revisionPairMoved_() {
+  updateStructureChanged_();
+}
+
+/**
+ * Whether the update's Docs API read shows the table of `child` directly below that of `parent` (only empty
+ * paragraphs between) -- the in-place check of moveTableAfter_() without asking the document for positions. Only
+ * while the read still is the report's structure: no move or section repair in this update, and as many body
+ * elements as the read has (an insertion or removal changes that). Otherwise, or with any doubt (a table twice, a
+ * section break between, a table not in the read): false, and moveTableAfter_() checks the document itself.
+ */
+function revisionPairInPlaceBySnapshot_(body, parent, child) {
+  const j = UPDATE_JOURNAL_;
+  if (!j || j.structureChanged) return false;
+  const snap = reportRunSnapshot_();
+  if (!snap || !snap.byNumber || !snap.content) return false;
+  const p = parseExactSA4DocumentId_(String(parent || '').trim());
+  const c = parseExactSA4DocumentId_(String(child || '').trim());
+  if (!p.isValid || !c.isValid) return false;
+  const a = snap.byNumber[p.raw], b = snap.byNumber[c.raw];
+  if (!a || !b || (snap.duplicates && (snap.duplicates[p.raw] || snap.duplicates[c.raw]))) return false;
+  if (j.snapshotElements === undefined) {
+    j.snapshotElements = snap.content.filter(function (e) { return !e.sectionBreak; }).length;
+    try { j.bodyElements = body.getNumChildren(); } catch (e) { j.bodyElements = -1; }
+  }
+  if (j.snapshotElements !== j.bodyElements) return false;
+  if (b.index <= a.index) return false;
+  for (let i = a.index + 1; i < b.index; i++) {
+    // An empty paragraph as isEmptyBodyParagraph_() takes it: Normal text, not a list item, no text, no object.
+    const e = snap.content[i];
+    if (!e || !e.paragraph) return false;
+    const para = e.paragraph;
+    const style = (para.paragraphStyle && para.paragraphStyle.namedStyleType) || 'NORMAL_TEXT';
+    if (style !== 'NORMAL_TEXT' || para.bullet || (para.positionedObjectIds && para.positionedObjectIds.length)) return false;
+    const els = para.elements || [];
+    if (!els.every(function (x) { return x.textRun && /^\n?$/.test(String(x.textRun.content || '')); })) return false;
+  }
+  return true;
+}
+
+// --- Every stage of the update on one timeline (after the sixth real-document run, 2026-11-26: an update of the
+// 140-TDoc main copy took 347 s, of which about 95 s were in timed stages -- where the rest went could not be seen).
+// Diagnostics only: nothing here changes what the update does, its time budgets or the report. The timeline is kept
+// for the execution; of it only the end of a stage is written, in the journal's record of that stage, with the
+// journal's next stage (no write of its own), so that an update stopped from outside still shows its last stages.
+
+/** The stages of this update in the order they ended: { stage, start, ms, depth } (start: ms from the update's start; depth 0: a stage of the update itself). */
+var PERF_STAGES_ = [];
+var PERF_STAGE_DEPTH_ = 0;
+var PERF_STAGES_STARTED_AT_ = 0;
+/** At most this many nested stages on a timeline (an update has about 40 stages in all). */
+const PERF_STAGES_KEPT_ = 300;
+
+/** The start of an update's timeline (from updateJournalStart_()). */
+function perfStagesStart_() {
+  PERF_STAGES_.length = 0;
+  PERF_STAGE_DEPTH_ = 0;
+  PERF_STAGES_STARTED_AT_ = Date.now();
+}
+
+/** perfTimed_(): a stage starts; its depth (0: none of the timed stages runs; more: nested in one). */
+function perfStageEnter_() {
+  return PERF_STAGE_DEPTH_++;
+}
+
+/**
+ * perfTimed_(): a stage ended (also by an error). On the timeline with its depth, so that the time of a nested stage
+ * is not counted twice; its end in the journal's record of the stage. Never throws.
+ */
+function perfStageLeave_(label, start, ms, depth) {
+  PERF_STAGE_DEPTH_ = depth;
+  try {
+    // A stage of the update itself is always kept (else the summary would take its time for untimed); nested ones up to the cap.
+    if (depth === 0 || PERF_STAGES_.length < PERF_STAGES_KEPT_) {
+      PERF_STAGES_.push({ stage: String(label).trim().slice(0, 120), start: PERF_STAGES_STARTED_AT_ ? start - PERF_STAGES_STARTED_AT_ : 0, ms: ms, depth: depth });
+    }
+    const j = UPDATE_JOURNAL_;
+    if (!j) return;
+    const name = String(label).slice(0, 80);
+    for (let i = j.stages.length - 1; i >= 0; i--) {
+      if (j.stages[i].stage !== name) continue;
+      if (j.stages[i].end === undefined) j.stages[i].end = updateElapsedMs_();
+      break;
+    }
+  } catch (e) { /* the timeline is a help only */ }
+}
+
+/**
+ * The timeline of this update: its total (TOTAL continuousUpdate, once it is known), the time in its own stages
+ * (depth 0, each counted once), the time outside every timed stage, and its stages of depth 0, slowest first.
+ */
+function perfStageSummary_() {
+  const total = PERF_TIMINGS_['TOTAL continuousUpdate'];
+  const top = PERF_STAGES_.filter(function (s) { return s.depth === 0; });
+  const timed = top.reduce(function (a, s) { return a + s.ms; }, 0);
+  return { totalMs: typeof total === 'number' ? total : null, timedMs: timed, untimedMs: typeof total === 'number' ? total - timed : null, stages: PERF_STAGES_.length,
+    slowest: top.slice().sort(function (a, b) { return b.ms - a.ms; }).slice(0, 8).map(function (s) { return { stage: s.stage, start: s.start, ms: s.ms }; }) };
+}
+
+/** The end of an update (continuousUpdateCore_()'s finally): the timeline in one [PERF] line. Never throws. */
+function perfStageTimelineLog_() {
+  try {
+    const s = perfStageSummary_();
+    Logger.log('[PERF] stage timeline: ' + s.timedMs + ' of ' + s.totalMs + ' ms in the timed stages, ' + s.untimedMs + ' ms outside them; the slowest: ' +
+      s.slowest.map(function (x) { return x.stage + ' ' + x.ms + ' ms (at ' + x.start + ' ms)'; }).join('; '));
+  } catch (e) { /* the timeline is a help only */ }
+}
+
+// --- The Disposition Summary within the update's time (after the seventh real-document run, 2026-11-27: the summary
+// of the 140-TDoc main copy took 109 s of an update of 326 s, started at 216 s, after the other stages had already been
+// left to the next update). It reads the whole report and every update writes it again, so an update that has run
+// past UPDATE_DISPOSITION_SUMMARY_LATEST_MS_ (the limit of the TDoc loop) leaves it to the next one: the update says it
+// is in part, and the summary is not changed. A report with Goes to Plenary writes its summary at the end of the update,
+// with its own limit (unchanged). Outside an update nothing is left.
+const UPDATE_DISPOSITION_SUMMARY_LATEST_MS_ = UPDATE_TDOC_LOOP_LATEST_MS_;
+
+/** True, with the summary left to the next update, when the update of this execution has run past the summary's limit. */
+function dispositionSummaryLeftForTime_() {
+  if (!UPDATE_JOURNAL_ || updateElapsedMs_() <= UPDATE_DISPOSITION_SUMMARY_LATEST_MS_) return false;
+  deferReportUpdateStage_('Disposition Summary');
+  return true;
+}
+
+// --- The Disposition Summary from the update's Docs API read (after the final real-document run, 2026-11-27: the
+// summary read the 140 TDoc tables of the main copy cell by cell through DocumentApp, in 15 s to more than 223 s on the
+// same unchanged document; the second update ran into the 6-minute limit inside it). The update has read the report
+// once through the Docs API already (reportRunSnapshot_(), shared with Undisposed Documents): the scope, the statuses
+// and the summary as it stands are taken from that read, with the helpers of Goes to Plenary. The read is the saved
+// report as the update started: what this update wrote (new TDoc tables and registrations, statuses and titles from the
+// list) is in the summary from the next update on, as in Undisposed Documents (decision of 2026-11-27). A TDoc in two
+// tables is read from each table's own dropdown, so differing values are a conflict (DocumentApp cannot read a dropdown
+// and gave every table of a TDoc the value of its first). A summary that already says this is not touched (its class
+// lines restyled only where the read shows they need it); one that changes is written by renderDispositionSummary_(),
+// which finds the section in the body itself -- never at a position of the read. Without the read (text statuses, no
+// Docs API, a failed read): through DocumentApp as before. The menu item and Goes to Plenary do not come here.
+
+/** The update's Docs API read for the summary: { snap, section } (section null when the read has no summary), or null without a read. */
+function dispositionSummaryRunRead_() {
+  const snap = reportRunSnapshot_();
+  if (!snap || !snap.tables || !snap.content) return null;
+  return { snap: snap, section: plenarySummarySectionOfContent_(snap.content) };
+}
+
+/**
+ * Pure: the TDoc tables of a read (plenaryDocsTables_()) as the summary reads them through DocumentApp: the Status is
+ * the text typed in its cell when it has any, else the value selected in its dropdown (readTdocStatus_()); the link is
+ * the one on the TDoc number (tdocCellLinkUrl_()), not the first of the cell ("X (revision of Y)" links Y). Copies; the
+ * read itself is not changed (Undisposed Documents and Goes to Plenary read it as before).
+ */
+function dispositionSummaryTablesOfRead_(tables) {
+  return (tables || []).map(function (t) {
+    if (!t.number) return t;
+    const e = t.statusEntry;
+    // findCellText_() on the read: the row labelled "Status" (or "Status:"), its paragraphs joined by line ends.
+    const typed = statusPartOfCellText_(docsRowCellText_(t.rows, 'Status')).trim();
+    const status = typed || (e && e.kind === 'dropdown' ? String(e.displayValue || '').trim() : '');
+    const head = ((t.rows[0] || {}).tableCells || [])[1];
+    const values = Object.assign({}, t.values, { title: docsRowCellText_(t.rows, 'Title'), source: docsRowCellText_(t.rows, 'Source'), 'agenda item': docsRowCellText_(t.rows, 'Agenda Item') });
+    return Object.assign({}, t, { values: values, statusEntry: { kind: 'text', text: status }, link: docsCellLinkAtText_(head, t.number) });
+  });
+}
+
+/** Pure: findCellText_() on the rows of a read -- the second cell of the first row of two or more cells labelled `label` (or "label:"), its paragraphs joined by line ends as getText() joins them, trimmed; '' without one. */
+function docsRowCellText_(rows, label) {
+  const want = String(label).toLowerCase();
+  const textOf = function (cell) {
+    return ((cell && cell.content) || []).map(function (block) {
+      return ((block.paragraph && block.paragraph.elements) || []).map(function (el) { return el.textRun ? String(el.textRun.content || '') : ''; }).join('').replace(/\n$/, '');
+    }).join('\n');
+  };
+  for (let r = 0; r < (rows || []).length; r++) {
+    const cells = rows[r].tableCells || [];
+    if (cells.length < 2) continue;
+    const key = textOf(cells[0]).trim().toLowerCase();
+    if (key === want || key === want + ':') return textOf(cells[1]).trim();
+  }
+  return '';
+}
+
+/** Pure: the link at the first place of `text` in a Docs API cell (at its start when it is not there), or '' -- tdocCellLinkUrl_() on a read. */
+function docsCellLinkAtText_(cell, text) {
+  const runs = [];
+  let all = '';
+  ((cell && cell.content) || []).forEach(function (block, b) {
+    if (b > 0) all += '\n';
+    ((block.paragraph && block.paragraph.elements) || []).forEach(function (el) {
+      if (!el.textRun) return;
+      const content = String(el.textRun.content || '').replace(/\n$/, '');
+      runs.push({ from: all.length, to: all.length + content.length, url: (el.textRun.textStyle && el.textRun.textStyle.link && el.textRun.textStyle.link.url) || '' });
+      all += content;
+    });
+  });
+  const at = Math.max(0, all.indexOf(String(text || '')));
+  const run = runs.filter(function (r) { return at >= r.from && at < r.to; })[0];
+  return run ? run.url : '';
+}
+
+/** writeDispositionSummary_() from the update's read (`run` of dispositionSummaryRunRead_(), with a section): the same states, read and model. */
+function writeDispositionSummaryFromRunRead_(body, run) {
+  const snap = run.snap;
+  // The Status and the link as DocumentApp reads them (readTdocStatus_(), tdocCellLinkUrl_()).
+  const shared = undisposedReadOfContent_(dispositionSummaryTablesOfRead_(snap.tables), snap.content);
+  if (!shared) {
+    const scope = plenaryScopeOfTables_(snap.tables);
+    return { state: 'no-scope', error: scope.error || 'the TDocs of this meeting are not known', read: { entries: [], unreadable: [], otherMeetings: [] }, model: buildDispositionSummaryModel_([]), foreign: [] };
+  }
+  const read = shared.read;
+  // The same read gives the Undisposed Documents section of this update.
+  rememberDispositionReadForUndisposed_(shared.scope, read);
+  if (!read.entries.length && read.otherMeetings.length) {
+    return { state: 'no-scope', error: 'none of the ' + read.otherMeetings.length + ' TDocs of the report\'s TDoc tables is registered in this report (' +
+      Object.keys(shared.scope.numbers).length + ' TDocs in its Registration of Documents table): it does not describe these TDoc tables', read: read, model: buildDispositionSummaryModel_([]), foreign: [] };
+  }
+  const model = buildDispositionSummaryModel_(read.entries);
+  if (run.section.foreign.length) return { state: 'refused', read: read, model: model, foreign: run.section.foreign };
+  if (JSON.stringify(plenarySummaryContentOfContent_(snap.content, run.section)) === JSON.stringify(dispositionSummaryContent_(model))) {
+    const restyle = planDispositionClassHeadings_(snap.content, run.section, function (range) { return range; }).length > 0;
+    return { state: 'unchanged', read: read, model: model, foreign: [], restyled: restyle ? restyleDispositionClassLines_(body, findDispositionSummarySection_(body)) : 0 };
+  }
+  const rendered = renderDispositionSummary_(body, model);
+  return { state: rendered.state, read: read, model: model, foreign: rendered.foreign || [] };
+}
+
+// =========================================================
+// END OF ISSUE 28 A
+// =========================================================
