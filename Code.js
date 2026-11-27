@@ -64,6 +64,16 @@
  *     the next update goes on there. Whether a revision already sits below
  *     its original comes from the update's Docs API read while that read
  *     still shows the report's structure; else from the document.
+ *   - Diagnostics (after the sixth real-document run): every significant
+ *     stage of an update is timed; one [PERF] line sums up the timeline
+ *     (time in timed stages, time outside them, the slowest stages), and
+ *     the update journal keeps the end of each stage (40 stages). Nothing
+ *     the update does, its budgets or the report change.
+ *   - The Disposition Summary within the time (after the seventh
+ *     real-document run): an update that has run more than 170 s
+ *     before the summary leaves it to the next update and says it is
+ *     updated in part; the summary is not changed. A report with Goes
+ *     to Plenary writes its summary as before.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -1321,11 +1331,14 @@ function perfTimed_(label, fn) {
   const start = Date.now();
   // After issue 28 A: the stage of a running update, for its journal (ISSUE 28 A section).
   updateJournalStage_(label);
+  // After issue 28 A: the stage on the update's timeline, a nested stage marked as such (ISSUE 28 A section).
+  const depth = perfStageEnter_();
   try {
     return fn();
   } finally {
     const ms = Date.now() - start;
     perfAddTime_(label, ms);
+    perfStageLeave_(label, start, ms, depth);
     Logger.log('[PERF] ' + label + ': ' + ms + ' ms');
   }
 }
@@ -1459,7 +1472,8 @@ function continuousUpdateCore_(context) {
   // After issue 28 A: the journal of this update; one that did not end before is found and recorded (ISSUE 28 A section).
   updateJournalStart_(context);
   const cfg = perfTimed_('configuration/context (getReportConfig_)', () => getReportConfig_(context));
-  const body = getReportBody_(context);
+  // After issue 28 A: every significant stage of the update timed, for its timeline (ISSUE 28 A section).
+  const body = perfTimed_('report body (getReportBody_)', () => getReportBody_(context));
   perfCount_('DocumentApp.getActiveDocument().getBody() calls (total)');
   perfCount_('getActiveDocument().getBody() call site: continuousUpdate:initial');
 
@@ -1498,9 +1512,9 @@ function continuousUpdateCore_(context) {
       throw e;
     }
     // After T-2026.10.31: a TDoc the meeting-room server has is no longer taken as reserved (UNDISPOSED DOCUMENTS section).
-    applyLocalDocsAvailabilitySafely_(tdocGroups, context);
+    perfTimed_('meeting-room availability (applyLocalDocsAvailabilitySafely_)', () => applyLocalDocsAvailabilitySafely_(tdocGroups, context));
     // After issue 28 A: what an interrupted update may have left, before the report is scanned (ISSUE 28 A section).
-    repairAfterInterruptedUpdate_(body, context);
+    perfTimed_('interrupted-update check (repairAfterInterruptedUpdate_)', () => repairAfterInterruptedUpdate_(body, context));
     const allTdocs = [];
     Object.keys(tdocGroups).forEach(key => {
       tdocGroups[key].tdocs.forEach(td => allTdocs.push({ ...td, agendaItem: key }));
@@ -1518,7 +1532,7 @@ function continuousUpdateCore_(context) {
     let structure = { sectionsMoved: 0, emptyParagraphsRemoved: 0 };
     try {
       // After T-2026.10.29: from the report snapshot; the repair runs only when it shows something to repair (GOES TO PLENARY section).
-      structure = repairReportStructureIfNeeded_(body, agendaTitleOf);
+      structure = perfTimed_('structure check (repairReportStructureIfNeeded_)', () => repairReportStructureIfNeeded_(body, agendaTitleOf));
       // After issue 28 A: sections moved -- the positions of the update's read are no longer those of the report (ISSUE 28 A section).
       if (structure && (structure.sectionsMoved || structure.emptyParagraphsRemoved)) updateStructureChanged_();
     } catch (e) {
@@ -1558,7 +1572,7 @@ function continuousUpdateCore_(context) {
     const abstractAskedThisRun = {};
 
     // After issue 28 A: the loop goes on where the last update left it (its time budget); the rest of the update keeps the list order (ISSUE 28 A section).
-    tdocLoopOrder_(allTdocs).forEach(tdocData => {
+    perfTimed_('TDoc loop (new TDoc tables, statuses, upload completion)', () => tdocLoopOrder_(allTdocs).forEach(tdocData => {
       const row = tdocData.row;
       const tdocNumber = String(row[tdocData.tdocCol] || '').trim();
       perfCount_('TDocs processed (loop iterations)');
@@ -1597,24 +1611,24 @@ function continuousUpdateCore_(context) {
           abstractAskedThisRun[tdocNumber] = true;
         }
       }
-    });
+    }));
 
     Logger.log(`Added ${newTdocsAdded} new, updated ${statusUpdated} statuses`);
     // After T-2026.10.29: only when the report snapshot shows a row without its link (GOES TO PLENARY section).
-    const registrationLinksAdded = refreshRegistrationTableLinksIfNeeded_(body, allTdocs);
+    const registrationLinksAdded = perfTimed_('registration-table links (refreshRegistrationTableLinksIfNeeded_)', () => refreshRegistrationTableLinksIfNeeded_(body, allTdocs));
     Logger.log(`Upload completion: ${linksAdded} TDoc link(s) added, ${uploadAbstractAttempts} abstract attempt(s), ${registrationLinksAdded} registration-table link(s) added`);
 
     // Update summary table
     // Ad-hoc sessions (stage B): null unless this is an ad-hoc report with
     // sessions. With it, a report that HAS the Session column gets the
     // column brought up to date; a four-column report stays four-column.
-    const tdocSessions = makeAdhocTdocSessionResolverSafely_(context);
+    const tdocSessions = perfTimed_('ad-hoc sessions (makeAdhocTdocSessionResolverSafely_)', () => makeAdhocTdocSessionResolverSafely_(context));
     if (newTdocsAdded > 0) {
       perfTimed_('registered-documents summary (updateRegisteredDocumentsTable_)', () => updateRegisteredDocumentsTable_(body, allTdocs, tdocGroups, tdocSessions));
     }
-    const sessionColumnFailure = refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions);
+    const sessionColumnFailure = perfTimed_('registration Session column (refreshRegistrationSessionColumnSafely_)', () => refreshRegistrationSessionColumnSafely_(body, allTdocs, tdocSessions));
     // After T-2026.10.34: a title changed in the TDoc list after the reservation (ISSUE 28 A section).
-    const titles = syncTdocTitlesOnUpdate_(body, allTdocs, tdocTableIndex, context);
+    const titles = perfTimed_('title sync (syncTdocTitlesOnUpdate_)', () => syncTdocTitlesOnUpdate_(body, allTdocs, tdocTableIndex, context));
     if (titles.applied) result.titles = titles.summary;
 
     // Revision placement: new TDOCs are appended at the end of their agenda
@@ -1663,13 +1677,13 @@ function continuousUpdateCore_(context) {
       const provisional = syncProvisionalRevisionsOnUpdate_(allTdocs, tdocTableIndex, context);
       if (provisional.written || provisional.transferred || provisional.conflicts || provisional.undone) result.revisionsExpected = provisional.summary;
       // After T-2026.10.29: the revision relationships (every report), and the Goes to Plenary data (GOES TO PLENARY section).
-      syncTdocRevisionsOnUpdate_(allTdocs, tdocTableIndex);
-      const plenary = syncPlenarySelectionOnUpdate_(body, allTdocs, tdocTableIndex);
+      perfTimed_('revision relationships (syncTdocRevisionsOnUpdate_)', () => syncTdocRevisionsOnUpdate_(allTdocs, tdocTableIndex));
+      const plenary = perfTimed_('Goes to Plenary (syncPlenarySelectionOnUpdate_)', () => syncPlenarySelectionOnUpdate_(body, allTdocs, tdocTableIndex));
       if (plenary.state !== 'off') result.goesToPlenary = plenary.state;
-      const summary = syncDispositionSummaryOnUpdate_(body);
+      const summary = perfTimed_('summary of the dispositions (syncDispositionSummaryOnUpdate_)', () => syncDispositionSummaryOnUpdate_(body));
       if (summary.state !== 'absent') result.dispositionSummary = summary.state;
       // After T-2026.10.31: the Undisposed Documents section of a main report (UNDISPOSED DOCUMENTS section).
-      syncUndisposedDocumentsOnUpdate_(body);
+      perfTimed_('Undisposed Documents (syncUndisposedDocumentsOnUpdate_)', () => syncUndisposedDocumentsOnUpdate_(body));
     }
 
     // PERF-003 (Part B) / PERF-003B (Part 3): the unconditional,
@@ -1708,7 +1722,7 @@ function continuousUpdateCore_(context) {
     // dropdowns the status sync moved on. Not in a background run: it has no active document to save.
     if (!context) {
       const unmapped = statusDropdownRun_().unmapped.slice();
-      const finalized = finalizeStatusDropdowns_('update');
+      const finalized = perfTimed_('status dropdowns (finalizeStatusDropdowns_)', () => finalizeStatusDropdowns_('update'));
       // After T-2026.10.29: the summary of a report with Goes to Plenary is written there (GOES TO PLENARY section).
       if (finalized && finalized.plenary && finalized.plenary.summary) result.dispositionSummary = finalized.plenary.summary;
       if (unmapped.length) result.statusNotes = unmapped;
@@ -1738,6 +1752,8 @@ function continuousUpdateCore_(context) {
     // this end-of-run summary -- for a genuine timeout, those per-stage
     // lines (as far as they got) are the only available evidence.
     perfAddTime_('TOTAL continuousUpdate', Date.now() - perfTotalStart);
+    // After issue 28 A: the timeline of this update, summed up in one line (ISSUE 28 A section).
+    perfStageTimelineLog_();
     // After T-2026.10.29: what follows in this execution is no update (GOES TO PLENARY section).
     // After issue 28 A: the journal of this update ends (ISSUE 28 A section).
     updateJournalEnd_(result);
@@ -23762,6 +23778,8 @@ function syncDispositionSummaryOnUpdate_(body) {
     if (plenarySelectionEnabled_()) return { state: 'deferred' };
     // After T-2026.10.34: a report without the text of the summary heading has none, without a walk of the body (ISSUE 28 A section).
     if (dispositionSummaryAbsentInBody_(body) || !findDispositionSummarySection_(body)) return { state: 'absent' };
+    // After issue 28 A: not started once the update has run long; the next update writes it (ISSUE 28 A section).
+    if (dispositionSummaryLeftForTime_()) return { state: 'deferred' };
     const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
     if (done.state === 'no-scope') Logger.log('Disposition Summary: not updated -- ' + done.error + '.');
     else if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
@@ -30853,6 +30871,7 @@ let UPDATE_JOURNAL_ = null;
  * known (null when none). Never throws: without its properties the update runs as before, without a journal.
  */
 function updateJournalStart_(context) {
+  perfStagesStart_();
   UPDATE_JOURNAL_ = { store: null, interrupted: null, stage: 'start', tdocsDeferred: false, movesDeferred: false, tdocsStartedAt: null, movesStartedAt: null,
     budgetStartedAt: updateBudgetNow_(), startedAtIso: new Date().toISOString(), stages: [], revisionsDeferred: false, revisionsCompleted: false };
   try {
@@ -31035,7 +31054,7 @@ const UPDATE_FINISH_RESERVE_MS_ = 45000;
 const UPDATE_TDOC_LOOP_LATEST_MS_ = 170000;
 const UPDATE_MOVES_LATEST_MS_ = 200000;
 const UPDATE_LATE_STAGES_LATEST_MS_ = UPDATE_TOTAL_BUDGET_MS_ - UPDATE_FINISH_RESERVE_MS_;
-const UPDATE_JOURNAL_STAGES_KEPT_ = 12;
+const UPDATE_JOURNAL_STAGES_KEPT_ = 40;
 const UPDATE_REVISIONS_CURSOR_KEY_ = 'UPDATE_REVISIONS_CURSOR';
 
 /** How long the update of this execution has run on the clock of its budgets, in ms (0 outside an update). */
@@ -31196,6 +31215,89 @@ function revisionPairInPlaceBySnapshot_(body, parent, child) {
     const els = para.elements || [];
     if (!els.every(function (x) { return x.textRun && /^\n?$/.test(String(x.textRun.content || '')); })) return false;
   }
+  return true;
+}
+
+// --- Every stage of the update on one timeline (after the sixth real-document run, 2026-11-26: an update of the
+// 140-TDoc main copy took 347 s, of which about 95 s were in timed stages -- where the rest went could not be seen).
+// Diagnostics only: nothing here changes what the update does, its time budgets or the report. The timeline is kept
+// for the execution; of it only the end of a stage is written, in the journal's record of that stage, with the
+// journal's next stage (no write of its own), so that an update stopped from outside still shows its last stages.
+
+/** The stages of this update in the order they ended: { stage, start, ms, depth } (start: ms from the update's start; depth 0: a stage of the update itself). */
+var PERF_STAGES_ = [];
+var PERF_STAGE_DEPTH_ = 0;
+var PERF_STAGES_STARTED_AT_ = 0;
+/** At most this many nested stages on a timeline (an update has about 40 stages in all). */
+const PERF_STAGES_KEPT_ = 300;
+
+/** The start of an update's timeline (from updateJournalStart_()). */
+function perfStagesStart_() {
+  PERF_STAGES_.length = 0;
+  PERF_STAGE_DEPTH_ = 0;
+  PERF_STAGES_STARTED_AT_ = Date.now();
+}
+
+/** perfTimed_(): a stage starts; its depth (0: none of the timed stages runs; more: nested in one). */
+function perfStageEnter_() {
+  return PERF_STAGE_DEPTH_++;
+}
+
+/**
+ * perfTimed_(): a stage ended (also by an error). On the timeline with its depth, so that the time of a nested stage
+ * is not counted twice; its end in the journal's record of the stage. Never throws.
+ */
+function perfStageLeave_(label, start, ms, depth) {
+  PERF_STAGE_DEPTH_ = depth;
+  try {
+    // A stage of the update itself is always kept (else the summary would take its time for untimed); nested ones up to the cap.
+    if (depth === 0 || PERF_STAGES_.length < PERF_STAGES_KEPT_) {
+      PERF_STAGES_.push({ stage: String(label).trim().slice(0, 120), start: PERF_STAGES_STARTED_AT_ ? start - PERF_STAGES_STARTED_AT_ : 0, ms: ms, depth: depth });
+    }
+    const j = UPDATE_JOURNAL_;
+    if (!j) return;
+    const name = String(label).slice(0, 80);
+    for (let i = j.stages.length - 1; i >= 0; i--) {
+      if (j.stages[i].stage !== name) continue;
+      if (j.stages[i].end === undefined) j.stages[i].end = updateElapsedMs_();
+      break;
+    }
+  } catch (e) { /* the timeline is a help only */ }
+}
+
+/**
+ * The timeline of this update: its total (TOTAL continuousUpdate, once it is known), the time in its own stages
+ * (depth 0, each counted once), the time outside every timed stage, and its stages of depth 0, slowest first.
+ */
+function perfStageSummary_() {
+  const total = PERF_TIMINGS_['TOTAL continuousUpdate'];
+  const top = PERF_STAGES_.filter(function (s) { return s.depth === 0; });
+  const timed = top.reduce(function (a, s) { return a + s.ms; }, 0);
+  return { totalMs: typeof total === 'number' ? total : null, timedMs: timed, untimedMs: typeof total === 'number' ? total - timed : null, stages: PERF_STAGES_.length,
+    slowest: top.slice().sort(function (a, b) { return b.ms - a.ms; }).slice(0, 8).map(function (s) { return { stage: s.stage, start: s.start, ms: s.ms }; }) };
+}
+
+/** The end of an update (continuousUpdateCore_()'s finally): the timeline in one [PERF] line. Never throws. */
+function perfStageTimelineLog_() {
+  try {
+    const s = perfStageSummary_();
+    Logger.log('[PERF] stage timeline: ' + s.timedMs + ' of ' + s.totalMs + ' ms in the timed stages, ' + s.untimedMs + ' ms outside them; the slowest: ' +
+      s.slowest.map(function (x) { return x.stage + ' ' + x.ms + ' ms (at ' + x.start + ' ms)'; }).join('; '));
+  } catch (e) { /* the timeline is a help only */ }
+}
+
+// --- The Disposition Summary within the update's time (after the seventh real-document run, 2026-11-27: the summary
+// of the 140-TDoc main copy took 109 s of an update of 326 s, started at 216 s, after the other stages had already been
+// left to the next update). It reads the whole report and every update writes it again, so an update that has run
+// past UPDATE_DISPOSITION_SUMMARY_LATEST_MS_ (the limit of the TDoc loop) leaves it to the next one: the update says it
+// is in part, and the summary is not changed. A report with Goes to Plenary writes its summary at the end of the update,
+// with its own limit (unchanged). Outside an update nothing is left.
+const UPDATE_DISPOSITION_SUMMARY_LATEST_MS_ = UPDATE_TDOC_LOOP_LATEST_MS_;
+
+/** True, with the summary left to the next update, when the update of this execution has run past the summary's limit. */
+function dispositionSummaryLeftForTime_() {
+  if (!UPDATE_JOURNAL_ || updateElapsedMs_() <= UPDATE_DISPOSITION_SUMMARY_LATEST_MS_) return false;
+  deferReportUpdateStage_('Disposition Summary');
   return true;
 }
 

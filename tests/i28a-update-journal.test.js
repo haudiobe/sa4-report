@@ -235,7 +235,7 @@ console.log('F. one clock for the whole update (after the second real-document r
   check('256 s into the update: the Goes to Plenary data, the summary and Undisposed Documents left to the next update', [summaries, (res.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents'), res.success], [0, true, true]);
   r.s.collectorUpdate_ = () => { clock = 200000; return { failures: [] }; };
   const res2 = r.update();
-  check('200 s into the update: they run', [summaries, (res2.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents')], [1, false]);
+  check('200 s into the update: the late stages start (the summary itself has its own limit since Run 7, tests/disposition-summary-close-report.test.js part X)', [summaries, (res2.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents')], [1, false]);
   r.s.updateBudgetNow_ = () => Date.now();
 }
 {
@@ -427,6 +427,114 @@ console.log('G. the revision pairs within the time (after Run 5, 2026-11-26)');
   r3.docProps.setProperty('UPDATE_PAIRS_CURSOR', JSON.stringify({ parent: 'B' }));
   const order = r3.exec(() => { r3.s.markReportUpdateStart_(); r3.s.updateJournalStart_(null); const o = r3.s.revisionPairsOrder_(['X', 'A', 'B', 'Z'], { X: 'Y', A: 'B', B: 'C', Z: 'W' }); r3.s.updateJournalEnd_({ success: true }); r3.s.endReportUpdate_(); return o; });
   check('a cursor inside a chain (A->B, B->C): the pairs resume at the start of that chain', order, ['A', 'B', 'Z', 'X']);
+}
+
+console.log('H. every stage of the update on one timeline (diagnostics only, after Run 6, 2026-11-26)');
+{
+  // The same report and the same list twice: once as it runs, once with no timing at all (perfTimed_ only calls its
+  // function). Revisions to move, a "Revised to", typed Minutes and Disposition: the stages have work to do.
+  const LIST = () => [
+    { id: 'S4aA269001', agenda: '4.3', status: 'available', uploaded: true },
+    { id: 'S4aA269002', agenda: '4.3', status: 'available', uploaded: true },
+    { id: 'S4aA269004', agenda: '4.4', status: 'noted', uploaded: true }];
+  const setCell = (x, id, label, text) => x.exec(() => { const tb = x.table(id); for (let i = 0; i < tb.getNumRows(); i++) if (tb.getRow(i).getCell(0).getText() === label) tb.getRow(i).getCell(1).setText(text); });
+  const prepare = (x) => {
+    x.build();
+    setCell(x, 'S4aA269001', 'Minutes', 'Typed minutes of 001, kept.');
+    setCell(x, 'S4aA269002', 'Disposition', 'Discussed on Tuesday');
+    const t0 = x.tdocs.find((d) => d.id === 'S4aA269002'); t0.status = 'revised'; t0.revisedTo = 'S4aA269012';
+    x.tdocs.push({ id: 'S4aA269012', agenda: '4.4', status: 'agreed', isRevisionOf: 'S4aA269002', uploaded: true });
+    x.tdocs.push({ id: 'S4aA269013', agenda: '4.3', status: 'reserved', uploaded: false });
+    x.s.findParentRevisedToTable_ = () => null;
+  };
+  const view = (x) => {
+    const props = x.docProps.getProperties();
+    const kept = {};
+    // Times of the clock (ISO times, the "no summary" cache's epoch milliseconds) are not the report's.
+    Object.keys(props).sort().forEach((k) => { kept[k] = String(props[k]).replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, '<time>').replace(/"ts":\d{13}/g, '"ts":<time>'); });
+    // The whole body: every paragraph (with its heading) and every cell of every table, in order.
+    const text = x.body._children.map((e) => {
+      if (e.getType() !== 'TABLE') return (e.getHeading ? e.getHeading() + ' ' : '') + (e.getText ? e.getText() : e.getType());
+      const rows = [];
+      for (let i = 0; i < e.getNumRows(); i++) { const row = e.getRow(i); const cells = []; for (let k = 0; k < row.getNumCells(); k++) cells.push(row.getCell(k).getText()); rows.push(cells.join(' | ')); }
+      return rows.join('\n');
+    }).join('\n');
+    return { text: text, order: x.order(), props: kept };
+  };
+  const strip = (res) => JSON.parse(JSON.stringify(res || {}));
+  const timed = templateReport({ tdocs: LIST() });
+  const plain = templateReport({ tdocs: LIST() });
+  prepare(timed); prepare(plain);
+  plain.s.perfTimed_ = function (label, fn) { return fn(); };
+  const a1 = timed.update(), b1 = plain.update();
+  const a2 = timed.update(), b2 = plain.update();
+  check('with and without the timing: the same report (text, order of the tables) and the same report state', [view(timed).text === view(plain).text, view(timed).order, view(timed).props], [true, view(plain).order, view(plain).props]);
+  check('... and the same results of both updates (complete, nothing left to the next update)', [strip(a1), strip(a2)], [strip(b1), strip(b2)]);
+  check('... the revision below its original, "Revised to" written once, typed text kept', [timed.order().indexOf('S4aA269012') === timed.order().indexOf('S4aA269002') + 1, timed.field('S4aA269002', 'Disposition'), timed.field('S4aA269001', 'Minutes')],
+    [true, 'Discussed on Tuesday — Revised to S4AA269012', 'Typed minutes of 001, kept.']);
+
+  // The timeline of the last update: every stage named, each stage of the update once (depth 0), the nested ones marked.
+  const stages = timed.exec(() => timed.s.PERF_STAGES_.slice());
+  const top = stages.filter((s) => s.depth === 0).map((s) => s.stage);
+  const WANTED = ['configuration/context (getReportConfig_)', 'report body (getReportBody_)', 'TDoc-list fetch/download+parse (downloadAndGroupTdocs_)',
+    'meeting-room availability (applyLocalDocsAvailabilitySafely_)', 'interrupted-update check (repairAfterInterruptedUpdate_)', 'structure check (repairReportStructureIfNeeded_)',
+    'existing-report/document scan (existing TDoc detection)', 'TDoc loop (new TDoc tables, statuses, upload completion)', 'registration-table links (refreshRegistrationTableLinksIfNeeded_)',
+    'ad-hoc sessions (makeAdhocTdocSessionResolverSafely_)', 'registration Session column (refreshRegistrationSessionColumnSafely_)', 'title sync (syncTdocTitlesOnUpdate_)',
+    'revision ordering/rearrangement (rearrangeRevisionTables_)', 'collectorUpdate_ (RSS/mail + revisions, total)', 'revision relationships (syncTdocRevisionsOnUpdate_)',
+    'Goes to Plenary (syncPlenarySelectionOnUpdate_)', 'summary of the dispositions (syncDispositionSummaryOnUpdate_)', 'Undisposed Documents (syncUndisposedDocumentsOnUpdate_)', 'status dropdowns (finalizeStatusDropdowns_)'];
+  check('the stages of the update on its timeline, in their order, each once (the TDoc loop, the title sync, the late stages, the status dropdowns among them)', top.filter((s) => WANTED.includes(s)), WANTED);
+  check('... a stage inside another is marked as nested (depth 1 or more), not as a stage of the update', stages.filter((s) => s.depth > 0).map((s) => s.stage).filter((s) => /collector: revisions|TDoc-list: /.test(s)).length > 0 &&
+    stages.filter((s) => s.depth > 0).every((s) => !WANTED.includes(s.stage)), true);
+  const ordered = stages.filter((s) => s.depth === 0).slice().sort((x, y) => x.start - y.start);
+  check('... the stages of the update do not overlap (each starts after the one before it ended)', ordered.every((s, i) => i === 0 || s.start >= ordered[i - 1].start + ordered[i - 1].ms), true);
+  const sum = timed.exec(() => timed.s.perfStageSummary_());
+  check('the summary: time in the timed stages counted once (depth 0), the total, the time outside them', [sum.timedMs === ordered.reduce((x, s) => x + s.ms, 0), sum.totalMs >= sum.timedMs, sum.untimedMs === sum.totalMs - sum.timedMs, sum.slowest.length > 0],
+    [true, true, true, true]);
+  check('... and one [PERF] line with it at the end of the update', timed.logs.some((l) => /\[PERF\] stage timeline: \d+ of \d+ ms in the timed stages, -?\d+ ms outside them; the slowest: /.test(String(l))), true);
+}
+{
+  // Nested stages are not counted twice; an error in a stage leaves the depth right for the next one.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  const out = r.exec(() => {
+    const s = r.s;
+    s.perfResetState_(); s.perfStagesStart_();
+    const busy = (ms) => { const until = Date.now() + ms; while (Date.now() < until) { /* wait */ } };
+    s.perfTimed_('outer', () => { busy(15); s.perfTimed_('inner', () => busy(25)); });
+    try { s.perfTimed_('failing', () => s.perfTimed_('failing inner', () => { throw new Error('boom'); })); } catch (e) { /* re-thrown, as before */ }
+    s.perfTimed_('after the error', () => 0);
+    s.PERF_TIMINGS_['TOTAL continuousUpdate'] = 1000000;
+    return { stages: s.PERF_STAGES_.map((x) => [x.stage, x.depth]), outer: s.PERF_STAGES_.find((x) => x.stage === 'outer').ms, sum: s.perfStageSummary_() };
+  });
+  check('nested: the inner stage depth 1, the outer one depth 0; after an error the next stage is depth 0 again', out.stages,
+    [['inner', 1], ['outer', 0], ['failing inner', 1], ['failing', 0], ['after the error', 0]]);
+  check('... the time in the timed stages counts the outer stage, not the inner one again', out.sum.timedMs - out.outer < 25, true);
+}
+{
+  // An update stopped from outside: the journal has the stages that ended (with their ends) and the one it was in
+  // (without); the next update records them. The journal keeps 40 stages and stays far below a property's 9 KB.
+  const r = templateReport({ tdocs: TDOCS });
+  r.build();
+  let inside = null;
+  r.exec(() => {
+    r.s.markReportUpdateStart_(); r.s.updateJournalStart_(null);
+    r.s.perfTimed_('stage one', () => 0);
+    r.s.perfTimed_('stage two', () => 0);
+    r.s.perfTimed_('stage three', () => { inside = JSON.parse(r.docProps.getProperty('UPDATE_RUN')); });
+    // killed here: no updateJournalEnd_()
+    r.s.endReportUpdate_();
+  });
+  const st = (inside.stages || []).map((s) => [s.stage, typeof s.ms, s.end === undefined ? 'running' : typeof s.end]);
+  check('an update stopped in its third stage: the stages before it with their ends, the one it was in without', st, [['stage one', 'number', 'number'], ['stage two', 'number', 'number'], ['stage three', 'number', 'running']]);
+  r.exec(() => { r.s.markReportUpdateStart_(); r.s.updateJournalStart_(null); });
+  const rec = json(r, 'UPDATE_INTERRUPTED');
+  check('... the next update records them (UPDATE_INTERRUPTED)', [rec.stage, rec.stages.map((s) => s.stage)], ['stage three', ['stage one', 'stage two', 'stage three']]);
+  r.exec(() => {
+    for (let i = 0; i < 50; i++) r.s.perfTimed_('a long stage name to fill the journal with eighty characters, number ' + String(i).padStart(4, '0') + ' ......', () => 0);
+  });
+  const run = prop(r, 'UPDATE_RUN');
+  check('the journal keeps the last 40 stages, ends included, well below the 9 KB of a property', [JSON.parse(run).stages.length, run.length < 7000], [40, true]);
+  r.exec(() => { r.s.updateJournalEnd_({ success: true }); r.s.endReportUpdate_(); });
 }
 
 if (failures) { console.log(`\n${failures} check(s) FAILED`); process.exit(1); }
