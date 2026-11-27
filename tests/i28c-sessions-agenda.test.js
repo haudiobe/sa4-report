@@ -422,12 +422,12 @@ console.log('G. the ledger');
   const git = (spec) => { try { return execFileSync('git', ['show', spec], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').replace(/\r/g, ''); } catch (e) { return null; } };
   const view = ledger.codeWithoutIssue28C(RAW);
   check('every change of the layer is in Code.js exactly once', view.problems, []);
-  // Phase B pinned by its commit (57e3040: with phase A e6d5a9a); the branch name only as a fallback.
-  const b = git('57e3040:Code.js') || git('feature/i28-b-provisional-revisions:Code.js');
+  // Phase B pinned by its commit (fded9ba: with phase A 211a677, after Run 7); the branch name only as a fallback.
+  const b = git('fded9ba:Code.js') || git('feature/i28-b-provisional-revisions:Code.js');
   if (b === null) console.log('  note: the phase B branch is not available; the byte comparison is skipped.');
   else check('without it, Code.js is that of phase B, byte for byte', view.code === b, true);
   const creator = fs.readFileSync(path.join(ROOT, 'template', 'ReportCreator.js'), 'utf8').replace(/\r/g, '');
-  const cb = git('57e3040:template/ReportCreator.js') || git('feature/i28-b-provisional-revisions:template/ReportCreator.js');
+  const cb = git('fded9ba:template/ReportCreator.js') || git('feature/i28-b-provisional-revisions:template/ReportCreator.js');
   check('ReportCreator.js: one menu item; without it, that of phase B', [ledger.creatorWithoutIssue28C(creator).problems, cb === null || ledger.creatorWithoutIssue28C(creator).code === cb], [[], true]);
   check('the version is 2.30.0', (RAW.match(/^ \* Version: (\d+\.\d+\.\d+)/m) || [])[1], '2.30.0');
   const names = (code) => (code.match(/^function ([A-Za-z0-9_$]+)\(/gm) || []).map((x) => x.slice(9, -1));
