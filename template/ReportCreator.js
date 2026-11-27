@@ -756,6 +756,8 @@ function buildTemplateReportMenu_(ui) {
     .addItem('Update Abstracts', 'addAbstractsOnly')
     // After T-2026.10.34: the titles of the TDoc list that differ and were not written (issue #28 A).
     .addItem('Review Title Changes…', 'reviewTitleChanges')
+    // Issue #28 B: the decision of a revision recorded before 3GU registers it.
+    .addItem('Revision Expected…', 'manageExpectedRevisions')
     .addSeparator()
     // After T-2026.10.15: the Disposition Summary at the end of the report, and the checks before it is closed.
     .addItem('Update Disposition Summary', 'updateDispositionSummary')
