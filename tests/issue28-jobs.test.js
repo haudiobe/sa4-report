@@ -101,5 +101,12 @@ check('the parts in any order: the result; another job with a longer id is not m
 check('a part missing: not yet (null)', J.assemble('main-x-1', files.filter((x) => !/ 2\/3/.test(x.name))), null);
 check('no part: null', J.assemble('main-x-1', []), null);
 
+// After the final run (2026-11-27): inspect stops the plan when the copy is not identical to s5.
+{
+  const job = J.makeJob('main2', 'inspect', 's');
+  const result = (identical) => ({ steps: [{ do: 'snap', ok: true }, { do: 'compare', ok: true, identical: identical, lines: identical ? 1 : 3, first: identical ? [] : ['a difference'] }] });
+  check('inspect: identical to s5 passes; any difference fails (the plan stops before anything is written)', [J.evaluate(job, result(true)), J.evaluate(job, result(false)).length], [[], 1]);
+}
+
 if (failures) { console.log(`\n${failures} check(s) FAILED`); process.exit(1); }
 console.log('\nAll checks passed.');

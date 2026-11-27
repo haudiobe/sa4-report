@@ -78,7 +78,9 @@ const JOBS = {
   expect: ok(1, 3).concat([{ step: 0, rule: 'identical' }, { step: 2, rule: 'identical' }]) }),
   // Read only: the copy as it is now against the settled T-2026.10.33 snapshot s5, every line (what an update that
   // was stopped left in it, if anything).
-  inspect: () => ({ steps: [{ do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2, all: true }], expect: ok(0, 1) }),
+  // After the final run (2026-11-27, an update stopped at the time limit, the copy not verified since): the copy must be
+  // identical to s5, else the plan stops here, before anything is written; the differences are in the result, every line.
+  inspect: () => ({ steps: [{ do: 'snap' }, { do: 'compare', from: SETTLED_REFERENCE.main2, all: true }], expect: ok(0, 1).concat([{ step: 1, rule: 'identical' }]) }),
   // Phase A first, on the copy as inspect found it: an update that did not end is recorded (its own journal was lost
   // with the test cleanup of 2026-11-26), the next A update finds it and repairs what it left; then the copy must be
   // the settled s5 again, two further updates change nothing, and each update ends -- complete, or in part with the
