@@ -234,3 +234,18 @@ Run 7 explained the time of the update: a one-off identity check on a copy witho
   5. T-2026.10.33: `rollback`, then `uninstall`; the original script goes back.
 - **On a failure** the orchestrator stops, runs the uninstall at the stage it stopped at, and pushes the original script back. So B runs only after A has passed, and C only after B.
 - **The anchor.** The first update of the copy still pays the one-off identity check, as a report's first update after Configure Meeting would. No workaround in the code; the test keeps the stricter case.
+
+## The final run's result and the state of the main2 copy (2026-11-27)
+
+- **Result: NO-GO for #29, #30 and #31.**
+  - Phase A's first update took 216.7 s; the copy was identical to s5 after it (s26).
+  - The second update reached the Disposition Summary at 135.7 s, under the 170 s limit. The summary then ran more than 223 s and the execution ended at the 6-minute limit.
+  - B and C were not run.
+- **Recovery.**
+  - The uninstall was clean.
+  - The guard first refused the original script: the runner's uninstall record was written in two parts. Fixed in `520132f`, which puts the parts together and checks the record more strictly.
+  - The original T-2026.10.33 script went back at 08:27 UTC, read back byte for byte equal to the recorded original. The harness is removed.
+- **Limitation: the document is not verified against s5 after the stopped update.**
+  - The update stopped inside the summary. Its journal shows the summary still reading, and on unchanged content the summary writes nothing. So the document is very probably unchanged, but this is not verified.
+  - By decision of 2026-11-27, no runner is installed only for this comparison.
+  - Any later run on this copy starts with `inspect` against s5, which settles it. Until then the copy is not taken as an exact s5 baseline.
