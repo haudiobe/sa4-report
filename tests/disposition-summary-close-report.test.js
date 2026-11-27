@@ -1483,5 +1483,115 @@ console.log('W. T-2026.10.34: a TDoc handed to the plenary by "☑ Yes" does not
   else check('without it, Code.js is that of T-2026.10.33 (b7299c1), byte for byte', view.code === released, true);
 }
 
+// ====================================================================== X
+console.log('X. issue #28 A, after the seventh real-document run (2026-11-27): the summary within the update\'s time');
+{
+  const tdocs = [t(1, '4.3'), t(2, '4.3'), t(3, '4.4'), t(4, '4.5'), t(5, '5')];
+  const r = built(tdocs, { 1: 'agreed', 2: 'noted', 3: 'parked', 5: 'endorsed' });
+  // Typed by hand: Minutes and a Disposition in a TDoc table.
+  r.user(() => {
+    const table = r.table(id(2));
+    for (let i = 0; i < table.getNumRows(); i++) {
+      if (table.getRow(i).getCell(0).getText() === 'Minutes') table.getRow(i).getCell(1).setText('Presented by ExampleCorp; noted.');
+      if (table.getRow(i).getCell(0).getText() === 'Disposition') table.getRow(i).getCell(1).setText('Discussed on Tuesday');
+    }
+  });
+  updateSummary(r);
+  // The update's clock (updateBudgetNow_): 0 at its start; after the collector (the last stage before the late ones) it is `at`.
+  let clock = 0;
+  let at = 0;
+  r.s.updateBudgetNow_ = () => clock;
+  const realCollector = r.s.collectorUpdate_;
+  r.s.collectorUpdate_ = function () { const out = realCollector.apply(this, arguments); clock = at; return out; };
+  let reads = 0;
+  const realRead = r.s.readReportDispositions_;
+  r.s.readReportDispositions_ = function () { reads++; return realRead.apply(this, arguments); };
+  const updateAt = (ms) => { clock = 0; at = ms; reads = 0; return r.update(); };
+  const typedOf = () => [r.field(id(2), 'Minutes'), r.field(id(2), 'Disposition')];
+  const typed = typedOf();
+  const tdocLinks = () => JSON.parse(snapshot(r.body)).filter((e) => e[0] === 'T' && e[1][0].length === 2 && e[1][0][0][0] === 'TDoc').map((e) => e[1].map((row) => row.map((cell) => cell[2])));
+  const linksBefore = tdocLinks();
+  check('(the report has links in its TDoc tables)', linksBefore.length === 5 && linksBefore.every((rows) => rows.some((row) => row.some((l) => l !== ''))), true);
+
+  // A decision changes; the next update has run past 170 s when it reaches the summary.
+  decide(r, { 3: 'agreed' });
+  const before = snapshot(r.body);
+  const summaryBefore = JSON.stringify(summaryOf(r.body));
+  const statuses = shownAll(r);
+  const late = updateAt(170001);
+  check('170.001 s into the update: the summary is left to the next update; the update says it is in part, not failed',
+    [late.success, late.dispositionSummary, late.incomplete], [true, 'deferred', ['Disposition Summary']]);
+  check('... nothing of the report changed: the summary as it was (03 still parked in it), the document identical element for element, no read of the TDoc tables for it',
+    [JSON.stringify(summaryOf(r.body)) === summaryBefore, snapshot(r.body) === before, reads], [true, true, 0]);
+  check('... logged as left to the next update', r.logs.some((l) => /^\[PERF\] left to the next update: Disposition Summary \(the update has run \d+ s\)\.$/.test(String(l))), true);
+
+  // The next update, within the time: the summary is written, for the decision made before the late update.
+  const next = updateAt(100000);
+  check('the next update (100 s at the summary, as in Run 7): the summary written, the update complete', [next.success, next.dispositionSummary, next.incomplete], [true, 'replaced', undefined]);
+  check('... 03 now in the agreed table', summaryOf(r.body).map((c) => c[0]), [TITLES[0] + ' (3)', TITLES[1] + ' (1)', TITLES[2] + ' (1)']);
+  const settled = snapshot(r.body);
+  updateSummary(r);
+  check('... it is what Update Disposition Summary writes ("already up to date", identical)', [lastAlert(r)[1].split('\n')[0], snapshot(r.body) === settled], ['Disposition Summary was already up to date.', true]);
+
+  // The limit itself: at 170 s the summary still runs.
+  check('exactly 170 s into the update: the summary runs (unchanged), the update complete', [updateAt(170000)].map((x) => [x.dispositionSummary, x.incomplete]), [['unchanged', undefined]]);
+
+  // Repeated updates: stable and idempotent; under normal times (62 s, 100 s, 169 s) never left to the next update.
+  const results = [62000, 100000, 169000, 62000, 100000].map((ms) => updateAt(ms));
+  check('five more updates under normal times: complete, the summary unchanged, never left to the next update', results.map((x) => [x.success, x.dispositionSummary, x.incomplete]),
+    Array(5).fill([true, 'unchanged', undefined]));
+  check('... the document identical after all of them', snapshot(r.body) === settled, true);
+
+  // Late again and again (no starvation under normal times): each late update leaves it, the first one in time writes it.
+  decide(r, { 4: 'noted' });
+  const lateTwice = [updateAt(200000), updateAt(250000)].map((x) => [x.dispositionSummary, x.incomplete]);
+  const recovered = updateAt(80000);
+  check('two late updates in a row leave it; the next one in time writes it, complete', [lateTwice, recovered.dispositionSummary, recovered.incomplete],
+    [[['deferred', ['Disposition Summary']], ['deferred', ['Disposition Summary']]], 'replaced', undefined]);
+  check('... 04 in the other disposed table', summaryOf(r.body).map((c) => c[0]), [TITLES[0] + ' (3)', TITLES[1] + ' (2)', TITLES[2] + ' (0)']);
+
+  // Typed text, Status and links: untouched by all of it.
+  check('typed Minutes and Disposition kept through all of it', typedOf(), typed);
+  check('no Status changed by any of it (only the picks of the test)', shownAll(r), statuses.map((x) => x.replace(id(4) + '=dropdown:available', id(4) + '=dropdown:noted')));
+  check('the links of the TDoc tables as they were', tdocLinks(), linksBefore);
+  check('... every TDoc of the summary linked', summaryOf(r.body).every((c) => c[1] === 'None.' || c[1].every((row) => row[4] !== '')), true);
+
+  // Past 255 s the earlier limit leaves all the late stages (unchanged): the summary is not named twice.
+  const veryLate = updateAt(256000);
+  check('256 s: the earlier limit of the late stages as before; the summary not named a second time', [veryLate.dispositionSummary, veryLate.incomplete],
+    [undefined, ['the Goes to Plenary data, the Disposition Summary and Undisposed Documents']]);
+  r.s.updateBudgetNow_ = () => Date.now();
+  r.s.collectorUpdate_ = realCollector;
+  r.s.readReportDispositions_ = realRead;
+}
+{
+  // A report with Goes to Plenary: its summary is written at the end of the update, with its own limit -- the new limit
+  // does not touch it. Outside an update nothing is left, however long the execution has run.
+  const r = built([t(1, '4.3'), t(2, '4.4')], { 1: 'agreed' });
+  let clock = 0;
+  r.s.updateBudgetNow_ = () => clock;
+  const out = r.exec(() => {
+    const s = r.s;
+    clock = 10 * 60 * 1000;
+    const outside = s.dispositionSummaryLeftForTime_();
+    clock = 0;
+    s.markReportUpdateStart_(); s.updateJournalStart_(null);
+    clock = 200000;
+    const realPlenary = s.plenarySelectionEnabled_;
+    s.plenarySelectionEnabled_ = () => true;
+    const plenary = s.syncDispositionSummaryOnUpdate_(r.body);
+    const deferredPlenary = s.reportUpdateDeferred_().slice();
+    s.plenarySelectionEnabled_ = realPlenary;
+    const plain = s.syncDispositionSummaryOnUpdate_(r.body);
+    const deferredPlain = s.reportUpdateDeferred_().slice();
+    s.updateJournalEnd_({ success: true }); s.endReportUpdate_();
+    return { outside: outside, plenary: plenary, deferredPlenary: deferredPlenary, plain: plain, deferredPlain: deferredPlain };
+  });
+  check('outside an update (the clock 10 minutes on): never left to the next update', out.outside, false);
+  check('Goes to Plenary, 200 s into the update: returns before the new limit, as before ("deferred" to its own place at the end), nothing left', [out.plenary, out.deferredPlenary], [{ state: 'deferred' }, []]);
+  check('... the same report without Goes to Plenary has no summary: "absent", nothing left either', [out.plain, out.deferredPlain], [{ state: 'absent' }, []]);
+  r.s.updateBudgetNow_ = () => Date.now();
+}
+
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll disposition-summary and close-report checks passed.');
 process.exitCode = failures ? 1 : 0;

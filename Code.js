@@ -55,6 +55,11 @@
  *     (time in timed stages, time outside them, the slowest stages), and
  *     the update journal keeps the end of each stage (40 stages). Nothing
  *     the update does, its budgets or the report change.
+ *   - The Disposition Summary within the time (after the seventh
+ *     real-document run): an update that has run more than 170 s
+ *     before the summary leaves it to the next update and says it is
+ *     updated in part; the summary is not changed. A report with Goes
+ *     to Plenary writes its summary as before.
  * 2.27.2 (2026-11-20)
  *   (T-2026.10.34, on T-2026.10.33 / 2.27.1.)
  *   - Close Report: a TDoc handed to the plenary by "Yes" in the Plenary
@@ -23754,6 +23759,8 @@ function syncDispositionSummaryOnUpdate_(body) {
     if (plenarySelectionEnabled_()) return { state: 'deferred' };
     // After T-2026.10.34: a report without the text of the summary heading has none, without a walk of the body (ISSUE 28 A section).
     if (dispositionSummaryAbsentInBody_(body) || !findDispositionSummarySection_(body)) return { state: 'absent' };
+    // After issue 28 A: not started once the update has run long; the next update writes it (ISSUE 28 A section).
+    if (dispositionSummaryLeftForTime_()) return { state: 'deferred' };
     const done = writeDispositionSummary_(body, { scope: reportTdocScope_(body) });
     if (done.state === 'no-scope') Logger.log('Disposition Summary: not updated -- ' + done.error + '.');
     else if (done.state === 'unreadable') Logger.log('Disposition Summary: not updated -- the Status of ' + done.read.unreadable.join(', ') + ' could not be read.');
@@ -31254,6 +31261,21 @@ function perfStageTimelineLog_() {
     Logger.log('[PERF] stage timeline: ' + s.timedMs + ' of ' + s.totalMs + ' ms in the timed stages, ' + s.untimedMs + ' ms outside them; the slowest: ' +
       s.slowest.map(function (x) { return x.stage + ' ' + x.ms + ' ms (at ' + x.start + ' ms)'; }).join('; '));
   } catch (e) { /* the timeline is a help only */ }
+}
+
+// --- The Disposition Summary within the update's time (after the seventh real-document run, 2026-11-27: the summary
+// of the 140-TDoc main copy took 109 s of an update of 326 s, started at 216 s, after the other stages had already been
+// left to the next update). It reads the whole report and every update writes it again, so an update that has run
+// past UPDATE_DISPOSITION_SUMMARY_LATEST_MS_ (the limit of the TDoc loop) leaves it to the next one: the update says it
+// is in part, and the summary is not changed. A report with Goes to Plenary writes its summary at the end of the update,
+// with its own limit (unchanged). Outside an update nothing is left.
+const UPDATE_DISPOSITION_SUMMARY_LATEST_MS_ = UPDATE_TDOC_LOOP_LATEST_MS_;
+
+/** True, with the summary left to the next update, when the update of this execution has run past the summary's limit. */
+function dispositionSummaryLeftForTime_() {
+  if (!UPDATE_JOURNAL_ || updateElapsedMs_() <= UPDATE_DISPOSITION_SUMMARY_LATEST_MS_) return false;
+  deferReportUpdateStage_('Disposition Summary');
+  return true;
 }
 
 // =========================================================

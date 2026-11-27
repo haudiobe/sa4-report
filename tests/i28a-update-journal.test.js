@@ -235,7 +235,7 @@ console.log('F. one clock for the whole update (after the second real-document r
   check('256 s into the update: the Goes to Plenary data, the summary and Undisposed Documents left to the next update', [summaries, (res.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents'), res.success], [0, true, true]);
   r.s.collectorUpdate_ = () => { clock = 200000; return { failures: [] }; };
   const res2 = r.update();
-  check('200 s into the update: they run', [summaries, (res2.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents')], [1, false]);
+  check('200 s into the update: the late stages start (the summary itself has its own limit since Run 7, tests/disposition-summary-close-report.test.js part X)', [summaries, (res2.incomplete || []).includes('the Goes to Plenary data, the Disposition Summary and Undisposed Documents')], [1, false]);
   r.s.updateBudgetNow_ = () => Date.now();
 }
 {

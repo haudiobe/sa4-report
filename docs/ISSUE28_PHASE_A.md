@@ -239,3 +239,33 @@ Run 6: one update of the 140-TDoc main copy took 347 s, but its timed stages acc
   - **Timeline.** Each stage of the update is on the timeline once, in order, without overlap. The summary counts nested stages once. After an error the depth is right again.
   - **Stopped update.** An update stopped in its third stage leaves the first two with their ends. The next update records them.
   - **Journal size.** The journal keeps 40 stages, well below 9 KB.
+
+## The Disposition Summary within the time (added 2026-11-27, after Run 7)
+
+Run 7 timed one update of the 140-TDoc main copy at 326 s, with less than 1.1 s outside the timed stages:
+
+- About 166 s were a one-off identity check of the TDoc list. The copy had no saved anchor (`TDOC_LIST_ANCHOR`, removed by the test cleanup) and no agenda TDoc. After the first update the anchor is there, and the check takes about 1 s.
+- The Disposition Summary took 109 s, starting at 216 s. The other stages had already been left to the next update at 214 s, but the summary had no limit of its own. The next two updates spent 53 s and 15 s on it.
+
+The change:
+
+- **The limit.** An update that has run more than 170 s on its clock (`updateElapsedMs_()`, the limit of the TDoc loop) does not start the summary.
+  - It leaves the summary to the next update (`deferReportUpdateStage_('Disposition Summary')`).
+  - The update says it is updated in part (`result.incomplete`), and its result has `dispositionSummary: 'deferred'`.
+  - Nothing of the summary is read or written.
+- **The next update.** Every update writes the summary again from the report, so the next update that reaches it within 170 s writes it as it should be. In Run 7 the updates reached it at 100 s and 62 s.
+- **Unchanged.**
+  - A report without a summary is still `'absent'`, never "in part".
+  - A report with Goes to Plenary writes its summary at the end of the update, with its own limit, as before.
+  - Past 255 s the earlier limit leaves all the late stages, as before.
+  - Undisposed Documents reads from the update's Docs API read when the summary has not run, as it does in a report without a summary.
+    - Without the Docs API it would read the TDoc tables itself (at most every 15 minutes), a cost the limit does not save.
+    - The reports and the test copy use the Docs API.
+  - Outside an update nothing is left.
+- **Tests.** `tests/disposition-summary-close-report.test.js`, part X:
+  - 170.001 s: left, in part, the report identical, no read for it, logged. 170 s: it runs.
+  - The next update writes it; the result is what Update Disposition Summary writes.
+  - Repeated updates at 62–169 s: complete and identical.
+  - Two late updates in a row, then one in time: written.
+  - Typed Minutes and Disposition, the Status dropdowns and the links stay.
+  - Goes to Plenary and outside an update: nothing left by the new limit.
